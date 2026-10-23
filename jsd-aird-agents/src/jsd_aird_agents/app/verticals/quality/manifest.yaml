@@ -1,0 +1,30 @@
+id: quality
+name: Quality Mock Extension
+version: "0.1.0"
+resource_kind: QUALITY_DATASET
+entry_permission: quality.view
+required_permissions: [quality.view, ai.use]
+skills:
+  - {name: quality-anomaly-review, path: skills/quality-anomaly-review/SKILL.md}
+tools:
+  - {name: list_quality_anomalies, version: "1", permission: quality.view, resource_kind: QUALITY_DATASET}
+workflows:
+  - id: quality-anomaly-check
+    version: "1"
+    tools: [list_quality_anomalies]
+    description: Minimal read-only mock for pack extension acceptance.
+scheduled_jobs:
+  - id: daily-quality-anomaly-check
+    workflow: quality-anomaly-check
+    request: 查询模拟质量异常并生成有引用的复检建议
+    interval_seconds: 86400
+    event_type: quality.changed
+evidence_rules:
+  - {source_type: QUALITY_RECORD, permission: quality.view, resource_kind: QUALITY_DATASET}
+evals:
+  - id: quality-fixture
+    workflow: quality-anomaly-check
+    request: 检查质量异常
+    required_sources: [QUALITY_RECORD]
+    must_contain: [附着力]
+    forbid_receipts: true

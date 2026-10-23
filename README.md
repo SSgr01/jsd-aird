@@ -7,6 +7,7 @@
 - `jsd-aird-web`：React 管理端基础外壳。
 - `jsd-aird-api`：Java/Spring Boot 模块化单体。
 - `jsd-aird-ai`：T07-PRE 独立 Python 配方模型计算服务，已完成A.2～A.5算法门禁、适用域、实验优化与分类目标Pipeline。
+- `jsd-aird-agents`：共享 AI 平台与可插拔业务模块，提供 LangGraph、Skills、统一调度、模拟 Java 读写审批闭环、恢复和 SSE；使用原生 Python 与独立 PostgreSQL，不依赖 Java 权限进度或 Docker。参见 [模块说明](jsd-aird-agents/README.md)。
 - `compose.yaml`：提供 PostgreSQL 18/pgvector、MinIO、Worker 与 AI 计算服务的容器编排。
 
 T07-A 仅新增算法、适用域、不可变制品和跨语言契约，不接入 T03–T06 尚未合并的客户接口和数据库结构。

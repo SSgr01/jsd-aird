@@ -1,0 +1,213 @@
+id: project
+name: Project Management
+version: 1.0.0
+resource_kind: PROJECT
+entry_permission: project.view
+required_permissions:
+- project.view
+- project.update
+- ai.use
+skills:
+- name: project-delay-analysis
+  path: skills/project-delay-analysis/SKILL.md
+- name: task-management
+  path: skills/task-management/SKILL.md
+- name: knowledge-research
+  path: skills/knowledge-research/SKILL.md
+- name: project-proactive-monitoring
+  path: skills/project-proactive-monitoring/SKILL.md
+tools:
+- name: get_project_snapshot
+  version: '1'
+  permission: project.view
+  resource_kind: PROJECT
+- name: list_project_stages
+  version: '1'
+  permission: project.view
+  resource_kind: PROJECT
+- name: list_project_tasks
+  version: '1'
+  permission: project.view
+  resource_kind: PROJECT
+- name: get_task_detail
+  version: '1'
+  permission: project.view
+  resource_kind: PROJECT
+- name: search_project_knowledge
+  version: '1'
+  permission: ai.use
+  resource_kind: PROJECT
+  kind: RAG_QUERY
+- name: update_project_task
+  version: '1'
+  permission: project.update
+  resource_kind: PROJECT
+  mutation: true
+  risk: MEDIUM
+- name: get_project_monitoring_snapshot
+  version: '1'
+  permission: project.view
+  resource_kind: PROJECT
+- name: get_project_approval_snapshot
+  version: '1'
+  permission: project.view
+  resource_kind: PROJECT
+workflows:
+- id: analyze-project-delay
+  version: '1'
+  description: Query, analyze, propose deadline changes and await approval before
+    execution.
+  tools:
+  - get_project_snapshot
+  - list_project_stages
+  - list_project_tasks
+  - get_task_detail
+  - search_project_knowledge
+  - update_project_task
+- id: project-health-check
+  version: '1'
+  description: Read project progress and report cited risks.
+  tools:
+  - get_project_snapshot
+  - list_project_tasks
+  - search_project_knowledge
+- id: project-progress-inspection
+  version: project-checks-v1
+  description: 每日健康巡检；只读检查、草稿和模拟站内提醒。
+  tools:
+  - get_project_monitoring_snapshot
+- id: project-task-followup
+  version: project-checks-v1
+  description: 到期与停滞跟进；只读检查、草稿和模拟站内提醒。
+  tools:
+  - get_project_monitoring_snapshot
+- id: project-milestone-precheck
+  version: project-checks-v1
+  description: 里程碑预检查；只读检查、草稿和模拟站内提醒。
+  tools:
+  - get_project_monitoring_snapshot
+- id: project-weekly-report
+  version: project-checks-v1
+  description: 周报草稿；只读检查、草稿和模拟站内提醒。
+  tools:
+  - get_project_monitoring_snapshot
+- id: project-approval-reminder
+  version: project-checks-v1
+  description: 审批提醒；只读检查、草稿和模拟站内提醒。
+  tools:
+  - get_project_approval_snapshot
+scheduled_jobs:
+- id: daily-project-health-check
+  workflow: project-health-check
+  request: 查询项目任务并分析延期风险，形成有引用的巡检结果
+  interval_seconds: 86400
+  event_type: project.changed
+- id: daily-project-progress-inspection
+  workflow: project-progress-inspection
+  request: 每日健康巡检
+  trigger:
+    kind: cron
+    timezone: Asia/Shanghai
+    expression: 30 8 * * mon-fri
+- id: daily-task-followup
+  workflow: project-task-followup
+  request: 到期与停滞跟进
+  trigger:
+    kind: cron
+    timezone: Asia/Shanghai
+    expression: 0 9 * * mon-fri
+- id: daily-milestone-precheck
+  workflow: project-milestone-precheck
+  request: 里程碑预检查
+  trigger:
+    kind: cron
+    timezone: Asia/Shanghai
+    expression: 0 9 * * mon-fri
+- id: weekly-project-report
+  workflow: project-weekly-report
+  request: 周报草稿
+  trigger:
+    kind: cron
+    timezone: Asia/Shanghai
+    expression: 0 17 * * fri
+- id: daily-approval-reminder
+  workflow: project-approval-reminder
+  request: 审批提醒
+  trigger:
+    kind: cron
+    timezone: Asia/Shanghai
+    expression: 0 10 * * mon-fri
+evidence_rules:
+- source_type: PROJECT
+  permission: project.view
+  resource_kind: PROJECT
+- source_type: STAGE
+  permission: project.view
+  resource_kind: PROJECT
+- source_type: TASK
+  permission: project.view
+  resource_kind: PROJECT
+- source_type: KNOWLEDGE_DOCUMENT
+  permission: project.view
+  resource_kind: PROJECT
+- source_type: PROGRESS_SNAPSHOT
+  permission: project.view
+  resource_kind: PROJECT
+- source_type: APPROVAL_SNAPSHOT
+  permission: project.view
+  resource_kind: PROJECT
+- source_type: MONITORING_REPORT
+  permission: project.view
+  resource_kind: PROJECT
+- source_type: MONITORING_BASELINE
+  permission: project.view
+  resource_kind: PROJECT
+evals:
+- id: project-delay-fixture
+  workflow: analyze-project-delay
+  request: 分析项目延期
+  required_sources:
+  - TASK
+  - KNOWLEDGE_DOCUMENT
+  must_contain:
+  - 复测
+- id: project-progress-inspection-fixture
+  workflow: project-progress-inspection
+  request: 每日健康巡检；只读检查、草稿和模拟站内提醒。
+  required_sources:
+  - MONITORING_REPORT
+  must_contain:
+  - 草稿
+  forbid_receipts: true
+- id: project-task-followup-fixture
+  workflow: project-task-followup
+  request: 到期与停滞跟进；只读检查、草稿和模拟站内提醒。
+  required_sources:
+  - MONITORING_REPORT
+  must_contain:
+  - 草稿
+  forbid_receipts: true
+- id: project-milestone-precheck-fixture
+  workflow: project-milestone-precheck
+  request: 里程碑预检查；只读检查、草稿和模拟站内提醒。
+  required_sources:
+  - MONITORING_REPORT
+  must_contain:
+  - 草稿
+  forbid_receipts: true
+- id: project-weekly-report-fixture
+  workflow: project-weekly-report
+  request: 周报草稿；只读检查、草稿和模拟站内提醒。
+  required_sources:
+  - MONITORING_REPORT
+  must_contain:
+  - 草稿
+  forbid_receipts: true
+- id: project-approval-reminder-fixture
+  workflow: project-approval-reminder
+  request: 审批提醒；只读检查、草稿和模拟站内提醒。
+  required_sources:
+  - MONITORING_REPORT
+  must_contain:
+  - 草稿
+  forbid_receipts: true

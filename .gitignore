@@ -47,6 +47,7 @@ Thumbs.db
 /catboost_info/
 **/catboost_info/
 **/__pycache__/
+**/.venv/
 **/.pytest_cache/
 /.runtime/demo/
 .codex-temp

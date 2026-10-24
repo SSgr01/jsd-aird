@@ -1,7 +1,10 @@
+import { useListPageBounds } from '@/services/query/use-list-page-bounds';
+import { useBusinessQuery } from '@/services/query/use-business-query';
+import { useListKeyword, useListUrl } from '@/services/query/use-list-url';
 import { DatabaseOutlined, DownloadOutlined, EyeOutlined, LinkOutlined, RedoOutlined, ReloadOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
 import { App, Button, Dropdown, Empty, Input, Modal, Progress, Select, Space, Table, Tag, Typography } from 'antd';
 import { DataPublicationPanel } from '@/features/data-workbench/DataPublicationPanel';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { CategoryCardGrid, type CatalogCategoryCard } from '@/components/catalog-workspace/CategoryCardGrid';
@@ -14,7 +17,7 @@ import { ProjectRelationPicker } from '@/components/project-relations/ProjectRel
 import '@/components/project-relations/project-relation-picker.css';
 import { dataApi, type DataCategory, type DataSourceFile } from '@/services/data/data-api';
 import { dataParseProgress } from '@/services/data/data-progress';
-import { getProjects, type Project } from '@/services/project/project-api';
+import { getProjects } from '@/services/project/project-api';
 import { projectResourceApi, type ProjectRelationTarget } from '@/services/project/project-resource-api';
 
 const statusLabels: Record<string, [string, string]> = {
@@ -34,52 +37,33 @@ const UNCATEGORIZED_CATEGORY_ID = 'UNCATEGORIZED';
 export function DataViewPage() {
   const { message } = App.useApp();
   const navigate = useNavigate();
-  const [categoryId, setCategoryId] = useState('ALL');
-  const [categories, setCategories] = useState<DataCategory[]>([]);
-  const [items, setItems] = useState<DataSourceFile[]>([]);
-  const [allSourceCount, setAllSourceCount] = useState(0);
-  const [uncategorizedSourceCount, setUncategorizedSourceCount] = useState(0);
-  const [templates, setTemplates] = useState<Array<{ versionId: string; name: string; templateCode: string; versionNo: number }>>([]);
-  const [keyword, setKeyword] = useState('');
-  const [status, setStatus] = useState<string>();
-  const [page, setPage] = useState({ current: 1, pageSize: 20, total: 0 });
-  const [loading, setLoading] = useState(false);
+  const url = useListUrl();
+  const [categoryId, setCategoryId] = url.field<string>('categoryId', 'ALL');
+  const [keyword, setKeyword] = useListKeyword(url);
+  const [status, setStatus] = url.field<string | undefined>('status', undefined);
   const [previewFile, setPreviewFile] = useState<FilePreviewDescriptor>();
   const [editor, setEditor] = useState<{ mode: 'NEW' | 'EDIT'; item?: DataCategory }>();
   const [deleteItem, setDeleteItem] = useState<DataCategory>();
   const [replacementId, setReplacementId] = useState<string>();
   const [saving, setSaving] = useState(false);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [projectId, setProjectId] = useState<string>();
+  const [projectId, setProjectId] = url.field<string | undefined>('projectId', undefined);
   const [relationEditor, setRelationEditor] = useState<{ item: DataSourceFile; targets: ProjectRelationTarget[] }>();
   const canUpdate = usePermission('data.update');
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [sourcePage, categoryList] = await Promise.all([
-        dataApi.listSourceFiles({
-          categoryId: categoryId !== 'ALL' && categoryId !== UNCATEGORIZED_CATEGORY_ID ? categoryId : undefined,
-          uncategorized: categoryId === UNCATEGORIZED_CATEGORY_ID,
-          status, keyword: keyword || undefined, projectId, page: page.current, size: page.pageSize,
-        }),
-        dataApi.listCategories(),
-      ]);
-      const facets = await dataApi.sourceFacets();
-      setItems(sourcePage.items);
-      const facetCounts = new Map(facets.categories.map((item) => [item.id, item.sourceCount]));
-      setCategories(categoryList.map((item) => ({ ...item, sourceCount: facetCounts.get(item.id) ?? 0 })));
-      setAllSourceCount(facets.totalSourceCount);
-      setUncategorizedSourceCount(facets.uncategorizedSourceCount);
-      setPage((value) => ({ ...value, current: sourcePage.page, pageSize: sourcePage.size, total: sourcePage.total }));
-    } catch (error) {
-      void message.error(error instanceof Error ? error.message : '来源文件加载失败');
-    } finally { setLoading(false); }
-  }, [categoryId, keyword, message, page.current, page.pageSize, projectId, status]);
-
-  useEffect(() => { void load(); }, [load]);
-  useEffect(() => { void getProjects({ page: 1, size: 100 }).then((result) => setProjects(result.items)).catch(() => setProjects([])); }, []);
-  useEffect(() => { void dataApi.listTemplates().then(setTemplates).catch(() => setTemplates([])); }, []);
+  const filters = { categoryId: categoryId !== 'ALL' && categoryId !== UNCATEGORIZED_CATEGORY_ID ? categoryId : undefined, uncategorized: categoryId === UNCATEGORIZED_CATEGORY_ID, keyword: keyword || undefined, status, projectId, page: url.number('page',1), size: url.number('size',20) };
+  const listQuery = useBusinessQuery('data', filters, signal => dataApi.listSourceFiles(filters, signal), { keepPage:true });
+  useListPageBounds(url, listQuery, 20);
+  const categoryQuery = useBusinessQuery('data', {kind:'categories'}, signal => dataApi.listCategories(signal), {dictionary:true,live:true});
+  const facetsQuery = useBusinessQuery('data', {kind:'facets'}, signal => dataApi.sourceFacets(signal));
+  const templateQuery = useBusinessQuery('data', {kind:'templates'}, signal => dataApi.listTemplates(signal), {dictionary:true});
+  const projectQuery = useBusinessQuery('projects', {kind:'options',page:1,size:100}, signal => getProjects({page:1,size:100},signal), {dictionary:true});
+  const items = listQuery.data?.items ?? [];
+  const categories = (categoryQuery.data ?? []).map(item => ({...item, sourceCount: facetsQuery.data?.categories.find(facet => facet.id === item.id)?.sourceCount ?? item.sourceCount}));
+  const templates = templateQuery.data ?? []; const projects = projectQuery.data?.items ?? [];
+  const allSourceCount = facetsQuery.data?.totalSourceCount ?? 0; const uncategorizedSourceCount = facetsQuery.data?.uncategorizedSourceCount ?? 0;
+  const [page,setPage] = url.pagination(listQuery.data?.total ?? 0);
+  const loading = listQuery.isPending;
+  const load = async () => { await Promise.all([listQuery.refetch(),categoryQuery.refetch(),facetsQuery.refetch()]); };
 
   const cards = useMemo<CatalogCategoryCard[]>(() => [
     { id: 'ALL', name: '全部来源文件', count: allSourceCount, description: '按文件和导入批次查看', icon: <DatabaseOutlined />, tone: 'blue' },
@@ -99,7 +83,7 @@ export function DataViewPage() {
     ? `/data/recognition-jobs/${item.importJobId}`
     : `/data/import-jobs/${item.importJobId}`;
   const moveSource = async (item: DataSourceFile, nextCategoryId?: string) => {
-    try { await dataApi.assignSourceCategory(item.importJobId, nextCategoryId); await load(); void message.success('归档分类已更新'); }
+    try { await dataApi.assignSourceCategory(item.importJobId, item.revision, nextCategoryId); await load(); void message.success('归档分类已更新'); }
     catch (error) { void message.error(error instanceof Error ? error.message : '归档分类更新失败'); }
   };
   const resetFilters = () => {
@@ -114,7 +98,7 @@ export function DataViewPage() {
     try {
       const description = value.description?.trim() || undefined;
       if (editor?.mode === 'NEW') await dataApi.createCategory({ name: value.name.trim(), description });
-      else if (editor?.item) await dataApi.renameCategory(editor.item.id, { name: value.name.trim(), description });
+      else if (editor?.item) await dataApi.renameCategory(editor.item.id, { revision: editor.item.revision, name: value.name.trim(), description });
       setEditor(undefined); await load(); void message.success('分类已保存');
     } catch (error) { void message.error(error instanceof Error ? error.message : '分类保存失败'); }
     finally { setSaving(false); }
@@ -123,7 +107,7 @@ export function DataViewPage() {
     if (!deleteItem) return;
     setSaving(true);
     try {
-      await dataApi.deleteCategory(deleteItem.id, replacementId);
+      await dataApi.deleteCategory(deleteItem.id,deleteItem.revision, replacementId);
       setDeleteItem(undefined); setReplacementId(undefined); setCategoryId('ALL'); await load(); void message.success('分类已删除');
     } catch (error) { void message.error(error instanceof Error ? error.message : '分类删除失败'); }
     finally { setSaving(false); }
@@ -133,7 +117,7 @@ export function DataViewPage() {
     setSaving(true);
     try {
       await projectResourceApi.replaceLinks('DATA_IMPORT_JOB', relationEditor.item.importJobId,
-        relationEditor.targets.filter((target) => target.projectId));
+        relationEditor.targets.filter((target) => target.projectId), relationEditor.item.relatedProjects || []);
       setRelationEditor(undefined); await load(); void message.success('关联项目已更新');
     } catch (error) { void message.error(error instanceof Error ? error.message : '关联项目更新失败'); }
     finally { setSaving(false); }

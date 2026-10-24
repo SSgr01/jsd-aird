@@ -1179,21 +1179,36 @@ class FormulaModelV2Service:
             if len(raw) >= 3 and raw[0] == "/" and raw[2] == ":":
                 raw = raw[1:]
             try:
-                data = Path(raw).read_bytes()
+                with Path(raw).open("rb") as source:
+                    data = self._bounded_artifact(source, expected_sha)
             except OSError as exc:
                 raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "unable to read artifact", retryable=True) from exc
         else:
             try:
-                response = httpx.get(str(url), timeout=self.settings.artifact_timeout_seconds, follow_redirects=False)
-                response.raise_for_status()
-                data = response.content
+                with httpx.stream("GET", str(url), timeout=self.settings.artifact_timeout_seconds, follow_redirects=False) as response:
+                    response.raise_for_status()
+                    data = self._bounded_artifact(response.iter_bytes(65536), expected_sha)
             except httpx.HTTPError as exc:
                 raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "unable to download artifact", retryable=True) from exc
         if len(data) > self.settings.maximum_artifact_bytes:
             raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "artifact exceeds configured size limit")
-        if _sha(data) != expected_sha:
-            raise FormulaModelError(ErrorCode.HASH_MISMATCH, "artifact SHA-256 does not match the request")
         return data
+
+    def _bounded_artifact(self, source, expected_sha: str | None = None) -> bytes:
+        # Do not trust Content-Length; stop before storing bytes beyond the limit.
+        chunks = iter(lambda: source.read(65536), b"") if hasattr(source, "read") else source
+        with io.BytesIO() as output:
+            size = 0
+            digest = hashlib.sha256()
+            for chunk in chunks:
+                size += len(chunk)
+                if size > self.settings.maximum_artifact_bytes:
+                    raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "artifact exceeds configured size limit")
+                output.write(chunk)
+                digest.update(chunk)
+            if expected_sha is not None and digest.hexdigest() != expected_sha:
+                raise FormulaModelError(ErrorCode.HASH_MISMATCH, "artifact SHA-256 does not match the request")
+            return output.getvalue()
 
     def _write(self, url: Any, data: bytes) -> None:
         if len(data) > self.settings.maximum_artifact_bytes:

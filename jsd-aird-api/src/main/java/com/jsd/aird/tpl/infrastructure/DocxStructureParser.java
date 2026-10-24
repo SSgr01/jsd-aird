@@ -36,6 +36,8 @@ import org.w3c.dom.NodeList;
 
 @Component
 public class DocxStructureParser implements OfficeStructureParser, WordDocumentParser {
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private IsolatedOfficeProcess isolated;
 
     private static final String WORDPROCESSINGML =
             "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -70,6 +72,7 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
 
     @Override
     public ParseResult parse(InputStream input) {
+        if(isolated!=null)return isolated.parse(input);
         try {
             var bytes = input.readAllBytes();
             var packageParts = inspectPackage(bytes);

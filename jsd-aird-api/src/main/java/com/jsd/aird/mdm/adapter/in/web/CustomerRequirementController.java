@@ -48,6 +48,7 @@ public class CustomerRequirementController {
     @Operation(summary = "更新客户需求", description = "更新指定需求（需携带版本号）")
     ApiResponse<Void> updateRequirement(@Parameter(description = "需求 ID") @PathVariable UUID id,
                                         @Valid @RequestBody RequirementRequest r) {
+        if(r.version()==null)throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.VALIDATION_ERROR,"必须提交读取时的数据版本");
         service.updateRequirement(id, r.toDomain());
         return ok(null);
     }

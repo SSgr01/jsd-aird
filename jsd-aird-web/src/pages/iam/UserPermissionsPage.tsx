@@ -1,3 +1,4 @@
+import { useRequestGuard } from '@/services/query/use-request-guard';
 import { ReloadOutlined, SaveOutlined } from '@ant-design/icons';
 import { App, Button, Card, Checkbox, Select, Space, Spin, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
@@ -32,6 +33,9 @@ export function UserPermissionsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const activeUser = users.find((user) => user.id === activeUserId);
+  const beginBindingsRequest = useRequestGuard(activeUserId || '');
+  const [bindingOwner, setBindingOwner] = useState<string>();
+  const bindingsReady = Boolean(activeUserId && bindingOwner === activeUserId);
   const load = async () => {
     setLoading(true);
     try {
@@ -50,14 +54,19 @@ export function UserPermissionsPage() {
   };
   const loadBindings = async () => {
     if (!activeUserId) return;
+    const request = beginBindingsRequest();
+    setBindingOwner(undefined);
+    setBindings({});
     try {
-      const data = await iamApi.userPermissions(activeUserId);
+      const data = await iamApi.userPermissions(activeUserId, request.signal);
+      if (!request.current()) return;
+      setBindingOwner(activeUserId);
       setVersion(data.version);
       setBindings(
         Object.fromEntries(data.bindings.map((binding) => [binding.permissionCode, binding])),
       );
     } catch (error) {
-      message.error(error instanceof HttpError ? error.message : '个人覆盖加载失败');
+      if (request.current()) message.error(error instanceof HttpError ? error.message : '个人覆盖加载失败');
     }
   };
   useEffect(() => {
@@ -88,7 +97,8 @@ export function UserPermissionsPage() {
       return next;
     });
   const save = async () => {
-    if (!activeUserId) return;
+    if (!activeUserId || !bindingsReady) return;
+    const request = beginBindingsRequest();
     const invalid = Object.values(bindings).find(
       (binding) =>
         binding.effect === 'ALLOW' &&
@@ -106,7 +116,9 @@ export function UserPermissionsPage() {
         version,
         Object.values(bindings),
       );
+      if (!request.current()) return;
       setVersion(result.version);
+      setUsers(current => current.map(user => user.id === activeUserId ? { ...user, authVersion: result.version } : user));
       message.success('个人权限覆盖已保存');
     } catch (error) {
       message.error(
@@ -117,10 +129,12 @@ export function UserPermissionsPage() {
     }
   };
   const restoreDefaults = async () => {
-    if (!activeUserId) return;
+    if (!activeUserId || !bindingsReady) return;
+    const request = beginBindingsRequest();
     setSaving(true);
     try {
       const result = await iamApi.saveUserPermissions(activeUserId, version, []);
+      if (!request.current()) return;
       setBindings({});
       setVersion(result.version);
       message.success('已恢复角色默认权限');
@@ -154,12 +168,12 @@ export function UserPermissionsPage() {
             type="primary"
             icon={<SaveOutlined />}
             loading={saving}
-            disabled={!activeUserId}
+            disabled={!bindingsReady}
             onClick={() => void save()}
           >
             保存覆盖
           </Button>
-          <Button disabled={!activeUserId || saving} onClick={() => void restoreDefaults()}>
+          <Button disabled={!bindingsReady || saving} onClick={() => void restoreDefaults()}>
             恢复角色默认
           </Button>
         </Space>
@@ -201,7 +215,8 @@ export function UserPermissionsPage() {
                 return (
                   <div className="iam-permission-row" key={definition.code}>
                     <Checkbox
-                      checked={Boolean(binding)}
+                      checked={bindingsReady && Boolean(binding)}
+                      disabled={!bindingsReady}
                       onChange={(event) => toggle(definition, event.target.checked)}
                     >
                       <span className="iam-permission-name">

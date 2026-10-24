@@ -45,6 +45,7 @@ export function SpectrumChartEditor({ item, categories, onCancel, onSaved }: {
     setSaving(true);
     try {
       await spectrumApi.updateChart(item.id, {
+        revision: item.revision,
         title: values.title.trim(), categoryId: values.categoryId,
         sampleName: values.sampleName?.trim() || '', batchNo: values.batchNo?.trim() || '',
         testConditions: values.testConditions?.trim() || '',

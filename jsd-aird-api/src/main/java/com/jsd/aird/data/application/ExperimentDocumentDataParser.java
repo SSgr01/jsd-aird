@@ -24,6 +24,8 @@ import org.springframework.stereotype.Component;
 /** Projects Word and OCR observations into the staged shape used by template imports. */
 @Component
 final class ExperimentDocumentDataParser {
+    @Autowired(required=false)
+    private com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated;
     private final FileStorageFacade files;
     private final ExperimentImportService sourceParser;
     private final ObjectMapper json;
@@ -88,10 +90,14 @@ final class ExperimentDocumentDataParser {
 
     private List<Observation> wordObservations(UUID organizationId, UUID fileId, String fileName, String format) {
         try (var stored = files.open(organizationId, fileId)) {
-            var source = stored.stream().readAllBytes();
+            var source = com.jsd.aird.shared.resource.BoundedStreams.readBytes(stored.stream(),200L*1024*1024);
             var wordBytes = "DOC".equals(format)
                     ? normalizeLegacyWord(fileName, stored.contentType(), source)
                     : source;
+            if(isolated!=null){
+                var values=isolated.execute("word-observations",new ByteArrayInputStream(wordBytes),null,com.fasterxml.jackson.databind.JsonNode.class);
+                var observations=new ArrayList<Observation>();for(var value:values)observations.add(new Observation(value.path("label").asText(),value.path("value").asText(),value.path("location").asText()));return observations;
+            }
             try (var document = new XWPFDocument(new ByteArrayInputStream(wordBytes))) {
                 var result = new ArrayList<Observation>();
                 for (int i = 0; i < document.getParagraphs().size(); i++)

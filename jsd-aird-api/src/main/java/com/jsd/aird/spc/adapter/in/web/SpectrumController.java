@@ -54,13 +54,13 @@ public class SpectrumController {
 
     @PutMapping("/categories/{categoryId}")
     public ApiResponse<SpectrumService.CategoryView> updateCategory(@PathVariable UUID categoryId,
-                                                                     @Valid @RequestBody CategoryRequest request) {
-        return success(service.updateCategory(categoryId, request.command()));
+                                                                     @Valid @RequestBody UpdateCategoryRequest request) {
+        return success(service.updateCategory(categoryId, request.command(), request.revision()));
     }
 
     @DeleteMapping("/categories/{categoryId}")
-    public ApiResponse<Void> deleteCategory(@PathVariable UUID categoryId) {
-        service.deleteCategory(categoryId);
+    public ApiResponse<Void> deleteCategory(@PathVariable UUID categoryId,@RequestParam String revision) {
+        service.deleteCategory(categoryId,revision);
         return success(null);
     }
 
@@ -150,18 +150,18 @@ public class SpectrumController {
     @PutMapping("/charts/{chartId}")
     public ApiResponse<SpectrumService.ChartView> updateChart(@PathVariable UUID chartId,
                                                                @Valid @RequestBody UpdateChartRequest request) {
-        return success(service.updateChart(chartId, request.command()));
+        return success(service.updateChart(chartId, request.command(), request.revision()));
     }
 
     @PutMapping("/charts/{chartId}/category")
     public ApiResponse<SpectrumService.ChartView> assignChartCategory(@PathVariable UUID chartId,
                                                                        @Valid @RequestBody AssignChartCategoryRequest request) {
-        return success(service.assignChartCategory(chartId, request.categoryId()));
+        return success(service.assignChartCategory(chartId, request.categoryId(), request.revision()));
     }
 
     @DeleteMapping("/charts/{chartId}")
-    public ApiResponse<Void> deleteChart(@PathVariable UUID chartId) {
-        service.deleteChart(chartId);
+    public ApiResponse<Void> deleteChart(@PathVariable UUID chartId,@RequestParam String revision) {
+        service.deleteChart(chartId,revision);
         return success(null);
     }
 
@@ -253,13 +253,23 @@ public class SpectrumController {
                                   @Size(max = 64) String code,
                                   @Size(max = 500) String description,
                                   @Size(max = 4000) String analysisHint,
-                                   JsonNode fields) {
+                                   JsonNode fields, String revision) {
         SpectrumService.CategoryCommand command() {
             return new SpectrumService.CategoryCommand(code, name, description, analysisHint, fields);
         }
     }
 
     public record SessionTitleRequest(@NotBlank @Size(max = 80) String title) { }
+
+    public record UpdateCategoryRequest(@NotBlank @Size(max = 120) String name,
+                                         @Size(max = 64) String code,
+                                         @Size(max = 500) String description,
+                                         @Size(max = 4000) String analysisHint,
+                                         JsonNode fields, @NotBlank String revision) {
+        SpectrumService.CategoryCommand command() {
+            return new SpectrumService.CategoryCommand(code, name, description, analysisHint, fields);
+        }
+    }
 
     public record CreateChartRequest(@NotBlank String fileId,
                                      @Size(max = 260) String title,
@@ -292,11 +302,11 @@ public class SpectrumController {
                                      @Size(max = 260) String sampleName,
                                      @Size(max = 160) String batchNo,
                                      @Size(max = 10000) String testConditions,
-                                     JsonNode metadata, UUID categoryId) {
+                                     JsonNode metadata, UUID categoryId,@NotBlank String revision) {
         SpectrumService.UpdateChartCommand command() {
             return new SpectrumService.UpdateChartCommand(title, sampleName, batchNo, testConditions, metadata, categoryId);
         }
     }
 
-    public record AssignChartCategoryRequest(@NotNull UUID categoryId) { }
+    public record AssignChartCategoryRequest(@NotNull UUID categoryId,@NotBlank String revision) { }
 }

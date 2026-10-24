@@ -18,7 +18,7 @@ public interface ProjectWorkMapper {
   "(SELECT count(*) FROM rnd.experiment e WHERE e.task_id=t.id AND e.deleted=false) experimentCount,t.version,t.created_at createdAt,t.updated_at updatedAt FROM mdm.project_task t WHERE t.id=#{id} AND t.deleted=false") Optional<ProjectTask> task(UUID id);
  // 任务可以调整所属阶段：updateTask 必须一并写入 stage_id，否则前端改了“关联阶段”保存后
  // 仍停留在原阶段（服务层已用 stageBelongs 校验目标阶段属于同一项目）。
- @Update("UPDATE mdm.project_task SET stage_id=#{stageId},name=#{name},owner=#{owner},priority=#{priority},planned_date=#{plannedDate},status=#{status},version=version+1,updated_at=now() WHERE id=#{id} AND version=#{version}") int updateTask(ProjectTask task);
+ @Update("UPDATE mdm.project_task SET stage_id=#{stageId},name=#{name},owner=#{owner},priority=#{priority},planned_date=#{plannedDate},status=#{status},version=version+1,updated_at=now() WHERE id=#{id} AND version=#{version} AND deleted=false") int updateTask(ProjectTask task);
  @Update("UPDATE mdm.project_task SET deleted=true,version=version+1,updated_at=now() WHERE id=#{id} AND version=#{version} AND deleted=false") int deleteTask(@Param("id") UUID id,@Param("version") long version);
 
  // ===================== 任务换阶段：过程产物一起迁移 =====================

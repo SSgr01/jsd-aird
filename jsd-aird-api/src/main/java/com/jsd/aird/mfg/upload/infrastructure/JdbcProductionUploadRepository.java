@@ -25,6 +25,11 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
         this.objectMapper = objectMapper;
     }
 
+    @Override public void claimVersion(UUID organizationId,UUID uploadId,long expectedVersion){
+        int changed=jdbcTemplate.update("UPDATE mfg.production_upload SET lock_version=lock_version+1,updated_at=now() WHERE organization_id=? AND id=? AND status<>'DELETED' AND lock_version=?",organizationId,uploadId,expectedVersion);
+        if(changed!=1)throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"生产单已被修改或作废，请核对最新版本后操作");
+    }
+
     @Override
     public void insert(NewUpload upload) {
         jdbcTemplate.update("""
@@ -61,7 +66,9 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
     }
 
     @Override
+    @org.springframework.transaction.annotation.Transactional
     public void updateRecognitionProgress(UUID uploadId, String status, int progress, String stage) {
+        guardRecognition(uploadId);
         jdbcTemplate.update("""
                 UPDATE mfg.production_upload
                 SET status = ?, recognition_progress = GREATEST(recognition_progress, ?),
@@ -71,9 +78,11 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
     }
 
     @Override
+    @org.springframework.transaction.annotation.Transactional
     public void completeRecognition(UUID uploadId, UUID selectedTemplateVersionId, String matchMode,
                                     double matchScore, JsonNode structureSummary, JsonNode workbookSnapshot,
                                     JsonNode recognitionResult) {
+        guardRecognition(uploadId);
         jdbcTemplate.update("""
                 UPDATE mfg.production_upload
                 -- Recognition produces an editable production-order draft.  A
@@ -81,7 +90,7 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
                 -- happens in the workspace and publication creates the first
                 -- version.  Keep REVIEW_REQUIRED readable below for records
                 -- written by older deployments.
-                SET status = 'SAVED', recognition_progress = 100,
+                SET status = 'SAVED', lock_version=lock_version+1, recognition_progress = 100,
                     current_stage = 'COMPLETED', selected_template_version_id = ?,
                     match_mode = ?, template_match_score = ?, structure_summary_jsonb = ?,
                     workbook_snapshot_jsonb = ?, recognition_result_jsonb = ?,
@@ -92,7 +101,9 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
     }
 
     @Override
+    @org.springframework.transaction.annotation.Transactional
     public void saveGeneratedWorkbook(UUID uploadId, JsonNode workbookSnapshot) {
+        guardRecognition(uploadId);
         var updated = jdbcTemplate.update("""
                 UPDATE mfg.production_upload
                 SET workbook_snapshot_jsonb = ?, lock_version = lock_version + 1, updated_at = now()
@@ -104,7 +115,9 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
     }
 
     @Override
+    @org.springframework.transaction.annotation.Transactional
     public void failRecognition(UUID uploadId, String message) {
+        guardRecognition(uploadId);
         jdbcTemplate.update("""
                 UPDATE mfg.production_upload
                 SET status = 'FAILED', current_stage = 'FAILED', failure_message = ?, updated_at = now()
@@ -113,7 +126,9 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
     }
 
     @Override
+    @org.springframework.transaction.annotation.Transactional
     public void replaceRecognitionFields(UUID uploadId, List<RecognitionField> fields) {
+        guardRecognition(uploadId);
         jdbcTemplate.update("DELETE FROM mfg.production_upload_field WHERE production_upload_id = ?", uploadId);
         if (fields == null || fields.isEmpty()) return;
         jdbcTemplate.batchUpdate("""
@@ -141,7 +156,9 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
     }
 
     @Override
+    @org.springframework.transaction.annotation.Transactional
     public void updateRecognitionResult(UUID uploadId, JsonNode recognitionResult) {
+        guardRecognition(uploadId);
         var updated = jdbcTemplate.update("""
                 UPDATE mfg.production_upload
                 SET recognition_result_jsonb = ?, lock_version = lock_version + 1, updated_at = now()
@@ -153,8 +170,10 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
     }
 
     @Override
+    @org.springframework.transaction.annotation.Transactional
     public void updateRecognizedMetadata(UUID uploadId, String orderNo, String productName,
                                          String category, java.time.LocalDate manufactureDate) {
+        guardRecognition(uploadId);
         jdbcTemplate.update("""
                 UPDATE mfg.production_upload
                 SET order_no = NULLIF(?, ''),
@@ -372,6 +391,21 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
                 WHERE organization_id = ? AND id = ?
                 """, actorId, organizationId, uploadId);
         return versions(organizationId, uploadId).getFirst();
+    }
+
+    private void guardRecognition(UUID uploadId){
+        var identity=com.jsd.aird.mfg.upload.application.ProductionRecognitionScope.current();
+        if(identity==null)return; // Human writes already claimed the expected document version.
+        var execution=identity.execution();
+        var matches=jdbcTemplate.query("""
+            SELECT pu.id FROM mfg.production_upload pu JOIN ops.async_job j ON j.id=pu.async_job_id
+            WHERE pu.id=? AND pu.organization_id=? AND pu.status<>'DELETED'
+              AND j.id=? AND j.organization_id=pu.organization_id AND j.lease_generation=?
+              AND ((?=false AND j.status='RUNNING' AND j.lease_token=? AND j.lease_expires_at>now())
+                OR (?=true AND j.status='FAILED')) FOR UPDATE OF pu,j
+            """,(rs,n)->rs.getObject(1,UUID.class),uploadId,execution.organizationId(),execution.jobId(),
+                execution.leaseGeneration(),identity.terminal(),execution.leaseToken(),identity.terminal());
+        if(matches.isEmpty())throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"旧识别任务已失效，不能写入生产单");
     }
 
     private String selectSql() {

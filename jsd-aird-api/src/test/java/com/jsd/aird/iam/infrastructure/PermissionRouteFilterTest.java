@@ -179,6 +179,8 @@ class PermissionRouteFilterTest {
                 .isEqualTo("experiment.submit");
         assertThat(code("POST", "/api/v1/experiments/" + id + "/approve"))
                 .isEqualTo("experiment.approve");
+        assertThat(code("POST", "/api/v1/experiments/" + id + "/publish"))
+                .isEqualTo("experiment.approve");
         assertThat(code("POST", "/api/v1/experiments/" + id + "/return"))
                 .isEqualTo("experiment.review");
         assertThat(code("POST", "/api/v1/experiments/" + id + "/void"))

@@ -20,6 +20,8 @@ import type {
   ExperimentListProjection,
 } from '@/features/template-workspace/types';
 import { httpClient, LARGE_PAYLOAD_TIMEOUT } from '@/services/http/client';
+import { HttpError } from '@/services/http/errors';
+import { snapshotBlob } from '@/features/template-workspace/editor-save';
 
 export interface CreateTemplateInput {
   name: string;
@@ -29,6 +31,7 @@ export interface CreateTemplateInput {
 }
 
 export interface TemplateCategory {
+  revision: string;
   id: string;
   name: string;
   description?: string;
@@ -38,6 +41,7 @@ export interface TemplateCategory {
 }
 
 export interface TemplateVersionReview {
+  lockVersion: number;
   versionId: string;
   status: 'NOT_SUBMITTED' | 'SUBMITTED' | 'APPROVED' | 'REJECTED';
   submittedBy?: string;
@@ -55,6 +59,14 @@ export interface TemplateVersionReview {
     comment?: string;
     createdAt: string;
   }>;
+}
+
+export interface TemplateReviewVersions { workspaceVersion: number; reviewVersion: number }
+
+function requireReviewVersions(versions: TemplateReviewVersions) {
+  if (![versions.workspaceVersion, versions.reviewVersion].every(version => Number.isSafeInteger(version) && version >= 0)) {
+    throw new HttpError('文档或审核版本缺失，请重新读取后操作', 'VERSION_REQUIRED', 422);
+  }
 }
 
 export interface TemplateFacetSummary {
@@ -601,8 +613,8 @@ export const templateApi = {
     return response.data.data;
   },
 
-  async renameTemplate(templateId: string, name: string) {
-    await httpClient.patch(`/api/v1/templates/${templateId}`, { name });
+  async renameTemplate(templateId: string, name: string, revision: string) {
+    await httpClient.patch(`/api/v1/templates/${templateId}`, { name, revision });
   },
 
   async copyTemplate(versionId: string, input: { name?: string; categoryId?: string }) {
@@ -621,7 +633,7 @@ export const templateApi = {
 
   async batchActions(input: {
     action: 'COPY' | 'MOVE' | 'DELETE_DRAFT' | 'RETIRE'; categoryId?: string;
-    items: Array<{ templateId: string; versionId?: string; name?: string }>;
+    items: Array<{ templateId: string; versionId?: string; name?: string; revision: string }>;
   }) {
     const response = await httpClient.post<ApiResponse<Array<{
       templateId: string; versionId?: string; success: boolean; reason?: string;
@@ -756,24 +768,27 @@ export const templateApi = {
     return response.data.data;
   },
 
-  async submitReview(versionId: string, dataCleanupConfirmed?: boolean) {
+  async submitReview(versionId: string, versions: TemplateReviewVersions, dataCleanupConfirmed?: boolean) {
+    requireReviewVersions(versions);
     const response = await httpClient.post<ApiResponse<TemplateVersionReview>>(
       `/api/v1/template-versions/${versionId}/review/submit`,
-      dataCleanupConfirmed === undefined ? undefined : { dataCleanupConfirmed },
+      { ...versions, dataCleanupConfirmed },
     );
     return response.data.data;
   },
 
-  async approveReview(versionId: string, comment?: string) {
+  async approveReview(versionId: string, versions: TemplateReviewVersions, comment?: string) {
+    requireReviewVersions(versions);
     const response = await httpClient.post<ApiResponse<TemplateVersionReview>>(
-      `/api/v1/template-versions/${versionId}/review/approve`, { comment },
+      `/api/v1/template-versions/${versionId}/review/approve`, { ...versions, comment },
     );
     return response.data.data;
   },
 
-  async rejectReview(versionId: string, reason: string) {
+  async rejectReview(versionId: string, versions: TemplateReviewVersions, reason: string) {
+    requireReviewVersions(versions);
     const response = await httpClient.post<ApiResponse<TemplateVersionReview>>(
-      `/api/v1/template-versions/${versionId}/review/reject`, { reason },
+      `/api/v1/template-versions/${versionId}/review/reject`, { ...versions, reason },
     );
     return response.data.data;
   },
@@ -820,30 +835,19 @@ export const templateApi = {
     return response.data.data;
   },
 
-  async deleteDraft(versionId: string) {
-    await httpClient.delete(`/api/v1/template-versions/${versionId}`);
+  async deleteDraft(versionId: string, revision: string) {
+    await httpClient.delete(`/api/v1/template-versions/${versionId}`, { params: { revision } });
   },
 
-  async retire(templateId: string) {
-    await httpClient.post(`/api/v1/templates/${templateId}/retire`);
+  async retire(templateId: string, revision: string) {
+    await httpClient.post(`/api/v1/templates/${templateId}/retire`, undefined, { params: { revision } });
   },
 
-  async stageSnapshot(snapshot: Record<string, unknown>, format: TemplateFormat) {
-    const validObject = Boolean(snapshot) && typeof snapshot === 'object' && !Array.isArray(snapshot);
-    const validWorkbook = format !== 'XLSX'
-      || (validObject && snapshot.sheets && typeof snapshot.sheets === 'object'
-        && !Array.isArray(snapshot.sheets) && Object.keys(snapshot.sheets).length > 0);
-    const validDocument = format !== 'DOCX'
-      || (validObject && snapshot.body && typeof snapshot.body === 'object'
-        && !Array.isArray(snapshot.body)
-        && typeof (snapshot.body as Record<string, unknown>).dataStream === 'string');
-    if (!validObject || !validWorkbook || !validDocument) {
-      throw new Error('编辑器快照无效，已取消保存，请刷新页面后重试');
-    }
+  async stageSnapshot(snapshot: Record<string, unknown> | Blob, format: TemplateFormat) {
     const body = new FormData();
     body.append(
       'file',
-      new Blob([JSON.stringify(snapshot)], { type: 'application/json' }),
+      snapshotBlob(snapshot, format),
       `${format.toLowerCase()}-univer-snapshot.json`,
     );
     const response = await httpClient.post<
@@ -965,19 +969,19 @@ export const templateApi = {
     return response.data.data;
   },
 
-  async renameCategory(categoryId: string, input: { name: string; description?: string | null }) {
+  async renameCategory(categoryId: string, input: { revision: string; name: string; description?: string | null }) {
     const response = await httpClient.put<ApiResponse<TemplateCategory>>(`/api/v1/template-categories/${categoryId}`, input);
     return response.data.data;
   },
 
-  async deleteCategory(categoryId: string, replacementCategoryId?: string) {
+  async deleteCategory(categoryId: string, revision: string, replacementCategoryId?: string) {
     await httpClient.delete(`/api/v1/template-categories/${categoryId}`, {
-      params: replacementCategoryId ? { replacementCategoryId } : undefined,
+      params: { replacementCategoryId, revision },
     });
   },
 
-  async assignTemplateCategory(templateId: string, categoryId?: string) {
-    await httpClient.put(`/api/v1/templates/${templateId}/category`, { categoryId: categoryId || null });
+  async assignTemplateCategory(templateId: string, revision: string, categoryId?: string) {
+    await httpClient.put(`/api/v1/templates/${templateId}/category`, { categoryId: categoryId || null, revision });
   },
 
   async decideRecognitionSuggestion(

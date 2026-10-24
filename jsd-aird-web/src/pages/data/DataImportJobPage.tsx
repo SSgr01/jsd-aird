@@ -80,6 +80,7 @@ export function DataImportJobPage({
   const [saving, setSaving] = useState(false);
   const [savingCell, setSavingCell] = useState<string>();
   const [documentCorrections, setDocumentCorrections] = useState<Record<string, string>>({});
+  const correctionRevision = useRef<string | undefined>(undefined);
   const [activeTab, setActiveTab] = useState<PanelTab>('data');
   const [selectedFieldKey, setSelectedFieldKey] = useState<string>();
   const [selectedBindingId, setSelectedBindingId] = useState<string>();
@@ -235,12 +236,14 @@ export function DataImportJobPage({
     setSavingCell(key);
     setSelectedFieldKey(fieldKey(field));
     try {
-      await dataApi.correctValue(id, field.recordId, {
+      const savedJob = await dataApi.correctValue(id, field.recordId, {
+        revision: correctionRevision.current ?? preview.job.revision,
         bindingId: field.bindingId,
         valuePath: field.valuePath,
         correctedValue: change.value,
         reason: '导入确认页直接修正',
       });
+      correctionRevision.current = Object.keys(documentCorrections).length ? savedJob.revision : undefined;
       setWorkbook((current) => current ? {
         ...current,
         fields: current.fields.map((item) => fieldKey(item) === fieldKey(field)
@@ -250,8 +253,9 @@ export function DataImportJobPage({
       await load({ silent: true, preserveSnapshot: true });
       void message.success('修正值已保存并重新校验');
     } catch (error) {
-      await editorRef.current?.writeCell?.(change.sheetId, change.address, change.previousValue).catch(() => undefined);
-      void message.error(error instanceof Error ? error.message : '修正值保存失败，已恢复原值');
+      correctionRevision.current ??= preview.job.revision;
+      setDocumentCorrections(current => ({ ...current, [fieldKey(field) || '']: formatImportValue(change.value) }));
+      void message.error(error instanceof Error ? error.message : '修正值保存失败，当前修改仍保留');
     } finally {
       setSavingCell(undefined);
     }
@@ -274,7 +278,7 @@ export function DataImportJobPage({
   const reExtract = async () => {
     setSaving(true);
     try {
-      await dataApi.reExtract(id);
+      await dataApi.reExtract(id,preview.job.revision);
       await load();
       void message.success('数据已重新读取并校验');
     } catch (error) { void message.error(error instanceof Error ? error.message : '重新读取失败'); }
@@ -284,13 +288,19 @@ export function DataImportJobPage({
   const saveDraft = async () => {
     setSaving(true);
     try {
+      let savedJob = { ...preview.job, revision: correctionRevision.current ?? preview.job.revision };
       for (const [key, value] of Object.entries(documentCorrections)) {
         const field = fields.find((item) => fieldKey(item) === key);
         if (!field?.editable || !field.recordId) throw new Error('字段位置已变化，请重新核对后保存');
-        await dataApi.correctValue(id, field.recordId, { bindingId: field.bindingId, valuePath: field.valuePath, correctedValue: value, reason: '保存导入草稿' });
+        savedJob = await dataApi.correctValue(id, field.recordId, { revision: savedJob.revision, bindingId: field.bindingId, valuePath: field.valuePath, correctedValue: value, reason: '保存导入草稿' });
+        const ownedJob = savedJob;
+        correctionRevision.current = savedJob.revision;
+        setPreview(current => current ? { ...current, job: ownedJob } : current);
         setDocumentCorrections((current) => { const next = { ...current }; delete next[key]; return next; });
       }
-      await dataApi.saveMappings(id, preview.mappings);
+      savedJob = await dataApi.saveMappings(id, savedJob.revision, preview.mappings);
+      correctionRevision.current = undefined;
+      setPreview(current => current ? { ...current, job: savedJob } : current);
       await load();
       void message.success('导入草稿已保存');
     } catch (error) { void message.error(error instanceof Error ? error.message : '草稿保存失败，未保存内容仍保留'); }
@@ -302,7 +312,7 @@ export function DataImportJobPage({
     setSaving(true);
     try {
       const relations = await projectResourceApi.replaceLinks('DATA_IMPORT_JOB', id,
-        projectRelations.filter((item) => item.projectId));
+        projectRelations.filter((item) => item.projectId), relatedProjects);
       setRelatedProjects(relations); setRelationOpen(false); void message.success('关联项目已保存');
     } catch (error) { void message.error(error instanceof Error ? error.message : '关联项目保存失败'); }
     finally { setSaving(false); }
@@ -398,14 +408,15 @@ export function DataImportJobPage({
               {workspaceView === 'edit' && canUpdate && field.editable && field.recordId ? <Space.Compact>
                 <Input disabled={saving || Boolean(savingCell)} aria-label={`修正${field.fieldName}`} placeholder="核对原文后输入实际值"
                   value={documentCorrections[fieldKey(field) || ''] ?? formatImportValue(field.effectiveValue)}
-                  onChange={(event) => setDocumentCorrections((current) => ({ ...current, [fieldKey(field) || '']: event.target.value }))} />
+                  onChange={(event) => { correctionRevision.current ??= preview.job.revision; setDocumentCorrections((current) => ({ ...current, [fieldKey(field) || '']: event.target.value })); }} />
                 <Button disabled={saving || Boolean(savingCell)} loading={savingCell === fieldKey(field)} onClick={() => {
                   setSavingCell(fieldKey(field));
                   void dataApi.correctValue(id, field.recordId!, {
+                    revision: correctionRevision.current ?? preview.job.revision,
                     bindingId: field.bindingId, valuePath: field.valuePath,
                     correctedValue: documentCorrections[fieldKey(field) || ''] ?? formatImportValue(field.effectiveValue),
                     reason: '人工核对原文件',
-                  }).then(() => { setDocumentCorrections((current) => { const next = { ...current }; delete next[fieldKey(field) || '']; return next; }); return load(); }).then(() => void message.success('已修正并重新校验'))
+                  }).then((savedJob) => { correctionRevision.current = savedJob.revision; setDocumentCorrections((current) => { const next = { ...current }; delete next[fieldKey(field) || '']; if (!Object.keys(next).length) correctionRevision.current = undefined; return next; }); return load(); }).then(() => void message.success('已修正并重新校验'))
                     .catch((error: unknown) => void message.error(error instanceof Error ? error.message : '修正失败'))
                     .finally(() => setSavingCell(undefined));
                 }}>保存修正</Button>

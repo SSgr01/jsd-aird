@@ -1,3 +1,6 @@
+import { DocsEditor, SheetsEditor } from '@/features/template-workspace/editor-runtime';
+import { ContentLoading } from '@/components/loading/ContentLoading';
+import { trackSnapshot, useWorkspaceLoadGeneration } from '@/features/template-workspace/workspace-loading';
 import {
   ArrowLeftOutlined,
   DownloadOutlined,
@@ -6,10 +9,11 @@ import {
   LoadingOutlined,
   SaveOutlined,
 } from '@ant-design/icons';
-import { App, Button, Input, Result, Skeleton, Space, Spin, Tabs, Tag, Typography } from 'antd';
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { App, Button, Input, Result, Space, Spin, Tabs, Tag, Typography } from 'antd';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import type { EditorHandle } from '@/features/template-workspace/types';
+import { preloadWorkspaceEditor } from '@/features/template-workspace/preload-editor';
 import { parseExperimentSnapshot } from '@/features/experiment-workspace/experiment-workbook';
 import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
 import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
@@ -27,12 +31,6 @@ import { httpClient } from '@/services/http/client';
 import { downloadBlob, fetchFileBlob, fetchFilePreviewBlob, fileContentUrl } from '@/services/files/file-api';
 import { FilePreviewModal } from '@/components/file-preview';
 import './research-test.css';
-const SheetsEditor = lazy(async () => ({
-  default: (await import('@/features/template-workspace/UniverSheetsEditor')).UniverSheetsEditor,
-}));
-const DocsEditor = lazy(async () => ({
-  default: (await import('@/features/template-workspace/UniverDocsEditor')).UniverDocsEditor,
-}));
 const text: Record<string, string> = {
   DRAFT: '草稿',
   PENDING_REVIEW: '待审核',
@@ -236,20 +234,27 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
     [error, setError] = useState<string>();
   const root = type === 'REPORT' ? 'reports' : 'standards';
   const returnTo = resolveReturnTo(location.state, `/research-test/${root}`);
+  const beginLoad = useWorkspaceLoadGeneration();
   const load = useCallback(async () => {
+    const isCurrent = beginLoad();
+    setError(undefined);
     try {
       const d = await getResearchTest(type, id);
+      if (!isCurrent()) return;
+      preloadWorkspaceEditor(d.summary.documentFormat);
+      void listResearchTestVersions(type,id).then(history=>{if(isCurrent())setVersions(history)}).catch(()=>undefined);
       setDetail(d);
-      const s = await loadResearchTestSnapshot(d);
+      const s = await trackSnapshot(loadResearchTestSnapshot(d));
+      if (!isCurrent()) return;
       setSnapshot(s);
-      setVersions(await listResearchTestVersions(type, id));
       setView(['DRAFT', 'RETURNED'].includes(d.summary.status) ? 'edit' : 'preview');
       setSaveState('SAVED');
     } catch (e) {
-      setError(e instanceof Error ? e.message : '加载失败');
+      if (isCurrent()) setError(e instanceof Error ? e.message : '加载失败');
     }
-  }, [id, type]);
+  }, [id, type, beginLoad]);
   useEffect(() => {
+    setDetail(undefined); setSnapshot(undefined);
     void load();
   }, [load]);
   useEffect(() => {
@@ -381,7 +386,7 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
         extra={<Button onClick={() => nav(-1)}>返回</Button>}
       />
     );
-  if (!detail || !snapshot) return <Skeleton active paragraph={{ rows: 12 }} />;
+  if (!detail || !snapshot) return <ContentLoading label="下载文档…" />;
   const editable = ['DRAFT', 'RETURNED'].includes(detail.summary.status) && view === 'edit';
   return (
     <section className="workspace-shell template-business-workspace research-test-workspace">

@@ -52,6 +52,7 @@ export interface ExperimentImportConfiguration {
 }
 
 export interface TemplateListItem {
+  revision: string;
   templateId: string;
   versionId: string;
   templateCode: string;
@@ -295,7 +296,7 @@ export interface TemplateWorkspace {
   versionId: string;
   recognitionRunId?: string;
   origin?: {
-    type: 'EXPERIMENT' | string;
+    type: string;
     experimentId?: string;
     experimentNo?: string;
     experimentTitle?: string;
@@ -471,6 +472,8 @@ export interface TemplateVersionHistoryItem {
 }
 
 export interface EditorHandle {
+  flushChanges?(): void;
+  getContentRevision?(): number;
   getSnapshot(): Record<string, unknown>;
   readBinding(binding: TemplateBinding): unknown;
   writeBinding(binding: TemplateBinding, value: unknown): Promise<void>;

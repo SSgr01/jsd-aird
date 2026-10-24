@@ -35,6 +35,8 @@ import org.springframework.stereotype.Component;
 /** Converts XLSX OOXML into a business-fidelity Univer workbook and recognition summary. */
 @Component
 public class XlsxStructureParser implements OfficeStructureParser, WorkbookInstanceParser {
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated;
 
     static final int STRUCTURE_VERSION = WorkbookPhysicalFactsBuilder.STRUCTURE_VERSION;
     private static final double POINT_TO_PIXEL = 96d / 72d;
@@ -61,6 +63,7 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
 
     @Override
     public ParseResult parse(InputStream input) {
+        if(isolated!=null)return isolated.execute("xlsx",input,null,ParseResult.class);
         try (var workbook = new XSSFWorkbook(input)) {
             var summary = objectMapper.createObjectNode();
             var sheets = objectMapper.createArrayNode();
@@ -212,7 +215,7 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
 
             snapshot.put("id", UUID.randomUUID().toString());
             snapshot.put("name", "导入的 Excel 模板");
-            snapshot.put("appVersion", "univer-0.25.1");
+            snapshot.put("appVersion", "univer-1.2.0");
             snapshot.put("snapshotFormatVersion", 3);
             snapshot.set("styles", snapshotStyles);
             snapshot.set("sheetOrder", sheetOrder);

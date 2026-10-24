@@ -12,6 +12,7 @@ import {
 import { Button, Empty, Input, Select, Switch, Tooltip } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
+import { CollapsibleFieldPanel } from '@/components/field-panel/CollapsibleFieldPanel';
 
 import type {
   BusinessField,
@@ -139,7 +140,7 @@ export function TemplateFieldManager({
   };
 
   return (
-    <aside className="template-field-manager" aria-label="字段管理">
+    <CollapsibleFieldPanel tabs={
       <div className="field-manager-tabs" role="tablist" aria-label="字段管理页面">
         {recognitionReview?.recognitionRunId && editable && (
           <button
@@ -179,7 +180,7 @@ export function TemplateFieldManager({
           </button>
         )}
       </div>
-
+      }>
       {activeTab === 'recognition' && recognitionReview?.recognitionRunId && editable ? (
         <RecognitionReviewPanel
           review={recognitionReview}
@@ -236,7 +237,7 @@ export function TemplateFieldManager({
       ) : (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="请先选择字段" />
       )}
-    </aside>
+    </CollapsibleFieldPanel>
   );
 }
 

@@ -24,7 +24,7 @@ import {
   message,
 } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import dayjs from '@/utils/dayjs';
 
 import {
@@ -67,6 +67,9 @@ interface InfoFormValues {
 export function ProjectDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const candidate: unknown = (location.state as { returnTo?: unknown } | null)?.returnTo;
+  const returnTo = typeof candidate === 'string' && /^\/projects\/list(?:\?|$)/.test(candidate) ? candidate : '/projects/list';
   const [searchParams, setSearchParams] = useSearchParams();
   const [project, setProject] = useState<Project>();
   const [loading, setLoading] = useState(true);
@@ -167,7 +170,7 @@ export function ProjectDetailPage() {
       acc[key] = (item.value ?? '').toString();
       return acc;
     }, {});
-    const input: ProjectInput = {
+    const input: ProjectInput & { version: number } = {
       projectCode: projectCode || undefined,
       name: values.name.trim(),
       owner: values.owner?.trim() || undefined,
@@ -336,7 +339,7 @@ export function ProjectDetailPage() {
     <div className="pm-detail-page">
       {holder}
       <div className="pm-detail-title">
-        <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/projects/list')}>返回</Button>
+        <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate(returnTo)}>返回</Button>
         <h2>{project.name}</h2>
         <Tag color="blue">{formatProjectStatus(project.status)}</Tag>
         <span className="pm-detail-partner">关联客户：{project.partnerName ?? '—'}</span>

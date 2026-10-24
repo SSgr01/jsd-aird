@@ -24,3 +24,4 @@ class ResizeObserverMock {
 }
 
 globalThis.ResizeObserver = ResizeObserverMock;
+window.scrollTo = vi.fn();

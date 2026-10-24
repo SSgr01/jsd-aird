@@ -25,6 +25,10 @@ public interface ProjectResourceFacade {
     List<RelatedProjectView> replaceLinks(Actor actor, ResourceType resourceType, UUID resourceId,
                                           List<ProjectRelationTarget> targets);
 
+    List<RelatedProjectView> replaceLinksChecked(Actor actor, ResourceType resourceType, UUID resourceId,
+                                                 List<ProjectRelationTarget> targets,
+                                                 List<ProjectRelationTarget> expectedTargets);
+
     List<ReferenceView> addReferences(Actor actor, ResourceType resourceType, UUID resourceId,
                                       String summary, List<ProjectRelationTarget> targets);
 

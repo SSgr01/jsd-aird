@@ -1,6 +1,8 @@
 import { Alert, Button, Input, Tabs, Tag, Typography } from 'antd';
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
+import { FieldPanelToggle } from '@/components/field-panel/CollapsibleFieldPanel';
+import { useAppStore } from '@/stores/app-store';
 import { DataFieldDataBrowser, DataFieldStructureBrowser } from '@/features/data-workbench/DataWorkbench';
 import { getAtPath } from '@/features/template-workspace/path-utils';
 import type { DataFieldValueView, DataWorkbookSnapshot } from '@/services/data/data-api';
@@ -67,6 +69,8 @@ function importedValue(snapshot: Record<string, unknown>, locator: Record<string
 export function ExperimentTemplateDataPanel({
   review, values, editable, confirmed, busy, onChange, onFocus, onConfirm, importedSnapshot,
 }: Props) {
+  const collapsed = useAppStore((state) => state.fieldPanelCollapsed);
+  const panelId = useId();
   const [activeTab, setActiveTab] = useState<'data' | 'structure' | 'mapping'>('data');
   const [selectedBindingId, setSelectedBindingId] = useState<string>();
   const [selectedFieldKey, setSelectedFieldKey] = useState<string>();
@@ -147,9 +151,12 @@ export function ExperimentTemplateDataPanel({
     setSelectedFieldKey([field.recordId, field.bindingId, field.valuePath, field.sheetId, field.address].join('|'));
     onFocus(field.bindingId);
   };
-  return <aside className="data-workbench-panel experiment-template-data-panel">
+  return <aside id={panelId} className="data-workbench-panel experiment-template-data-panel collapsible-field-panel"
+    aria-label="字段数据确认" data-collapsed={collapsed}>
     <div className="data-workbench-panel-header">
       <div className="data-workbench-panel-title">
+        <FieldPanelToggle controls={panelId} />
+        {collapsed && <span className="field-panel-collapsed-label" aria-hidden="true">字段数据</span>}
         <Typography.Title level={5}>本次实验数据</Typography.Title>
         <Tag color={confirmed ? 'success' : 'warning'}>{confirmed ? '已确认' : '待确认'}</Tag>
       </div>

@@ -1,3 +1,4 @@
+import { useRequestGuard } from '@/services/query/use-request-guard';
 import { DeleteOutlined, DownloadOutlined, EyeOutlined, FolderOpenOutlined, LineChartOutlined, MessageOutlined, RedoOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
 import { App, Button, Dropdown, Empty, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -38,20 +39,23 @@ export function SpectrumViewPage() {
     targets: ProjectRelationTarget[];
   }>();
 
+  const beginListRequest = useRequestGuard(JSON.stringify([categoryId,status,keyword,page.current,page.pageSize]));
   const load = useCallback(async () => {
+    const request = beginListRequest();
     setLoading(true);
     try {
       const [chartPage, categoryList] = await Promise.all([
-        spectrumApi.listCharts({ categoryId: categoryId === 'ALL' ? undefined : categoryId, status, keyword: keyword || undefined, page: page.current, size: page.pageSize }),
+        spectrumApi.listCharts({ categoryId: categoryId === 'ALL' ? undefined : categoryId, status, keyword: keyword || undefined, page: page.current, size: page.pageSize }, request.signal),
         spectrumApi.categories(),
       ]);
+      if (!request.current()) return;
       setItems(chartPage.items);
       setCategories(categoryList);
       if (categoryId === 'ALL' && !status && !keyword) setAllChartCount(chartPage.total);
       setPage((value) => ({ ...value, current: chartPage.page, pageSize: chartPage.size, total: chartPage.total }));
-    } catch (error) { void message.error(error instanceof Error ? error.message : '图谱列表加载失败'); }
-    finally { setLoading(false); }
-  }, [categoryId, keyword, message, page.current, page.pageSize, status]);
+    } catch (error) { if (request.current()) void message.error(error instanceof Error ? error.message : '图谱列表加载失败'); }
+    finally { if (request.current()) setLoading(false); }
+  }, [beginListRequest, categoryId, keyword, message, page.current, page.pageSize, status]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -74,7 +78,7 @@ export function SpectrumViewPage() {
     setSaving(true);
     try {
       if (editor?.mode === 'NEW') await spectrumApi.createCategory({ name: value.name.trim(), description: value.description?.trim() || undefined });
-      else if (editor?.item) await spectrumApi.updateCategory(editor.item.id, { name: value.name.trim(), description: value.description?.trim() || undefined });
+      else if (editor?.item) await spectrumApi.updateCategory(editor.item.id, { revision: editor.item.revision, name: value.name.trim(), description: value.description?.trim() || undefined });
       setEditor(undefined); await load(); void message.success('图谱分类已保存');
     } catch (error) { void message.error(error instanceof Error ? error.message : '分类保存失败'); }
     finally { setSaving(false); }
@@ -83,7 +87,7 @@ export function SpectrumViewPage() {
   const removeCategory = async () => {
     if (!deleteItem) return;
     setSaving(true);
-    try { await spectrumApi.deleteCategory(deleteItem.id); setDeleteItem(undefined); setCategoryId('ALL'); await load(); void message.success('分类已删除'); }
+    try { await spectrumApi.deleteCategory(deleteItem.id, deleteItem.revision); setDeleteItem(undefined); setCategoryId('ALL'); await load(); void message.success('分类已删除'); }
     catch (error) { void message.error(error instanceof Error ? error.message : '分类删除失败'); }
     finally { setSaving(false); }
   };
@@ -92,7 +96,7 @@ export function SpectrumViewPage() {
     if (item.categoryId === nextCategoryId) return;
     setSaving(true);
     try {
-      await spectrumApi.assignChartCategory(item.id, nextCategoryId);
+      await spectrumApi.assignChartCategory(item.id, nextCategoryId, item.revision);
       await load();
       void message.success('图谱分类已更新');
     } catch (error) { void message.error(error instanceof Error ? error.message : '图谱分类更新失败'); }
@@ -108,7 +112,7 @@ export function SpectrumViewPage() {
       okButtonProps: { danger: true },
       cancelText: '取消',
       onOk: async () => {
-        try { await spectrumApi.deleteChart(item.id); await load(); void message.success('图谱已删除'); }
+        try { await spectrumApi.deleteChart(item.id, item.revision); await load(); void message.success('图谱已删除'); }
         catch (error) { void message.error(error instanceof Error ? error.message : '图谱删除失败'); throw error; }
       },
     });

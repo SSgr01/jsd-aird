@@ -104,7 +104,7 @@ export function KnowledgeSearchPage() {
     setRelationSaving(true);
     try {
       if (relationEditor.mode === 'LINK') {
-        await projectResourceApi.replaceLinks(relationEditor.file.resourceType, relationEditor.file.resourceId, targets);
+        await projectResourceApi.replaceLinks(relationEditor.file.resourceType, relationEditor.file.resourceId, targets, relationEditor.file.relatedProjects || []);
         void message.success('项目关联已保存');
       } else {
         await projectResourceApi.addReferences(relationEditor.file.resourceType, relationEditor.file.resourceId, targets);

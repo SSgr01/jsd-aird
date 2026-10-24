@@ -4,6 +4,7 @@ import type { ExperimentModel } from '@/services/experiments/experiment-api';
 import type { RecognitionReview, RecognitionReviewItem, RecognitionSuggestionPayload } from '@/services/templates/template-api';
 import { RecognitionReviewPanel } from '@/pages/template-workspace/RecognitionReviewPanel';
 import { FieldProperties, FieldStructure } from '@/pages/template-workspace/TemplateFieldManager';
+import { CollapsibleFieldPanel } from '@/components/field-panel/CollapsibleFieldPanel';
 import type { BusinessField, FieldModel } from '@/features/template-workspace/types';
 
 type Field = NonNullable<ExperimentModel['recognizedFields']>[number];
@@ -184,13 +185,13 @@ export function ExperimentFieldReviewPanel({ fields, regions, editable, onUpdate
     onFocusField(field.id);
   };
 
-  return <aside className="experiment-field-manager template-field-manager" aria-label="字段管理">
+  return <CollapsibleFieldPanel className="experiment-field-manager" tabs={
     <div className="field-manager-tabs" role="tablist" aria-label="字段管理页面">
       <button type="button" role="tab" data-tab="recognition" aria-selected={tab === 'recognition'} onClick={() => setTab('recognition')}>识别确认</button>
       <button type="button" role="tab" aria-selected={tab === 'structure'} onClick={() => setTab('structure')}>字段结构</button>
       <button type="button" role="tab" aria-selected={tab === 'properties'} disabled={!selectedField} onClick={() => setTab('properties')}>字段属性</button>
     </div>
-
+    }>
     {tab === 'recognition' ? <RecognitionReviewPanel
       review={review}
       editable={editable}
@@ -272,5 +273,5 @@ export function ExperimentFieldReviewPanel({ fields, regions, editable, onUpdate
       onDeleteField={(field) => onDeleteField(field.id)}
       onPlaceWordField={() => {}}
     /> : null}
-  </aside>;
+  </CollapsibleFieldPanel>;
 }

@@ -26,6 +26,11 @@ import java.util.UUID;
 public class QualityDataRepository implements QualityDataStore {
     private final JdbcTemplate jdbc; private final ObjectMapper mapper;
     public QualityDataRepository(JdbcTemplate jdbc,ObjectMapper mapper){this.jdbc=jdbc;this.mapper=mapper;}
+    @Override public void lockCategory(UUID organizationId,UUID categoryId){
+        if(jdbc.query("SELECT id FROM quality.data_category WHERE organization_id=? AND id=? FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),organizationId,categoryId).isEmpty())
+            throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,"分类不存在");
+    }
+
     public List<Category> categories(UUID org,String type){return jdbc.query("SELECT c.*,count(r.id) record_count FROM quality.data_category c LEFT JOIN quality.data_record r ON r.category_id=c.id AND r.deleted=false WHERE c.organization_id=? AND c.business_type=? GROUP BY c.id ORDER BY c.sort_order,c.created_at",(rs,n)->category(rs),org,type);}
     public Category category(UUID org,UUID id){var rows=jdbc.query("SELECT c.*,0 record_count FROM quality.data_category c WHERE organization_id=? AND id=?",(rs,n)->category(rs),org,id);if(rows.isEmpty())throw new ApiException(ApiErrorCode.NOT_FOUND,"品管分类不存在");return rows.getFirst();}
     public Category createCategory(UUID org,UUID user,String type,String name,String desc){try{var id=UUID.randomUUID();jdbc.update("INSERT INTO quality.data_category(id,organization_id,business_type,name,description,created_by) VALUES(?,?,?,?,?,?)",id,org,type,name,desc,user);return category(org,id);}catch(DuplicateKeyException e){throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"分类名称已存在");}}
@@ -58,11 +63,32 @@ public class QualityDataRepository implements QualityDataStore {
         return record(org,id);
     }
     public void insertVersion(UUID org,UUID user,UUID recordId,int versionNo,String no,JsonNode data,JsonNode workbookSnapshot,long lockVersion,String changeType){jdbc.update("INSERT INTO quality.data_record_version(id,organization_id,record_id,version_no,business_no,data_jsonb,workbook_snapshot_jsonb,lock_version,change_type,created_by) VALUES(?,?,?,?,?,?,?,?,?,?)",UUID.randomUUID(),org,recordId,versionNo,no,pg(data),pgOrNull(workbookSnapshot),lockVersion,changeType,user);}
-    public void softDelete(UUID org,List<UUID> ids){if(ids==null)return;ids.forEach(id->jdbc.update("UPDATE quality.data_record SET deleted=true,updated_at=now() WHERE organization_id=? AND id=?",org,id));}
-    public void softDeleteOne(UUID org,UUID id){if(jdbc.update("UPDATE quality.data_record SET deleted=true,updated_at=now() WHERE organization_id=? AND id=? AND deleted=false",org,id)==0)throw new ApiException(ApiErrorCode.NOT_FOUND,"品管数据不存在");}
-    public void move(UUID org,List<UUID> ids,UUID cat){if(ids==null)return;ids.forEach(id->jdbc.update("UPDATE quality.data_record SET category_id=?,lock_version=lock_version+1,updated_at=now() WHERE organization_id=? AND id=? AND deleted=false AND business_type=(SELECT business_type FROM quality.data_category WHERE organization_id=? AND id=?)",cat,org,id,org,cat));}
+    public void lockRecord(UUID org,UUID id){
+        if(jdbc.query("SELECT id FROM quality.data_record WHERE organization_id=? AND id=? AND deleted=false FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),org,id).isEmpty())
+            throw new ApiException(ApiErrorCode.NOT_FOUND,"品管数据不存在");
+    }
+    public void softDeleteOne(UUID org,UUID id,long expected){
+        changed(jdbc.update("UPDATE quality.data_record SET deleted=true,lock_version=lock_version+1,updated_at=now() WHERE organization_id=? AND id=? AND deleted=false AND lock_version=?",org,id,expected));
+    }
+    public void moveOne(UUID org,UUID id,long expected,UUID cat){
+        changed(jdbc.update("UPDATE quality.data_record SET category_id=?,lock_version=lock_version+1,updated_at=now() WHERE organization_id=? AND id=? AND lock_version=? AND deleted=false AND business_type=(SELECT business_type FROM quality.data_category WHERE organization_id=? AND id=?)",cat,org,id,expected,org,cat));
+    }
+    private static void changed(int count){if(count!=1)throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"品管数据已被其他用户修改");}
     public UUID insertDraft(UUID org,UUID user,String type,UUID cat,String no,JsonNode data,QualityDataService.UploadInput in,JsonNode workbookSnapshot){var id=UUID.randomUUID();jdbc.update("INSERT INTO quality.data_record(id,organization_id,business_type,category_id,business_no,data_jsonb,workbook_snapshot_jsonb,source_file_id,project_id,project_name,stage_id,stage_name,task_id,task_name,visibility,created_by,updated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",id,org,type,cat,no,pg(data),pgOrNull(workbookSnapshot),in.fileId(),in.projectId(),in.projectName(),in.stageId(),in.stageName(),in.taskId(),in.taskName(),in.visibility(),user,user);return id;}
-    public VersionView publish(UUID org,UUID user,UUID id){var current=record(org,id);if("coa".equals(current.businessType())){jdbc.update("UPDATE quality.data_record SET data_jsonb=jsonb_set(data_jsonb,'{status}',to_jsonb('已签发'::text),true),lock_version=lock_version+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND deleted=false",user,org,id);current=record(org,id);}jdbc.update("DELETE FROM quality.data_record_version WHERE organization_id=? AND record_id=? AND change_type<>'PUBLISH'",org,id);var next=jdbc.queryForObject("SELECT coalesce(max(version_no),0)+1 FROM quality.data_record_version WHERE organization_id=? AND record_id=?",Integer.class,org,id);insertVersion(org,user,id,next,current.businessNo(),current.data(),current.workbookSnapshot(),current.lockVersion(),"PUBLISH");return versions(org,id).getFirst();}
+    public VersionView publish(UUID org,UUID user,UUID id,long expected){
+        // The CAS takes the parent row lock before allocating the publication number.
+        changed(jdbc.update("""
+            UPDATE quality.data_record SET
+                data_jsonb=CASE WHEN business_type='coa' THEN jsonb_set(data_jsonb,'{status}',to_jsonb('已签发'::text),true) ELSE data_jsonb END,
+                lock_version=lock_version+1,updated_by=?,updated_at=now()
+            WHERE organization_id=? AND id=? AND deleted=false AND lock_version=?
+            """,user,org,id,expected));
+        var current=record(org,id);
+        jdbc.update("DELETE FROM quality.data_record_version WHERE organization_id=? AND record_id=? AND change_type<>'PUBLISH'",org,id);
+        var next=jdbc.queryForObject("SELECT coalesce(max(version_no),0)+1 FROM quality.data_record_version WHERE organization_id=? AND record_id=?",Integer.class,org,id);
+        insertVersion(org,user,id,next,current.businessNo(),current.data(),current.workbookSnapshot(),current.lockVersion(),"PUBLISH");
+        return versions(org,id).getFirst();
+    }
     public UploadView insertUpload(UUID org,UUID user,UUID recordId,QualityDataService.UploadInput in){var id=UUID.randomUUID();jdbc.update("INSERT INTO quality.upload_file(id,organization_id,file_id,category_id,original_name,content_type,file_size,sha256,project_id,project_name,stage_id,stage_name,task_id,task_name,visibility,status,generated_record_id,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",id,org,in.fileId(),in.categoryId(),in.originalName(),in.contentType(),in.size(),in.sha256(),in.projectId(),in.projectName(),in.stageId(),in.stageName(),in.taskId(),in.taskName(),in.visibility(),"DRAFT_CREATED",recordId,user);return upload(org,id);}
     public Optional<UploadView> findUpload(UUID org,UUID id){var rows=jdbc.query("SELECT u.*,(SELECT name FROM quality.data_category c WHERE c.id=u.category_id) category_name FROM quality.upload_file u WHERE u.organization_id=? AND u.id=? AND u.deleted=false",(rs,n)->upload(rs),org,id);return rows.stream().findFirst();}
     public UploadView updateUploadStatus(UUID org,UUID id,String status,UUID generatedRecordId,String errorMessage){

@@ -33,6 +33,8 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class DocxTableWorkbookConverter {
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated;
 
     /**
      * The sheet workspace needs somewhere to type, so a converted form keeps the
@@ -59,6 +61,7 @@ public class DocxTableWorkbookConverter {
      * there is nothing a worksheet could represent.
      */
     public ConvertedWorksheet convert(byte[] docx, String documentName) {
+        if(isolated!=null)return isolated.execute("docx-workbook",new ByteArrayInputStream(docx),com.fasterxml.jackson.databind.node.TextNode.valueOf(documentName),ConvertedWorksheet.class);
         try (var document = new XWPFDocument(new ByteArrayInputStream(docx))) {
             var sheets = new ArrayList<ObjectNode>();
             var cellCount = 0;

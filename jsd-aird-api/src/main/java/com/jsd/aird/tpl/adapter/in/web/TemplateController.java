@@ -25,6 +25,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -142,7 +143,7 @@ public class TemplateController {
     @PatchMapping("/templates/{templateId}")
     public ApiResponse<Void> renameTemplate(@PathVariable UUID templateId,
                                              @Valid @RequestBody RenameTemplateRequest request) {
-        service.renameTemplate(templateId, request.name());
+        service.renameTemplate(templateId, request.name(),request.revision());
         return success(null);
     }
 
@@ -163,7 +164,7 @@ public class TemplateController {
         return success(service.batch(new TemplateWorkspaceService.BatchActionCommand(
                 request.action(), request.categoryId(), request.items().stream()
                 .map(item -> new TemplateWorkspaceService.BatchActionItem(
-                        item.templateId(), item.versionId(), item.name())).toList())));
+                        item.templateId(), item.versionId(), item.name(),item.revision())).toList())));
     }
 
     @GetMapping("/template-versions/{versionId}/export/check")
@@ -205,21 +206,21 @@ public class TemplateController {
     @PutMapping("/template-categories/{categoryId}")
     public ApiResponse<TemplateRepository.TemplateCategoryItem> renameCategory(
             @PathVariable UUID categoryId, @Valid @RequestBody CategoryRequest request) {
-        return success(service.renameCategory(categoryId, request.name(), request.description()));
+        return success(service.renameCategory(categoryId, request.name(), request.description(),request.revision()));
     }
 
     @DeleteMapping("/template-categories/{categoryId}")
     public ApiResponse<Void> deleteCategory(
             @PathVariable UUID categoryId,
-            @RequestParam(required = false) UUID replacementCategoryId) {
-        service.deleteCategory(categoryId, replacementCategoryId);
+            @RequestParam(required = false) UUID replacementCategoryId,@RequestParam String revision) {
+        service.deleteCategory(categoryId, replacementCategoryId,revision);
         return success(null);
     }
 
     @PutMapping("/templates/{templateId}/category")
     public ApiResponse<Void> assignTemplateCategory(
-            @PathVariable UUID templateId, @RequestBody AssignCategoryRequest request) {
-        service.assignTemplateCategory(templateId, request.categoryId());
+            @PathVariable UUID templateId, @Valid @RequestBody AssignCategoryRequest request) {
+        service.assignTemplateCategory(templateId, request.categoryId(),request.revision());
         return success(null);
     }
 
@@ -345,21 +346,21 @@ public class TemplateController {
 
     @PostMapping("/template-versions/{versionId}/review/submit")
     public ApiResponse<TemplateVersionReviewService.View> submitReview(
-            @PathVariable UUID versionId, @RequestBody(required = false) ReviewSubmitRequest request) {
-        return success(templateVersionReviewService.submit(versionId,
-                request != null && Boolean.TRUE.equals(request.dataCleanupConfirmed())));
+            @PathVariable UUID versionId, @Valid @RequestBody ReviewSubmitRequest request) {
+        return success(templateVersionReviewService.submit(versionId, request.workspaceVersion(), request.reviewVersion(),
+                Boolean.TRUE.equals(request.dataCleanupConfirmed())));
     }
 
     @PostMapping("/template-versions/{versionId}/review/approve")
     public ApiResponse<TemplateVersionReviewService.View> approveReview(
-            @PathVariable UUID versionId, @RequestBody ReviewCommentRequest request) {
-        return success(templateVersionReviewService.approve(versionId, request == null ? null : request.comment()));
+            @PathVariable UUID versionId, @Valid @RequestBody ReviewCommentRequest request) {
+        return success(templateVersionReviewService.approve(versionId, request.workspaceVersion(), request.reviewVersion(), request.comment()));
     }
 
     @PostMapping("/template-versions/{versionId}/review/reject")
     public ApiResponse<TemplateVersionReviewService.View> rejectReview(
             @PathVariable UUID versionId, @Valid @RequestBody ReviewReasonRequest request) {
-        return success(templateVersionReviewService.reject(versionId, request.reason()));
+        return success(templateVersionReviewService.reject(versionId, request.workspaceVersion(), request.reviewVersion(), request.reason()));
     }
 
     private <T> ApiResponse<T> success(T value) {
@@ -374,13 +375,17 @@ public class TemplateController {
     ) {
     }
 
-    public record RenameTemplateRequest(@NotBlank @Size(max = 160) String name) {}
+    public record RenameTemplateRequest(@NotBlank String revision,@NotBlank @Size(max = 160) String name) {}
 
-    public record ReviewCommentRequest(String comment) {}
+    public record ReviewCommentRequest(@NotNull @PositiveOrZero Long workspaceVersion,
+                                       @NotNull @PositiveOrZero Long reviewVersion, String comment) {}
 
-    public record ReviewSubmitRequest(Boolean dataCleanupConfirmed) {}
+    public record ReviewSubmitRequest(@NotNull @PositiveOrZero Long workspaceVersion,
+                                      @NotNull @PositiveOrZero Long reviewVersion, Boolean dataCleanupConfirmed) {}
 
-    public record ReviewReasonRequest(@NotBlank @Size(max = 2000) String reason) {}
+    public record ReviewReasonRequest(@NotNull @PositiveOrZero Long workspaceVersion,
+                                      @NotNull @PositiveOrZero Long reviewVersion,
+                                      @NotBlank @Size(max = 2000) String reason) {}
 
     public record CopyTemplateRequest(String name, UUID categoryId) {}
 
@@ -389,7 +394,7 @@ public class TemplateController {
             @NotNull UUID categoryId
     ) {}
 
-    public record BatchActionItemRequest(@NotNull UUID templateId, UUID versionId, String name) {}
+    public record BatchActionItemRequest(@NotNull UUID templateId, UUID versionId, String name,@NotBlank String revision) {}
 
     public record BatchActionRequest(
             @NotBlank String action, UUID categoryId,
@@ -411,10 +416,10 @@ public class TemplateController {
     ) {
     }
 
-    public record CategoryRequest(@NotBlank String name, @Size(max = 240) String description) {
+    public record CategoryRequest(String revision,@NotBlank String name, @Size(max = 240) String description) {
     }
 
-    public record AssignCategoryRequest(UUID categoryId) {
+    public record AssignCategoryRequest(@NotBlank String revision,UUID categoryId) {
     }
 
     @GetMapping("/template-versions/{versionId}/word-document")
@@ -458,14 +463,14 @@ public class TemplateController {
     }
 
     @DeleteMapping("/template-versions/{versionId}")
-    public ApiResponse<Void> deleteDraft(@PathVariable UUID versionId) {
-        service.deleteDraft(versionId);
+    public ApiResponse<Void> deleteDraft(@PathVariable UUID versionId,@RequestParam String revision) {
+        service.deleteDraft(versionId,revision);
         return success(null);
     }
 
     @PostMapping("/templates/{templateId}/retire")
-    public ApiResponse<Void> retire(@PathVariable UUID templateId) {
-        service.retire(templateId);
+    public ApiResponse<Void> retire(@PathVariable UUID templateId,@RequestParam String revision) {
+        service.retire(templateId,revision);
         return success(null);
     }
 

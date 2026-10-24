@@ -26,6 +26,7 @@ const EMPTY_EXPERIMENT_CONFIG = {} as ManagerProps['experimentConfiguration'];
  */
 export function ProductionUploadFieldManagerPanel({
   uploadId,
+  lockVersion,
   format,
   recognitionResult,
   canUpdate,
@@ -36,6 +37,7 @@ export function ProductionUploadFieldManagerPanel({
   onFocusItem,
 }: {
   uploadId: string;
+  lockVersion: number;
   format: 'XLSX' | 'DOCX';
   recognitionResult?: Record<string, unknown>;
   canUpdate: boolean;
@@ -115,7 +117,7 @@ export function ProductionUploadFieldManagerPanel({
     try {
       await productionUploadApi.confirmFields(uploadId, [
         { fieldCode, dataPath, recordIndex, reviewStatus },
-      ]);
+      ],lockVersion);
       setFieldStatus((current) => ({
         ...current,
         [`${fieldCode ?? ''}|${dataPath ?? ''}|${recordIndex ?? ''}`]: reviewStatus,

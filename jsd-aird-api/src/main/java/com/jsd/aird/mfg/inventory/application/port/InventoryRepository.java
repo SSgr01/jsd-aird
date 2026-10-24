@@ -9,6 +9,10 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface InventoryRepository {
+    void lockTransaction(UUID org,UUID id);
+    void lockSample(UUID org,UUID id);
+    void lockShipment(UUID org,UUID id);
+
     boolean productExists(UUID org,UUID productId,Scope scope);
     java.util.List<ProductOption> productOptions(UUID org,Scope scope,String keyword);
     ProductOption createProduct(UUID org,String name,Scope scope,UUID actor);

@@ -1,3 +1,7 @@
+import { DocsEditor, SheetsEditor } from '@/features/template-workspace/editor-runtime';
+import { editorUnchanged, flushEditorChanges, pauseWorkspaceInputs, useSaveSession } from '@/features/template-workspace/editor-save';
+import { ContentLoading } from '@/components/loading/ContentLoading';
+import { trackSnapshot, useWorkspaceLoadGeneration } from '@/features/template-workspace/workspace-loading';
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
@@ -22,7 +26,6 @@ import {
   Modal,
   Progress,
   Result,
-  Skeleton,
   Space,
   Spin,
   Select,
@@ -30,7 +33,7 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
 import {
@@ -38,6 +41,7 @@ import {
   parseExperimentSnapshot,
 } from '@/features/experiment-workspace/experiment-workbook';
 import type { EditorHandle, EditorSelection, TemplateBinding } from '@/features/template-workspace/types';
+import { preloadWorkspaceEditor } from '@/features/template-workspace/preload-editor';
 import { getAtPath, setAtPath } from '@/features/template-workspace/path-utils';
 import {
   reviewInformation,
@@ -71,13 +75,7 @@ import './experiments.css';
 import { ExperimentTemplateDataPanel } from './ExperimentTemplateDataPanel';
 import { ExperimentImportDataPanel } from './ExperimentImportDataPanel';
 
-const SheetsEditor = lazy(async () => ({
-  default: (await import('@/features/template-workspace/UniverSheetsEditor')).UniverSheetsEditor,
-}));
 
-const DocsEditor = lazy(async () => ({
-  default: (await import('@/features/template-workspace/UniverDocsEditor')).UniverDocsEditor,
-}));
 
 type WorkspaceView = 'preview' | 'edit' | 'versions';
 type PublishAction = 'submit-review' | 'approve';
@@ -134,10 +132,18 @@ export function ExperimentWorkspacePage({
   const goBack = () => onBack ? onBack() : navigate(returnTo);
   const { message, modal } = App.useApp();
   const editorRef = useRef<EditorHandle>(null);
+  const saveSession = useSaveSession(id);
+  const workspaceRootRef = useRef<HTMLElement>(null);
+  const savedGenerationRef = useRef(0);
+  const automaticSaveBlockedRef = useRef(false);
+  const savedEditorRef = useRef<{ editor: EditorHandle | null; revision: number | undefined }>();
+  const saveOwnerRef = useRef<object>();
   const detailRef = useRef<ExperimentDetail>();
   const [detail, setDetail] = useState<ExperimentDetail>();
   const [snapshot, setSnapshot] = useState<Record<string, unknown>>();
   const [editModel, setEditModel] = useState<ExperimentModel>({});
+  const latestModelRef = useRef({ detail, editModel });
+  latestModelRef.current = { detail, editModel };
   const [templateReview, setTemplateReview] = useState<ExperimentTemplateDataReview>();
   const pendingTemplateWrites = useRef<Promise<void>[]>([]);
   const savePromiseRef = useRef<Promise<boolean>>();
@@ -177,13 +183,16 @@ export function ExperimentWorkspacePage({
   const statusLocked = !detail
     || ['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(detail.summary.status);
 
+  const beginLoad = useWorkspaceLoadGeneration();
   const load = useCallback(async () => {
+    const isCurrent = beginLoad();
+    setLoadError(undefined);
     setSaveState('SAVED');
     try {
-      const [d, v] = await Promise.all([
-        getExperiment(id),
-        listVersions(id),
-      ]);
+      const d = await trackSnapshot(getExperiment(id));
+      if (!isCurrent()) return;
+      preloadWorkspaceEditor(documentFormatOf(d.editModel ?? {}, d.templateSnapshot));
+      void listVersions(id).then(versions=>{if(isCurrent())setVersions(versions)}).catch(()=>undefined);
       const nextModel: ExperimentModel = { ...(d.editModel ?? {}) };
       // Keep legacy XLS/XLSX imports aligned with the production workspace:
       // workbook snapshots always use Sheets, even if an older record was
@@ -199,33 +208,40 @@ export function ExperimentWorkspacePage({
       detailRef.current = d;
       setDetail(d);
       setEditModel(nextModel);
-      setTemplateReview(nextModel.templateDataReview?.required
+      const review = await (nextModel.templateDataReview?.required
         || (d.summary.sourceType === 'TEMPLATE' && Boolean(d.templateVersionId))
         || (['EXCEL_IMPORT', 'OCR_IMPORT'].includes(d.summary.sourceType)
           && Boolean(nextModel.sourceImportJobId) && Boolean(d.templateVersionId))
-        ? await getExperimentTemplateDataReview(id) : undefined);
+        ? getExperimentTemplateDataReview(id) : undefined);
+      if (!isCurrent()) return;
+      setTemplateReview(review);
       const initialSnapshot = buildExperimentSnapshot(
         nextModel,
         d.currentVersionId ?? id,
         d.templateSnapshot,
       );
       setSnapshot(initialSnapshot);
-      setVersions(v);
       const editable = !['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(d.summary.status);
       setView(editable ? 'edit' : 'preview');
       setSaveState('SAVED');
       editGenerationRef.current = 0;
+      savedGenerationRef.current = 0; savedEditorRef.current = undefined;
+      automaticSaveBlockedRef.current = false;
       setEditRevision(0);
     } catch (error) {
+      if (!isCurrent()) return;
       setLoadError(error instanceof Error ? error.message : '实验本加载失败');
     }
-  }, [id]);
+  }, [id, beginLoad]);
 
   useEffect(() => {
+    setDetail(undefined); setSnapshot(undefined);
+    setMetadataSaving(false); setMetadataOpen(false); setBusy(false);
     void load();
   }, [load]);
 
   const currentDraftModel = () => {
+    const { detail, editModel } = latestModelRef.current;
     if (!detail) return editModel;
     // Keep saving functional while the lazy Univer editor is starting by
     // using the last loaded snapshot as the document baseline; once the
@@ -248,9 +264,12 @@ export function ExperimentWorkspacePage({
     }
     return { ...model, dynamicValues: values };
   };
+  const draftModelRef = useRef(currentDraftModel);
+  draftModelRef.current = currentDraftModel;
 
   // 与模板中心一致：每次修改推进编辑代号并标记未保存，由自动保存接管落库。
   const markDirty = () => {
+    automaticSaveBlockedRef.current = false;
     editGenerationRef.current += 1;
     setEditRevision(editGenerationRef.current);
     setSaveState((current) => (current === 'SAVING' ? current : 'DIRTY'));
@@ -433,19 +452,28 @@ export function ExperimentWorkspacePage({
   const confirmTemplateData = async () => {
     if (!detail || (!templateReview && detail.summary.sourceType !== 'EXCEL_IMPORT')) return;
     setBusy(true);
+    const session = saveSession.current, editor = editorRef.current;
+    const isCurrent = () => session.active && saveSession.current === session;
+    const resume = pauseWorkspaceInputs(workspaceRootRef.current);
     try {
       await Promise.all(pendingTemplateWrites.current);
       // 自动保存可能仍在进行，先等它结束，避免同一 revision 并发写入冲突。
       await savePromiseRef.current;
-      const saved = await persistDraft(currentDraftModel());
+      if (!isCurrent()) return;
+      flushEditorChanges(editor);
+      const generation = editGenerationRef.current, revision = editor?.getContentRevision?.();
+      const saved = await persistDraft(draftModelRef.current());
       if (!saved) return;
+      if (!isCurrent() || generation !== editGenerationRef.current || !editorUnchanged(editorRef.current, editor, revision)) return;
       await confirmExperimentTemplateData(id, saved.summary.revision);
+      if (!isCurrent()) return;
       void message.success('本次实验数据已确认');
       await load();
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : '数据确认失败');
+      if (isCurrent()) void message.error(error instanceof Error ? error.message : '数据确认失败');
     } finally {
-      setBusy(false);
+      resume();
+      if (isCurrent()) setBusy(false);
     }
   };
 
@@ -455,6 +483,8 @@ export function ExperimentWorkspacePage({
     silent = false,
     metadata?: { ownerName: string; experimentDate: string },
   ) => {
+    const session = saveSession.current, editor = editorRef.current;
+    const generation = editGenerationRef.current, revision = editor?.getContentRevision?.();
     const currentDetail = detailRef.current?.summary.id === id ? detailRef.current : detail;
     if (!currentDetail) return undefined;
     const title = nextModel.title ?? currentDetail.summary.title;
@@ -478,13 +508,17 @@ export function ExperimentWorkspacePage({
       templateSnapshot: currentDetail.templateSnapshot,
       editModel: nextModel,
     });
+    if (!session.active || saveSession.current !== session || editorRef.current !== editor) return undefined;
+    savedGenerationRef.current = generation; savedEditorRef.current = { editor, revision };
     // Keep the live editor mounted after a draft save. Updating `snapshot`
     // here would trigger UniverSheetsEditor’s snapshot effect, destroy the
     // current workspace, and recreate it from a possibly stale response.
     detailRef.current = savedDetail;
     setDetail(savedDetail);
-    setEditModel({ ...nextModel, templateDataReview: savedDetail.editModel.templateDataReview,
-      importDataReview: savedDetail.editModel.importDataReview });
+    if (generation === editGenerationRef.current && editorUnchanged(editorRef.current, editor, revision)) {
+      setEditModel({ ...nextModel, templateDataReview: savedDetail.editModel.templateDataReview,
+        importDataReview: savedDetail.editModel.importDataReview });
+    }
     if (successText) void message.success(successText);
     return savedDetail;
   };
@@ -511,62 +545,80 @@ export function ExperimentWorkspacePage({
     } catch {
       return;
     }
-    const generation = editGenerationRef.current;
+    const session = saveSession.current, editor = editorRef.current;
     window.clearTimeout(autosaveTimerRef.current);
     setMetadataSaving(true);
     setSaveState('SAVING');
     try {
       await Promise.all(pendingTemplateWrites.current);
       await savePromiseRef.current;
-      const saved = await persistDraft(currentDraftModel(), '实验基本信息已保存', false, {
+      if (!session.active || saveSession.current !== session) return;
+      flushEditorChanges(editor);
+      const generation = editGenerationRef.current, revision = editor?.getContentRevision?.();
+      const saved = await persistDraft(draftModelRef.current(), '实验基本信息已保存', false, {
         ownerName: values.ownerName.trim(),
         experimentDate: values.experimentDate,
       });
+      if (!session.active || saveSession.current !== session) return;
       if (saved) {
-        setSaveState(editGenerationRef.current === generation ? 'SAVED' : 'DIRTY');
+        setSaveState(editGenerationRef.current === generation && editorUnchanged(editorRef.current, editor, revision) ? 'SAVED' : 'DIRTY');
         setMetadataOpen(false);
       } else {
         setSaveState('DIRTY');
       }
     } catch (error) {
+      if (!session.active || saveSession.current !== session) return;
+      automaticSaveBlockedRef.current = true;
       setSaveState('DIRTY');
       void message.error(error instanceof Error ? error.message : '实验基本信息保存失败');
     } finally {
-      setMetadataSaving(false);
+      if (session.active && saveSession.current === session) setMetadataSaving(false);
     }
   };
 
   const performSave = async (silent: boolean): Promise<boolean> => {
     if (!detail) return false;
-    const generation = editGenerationRef.current;
+    const session = saveSession.current, editor = editorRef.current;
+    const isCurrent = () => session.active && saveSession.current === session && editorRef.current === editor;
     setSaveState('SAVING');
     try {
+      await Promise.all(pendingTemplateWrites.current);
+      if (!isCurrent()) return false;
+      flushEditorChanges(editor);
+      const generation = editGenerationRef.current, revision = editor?.getContentRevision?.();
       const savedDetail = await persistDraft(
-        currentDraftModel(),
+        draftModelRef.current(),
         silent ? undefined : '草稿已保存',
         silent,
       );
+      if (!isCurrent()) return false;
       if (!savedDetail) {
         setSaveState('DIRTY');
         return false;
       }
       // 保存期间如果继续编辑，保持“未保存”，由自动保存继续落库，
       // 避免把保存前的旧内容当成最新版本。
-      setSaveState(editGenerationRef.current === generation ? 'SAVED' : 'DIRTY');
+      setSaveState(editGenerationRef.current === generation && editorUnchanged(editorRef.current, editor, revision) ? 'SAVED' : 'DIRTY');
       return true;
     } catch (error) {
+      if (!isCurrent()) return false;
+      automaticSaveBlockedRef.current = true;
       setSaveState('DIRTY');
       void message.error(error instanceof Error ? error.message : '保存失败，本地内容仍然保留');
       return false;
+    } finally {
+      if (session.active && saveSession.current === session && editorRef.current !== editor) setSaveState('DIRTY');
     }
   };
 
   const save = (silent = false): Promise<boolean> => {
-    if (savePromiseRef.current) return savePromiseRef.current;
+    const owner = saveSession.current;
+    if (savePromiseRef.current && saveOwnerRef.current === owner) return savePromiseRef.current;
     const pending = performSave(silent).finally(() => {
       if (savePromiseRef.current === pending) savePromiseRef.current = undefined;
     });
     savePromiseRef.current = pending;
+    saveOwnerRef.current = owner;
     return pending;
   };
   saveRef.current = save;
@@ -574,7 +626,7 @@ export function ExperimentWorkspacePage({
   // 参照模板中心：编辑态停止输入 2 秒后自动保存草稿。
   // 每次编辑都会推进 editRevision，从而重置防抖计时器。
   useEffect(() => {
-    if (saveState !== 'DIRTY' || statusLocked || !isDesktop || view !== 'edit' || busy || metadataOpen || metadataSaving) return;
+    if (automaticSaveBlockedRef.current || saveState !== 'DIRTY' || statusLocked || !isDesktop || view !== 'edit' || busy || metadataOpen || metadataSaving) return;
     autosaveTimerRef.current = window.setTimeout(() => {
       void saveRef.current(true);
     }, AUTOSAVE_DELAY_MS);
@@ -601,23 +653,35 @@ export function ExperimentWorkspacePage({
     }
     setBusy(true);
     setSaveState('SAVING');
+    const session = saveSession.current, editor = editorRef.current;
+    const isCurrent = () => session.active && saveSession.current === session;
+    const resume = pauseWorkspaceInputs(workspaceRootRef.current);
     try {
+      await Promise.all(pendingTemplateWrites.current);
       await savePromiseRef.current;
-      const nextModel = withReviewInformation(currentDraftModel(), values);
+      if (!isCurrent()) return;
+      flushEditorChanges(editor);
+      const generation = editGenerationRef.current, revision = editor?.getContentRevision?.();
+      const nextModel = withReviewInformation(draftModelRef.current(), values);
       const savedDetail = await persistDraft(nextModel);
+      if (!isCurrent()) return;
       if (!savedDetail) {
         setSaveState('DIRTY');
         return;
       }
+      if (generation !== editGenerationRef.current || !editorUnchanged(editorRef.current, editor, revision)) { setSaveState('DIRTY'); return; }
       await actExperiment(id, 'submit-review', savedDetail.summary.revision);
+      if (!isCurrent()) return;
       setReviewOpen(false);
       void message.success('已提交审核');
       await load();
     } catch (error) {
+      if (!isCurrent()) return;
       setSaveState('DIRTY');
       void message.error(error instanceof Error ? error.message : '提交审核失败');
     } finally {
-      setBusy(false);
+      resume();
+      if (isCurrent()) setBusy(false);
     }
   };
 
@@ -639,19 +703,28 @@ export function ExperimentWorkspacePage({
 
   const act = async (action: PublishAction) => {
     if (!detail) return;
-    if (saveState !== 'SAVED') {
+    flushEditorChanges(editorRef.current);
+    const editor = editorRef.current;
+    const baseline = savedEditorRef.current?.editor === editor ? savedEditorRef.current.revision : 0;
+    if (saveState !== 'SAVED' || savePromiseRef.current || editGenerationRef.current !== savedGenerationRef.current
+      || (editor?.getContentRevision && editor.getContentRevision() !== baseline)) {
       void message.warning('当前内容尚未保存，请先保存后再执行流程操作');
       return;
     }
     setBusy(true);
+    const session = saveSession.current;
+    const isCurrent = () => session.active && saveSession.current === session;
+    const resume = pauseWorkspaceInputs(workspaceRootRef.current);
     try {
       await actExperiment(id, action, detail.summary.revision);
+      if (!isCurrent()) return;
       void message.success('状态已更新');
       await load();
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : '实验状态更新失败');
+      if (isCurrent()) void message.error(error instanceof Error ? error.message : '实验状态更新失败');
     } finally {
-      setBusy(false);
+      resume();
+      if (isCurrent()) setBusy(false);
     }
   };
 
@@ -796,7 +869,7 @@ export function ExperimentWorkspacePage({
       />
     );
   }
-  if (!detail || !snapshot) return <Skeleton active paragraph={{ rows: 12 }} />;
+  if (!detail || !snapshot) return <ContentLoading label="下载文档…" />;
 
   const status = detail.summary.status;
   // 与数据中心一致：预览走预览接口，下载走原文件地址（浏览器原生下载）。
@@ -839,6 +912,7 @@ export function ExperimentWorkspacePage({
           : undefined;
   return (
     <section
+      ref={workspaceRootRef}
       className="workspace-shell template-business-workspace experiment-workspace-shell"
       aria-label={`${detail.summary.title}实验工作台`}
     >
@@ -1046,7 +1120,7 @@ export function ExperimentWorkspacePage({
             <main className={`workspace-canvas ${view === 'preview' ? 'is-preview' : ''}`}>
               <Suspense
                 fallback={
-                  <Spin indicator={<LoadingOutlined spin />} tip="正在加载实验记录" fullscreen />
+                  <ContentLoading label="加载编辑器…" />
                 }
               >
                 {documentFormatOf(editModel, snapshot) === 'word' ? (

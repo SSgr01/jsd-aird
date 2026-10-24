@@ -411,6 +411,7 @@ export function AssistantPage() {
                   description: '尚未归入数据分类的来源文件',
                   sortOrder: Number.MAX_SAFE_INTEGER,
                   sourceCount: uncategorizedSourceCount,
+                  revision: '',
                 },
               ]
             : dataList;

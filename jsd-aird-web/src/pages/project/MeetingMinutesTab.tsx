@@ -139,7 +139,7 @@ export function MeetingMinutesTab({ projectId }: Props) {
 
   const handleArchive = async (record: MeetingMinutes) => {
     try {
-      await archiveMeetingToKb(projectId, record.id);
+      await archiveMeetingToKb(projectId, record.id,record.version);
       message.success('已归档到知识库');
       await load();
     } catch (reason) {

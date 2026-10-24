@@ -299,8 +299,9 @@ public class KnowledgeGovernanceService {
     }
 
     @Transactional
-    public void lifecycle(UUID documentId, String target, String reason) {
+    public void lifecycle(UUID documentId, String target, String reason, String revision) {
         var actor = ActorContext.required();
+        knowledge.requireRevision(documentId,revision);
         var before = knowledge.get(documentId);
         var normalized = target.toUpperCase(Locale.ROOT);
         if (!Set.of("ACTIVE", "DISABLED").contains(normalized)) throw new ApiException(ApiErrorCode.BAD_REQUEST, "无效生命周期状态");
@@ -316,23 +317,23 @@ public class KnowledgeGovernanceService {
                         .put("reason", reason == null ? "" : reason));
     }
 
-    public List<BatchResult> batchMove(List<UUID> documentIds, UUID categoryId) {
+    public List<BatchResult> batchMove(List<DocumentRevision> documents, UUID categoryId) {
         var actor = ActorContext.required();
         requireCategory(actor.organizationId(), categoryId, null);
-        return batch(documentIds, id -> {
+        return batch(documents, id -> {
             var before = knowledge.get(id);
-            knowledge.assignCategory(id, categoryId);
+            knowledge.assignCategory(id, categoryId, documents.stream().filter(item->item.id().equals(id)).findFirst().orElseThrow().revision());
             return objectMapper.createObjectNode()
                     .put("beforeCategoryId", before.categoryId() == null ? null : before.categoryId().toString())
                     .put("afterCategoryId", categoryId.toString());
         }, "KB_BATCH_MOVE");
     }
 
-    public List<BatchResult> batchTags(List<UUID> documentIds, List<String> add, List<String> remove) {
+    public List<BatchResult> batchTags(List<DocumentRevision> documents, List<String> add, List<String> remove) {
         var actor = ActorContext.required();
         var additions = normalizeTags(add);
         var removals = normalizeTags(remove).stream().map(value -> value.toLowerCase(Locale.ROOT)).collect(java.util.stream.Collectors.toSet());
-        return batch(documentIds, id -> {
+        return batch(documents, id -> {
             knowledge.get(id);
             var before = governance.tags(actor.organizationId(), id);
             var tags = new LinkedHashSet<>(before);
@@ -346,9 +347,9 @@ public class KnowledgeGovernanceService {
         }, "KB_BATCH_TAGS");
     }
 
-    public List<BatchResult> batchAiUsage(List<UUID> documentIds, String action, String reason) {
-        return batch(documentIds, id -> {
-            var result = knowledge.updateAiGrant(id, new KnowledgeService.GrantCommand(action, reason));
+    public List<BatchResult> batchAiUsage(List<DocumentRevision> documents, String action, String reason) {
+        return batch(documents, id -> {
+            var result = knowledge.updateAiGrant(id, new KnowledgeService.GrantCommand(documents.stream().filter(item->item.id().equals(id)).findFirst().orElseThrow().revision(),action, reason));
             return objectMapper.createObjectNode().put("aiStatus", result.aiStatus());
         }, "KB_BATCH_AI_USAGE");
     }
@@ -457,15 +458,17 @@ public class KnowledgeGovernanceService {
                 "kb-index:" + reviewRevisionId, 50);
     }
 
-    private List<BatchResult> batch(List<UUID> documentIds, BatchAction action, String auditAction) {
+    private List<BatchResult> batch(List<DocumentRevision> documents, BatchAction action, String auditAction) {
         var actor = ActorContext.required();
-        if (documentIds == null || documentIds.isEmpty() || documentIds.size() > 200) {
+        if (documents == null || documents.isEmpty() || documents.size() > 200 || documents.stream().map(DocumentRevision::id).distinct().count()!=documents.size()) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "批量操作文档数必须在 1 到 200 之间");
         }
         var result = new ArrayList<BatchResult>();
-        for (var id : documentIds.stream().distinct().toList()) {
+        for (var target : documents) {
+            var id=target.id();
             try {
                 itemTransaction.executeWithoutResult(ignored -> {
+                    knowledge.requireRevision(id,target.revision());
                     var detail = action.run(id);
                     audit(actor.organizationId(), actor.userId(), auditAction, id,
                             detail == null ? objectMapper.createObjectNode() : detail);
@@ -596,5 +599,7 @@ public class KnowledgeGovernanceService {
     public record IndexBuildView(UUID documentId, UUID versionId, UUID reviewRevisionId, String status) { }
 
     public record BulkIndexBuildView(int documentCount, String status) { }
+    public record DocumentRevision(@jakarta.validation.constraints.NotNull UUID id,
+            @jakarta.validation.constraints.NotBlank String revision) {}
     public record BatchResult(UUID documentId, boolean success, String errorCode, String message) { }
 }

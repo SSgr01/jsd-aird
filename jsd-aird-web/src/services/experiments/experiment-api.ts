@@ -196,9 +196,9 @@ export interface Category {
   allowedActions?: string[];
 }
 const data = <T>(r: { data: ApiResponse<T> }) => r.data.data;
-export async function listExperiments(params: Record<string, unknown>) {
+export async function listExperiments(params: Record<string, unknown>, signal?: AbortSignal) {
   return data(
-    await httpClient.get<ApiResponse<Page<ExperimentSummary>>>('/api/v1/experiments', { params }),
+    await httpClient.get<ApiResponse<Page<ExperimentSummary>>>('/api/v1/experiments', { params, signal }),
   );
 }
 /** Project-detail experiment list. The project id is part of the resource path. */
@@ -245,7 +245,7 @@ export async function copyExperiment(id: string) {
 }
 export async function saveExperiment(id: string, input: Record<string, unknown>) {
   return data(
-    await httpClient.post<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/draft`, input),
+    await httpClient.post<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/draft`, JSON.stringify(input), { headers: { 'Content-Type': 'application/json' } }),
   );
 }
 export async function deleteExperiment(id: string, revision: number) {
@@ -312,10 +312,10 @@ export async function listAudits(id: string) {
     ),
   );
 }
-export async function listCategories(includeInactive = false) {
+export async function listCategories(includeInactive = false, signal?: AbortSignal) {
   return data(
     await httpClient.get<ApiResponse<Category[]>>('/api/v1/experiment-categories', {
-      params: { includeInactive },
+      params: { includeInactive }, signal,
     }),
   );
 }
@@ -329,9 +329,9 @@ export async function setCategoryActive(id: string, revision: number, active: bo
   return data(await httpClient.put<ApiResponse<Category>>(`/api/v1/experiment-categories/${id}/active`, { revision, active }));
 }
 /** Deletes the category; experiments inside it move to replacementCategoryId (empty means uncategorized). */
-export async function deleteCategory(id: string, replacementCategoryId?: string) {
+export async function deleteCategory(id: string, revision: number,replacementCategoryId?: string) {
   await httpClient.delete(`/api/v1/experiment-categories/${id}`, {
-    params: replacementCategoryId ? { replacementCategoryId } : undefined,
+    params: { replacementCategoryId, revision },
   });
 }
 export interface StagedFile {

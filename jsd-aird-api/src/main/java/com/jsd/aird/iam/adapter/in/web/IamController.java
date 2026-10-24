@@ -58,23 +58,23 @@ public class IamController {
     @PatchMapping("/users/{userId}")
     public ApiResponse<IamAdminService.UserView> updateUser(@PathVariable UUID userId, @Valid @RequestBody UpdateUserRequest request) {
         return success(service.update(ActorContext.required(), userId, new IamAdminService.UpdateUserCommand(
-                request.displayName(), request.email(), request.phone(), request.departmentName(), request.roleId())));
+                request.expectedVersion(),request.displayName(), request.email(), request.phone(), request.departmentName(), request.roleId())));
     }
 
     @PostMapping("/users/{userId}/enable")
-    public ApiResponse<Void> enable(@PathVariable UUID userId) { service.setStatus(ActorContext.required(), userId, true); return success(null); }
+    public ApiResponse<Void> enable(@PathVariable UUID userId,@Valid @RequestBody VersionRequest request) { service.setStatus(ActorContext.required(), userId, true,request.expectedVersion()); return success(null); }
 
     @PostMapping("/users/{userId}/disable")
-    public ApiResponse<Void> disable(@PathVariable UUID userId) { service.setStatus(ActorContext.required(), userId, false); return success(null); }
+    public ApiResponse<Void> disable(@PathVariable UUID userId,@Valid @RequestBody VersionRequest request) { service.setStatus(ActorContext.required(), userId, false,request.expectedVersion()); return success(null); }
 
     @PostMapping("/users/{userId}/reset-password")
     public ApiResponse<Void> resetPassword(@PathVariable UUID userId, @Valid @RequestBody ResetPasswordRequest request) {
-        service.resetPassword(ActorContext.required(), userId, request.password());
+        service.resetPassword(ActorContext.required(), userId, request.password(),request.expectedVersion());
         return success(null);
     }
 
     @PostMapping("/users/{userId}/force-logout")
-    public ApiResponse<Void> forceLogout(@PathVariable UUID userId) { service.forceLogout(ActorContext.required(), userId); return success(null); }
+    public ApiResponse<Void> forceLogout(@PathVariable UUID userId,@Valid @RequestBody VersionRequest request) { service.forceLogout(ActorContext.required(), userId,request.expectedVersion()); return success(null); }
 
     @GetMapping("/roles")
     public ApiResponse<List<IamAdminService.RoleView>> roles() { return success(service.roles(ActorContext.required())); }
@@ -86,11 +86,11 @@ public class IamController {
 
     @PatchMapping("/roles/{roleId}")
     public ApiResponse<Void> renameRole(@PathVariable UUID roleId, @Valid @RequestBody RenameRoleRequest request) {
-        service.renameRole(ActorContext.required(), roleId, request.name()); return success(null);
+        service.renameRole(ActorContext.required(), roleId, request.name(),request.expectedVersion()); return success(null);
     }
 
     @DeleteMapping("/roles/{roleId}")
-    public ApiResponse<Void> deleteRole(@PathVariable UUID roleId) { service.deleteRole(ActorContext.required(), roleId); return success(null); }
+    public ApiResponse<Void> deleteRole(@PathVariable UUID roleId,@RequestParam @jakarta.validation.constraints.PositiveOrZero long expectedVersion) { service.deleteRole(ActorContext.required(), roleId,expectedVersion); return success(null); }
 
     @GetMapping("/roles/{roleId}/permissions")
     public ApiResponse<PermissionPayload> rolePermissions(@PathVariable UUID roleId) {
@@ -118,8 +118,8 @@ public class IamController {
     }
 
     @DeleteMapping("/users/{userId}/permissions/{permissionCode}")
-    public ApiResponse<Void> restoreUserPermission(@PathVariable UUID userId, @PathVariable String permissionCode) {
-        service.deleteUserOverride(ActorContext.required(), userId, permissionCode); return success(null);
+    public ApiResponse<Void> restoreUserPermission(@PathVariable UUID userId, @PathVariable String permissionCode,@RequestParam @jakarta.validation.constraints.PositiveOrZero long expectedVersion) {
+        service.deleteUserOverride(ActorContext.required(), userId, permissionCode,expectedVersion); return success(null);
     }
 
     @GetMapping("/permission-definitions")
@@ -152,12 +152,13 @@ public class IamController {
     public record CreateUserRequest(@NotBlank String username, @NotBlank String displayName, String email, String phone,
                                     String departmentName, @NotNull UUID roleId,
                                     @NotBlank @jakarta.validation.constraints.Size(min = 6, max = 200) String password) { }
-    public record ResetPasswordRequest(@NotBlank @jakarta.validation.constraints.Size(min = 6, max = 200) String password) { }
-    public record UpdateUserRequest(@NotBlank String displayName, String email, String phone, String departmentName,
+    public record ResetPasswordRequest(@NotNull @jakarta.validation.constraints.PositiveOrZero Long expectedVersion,@NotBlank @jakarta.validation.constraints.Size(min = 6, max = 200) String password) { }
+    public record UpdateUserRequest(@NotNull @jakarta.validation.constraints.PositiveOrZero Long expectedVersion,@NotBlank String displayName, String email, String phone, String departmentName,
                                     @NotNull UUID roleId) { }
     public record RoleRequest(@NotBlank String code, @NotBlank String name) { }
-    public record RenameRoleRequest(@NotBlank String name) { }
-    public record PermissionRequest(long expectedVersion, List<BindingRequest> bindings) { }
+    public record RenameRoleRequest(@NotNull @jakarta.validation.constraints.PositiveOrZero Long expectedVersion,@NotBlank String name) { }
+    public record VersionRequest(@NotNull @jakarta.validation.constraints.PositiveOrZero Long expectedVersion) {}
+    public record PermissionRequest(@NotNull @jakarta.validation.constraints.PositiveOrZero Long expectedVersion, List<BindingRequest> bindings) { }
     public record BindingRequest(@NotBlank String permissionCode, @NotBlank String effect, @NotBlank String scopeType,
                                  List<UUID> targetIds) { }
     public record PermissionPayload(long version, List<Binding> bindings) { }

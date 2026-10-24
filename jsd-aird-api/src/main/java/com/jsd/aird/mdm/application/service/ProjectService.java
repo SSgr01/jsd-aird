@@ -115,6 +115,7 @@ public class ProjectService {
     @Transactional
     public void update(UUID id, ProjectCommands.SaveProject command) {
         validate(command);
+        requireVersion(command.version());
         if (command.projectCode() == null || command.projectCode().isBlank())
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "项目编号不能为空");
         var current = get(id);
@@ -130,18 +131,33 @@ public class ProjectService {
             command.teamMembers() == null ? current.teamMembers() : command.teamMembers(),
             current.version(), current.createdAt(), Instant.now());
 
-        var version = command.version() == null ? current.version() : command.version();
         try {
-            if (!repository.update(project, version, OPERATOR)) conflict();
+            if (!repository.update(project, command.version(), OPERATOR)) mutationFailed(id);
         } catch (DuplicateKeyException exception) {
             throw duplicateProjectCode(code);
         }
     }
 
     @Transactional
-    public void delete(UUID id) {
-        if (!repository.softDelete(id, OPERATOR))
-            throw new ApiException(ApiErrorCode.NOT_FOUND, "项目不存在");
+    public void delete(UUID id, long expectedVersion) {
+        requireVersion(expectedVersion);
+        var current = get(id);
+        if (current.version() != expectedVersion) conflict();
+        if (current.status() == ProjectStatus.COMPLETED) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "已完成项目不可直接删除");
+        }
+        if (!repository.softDelete(id, expectedVersion, OPERATOR)) mutationFailed(id);
+    }
+
+    private void mutationFailed(UUID id) {
+        get(id); // A deleted/missing row is 404; an existing changed row is 409.
+        conflict();
+    }
+
+    private static void requireVersion(Long version) {
+        if (version == null || version < 0) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "必须提交读取时的数据版本号");
+        }
     }
 
     @Transactional

@@ -128,7 +128,7 @@ public class DataWorkbookService {
         var root = objectMapper.createObjectNode()
                 .put("id", UUID.randomUUID().toString())
                 .put("name", fileName)
-                .put("appVersion", "univer-0.25.1")
+                .put("appVersion", "univer-1.2.0")
                 .put("snapshotFormatVersion", 3);
         root.set("styles", objectMapper.createObjectNode());
         var order = root.putArray("sheetOrder");

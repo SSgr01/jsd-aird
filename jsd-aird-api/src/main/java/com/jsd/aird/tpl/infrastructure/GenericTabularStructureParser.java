@@ -29,12 +29,15 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class GenericTabularStructureParser implements TabularStructureParser {
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated;
 
     private static final int MAX_ROWS = 10_000;
     private static final int HEADER_SCAN_ROWS = 30;
 
     @Override
     public TemplateDataImportFacade.ParsedTabularFile parse(InputStream input, String fileName) {
+        if(isolated!=null)return isolated.execute("tabular",input,com.fasterxml.jackson.databind.node.TextNode.valueOf(fileName),TemplateDataImportFacade.ParsedTabularFile.class);
         var lower = fileName == null ? "" : fileName.toLowerCase(Locale.ROOT);
         if (lower.endsWith(".csv")) return parseCsv(input);
         if (lower.endsWith(".xls") || lower.endsWith(".xlsx")) return parseWorkbook(input, lower.endsWith(".xlsx"));

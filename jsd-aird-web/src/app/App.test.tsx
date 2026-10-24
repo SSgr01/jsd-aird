@@ -40,7 +40,9 @@ describe('App', () => {
     });
     render(<App />);
 
-    const asyncRenderOptions = { timeout: 5000 };
+    // The shell is now loaded on demand. Allow cold Windows workers to
+    // transform ProLayout when this route is first rendered.
+    const asyncRenderOptions = { timeout: 30_000 };
     expect((await screen.findAllByText('模板上传', undefined, asyncRenderOptions)).length).toBeGreaterThan(0);
     expect(await screen.findByText('生产单管理', undefined, asyncRenderOptions)).toBeInTheDocument();
     const globalSearch = screen.getByRole('textbox', { name: '全局搜索' });
@@ -51,5 +53,5 @@ describe('App', () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 500));
     });
-  }, 15000);
+  }, 60_000);
 });

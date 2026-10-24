@@ -7,7 +7,10 @@ import java.util.UUID;
 import com.jsd.aird.shared.api.AllowedActions;
 
 public interface KnowledgeRepository {
+    void lockCategory(UUID organizationId,UUID categoryId);
 
+
+    void lockDocument(UUID organizationId, UUID documentId);
     void insertDocument(NewDocument document);
     void insertVersion(NewVersion version);
     Optional<DocumentRow> findDocument(UUID organizationId, UUID documentId);
@@ -148,6 +151,7 @@ public interface KnowledgeRepository {
     }
 
     record CategoryRow(UUID id, String scope, String name, String description, int sortOrder, long documentCount) {
+        public String getRevision(){return com.jsd.aird.shared.json.RevisionToken.of(id,scope,name,description,sortOrder);}
         public List<String> getAllowedActions() { return AllowedActions.category(false); }
     }
     record NewDocument(UUID id, UUID organizationId, String title, UUID actorId, String scope, UUID categoryId) { }

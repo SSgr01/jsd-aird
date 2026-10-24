@@ -152,19 +152,19 @@ public class ProductionOrderController {
     }
 
     @PostMapping("/{orderId}/submit")
-    public ApiResponse<SubmitResponse> submit(@PathVariable UUID orderId) {
-        return success(new SubmitResponse(service.submit(orderId)));
+    public ApiResponse<SubmitResponse> submit(@PathVariable UUID orderId, @Valid @RequestBody VersionRequest request) {
+        return success(new SubmitResponse(service.submit(orderId, request.lockVersion())));
     }
 
     @PostMapping("/{orderId}/cancel")
-    public ApiResponse<Void> cancel(@PathVariable UUID orderId) {
-        service.cancel(orderId);
+    public ApiResponse<Void> cancel(@PathVariable UUID orderId, @Valid @RequestBody VersionRequest request) {
+        service.cancel(orderId, request.lockVersion());
         return success(null);
     }
 
     @DeleteMapping("/{orderId}")
-    public ApiResponse<Void> delete(@PathVariable UUID orderId) {
-        service.delete(orderId);
+    public ApiResponse<Void> delete(@PathVariable UUID orderId, @RequestParam @Min(0) long lockVersion) {
+        service.delete(orderId, lockVersion);
         return success(null);
     }
 
@@ -204,6 +204,8 @@ public class ProductionOrderController {
             List<@Valid BindingValueRequest> bindingValues
     ) {
     }
+
+    public record VersionRequest(@NotNull @Min(0) Long lockVersion) {}
 
     public record SubmitResponse(UUID revisionId) {
     }

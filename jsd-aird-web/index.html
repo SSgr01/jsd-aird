@@ -5,10 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#1677ff" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style data-startup-style></style>
+    <script>document.documentElement.dataset.startup=location.pathname==='/login'?'login':'app';</script>
     <title>杰事达研发数字化与AI平台</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="startup-skeleton" role="status" aria-label="正在打开应用"><aside class="startup-sidebar"><i></i><i></i><i></i><i></i><i></i><i></i></aside><header class="startup-header"><i></i></header><div class="startup-content"><i></i><div class="startup-panel"><i></i><i></i><i></i></div></div></div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

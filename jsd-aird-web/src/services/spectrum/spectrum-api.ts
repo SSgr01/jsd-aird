@@ -10,6 +10,7 @@ export interface SpectrumFieldDefinition {
   label: string;
 }
 export interface SpectrumCategory {
+  revision: string;
   id: string;
   code: string;
   name: string;
@@ -22,6 +23,7 @@ export interface SpectrumCategory {
   allowedActions?: string[];
 }
 export interface SpectrumChart {
+  revision: string;
   id: string;
   categoryId: string;
   categoryCode: string;
@@ -214,6 +216,7 @@ export const spectrumApi = {
   async updateCategory(
     id: string,
     input: {
+      revision: string;
       name: string;
       description?: string;
       analysisHint?: string;
@@ -226,15 +229,15 @@ export const spectrumApi = {
     );
     return response.data.data;
   },
-  async assignChartCategory(chartId: string, categoryId: string) {
+  async assignChartCategory(chartId: string, categoryId: string, revision: string) {
     const response = await httpClient.put<ApiResponse<SpectrumChart>>(
       `/api/v1/spc/charts/${chartId}/category`,
-      { categoryId },
+      { categoryId, revision },
     );
     return response.data.data;
   },
-  async deleteCategory(id: string) {
-    await httpClient.delete(`/api/v1/spc/categories/${id}`);
+  async deleteCategory(id: string, revision: string) {
+    await httpClient.delete(`/api/v1/spc/categories/${id}`, { params: { revision } });
   },
   async listCharts(
     params: {
@@ -244,10 +247,11 @@ export const spectrumApi = {
       page?: number;
       size?: number;
     } = {},
+    signal?: AbortSignal,
   ) {
     const response = await httpClient.get<ApiResponse<PageResponse<SpectrumChart>>>(
       '/api/v1/spc/charts',
-      { params },
+      { params, signal },
     );
     return response.data.data;
   },
@@ -276,6 +280,7 @@ export const spectrumApi = {
   async updateChart(
     id: string,
     input: {
+      revision: string;
       title: string;
       categoryId?: string;
       sampleName?: string;
@@ -290,8 +295,8 @@ export const spectrumApi = {
     );
     return response.data.data;
   },
-  async deleteChart(id: string) {
-    await httpClient.delete(`/api/v1/spc/charts/${id}`);
+  async deleteChart(id: string, revision: string) {
+    await httpClient.delete(`/api/v1/spc/charts/${id}`, { params: { revision } });
   },
   async uploadAttempts(limit = 100) {
     const response = await httpClient.get<ApiResponse<SpectrumUploadAttempt[]>>(

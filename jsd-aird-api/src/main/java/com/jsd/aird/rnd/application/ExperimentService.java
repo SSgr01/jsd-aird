@@ -659,7 +659,8 @@ public class ExperimentService {
     }
 
     /** 删除实验分类；分类下的实验会迁移到 replacementCategoryId（为空表示移出分类）。 */
-    public void deleteCategory(UUID id, UUID replacementCategoryId) {
+    @org.springframework.transaction.annotation.Transactional
+    public void deleteCategory(UUID id,long expectedVersion, UUID replacementCategoryId) {
         var actor = ActorContext.required();
         var organizationId = actor.organizationId();
         if (id.equals(replacementCategoryId)) {
@@ -668,7 +669,7 @@ public class ExperimentService {
         var category = repository.categories(organizationId, true).stream()
                 .filter(value -> value.id().equals(id)).findFirst()
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验分类不存在"));
-        if (repository.deleteCategory(organizationId, id, replacementCategoryId) == 0) {
+        if (repository.deleteCategory(organizationId, id, expectedVersion,replacementCategoryId) == 0) {
             throw new ApiException(ApiErrorCode.NOT_FOUND, "实验分类不存在");
         }
         audit(actor, "EXPERIMENT_CATEGORY_DELETED", "EXPERIMENT_CATEGORY", id, category.name());

@@ -30,35 +30,35 @@ public interface ProjectMapper {
         "<if test='startDateFrom != null'> AND p.start_date &gt;= #{startDateFrom}</if>" +
         "<if test='startDateTo != null'> AND p.start_date &lt;= #{startDateTo}</if>";
 
-    @Select("<script>" + SELECT_COLUMNS + "WHERE p.deleted = false " + FILTERS +
+    @Select("<script>" + SELECT_COLUMNS + "WHERE p.organization_id = #{organizationId} AND p.deleted = false " + FILTERS +
         " ORDER BY p.updated_at DESC LIMIT #{size} OFFSET #{offset}</script>")
-    List<ProjectRow> findPage(@Param("keyword") String keyword, @Param("owner") String owner,
+    List<ProjectRow> findPage(@Param("organizationId") UUID organizationId, @Param("keyword") String keyword, @Param("owner") String owner,
                               @Param("priority") String priority, @Param("status") String status,
                               @Param("partnerId") UUID partnerId,
                               @Param("startDateFrom") LocalDate startDateFrom, @Param("startDateTo") LocalDate startDateTo,
                               @Param("offset") int offset, @Param("size") int size);
 
-    @Select("<script>SELECT count(*) FROM mdm.project p WHERE p.deleted = false " + FILTERS + "</script>")
-    long count(@Param("keyword") String keyword, @Param("owner") String owner,
+    @Select("<script>SELECT count(*) FROM mdm.project p WHERE p.organization_id = #{organizationId} AND p.deleted = false " + FILTERS + "</script>")
+    long count(@Param("organizationId") UUID organizationId, @Param("keyword") String keyword, @Param("owner") String owner,
                @Param("priority") String priority, @Param("status") String status,
                @Param("partnerId") UUID partnerId,
                @Param("startDateFrom") LocalDate startDateFrom, @Param("startDateTo") LocalDate startDateTo);
 
-    @Select(SELECT_COLUMNS + "WHERE p.id = #{id} AND p.deleted = false")
-    Optional<ProjectRow> findById(@Param("id") UUID id);
+    @Select(SELECT_COLUMNS + "WHERE p.organization_id = #{organizationId} AND p.id = #{id} AND p.deleted = false")
+    Optional<ProjectRow> findById(@Param("organizationId") UUID organizationId, @Param("id") UUID id);
 
-    @Select("<script>" + SELECT_COLUMNS + "WHERE p.deleted = false AND p.id IN " +
+    @Select("<script>" + SELECT_COLUMNS + "WHERE p.organization_id = #{organizationId} AND p.deleted = false AND p.id IN " +
         "<foreach collection='ids' item='id' open='(' separator=',' close=')'>#{id,jdbcType=OTHER}</foreach>" +
         "</script>")
-    List<ProjectRow> findAllByIds(@Param("ids") List<UUID> ids);
+    List<ProjectRow> findAllByIds(@Param("organizationId") UUID organizationId, @Param("ids") List<UUID> ids);
 
-    @Select("<script>SELECT EXISTS(SELECT 1 FROM mdm.project WHERE project_code = #{projectCode} AND deleted = false " +
+    @Select("<script>SELECT EXISTS(SELECT 1 FROM mdm.project WHERE organization_id=#{organizationId} AND project_code = #{projectCode} AND deleted = false " +
         "<if test='excludedId != null'> AND id != #{excludedId}</if>)</script>")
-    boolean existsByProjectCode(@Param("projectCode") String projectCode, @Param("excludedId") UUID excludedId);
+    boolean existsByProjectCode(@Param("organizationId") UUID organizationId, @Param("projectCode") String projectCode, @Param("excludedId") UUID excludedId);
 
     @Select("SELECT coalesce(max(substring(project_code from '[0-9]+$')::int), 0) FROM mdm.project " +
-        "WHERE project_code LIKE #{prefix} || '%'")
-    int maxSequence(@Param("prefix") String prefix);
+        "WHERE organization_id=#{organizationId} AND project_code LIKE #{prefix} || '%'")
+    int maxSequence(@Param("organizationId") UUID organizationId, @Param("prefix") String prefix);
 
     @Insert("INSERT INTO mdm.project(organization_id,id,project_code,name,partner_id,partner_name,owner,start_date,end_date," +
         "priority,status,team_size,background,custom_fields,team_members,version,created_at,updated_at,created_by,updated_by) " +
@@ -78,8 +78,8 @@ public interface ProjectMapper {
         "priority=#{priority},status=#{status},team_size=#{teamSize},background=#{background}," +
         "custom_fields=CAST(#{customFields} AS jsonb),team_members=CAST(#{teamMembers} AS jsonb)," +
         "version=version+1,updated_at=now(),updated_by=#{operator} " +
-        "WHERE id=#{id} AND deleted=false AND version=#{version}")
-    int update(@Param("id") UUID id, @Param("projectCode") String projectCode, @Param("name") String name,
+        "WHERE organization_id=#{organizationId} AND id=#{id} AND deleted=false AND version=#{version}")
+    int update(@Param("organizationId") UUID organizationId, @Param("id") UUID id, @Param("projectCode") String projectCode, @Param("name") String name,
                @Param("partnerId") UUID partnerId, @Param("partnerName") String partnerName,
                @Param("owner") String owner, @Param("startDate") LocalDate startDate, @Param("endDate") LocalDate endDate,
                @Param("priority") String priority, @Param("status") String status, @Param("teamSize") int teamSize,
@@ -88,18 +88,18 @@ public interface ProjectMapper {
                @Param("version") long version, @Param("operator") String operator);
 
     @Update("UPDATE mdm.project SET deleted=true,version=version+1,updated_at=now(),updated_by=#{operator} " +
-        "WHERE id=#{id} AND deleted=false")
-    int softDelete(@Param("id") UUID id, @Param("operator") String operator);
+        "WHERE organization_id=#{organizationId} AND id=#{id} AND deleted=false AND version=#{version} AND status <> 'COMPLETED'")
+    int softDelete(@Param("organizationId") UUID organizationId, @Param("id") UUID id, @Param("version") long version, @Param("operator") String operator);
 
-    @Update("UPDATE mdm.project SET partner_id=#{partnerId},partner_name=#{partnerName},version=version+1,updated_at=now(),updated_by=#{operator} WHERE id=#{projectId} AND deleted=false AND (partner_id IS NULL OR partner_id=#{partnerId})")
-    int assignPartner(@Param("projectId") UUID projectId, @Param("partnerId") UUID partnerId,
+    @Update("UPDATE mdm.project SET partner_id=#{partnerId},partner_name=#{partnerName},version=version+1,updated_at=now(),updated_by=#{operator} WHERE organization_id=#{organizationId} AND id=#{projectId} AND deleted=false AND (partner_id IS NULL OR partner_id=#{partnerId})")
+    int assignPartner(@Param("organizationId") UUID organizationId, @Param("projectId") UUID projectId, @Param("partnerId") UUID partnerId,
                       @Param("partnerName") String partnerName, @Param("operator") String operator);
 
-    @Update("UPDATE mdm.project SET partner_id=NULL,partner_name=NULL,version=version+1,updated_at=now(),updated_by=#{operator} WHERE id=#{projectId} AND deleted=false AND partner_id=#{partnerId}")
-    int clearPartner(@Param("projectId") UUID projectId, @Param("partnerId") UUID partnerId,
+    @Update("UPDATE mdm.project SET partner_id=NULL,partner_name=NULL,version=version+1,updated_at=now(),updated_by=#{operator} WHERE organization_id=#{organizationId} AND id=#{projectId} AND deleted=false AND partner_id=#{partnerId}")
+    int clearPartner(@Param("organizationId") UUID organizationId, @Param("projectId") UUID projectId, @Param("partnerId") UUID partnerId,
                      @Param("operator") String operator);
 
-    @Update("UPDATE mdm.project SET partner_name=#{partnerName},version=version+1,updated_at=now(),updated_by=#{operator} WHERE partner_id=#{partnerId} AND deleted=false")
-    int refreshPartnerName(@Param("partnerId") UUID partnerId, @Param("partnerName") String partnerName,
+    @Update("UPDATE mdm.project SET partner_name=#{partnerName},version=version+1,updated_at=now(),updated_by=#{operator} WHERE organization_id=#{organizationId} AND partner_id=#{partnerId} AND deleted=false")
+    int refreshPartnerName(@Param("organizationId") UUID organizationId, @Param("partnerId") UUID partnerId, @Param("partnerName") String partnerName,
                            @Param("operator") String operator);
 }

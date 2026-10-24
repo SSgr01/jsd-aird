@@ -13,6 +13,11 @@ import com.jsd.aird.iam.api.PermissionDefinitionContributor.PermissionDefinition
  * this contract and its application-facing records.
  */
 public interface IamStore {
+    void lockAdministration(UUID organizationId);
+    void lockUser(UUID organizationId,UUID userId);
+    void lockRole(UUID organizationId,UUID roleId);
+    void bumpUserVersion(UUID organizationId,UUID userId);
+
 
     Optional<Organization> defaultOrganization();
 

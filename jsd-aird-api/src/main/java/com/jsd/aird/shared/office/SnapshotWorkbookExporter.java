@@ -61,6 +61,8 @@ public final class SnapshotWorkbookExporter {
             if (mapping != null && mapping.isArray()) {
                 applyValues(snapshot, workbook, names, mapping, data == null ? objectMapper.createObjectNode() : data, warnings);
             }
+            copyImages(snapshot, workbook, names);
+            copyCellImages(snapshot, workbook, names);
             if (manifest != null) writeManifest(workbook, manifest);
             workbook.setForceFormulaRecalculation(true);
             workbook.write(output);
@@ -68,6 +70,133 @@ public final class SnapshotWorkbookExporter {
         } catch (Exception exception) {
             throw new IllegalArgumentException("XLSX 导出失败：" + exception.getMessage(), exception);
         }
+    }
+
+    private void copyImages(JsonNode snapshot, XSSFWorkbook workbook, Map<String, String> names) throws Exception {
+        for (var resource : snapshot.path("resources")) {
+            if (!"SHEET_DRAWING_PLUGIN".equals(resource.path("name").asText())) continue;
+            var json = resource.path("data").asText("");
+            if (json.isBlank()) continue;
+            var sheets = objectMapper.readTree(json);
+            if (!sheets.isObject()) throw new IllegalArgumentException("图片绘图资源格式无效");
+            var fields = sheets.fields();
+            while (fields.hasNext()) {
+                var entry = fields.next();
+                var sheet = workbook.getSheet(names.getOrDefault(entry.getKey(), ""));
+                if (sheet == null) continue;
+                var drawingData = entry.getValue().path("data");
+                if (entry.getValue().has("data") && !drawingData.isObject()) {
+                    throw new IllegalArgumentException("图片绘图资源格式无效：" + entry.getKey());
+                }
+                var ordered = new java.util.LinkedHashMap<String, JsonNode>();
+                for (var id : entry.getValue().path("order")) {
+                    if (drawingData.has(id.asText())) ordered.put(id.asText(), drawingData.get(id.asText()));
+                }
+                drawingData.fields().forEachRemaining(item -> ordered.putIfAbsent(item.getKey(), item.getValue()));
+                for (var drawing : ordered.values()) {
+                    if (drawing.path("drawingType").asInt(0) != 0) continue;
+                    var image = EmbeddedOfficeImage.read(drawing, snapshot.path("resources"));
+                    var anchor = imageAnchor(sheet, drawing, image);
+                    var picture = sheet.createDrawingPatriarch().createPicture(anchor,
+                            workbook.addPicture(image.bytes(), image.pictureType()));
+                    var angle = drawing.path("transform").path("angle").asDouble(0);
+                    if (angle != 0) picture.getCTPicture().getSpPr().getXfrm().setRot((int) Math.round(angle * 60000));
+                }
+            }
+        }
+    }
+
+    private void copyCellImages(JsonNode snapshot, XSSFWorkbook workbook, Map<String, String> names) {
+        for (var sheetEntry : names.entrySet()) {
+            var sheet = workbook.getSheet(sheetEntry.getValue());
+            var rows = snapshot.path("sheets").path(sheetEntry.getKey()).path("cellData").fields();
+            while (rows.hasNext()) {
+                var row = rows.next();
+                var cells = row.getValue().fields();
+                while (cells.hasNext()) {
+                    var cell = cells.next();
+                    var document = cell.getValue().path("p");
+                    for (var drawing : document.path("drawings")) {
+                        if (drawing.path("drawingType").asInt(0) != 0 || !drawing.isObject()) continue;
+                        var image = EmbeddedOfficeImage.read(drawing, document.path("resources"));
+                        var rowIndex = Integer.parseInt(row.getKey());
+                        var colIndex = Integer.parseInt(cell.getKey());
+                        var anchored = ((com.fasterxml.jackson.databind.node.ObjectNode) drawing).deepCopy();
+                        var size = drawing.path("docTransform").path("size");
+                        var width = EmbeddedOfficeImage.dimension(size.path("width"), image.width());
+                        var height = EmbeddedOfficeImage.dimension(size.path("height"), image.height());
+                        anchored.withObject("/transform").put("width", width).put("height", height);
+                        anchored.putObject("sheetTransform").putObject("from").put("row", rowIndex).put("column", colIndex)
+                                .put("columnOffset", Math.max(0, (sheet.getColumnWidthInPixels(colIndex) - width) / 2))
+                                .put("rowOffset", Math.max(0, (rowPixels(sheet, rowIndex) - height) / 2));
+                        var anchor = imageAnchor(sheet, anchored, image);
+                        // Native XLSX drawings remain anchored to their owning cell.
+                        anchor.setAnchorType(org.apache.poi.ss.usermodel.ClientAnchor.AnchorType.MOVE_AND_RESIZE);
+                        sheet.createDrawingPatriarch().createPicture(anchor, workbook.addPicture(image.bytes(), image.pictureType()));
+                    }
+                }
+            }
+        }
+    }
+
+    private org.apache.poi.xssf.usermodel.XSSFClientAnchor imageAnchor(XSSFSheet sheet, JsonNode drawing, EmbeddedOfficeImage image) {
+        var transform = drawing.path("transform");
+        var sheetTransform = drawing.path("sheetTransform");
+        var from = sheetTransform.path("from");
+        var to = sheetTransform.path("to");
+        var width = EmbeddedOfficeImage.dimension(transform.path("width"), image.width());
+        var height = EmbeddedOfficeImage.dimension(transform.path("height"), image.height());
+        var left = transform.path("left").asDouble(0);
+        var top = transform.path("top").asDouble(0);
+        if (from.isObject()) {
+            left = cellLeft(sheet, from.path("column").asInt()) + from.path("columnOffset").asDouble();
+            top = cellTop(sheet, from.path("row").asInt()) + from.path("rowOffset").asDouble();
+        }
+        var start = pixelPosition(sheet, left, top);
+        var end = to.isObject() && "1".equals(drawing.path("anchorType").asText("0"))
+                ? pixelPosition(sheet, cellLeft(sheet, to.path("column").asInt()) + to.path("columnOffset").asDouble(),
+                    cellTop(sheet, to.path("row").asInt()) + to.path("rowOffset").asDouble())
+                : pixelPosition(sheet, left + width, top + height);
+        var anchor = new org.apache.poi.xssf.usermodel.XSSFClientAnchor(start[2], start[3], end[2], end[3],
+                start[0], start[1], end[0], end[1]);
+        anchor.setAnchorType(switch (drawing.path("anchorType").asText("0")) {
+            case "1" -> org.apache.poi.ss.usermodel.ClientAnchor.AnchorType.MOVE_AND_RESIZE;
+            case "2" -> org.apache.poi.ss.usermodel.ClientAnchor.AnchorType.DONT_MOVE_AND_RESIZE;
+            default -> org.apache.poi.ss.usermodel.ClientAnchor.AnchorType.MOVE_DONT_RESIZE;
+        });
+        return anchor;
+    }
+
+    private double cellLeft(XSSFSheet sheet, int column) {
+        if (column < 0 || column > 16383) throw new IllegalArgumentException("图片列位置无效");
+        double value = 0;
+        for (var i = 0; i < column; i++) value += sheet.getColumnWidthInPixels(i);
+        return value;
+    }
+
+    private double cellTop(XSSFSheet sheet, int row) {
+        if (row < 0 || row > 1048575) throw new IllegalArgumentException("图片行位置无效");
+        double value = 0;
+        for (var i = 0; i < row; i++) value += rowPixels(sheet, i);
+        return value;
+    }
+
+    private double rowPixels(XSSFSheet sheet, int row) {
+        var data = sheet.getRow(row);
+        return (data == null ? sheet.getDefaultRowHeightInPoints() : data.getHeightInPoints()) * 96d / 72d;
+    }
+
+    private int[] pixelPosition(XSSFSheet sheet, double left, double top) {
+        if (!Double.isFinite(left) || !Double.isFinite(top) || left < 0 || top < 0) {
+            throw new IllegalArgumentException("图片位置无效");
+        }
+        int column = 0, row = 0;
+        while (column < 16383 && left >= Math.max(1, sheet.getColumnWidthInPixels(column))) {
+            left -= Math.max(1, sheet.getColumnWidthInPixels(column++));
+        }
+        while (row < 1048575 && top >= Math.max(1, rowPixels(sheet, row))) top -= Math.max(1, rowPixels(sheet, row++));
+        return new int[]{column, row, org.apache.poi.util.Units.pixelToEMU((int) Math.round(left)),
+                org.apache.poi.util.Units.pixelToEMU((int) Math.round(top))};
     }
 
     private void applyValues(
@@ -235,6 +364,13 @@ public final class SnapshotWorkbookExporter {
     }
 
     private void copyGeometry(JsonNode source, XSSFSheet target) {
+        if (source.path("defaultColumnWidth").asDouble() > 0) {
+            if (!target.getCTWorksheet().isSetSheetFormatPr()) target.getCTWorksheet().addNewSheetFormatPr();
+            target.getCTWorksheet().getSheetFormatPr().setDefaultColWidth(source.path("defaultColumnWidth").asDouble() / 7d);
+        }
+        if (source.path("defaultRowHeight").asDouble() > 0) {
+            target.setDefaultRowHeightInPoints((float) (source.path("defaultRowHeight").asDouble() * 72d / 96d));
+        }
         for (var merge : source.path("mergeData")) {
             target.addMergedRegion(new CellRangeAddress(merge.path("startRow").asInt(), merge.path("endRow").asInt(),
                     merge.path("startColumn").asInt(), merge.path("endColumn").asInt()));

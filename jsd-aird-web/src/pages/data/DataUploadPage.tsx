@@ -216,7 +216,7 @@ export function DataUploadPage() {
     }
     setRetryingJobId(job.id);
     try {
-      await dataApi.reprocessJob(job.id);
+      await dataApi.reprocessJob(job.id,job.revision);
       await loadJobs();
       void message.success('已重新处理');
     }
@@ -230,7 +230,7 @@ export function DataUploadPage() {
       okText: '删除记录', okButtonProps: { danger: true }, cancelText: '取消',
       onOk: async () => {
         setDeletingJobId(job.id);
-        try { await dataApi.hideJob(job.id); await loadJobs(); void message.success('上传历史已隐藏'); }
+        try { await dataApi.hideJob(job.id,job.revision); await loadJobs(); void message.success('上传历史已隐藏'); }
         catch (error) { void message.error(error instanceof Error ? error.message : '删除上传记录失败'); }
         finally { setDeletingJobId(undefined); }
       },

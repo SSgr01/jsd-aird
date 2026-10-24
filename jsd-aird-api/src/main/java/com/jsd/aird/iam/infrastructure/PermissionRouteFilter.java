@@ -139,7 +139,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
                 return permission("experiment.view", "EXPERIMENT", "READ");
             if (read) return permission("experiment.view", "EXPERIMENT", "READ");
             if (path.contains("/submit-review")) return permission("experiment.submit", "EXPERIMENT", "WRITE");
-            if (path.contains("/approve")) return permission("experiment.approve", "EXPERIMENT", "WRITE");
+            if (path.contains("/approve") || path.endsWith("/publish")) return permission("experiment.approve", "EXPERIMENT", "WRITE");
             if (path.contains("/return") || path.contains("/void")) return permission("experiment.review", "EXPERIMENT", "WRITE");
             if (path.contains("/start")) return permission("experiment.update", "EXPERIMENT", "WRITE");
             if (method.equals("DELETE")) return permission("experiment.delete", "EXPERIMENT", "WRITE");
@@ -261,7 +261,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         if (path.startsWith("/api/v1/production-orders")) {
             if (path.contains("/export")) return permission("production.export", "PRODUCTION", "READ");
             if (read) return permission("production.view", "PRODUCTION", "READ");
-            if (path.endsWith("/submit")) return permission("production.submit", "PRODUCTION", "WRITE");
+            if (path.endsWith("/submit") || path.endsWith("/publish")) return permission("production.submit", "PRODUCTION", "WRITE");
             if (path.endsWith("/cancel")) return permission("production.cancel", "PRODUCTION", "WRITE");
             if (method.equals("DELETE")) return permission("production.delete", "PRODUCTION", "WRITE");
             if (path.endsWith("/draft") || method.equals("PUT")) return permission("production.update", "PRODUCTION", "WRITE");
@@ -346,6 +346,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         }
 
         if (path.startsWith("/api/v1/quality")) {
+            if(path.equals("/api/v1/quality/records/delete")) return permission("quality.delete","QUALITY","WRITE");
             if (path.endsWith("/publish")) return permission("quality.publish", "QUALITY", "WRITE");
             if (path.contains("/export")) return permission("quality.export", "QUALITY", "READ");
             if (read) return permission("quality.view", "QUALITY", "READ");

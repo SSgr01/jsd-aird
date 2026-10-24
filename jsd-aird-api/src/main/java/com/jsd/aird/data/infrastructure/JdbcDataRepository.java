@@ -526,6 +526,22 @@ public class JdbcDataRepository implements DataRepository {
     }
 
     @Override
+    @Transactional(readOnly=true)
+    public void forEachRow(UUID organizationId,UUID importJobId,java.util.function.Consumer<Row> consumer) {
+        jdbc.query(connection->{
+            var statement=connection.prepareStatement("""
+                SELECT r.id,s.sheet_id,r.source_row_number,r.raw_values_jsonb,r.normalized_values_jsonb,
+                    r.corrected_values_jsonb,r.status,r.source_metadata_jsonb,r.excluded,r.exclusion_reason
+                FROM data.staging_row r JOIN data.import_sheet s ON s.id=r.import_sheet_id
+                JOIN data.import_job j ON j.id=r.import_job_id
+                WHERE j.organization_id=? AND j.id=? AND s.selected=true
+                ORDER BY s.sheet_order,r.source_row_number
+                """);
+            statement.setObject(1,organizationId);statement.setObject(2,importJobId);statement.setFetchSize(256);return statement;
+        },(org.springframework.jdbc.core.RowCallbackHandler)rs->consumer.accept(new Row(rs.getObject("id",UUID.class),rs.getString("sheet_id"),rs.getInt("source_row_number"),parse(rs.getString("raw_values_jsonb")),parse(rs.getString("normalized_values_jsonb")),parse(rs.getString("corrected_values_jsonb")),rs.getString("status"),parse(rs.getString("source_metadata_jsonb")),rs.getBoolean("excluded"),rs.getString("exclusion_reason"))));
+    }
+
+    @Override
     @Transactional
     public void replaceValidation(UUID organizationId, UUID importJobId, List<Row> rows, List<Issue> issues, String status) {
         jdbc.update("DELETE FROM data.import_issue WHERE import_job_id = ?", importJobId);

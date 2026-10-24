@@ -1,22 +1,19 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { Result, Spin } from 'antd';
+import { DocsEditor, SheetsEditor } from '@/features/template-workspace/editor-runtime';
+import { ContentLoading } from '@/components/loading/ContentLoading';
+import { trackSnapshot } from './workspace-loading';
+import { markPerformance } from '@/services/performance/metrics';
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Result } from 'antd';
 import { templateApi } from '@/services/templates/template-api';
 import type { TemplateWorkspace } from './types';
+import { preloadWorkspaceEditor } from './preload-editor';
 
 /**
  * 模板中心工作台的只读复用组件：按 templateVersionId 加载模板快照，
  * 用 Univer 渲染 Word/Excel 模板内容。用于项目文档等场景内嵌查看，
  * 避免整页跳转到模板中心工作台。
  */
-const SheetsEditor = lazy(async () => {
-  const module = await import('@/features/template-workspace/UniverSheetsEditor');
-  return { default: module.UniverSheetsEditor };
-});
 
-const DocsEditor = lazy(async () => {
-  const module = await import('@/features/template-workspace/UniverDocsEditor');
-  return { default: module.UniverDocsEditor };
-});
 
 function snapshotVersion(snapshot: Record<string, unknown>, fallback: number) {
   const value = snapshot.snapshotFormatVersion;
@@ -35,6 +32,7 @@ export default function TemplateVersionPreview({ versionId, height = 560 }: Prop
   const [error, setError] = useState<string>();
 
   useEffect(() => {
+    markPerformance('workspace-open');
     let active = true;
     setLoading(true);
     setError(undefined);
@@ -43,9 +41,11 @@ export default function TemplateVersionPreview({ versionId, height = 560 }: Prop
     void (async () => {
       try {
         const model = await templateApi.getEditModel(versionId);
+        if (!active) return;
+        preloadWorkspaceEditor(model.format);
         const loaded =
           model.snapshotFileId && model.snapshotHash
-            ? await templateApi.downloadSnapshot(model.snapshotFileId)
+            ? await trackSnapshot(templateApi.downloadSnapshot(model.snapshotFileId))
             : (model.inlineSnapshot ?? {});
         if (model.format === 'DOCX' && snapshotVersion(loaded, 0) < 5) {
           throw new Error('该 Word 模板使用旧编辑快照，请在模板中心重新导入原始 DOCX 后再查看');
@@ -70,7 +70,7 @@ export default function TemplateVersionPreview({ versionId, height = 560 }: Prop
     return (
       <div className="pm-documents-preview" style={{ height }}>
         <div className="pm-documents-preview-loading">
-          <Spin /><span>正在加载模板内容</span>
+          <ContentLoading label="下载文档…" />
         </div>
       </div>
     );
@@ -89,7 +89,7 @@ export default function TemplateVersionPreview({ versionId, height = 560 }: Prop
       <Suspense
         fallback={
           <div className="pm-documents-preview-loading">
-            <Spin /><span>正在渲染文档</span>
+            <ContentLoading label="加载编辑器…" />
           </div>
         }
       >

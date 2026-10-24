@@ -18,6 +18,11 @@ public class JdbcDataCategoryRepository implements DataCategoryRepository {
         this.jdbc = jdbc;
     }
 
+    @Override public void lockCategory(UUID organizationId,UUID categoryId){
+        if(jdbc.query("SELECT id FROM data.data_category WHERE organization_id=? AND id=? FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),organizationId,categoryId).isEmpty())
+            throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,"分类不存在");
+    }
+
     @Override
     public List<Category> list(UUID organizationId) {
         return jdbc.query("""

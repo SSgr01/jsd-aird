@@ -4,6 +4,7 @@ import type {
   ProductionWorkspace,
 } from '@/features/production-orders/types';
 import type { TemplateFormat } from '@/features/template-workspace/types';
+import { snapshotBlob } from '@/features/template-workspace/editor-save';
 import { httpClient } from '@/services/http/client';
 import type { ApiResponse } from '@/types/api';
 
@@ -120,19 +121,19 @@ export const productionOrderApi = {
     return response.data.data;
   },
 
-  async submit(orderId: string) {
+  async submit(orderId: string, lockVersion: number) {
     const response = await httpClient.post<ApiResponse<{ revisionId: string }>>(
-      `/api/v1/production-orders/${orderId}/submit`,
+      `/api/v1/production-orders/${orderId}/submit`, { lockVersion },
     );
     return response.data.data;
   },
 
-  async cancel(orderId: string) {
-    await httpClient.post(`/api/v1/production-orders/${orderId}/cancel`);
+  async cancel(orderId: string, lockVersion: number) {
+    await httpClient.post(`/api/v1/production-orders/${orderId}/cancel`, { lockVersion });
   },
 
-  async delete(orderId: string) {
-    await httpClient.delete(`/api/v1/production-orders/${orderId}`);
+  async delete(orderId: string, lockVersion: number) {
+    await httpClient.delete(`/api/v1/production-orders/${orderId}`, { params: { lockVersion } });
   },
 
   async stageInstanceSource(file: File, sourceType: 'XLSX' | 'PHOTO') {
@@ -223,11 +224,11 @@ export const productionOrderApi = {
     anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 0);
   },
 
-  async stageSnapshot(snapshot: Record<string, unknown>, format: TemplateFormat) {
+  async stageSnapshot(snapshot: Record<string, unknown> | Blob, format: TemplateFormat) {
     const body = new FormData();
     body.append(
       'file',
-      new Blob([JSON.stringify(snapshot)], { type: 'application/json' }),
+      snapshotBlob(snapshot, format),
       `${format.toLowerCase()}-production-snapshot.json`,
     );
     const response = await httpClient.post<

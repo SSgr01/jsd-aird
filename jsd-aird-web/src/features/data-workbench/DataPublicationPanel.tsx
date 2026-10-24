@@ -79,21 +79,21 @@ export function DataPublicationPanel({ jobId, refreshKey, canConfirm = false, di
       type="primary" disabled={busy || disabled || (state.status !== 'CONFIRMED' && (!canUpdate || !canConfirm))}
       onClick={() => { setOpen(false); setSubmitOpen(true); }}>{state.status === 'RETURNED' ? '重新提交审核' : '提交审核'}</Button>}
     {!readOnly && canUpdate && !canSubmit && canConfirm && ['DRAFT', 'RETURNED'].includes(state.status) && <Button disabled={busy || disabled}
-      onClick={() => void run(() => dataApi.publicationAction(jobId, 'confirm'), '数据已确认，可由有送审权限的人员提交发布审核')}>确认数据</Button>}
+      onClick={() => void run(() => dataApi.publicationAction(jobId, 'confirm', state.revision), '数据已确认，可由有送审权限的人员提交发布审核')}>确认数据</Button>}
     {state.status === 'PENDING_REVIEW' && <>
       {activeSnapshot && <Button disabled={busy} onClick={() => void showSnapshot(activeSnapshot.id, activeSnapshot.versionNo)}>查看审核内容</Button>}
       {!readOnly && canReview && activeSnapshot && <><Button danger disabled={busy} onClick={() => { setOpen(false); setComment(''); setRejectOpen(true); }}>驳回</Button>
-        <Button type="primary" disabled={busy} onClick={() => void run(() => dataApi.review(jobId, activeSnapshot.id, true), '审核已通过，可单独发布')}>审核通过</Button></>}
-      {!readOnly && canSubmit && <Button disabled={busy} onClick={() => void run(() => dataApi.publicationAction(jobId, 'withdraw'), '已撤回，可继续修改')}>撤回送审</Button>}
+        <Button type="primary" disabled={busy} onClick={() => void run(() => dataApi.review(jobId, activeSnapshot.id, true, state.revision), '审核已通过，可单独发布')}>审核通过</Button></>}
+      {!readOnly && canSubmit && <Button disabled={busy} onClick={() => void run(() => dataApi.publicationAction(jobId, 'withdraw', state.revision), '已撤回，可继续修改')}>撤回送审</Button>}
     </>}
     {state.status === 'APPROVED' && <>
-      {!readOnly && canReview && <Button type="primary" disabled={busy} onClick={() => void run(() => dataApi.publicationAction(jobId, 'publish'), '导入数据已发布并正式入库')}>发布</Button>}
-      {!readOnly && canSubmit && <Button disabled={busy} onClick={() => void run(() => dataApi.publicationAction(jobId, 'withdraw'), '已撤回，修改后需重新提交审核')}>撤回修改</Button>}
+      {!readOnly && canReview && <Button type="primary" disabled={busy} onClick={() => void run(() => dataApi.publicationAction(jobId, 'publish', state.revision), '导入数据已发布并正式入库')}>发布</Button>}
+      {!readOnly && canSubmit && <Button disabled={busy} onClick={() => void run(() => dataApi.publicationAction(jobId, 'withdraw', state.revision), '已撤回，修改后需重新提交审核')}>撤回修改</Button>}
     </>}
-    {!readOnly && canUpdate && (state.status === 'PUBLISHED' || revisionRequired) && <Popconfirm title="停用这份已发布资料？" description="保留历史与引用，停用后不再参与 AI 检索。" onConfirm={() => { void run(() => dataApi.publicationAction(jobId, 'disable'), '已停用'); }}><Button disabled={busy}>停用</Button></Popconfirm>}
-    {!readOnly && canUpdate && state.status === 'DISABLED' && <Button disabled={busy} onClick={() => void run(() => dataApi.publicationAction(jobId, 'restore'), '已恢复使用')}>恢复使用</Button>}
+    {!readOnly && canUpdate && (state.status === 'PUBLISHED' || revisionRequired) && <Popconfirm title="停用这份已发布资料？" description="保留历史与引用，停用后不再参与 AI 检索。" onConfirm={() => { void run(() => dataApi.publicationAction(jobId, 'disable', state.revision), '已停用'); }}><Button disabled={busy}>停用</Button></Popconfirm>}
+    {!readOnly && canUpdate && state.status === 'DISABLED' && <Button disabled={busy} onClick={() => void run(() => dataApi.publicationAction(jobId, 'restore', state.revision), '已恢复使用')}>恢复使用</Button>}
     {!readOnly && canUpdate && (['PUBLISHED', 'DISABLED'].includes(state.status) || revisionRequired) && <Button disabled={busy}
-      onClick={() => void run(() => dataApi.publicationAction(jobId, 'revise'), '修订草稿已打开，原发布版本保持不变').then((ok) => { if (ok) { setOpen(false); onEdit?.(); } })}>创建修订</Button>}
+      onClick={() => void run(() => dataApi.publicationAction(jobId, 'revise', state.revision), '修订草稿已打开，原发布版本保持不变').then((ok) => { if (ok) { setOpen(false); onEdit?.(); } })}>创建修订</Button>}
     {!readOnly && lazy && onEdit && !revisionRequired && ['DRAFT', 'RETURNED', 'CONFIRMED'].includes(state.status) && <Button onClick={onEdit}>打开草稿</Button>}
   </Space>;
 
@@ -151,7 +151,7 @@ export function DataPublicationPanel({ jobId, refreshKey, canConfirm = false, di
       }))} /> : <Typography.Text type="secondary">当前资料暂无审核操作记录。</Typography.Text>}
     </Modal>
     <Modal open={submitOpen} title="提交审核" okText="提交审核" confirmLoading={busy} okButtonProps={{ disabled: !reviewerId || reviewersLoading || Boolean(reviewersError) }}
-      onCancel={() => setSubmitOpen(false)} onOk={() => void run(() => dataApi.publicationAction(jobId, 'submit', reviewerId), '已提交审核').then((ok) => { if (ok) setSubmitOpen(false); })}>
+      onCancel={() => setSubmitOpen(false)} onOk={() => state && void run(() => dataApi.publicationAction(jobId, 'submit', state.revision, reviewerId), '已提交审核').then((ok) => { if (ok) setSubmitOpen(false); })}>
       <Space direction="vertical" style={{ width: '100%' }} size={16}>
         <Typography.Text>审核对象是当前已保存的导入数据。审核通过后可发布，发布后正式入库。</Typography.Text>
         <Select aria-label="发布审核人" showSearch optionFilterProp="label" placeholder="选择发布审核人" style={{ width: '100%' }} loading={reviewersLoading}
@@ -161,7 +161,7 @@ export function DataPublicationPanel({ jobId, refreshKey, canConfirm = false, di
       </Space>
     </Modal>
     <Modal open={rejectOpen} title="驳回" okText="驳回" confirmLoading={busy} okButtonProps={{ disabled: !comment.trim() }} onCancel={() => setRejectOpen(false)}
-      onOk={() => { if (activeSnapshot) void run(() => dataApi.review(jobId, activeSnapshot.id, false, comment), '已驳回，可在原工作台修改后重新提交').then((ok) => { if (ok) setRejectOpen(false); }); }}>
+      onOk={() => { if (activeSnapshot) void run(() => dataApi.review(jobId, activeSnapshot.id, false, state.revision, comment), '已驳回，可在原工作台修改后重新提交').then((ok) => { if (ok) setRejectOpen(false); }); }}>
       <Input.TextArea aria-label="驳回原因" value={comment} onChange={(event) => setComment(event.target.value)} placeholder="请填写驳回原因（必填）" rows={3} />
     </Modal>
     <Modal open={open} title={snapshot ? `版本快照 V${snapshot.version}` : '版本记录'} width={1040} footer={null} onCancel={() => setOpen(false)} destroyOnHidden>

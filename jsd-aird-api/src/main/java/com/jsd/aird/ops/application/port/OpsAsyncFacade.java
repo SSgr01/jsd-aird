@@ -8,6 +8,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 /** Public submission boundary for the Postgres-backed worker. */
 public interface OpsAsyncFacade {
+    default void requireExecution(AsyncJobHandler.ExecutionContext context,boolean terminal){
+        if(context!=null && context.cancelled())throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
+    }
 
     UUID enqueue(UUID organizationId, String jobType, JsonNode payload, String idempotencyKey, int priority);
 

@@ -103,7 +103,7 @@ public class FileObjectController {
             }
             byte[] source;
             try (var stored = file.storedObject()) {
-                source = stored.stream().readAllBytes();
+                source = com.jsd.aird.shared.resource.BoundedStreams.readBytes(stored.stream(),MAX_DOC_PREVIEW_BYTES);
             } catch (Exception exception) {
                 throw new IOException("Unable to read legacy Word preview source", exception);
             }

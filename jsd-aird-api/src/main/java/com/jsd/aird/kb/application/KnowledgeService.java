@@ -248,8 +248,10 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     }
 
     @Transactional
-    public KnowledgeRepository.CategoryRow renameCategory(UUID categoryId, String name, String description) {
+    public KnowledgeRepository.CategoryRow renameCategory(UUID categoryId, String name, String description,String revision) {
         var actor = ActorContext.required();
+        repository.lockCategory(actor.organizationId(),categoryId);
+        com.jsd.aird.shared.json.RevisionToken.require(revision,requireCategory(actor.organizationId(),categoryId).getRevision());
         var category = requireCategory(actor.organizationId(), categoryId);
         var normalizedName = normalizeName(name);
         ensureCategoryNameAvailable(actor.organizationId(), category.scope(), normalizedName, categoryId);
@@ -257,8 +259,10 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     }
 
     @Transactional
-    public void deleteCategory(UUID categoryId, UUID replacementCategoryId) {
+    public void deleteCategory(UUID categoryId, UUID replacementCategoryId,String revision) {
         var actor = ActorContext.required();
+        repository.lockCategory(actor.organizationId(),categoryId);
+        com.jsd.aird.shared.json.RevisionToken.require(revision,requireCategory(actor.organizationId(),categoryId).getRevision());
         var category = requireCategory(actor.organizationId(), categoryId);
         if ("未分类".equals(category.name())) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "默认的未分类不可删除");
@@ -282,8 +286,9 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     }
 
     @Transactional
-    public void assignCategory(UUID documentId, UUID categoryId) {
+    public void assignCategory(UUID documentId, UUID categoryId, String revision) {
         var actor = ActorContext.required();
+        requireRevision(documentId, revision);
         var document = repository.findDocument(actor.organizationId(), documentId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在"));
         var category = requireCategory(actor.organizationId(), categoryId);
@@ -294,8 +299,9 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     }
 
     @Transactional
-    public DocumentView renameDocument(UUID documentId, String title) {
+    public DocumentView renameDocument(UUID documentId, String title, String revision) {
         var actor = ActorContext.required();
+        requireRevision(documentId, revision);
         requireDocument(actor.organizationId(), documentId);
         repository.renameDocument(actor.organizationId(), documentId, normalizeDocumentTitle(title));
         audit.append(actor.organizationId(), actor.userId(), "KB_DOCUMENT_RENAMED", "KB_DOCUMENT", documentId,
@@ -306,6 +312,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     @Transactional
     public DocumentView updateDocument(UUID documentId, UpdateDocumentCommand command) {
         var actor = ActorContext.required();
+        requireRevision(documentId, command.revision());
         var document = requireDocument(actor.organizationId(), documentId);
         var category = requireCategory(actor.organizationId(), command.categoryId());
         if (!category.scope().equals(command.libraryScope())) {
@@ -336,12 +343,13 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         return get(documentId);
     }
 
-    public record UpdateDocumentCommand(String title, String libraryScope, UUID categoryId, List<String> tags,
+    public record UpdateDocumentCommand(String revision, String title, String libraryScope, UUID categoryId, List<String> tags,
                                         JsonNode sourceInfo, List<ProjectResourceFacade.ProjectRelationTarget> projectRelations) { }
 
     @Transactional
-    public void deleteDocument(UUID documentId) {
+    public void deleteDocument(UUID documentId, String revision) {
         var actor = ActorContext.required();
+        requireRevision(documentId, revision);
         requireDocument(actor.organizationId(), documentId);
         if (governance.hasPublication(actor.organizationId(), documentId)) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "已发布文档不可物理删除，请使用停用");
@@ -432,6 +440,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     @Transactional
     public DocumentView updateAiGrant(UUID documentId, GrantCommand command) {
         var actor = ActorContext.required();
+        requireRevision(documentId,command.revision());
         requireDocument(actor.organizationId(), documentId);
         var action = command.action() == null ? "" : command.action().trim().toUpperCase(Locale.ROOT);
         switch (action) {
@@ -1260,6 +1269,12 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         return List.copyOf(result);
     }
 
+    public void requireRevision(UUID documentId,String revision) {
+        var actor=ActorContext.required();
+        repository.lockDocument(actor.organizationId(),documentId);
+        com.jsd.aird.shared.json.RevisionToken.require(revision,get(documentId).getRevision());
+    }
+
     private DocumentView view(KnowledgeRepository.DocumentRow row) {
         return new DocumentView(row.id(), row.title(), row.status(), row.scanStatus(), row.aiStatus(),
                 row.currentVersionNo(), row.currentVersionId(), row.originalName(), row.contentType(), row.size(),
@@ -1402,7 +1417,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     }
 
     public record CreateCommand(UUID fileId, String title, String libraryScope, UUID categoryId) { }
-    public record GrantCommand(String action, String reason) { }
+    public record GrantCommand(String revision,String action, String reason) { }
     public record CreateVersionCommand(UUID fileId) { }
     public record DocumentView(UUID id, String title, String status, String scanStatus,
                                String aiStatus, int currentVersionNo, UUID currentVersionId, String originalName,
@@ -1413,6 +1428,12 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                                UUID currentPublicationId, Integer currentPublicationNo,
                                List<ProjectResourceFacade.RelatedProjectView> relatedProjects,
                                List<String> tags, JsonNode sourceInfo) {
+        public String getRevision(){
+            return com.jsd.aird.shared.json.RevisionToken.of(id,title,status,scanStatus,aiStatus,currentVersionNo,
+                currentVersionId,sha256,updatedAt,libraryScope,categoryId,lifecycleStatus,reviewStatus,
+                reviewRevisionStatus,reviewRevision,currentPublicationId,tags,sourceInfo,
+                relatedProjects==null?List.of():relatedProjects.stream().sorted(java.util.Comparator.comparing(Object::toString)).toList());
+        }
         public List<String> getAllowedActions() {
             return AllowedActions.knowledge(lifecycleStatus, reviewStatus, currentPublicationId != null,
                     relatedProjects != null && !relatedProjects.isEmpty());

@@ -54,6 +54,8 @@ public class IamAdminService {
 
     @Transactional
     public CreateUserResult create(Actor actor, CreateUserCommand command) {
+        store.lockAdministration(actor.organizationId());
+
         if (command.password() == null || command.password().length() < 6 || command.password().length() > 200) {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "密码长度为 6-200 位");
         }
@@ -68,9 +70,13 @@ public class IamAdminService {
 
     @Transactional
     public UserView update(Actor actor, UUID userId, UpdateUserCommand command) {
+        store.lockAdministration(actor.organizationId());
+        requireUserVersion(actor,userId,command.expectedVersion());
         require(actor, "system.user.manage");
         var existing = requireUser(actor, userId);
-        role(actor, command.roleId());
+        var targetRole=role(actor, command.roleId());
+        if("SYSTEM_ADMIN".equals(existing.roleCode()) && "ACTIVE".equals(existing.status()) && !"SYSTEM_ADMIN".equals(targetRole.code()) && store.activeSystemAdmins(actor.organizationId())<=1)
+            throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN,"不能移除最后一个系统管理员");
         store.updateUser(actor.organizationId(), userId, command.displayName(), command.email(), command.phone(),
                 command.departmentName(), command.roleId());
         audit(actor, "IAM_USER_UPDATED", "USER", userId);
@@ -78,7 +84,9 @@ public class IamAdminService {
     }
 
     @Transactional
-    public void setStatus(Actor actor, UUID userId, boolean enabled) {
+    public void setStatus(Actor actor, UUID userId, boolean enabled,long expectedVersion) {
+        store.lockAdministration(actor.organizationId());
+        requireUserVersion(actor,userId,expectedVersion);
         require(actor, "system.user.manage");
         var existing = requireUser(actor, userId);
         if (!enabled && "SYSTEM_ADMIN".equals(existing.roleCode()) && store.activeSystemAdmins(actor.organizationId()) <= 1) {
@@ -89,7 +97,9 @@ public class IamAdminService {
     }
 
     @Transactional
-    public void resetPassword(Actor actor, UUID userId, String password) {
+    public void resetPassword(Actor actor, UUID userId, String password,long expectedVersion) {
+        store.lockAdministration(actor.organizationId());
+        requireUserVersion(actor,userId,expectedVersion);
         if (password == null || password.length() < 6 || password.length() > 200) {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "密码长度为 6-200 位");
         }
@@ -100,9 +110,12 @@ public class IamAdminService {
     }
 
     @Transactional
-    public void forceLogout(Actor actor, UUID userId) {
+    public void forceLogout(Actor actor, UUID userId,long expectedVersion) {
+        store.lockAdministration(actor.organizationId());
+        requireUserVersion(actor,userId,expectedVersion);
         require(actor, "system.user.manage");
         requireUser(actor, userId);
+        store.bumpUserVersion(actor.organizationId(),userId);
         store.revokeUserSessions(actor.organizationId(), userId);
         audit(actor, "IAM_FORCE_LOGOUT", "USER", userId);
     }
@@ -115,6 +128,8 @@ public class IamAdminService {
 
     @Transactional
     public RoleView createRole(Actor actor, String code, String name) {
+        store.lockAdministration(actor.organizationId());
+
         require(actor, "system.role.create");
         if (!code.matches("[A-Z][A-Z0-9_]{2,79}")) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "角色编码必须使用大写字母、数字和下划线");
         var role = store.roleByCode(actor.organizationId(), code);
@@ -125,7 +140,9 @@ public class IamAdminService {
     }
 
     @Transactional
-    public void renameRole(Actor actor, UUID roleId, String name) {
+    public void renameRole(Actor actor, UUID roleId, String name,long expectedVersion) {
+        store.lockAdministration(actor.organizationId());
+        requireRoleVersion(actor,roleId,expectedVersion);
         require(actor, "system.role.manage");
         var role = role(actor, roleId);
         if (role.builtin()) throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "内置角色不可重命名");
@@ -134,7 +151,9 @@ public class IamAdminService {
     }
 
     @Transactional
-    public void deleteRole(Actor actor, UUID roleId) {
+    public void deleteRole(Actor actor, UUID roleId,long expectedVersion) {
+        store.lockAdministration(actor.organizationId());
+        requireRoleVersion(actor,roleId,expectedVersion);
         require(actor, "system.role.manage");
         role(actor, roleId);
         try { store.deleteRole(actor.organizationId(), roleId); }
@@ -150,6 +169,8 @@ public class IamAdminService {
 
     @Transactional
     public long saveRolePermissions(Actor actor, UUID roleId, long expectedVersion, List<Binding> bindings) {
+        store.lockAdministration(actor.organizationId());
+        requireRoleVersion(actor,roleId,expectedVersion);
         require(actor, "system.permission.manage");
         var role = role(actor, roleId);
         validateBindings(bindings);
@@ -167,6 +188,8 @@ public class IamAdminService {
 
     @Transactional
     public long saveUserPermissions(Actor actor, UUID userId, long expectedVersion, List<Binding> bindings) {
+        store.lockAdministration(actor.organizationId());
+        requireUserVersion(actor,userId,expectedVersion);
         require(actor, "system.permission.manage");
         requireUser(actor, userId);
         validateBindings(bindings);
@@ -177,7 +200,9 @@ public class IamAdminService {
     }
 
     @Transactional
-    public void deleteUserOverride(Actor actor, UUID userId, String permissionCode) {
+    public void deleteUserOverride(Actor actor, UUID userId, String permissionCode,long expectedVersion) {
+        store.lockAdministration(actor.organizationId());
+        requireUserVersion(actor,userId,expectedVersion);
         require(actor, "system.permission.manage");
         requireUser(actor, userId);
         store.deleteUserOverride(actor.organizationId(), userId, permissionCode);
@@ -232,13 +257,22 @@ public class IamAdminService {
                 user.roleId(), user.roleCode(), user.roleName(), user.status(), user.lastLoginAt(), user.authVersion());
     }
 
+    private void requireUserVersion(Actor actor,UUID id,long expected){
+        store.lockUser(actor.organizationId(),id);
+        if(expected<0||requireUser(actor,id).authVersion()!=expected)throw new ApiException(ApiErrorCode.POLICY_VERSION_CONFLICT);
+    }
+    private void requireRoleVersion(Actor actor,UUID id,long expected){
+        store.lockRole(actor.organizationId(),id);
+        if(expected<0||role(actor,id).policyVersion()!=expected)throw new ApiException(ApiErrorCode.POLICY_VERSION_CONFLICT);
+    }
+
     private void audit(Actor actor, String action, String type, UUID id) {
         audit.append(actor.organizationId(), actor.userId(), action, type, id, JsonNodeFactory.instance.objectNode().put("source", "iam"));
     }
 
     public record CreateUserCommand(String username, String displayName, String email, String phone, String departmentName,
                                     UUID roleId, String password) { }
-    public record UpdateUserCommand(String displayName, String email, String phone, String departmentName, UUID roleId) { }
+    public record UpdateUserCommand(long expectedVersion,String displayName, String email, String phone, String departmentName, UUID roleId) { }
     public record UserView(UUID id, String username, String displayName, String email, String phone, String departmentName,
                            UUID roleId, String roleCode, String roleName, String status, Instant lastLoginAt,
                            long authVersion) { }

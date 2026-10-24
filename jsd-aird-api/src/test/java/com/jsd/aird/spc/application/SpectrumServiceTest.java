@@ -128,8 +128,9 @@ class SpectrumServiceTest {
         when(repository.findChart(ORGANIZATION_ID, chart.id())).thenReturn(Optional.of(chart));
         when(repository.hasActiveProjectReference(ORGANIZATION_ID, chart.id())).thenReturn(true);
 
-        assertThatThrownBy(() -> new SpectrumService(repository, mock(FileStorageFacade.class), new ObjectMapper())
-                .deleteChart(chart.id()))
+        var service = new SpectrumService(repository, mock(FileStorageFacade.class), new ObjectMapper());
+        var revision = service.chart(chart.id()).getRevision();
+        assertThatThrownBy(() -> service.deleteChart(chart.id(), revision))
                 .isInstanceOf(ApiException.class)
                 .satisfies(error -> assertThat(((ApiException) error).errorCode())
                         .isEqualTo(ApiErrorCode.REFERENCE_IN_USE));
@@ -144,8 +145,9 @@ class SpectrumServiceTest {
         when(repository.findChart(ORGANIZATION_ID, chart.id())).thenReturn(Optional.of(chart));
         when(repository.hasAnalysisReportReference(ORGANIZATION_ID, chart.id())).thenReturn(true);
 
-        assertThatThrownBy(() -> new SpectrumService(repository, mock(FileStorageFacade.class), new ObjectMapper())
-                .deleteChart(chart.id()))
+        var service = new SpectrumService(repository, mock(FileStorageFacade.class), new ObjectMapper());
+        var revision = service.chart(chart.id()).getRevision();
+        assertThatThrownBy(() -> service.deleteChart(chart.id(), revision))
                 .isInstanceOf(ApiException.class)
                 .satisfies(error -> assertThat(((ApiException) error).errorCode())
                         .isEqualTo(ApiErrorCode.REFERENCE_IN_USE));

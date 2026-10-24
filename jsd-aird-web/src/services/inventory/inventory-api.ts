@@ -6,6 +6,7 @@ export type InventoryScope = 'RND' | 'PRODUCTION';
 export type InventoryDirection = 'INBOUND' | 'OUTBOUND';
 export type AlertStatus = 'NORMAL' | 'LOW_STOCK' | 'OUT_OF_STOCK';
 export interface InventoryBalance {
+  policyRevision: string;
   productId: string;
   productCode: string;
   productName: string;
@@ -35,6 +36,7 @@ export interface BalancePage extends Page<InventoryBalance> {
   summary: InventorySummary;
 }
 export interface InventoryTransaction {
+  revision: string;
   id: string;
   productId: string;
   productCode: string;
@@ -56,6 +58,7 @@ export interface InventoryTransaction {
   reversed: boolean;
 }
 export interface SampleDispatch {
+  revision: string;
   id: string;
   dispatchNo: string;
   businessDate: string;
@@ -80,6 +83,7 @@ export interface SampleDispatch {
   createdAt: string;
 }
 export interface Shipment {
+  revision: string;
   id: string;
   shipmentNo: string;
   businessDate: string;
@@ -96,6 +100,7 @@ export interface Shipment {
   createdAt: string;
 }
 export interface InventoryTransactionUpdateInput {
+  revision: string;
   businessDate: string;
   documentNo: string;
   reason: string;
@@ -103,6 +108,7 @@ export interface InventoryTransactionUpdateInput {
   actorName?: string;
 }
 export interface SampleDispatchUpdateInput {
+  revision: string;
   dispatchNo: string;
   businessDate: string;
   customerId: string;
@@ -118,6 +124,7 @@ export interface SampleDispatchUpdateInput {
   customerFeedback?: string;
 }
 export interface ShipmentUpdateInput {
+  revision: string;
   shipmentNo: string;
   businessDate: string;
   customerId: string;
@@ -165,9 +172,9 @@ export const inventoryApi = {
       })
     ).data.data;
   },
-  async balances(params: Record<string, unknown> = {}) {
+  async balances(params: Record<string, unknown> = {}, signal?: AbortSignal) {
     return (
-      await httpClient.get<ApiResponse<BalancePage>>('/api/v1/inventory/balances', { params })
+      await httpClient.get<ApiResponse<BalancePage>>('/api/v1/inventory/balances', { params, signal })
     ).data.data;
   },
   async transactions(params: Record<string, unknown> = {}) {
@@ -188,7 +195,7 @@ export const inventoryApi = {
   async updatePolicy(
     productId: string,
     scope: InventoryScope,
-    input: { packageKg?: number; lowStockKg: number },
+    input: { revision: string; packageKg?: number; lowStockKg: number },
   ) {
     return (
       await httpClient.put<ApiResponse<InventoryBalance>>(
@@ -214,11 +221,11 @@ export const inventoryApi = {
       )
     ).data.data;
   },
-  async reverse(id: string, note?: string) {
+  async reverse(id: string, revision: string, note?: string) {
     return (
       await httpClient.post<ApiResponse<InventoryTransaction>>(
         `/api/v1/inventory/transactions/${id}/reverse`,
-        { note },
+        { note, revision },
         { headers: { 'Idempotency-Key': `REVERSAL:${id}` } },
       )
     ).data.data;

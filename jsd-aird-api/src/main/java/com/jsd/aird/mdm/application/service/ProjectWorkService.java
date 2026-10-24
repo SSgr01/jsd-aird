@@ -25,9 +25,10 @@ public class ProjectWorkService {
  public ProjectTask getTask(UUID id){return mapper.task(id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"任务不存在"));}
  @Transactional
  public ProjectTask updateTask(UUID id,TaskInput input){
+  if(input.version()==null||input.version()<0) throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"必须提交读取时的任务版本");
   ProjectTask existing=mapper.task(id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"任务不存在"));
   if(!mapper.stageBelongs(input.stageId(),existing.projectId())) throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"所选阶段不属于当前项目");
-  long version=input.version()==null?existing.version():input.version();
+  long version=input.version();
   var task=new ProjectTask(id,existing.taskCode(),existing.projectId(),input.stageId(),required(input.name(),"任务名称不能为空"),clean(input.owner()),input.priority()==null?existing.priority():input.priority(),input.plannedDate(),input.status()==null?"PENDING":input.status(),existing.experimentCount(),version,existing.createdAt(),existing.updatedAt());
   int rows=mapper.updateTask(task);
   if(rows==0) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"任务已被他人修改，请刷新后重试");
@@ -52,6 +53,7 @@ public class ProjectWorkService {
  }
  @Transactional
  public void deleteTask(UUID id,long version){
+  if(version<0) throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"任务版本不能为负数");
   ProjectTask existing=mapper.task(id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"任务不存在"));
   if (existing.experimentCount() > 0) throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"任务下存在实验，不能删除");
   int rows=mapper.deleteTask(id,version);

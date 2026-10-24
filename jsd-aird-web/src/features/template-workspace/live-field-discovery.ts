@@ -41,6 +41,25 @@ export function potentialFieldLabel(value: unknown) {
 
 export function isCellMutationCommand(commandId: string, params?: unknown) {
   const id = (commandId || '').toLowerCase();
+  // Opening the global Find/Replace panel is a UI operation, not replacing cells.
+  if (!/^sheets?\./.test(id)) return false;
+  // Plugin resources and drawings do not change a field's textual value.
+  if (/drawing|image|conditional-format|data-validation|datavalidation|hyper-link|note|filter|numfmt/.test(id)) return false;
+  // Univer 1.2 also applies formatting through set-range-values. Inspect
+  // its sparse cell matrix so a style-only patch cannot look like typing.
+  if (params && typeof params === 'object' && 'cellValue' in params) {
+    const matrix = params.cellValue;
+    if (matrix && typeof matrix === 'object') {
+      return Object.values(matrix).some((row: unknown) => row && typeof row === 'object'
+        && Object.values(row).some((cell: unknown) => {
+          if (cell == null || typeof cell !== 'object') return true;
+          if ('v' in cell || 'f' in cell) return true;
+          if (!('p' in cell)) return false;
+          const richText = cell.p as { body?: { dataStream?: string }; drawings?: unknown } | null;
+          return !richText?.drawings || Boolean(richText.body?.dataStream?.replace(/[\b\r\n]/g, '').trim());
+        }));
+    }
+  }
   // The sheet editor shares Univer's global command bus with the document and
   // formula engines. Their snapshot replacement, recalculation, and edit-mode
   // activation commands are internal initialization/state changes, not user
@@ -52,7 +71,7 @@ export function isCellMutationCommand(commandId: string, params?: unknown) {
   // command bus. They must not turn an already selected label into a new
   // field. Value/edit commands are intentionally checked before the fallback
   // parameter inspection because command ids differ between Univer builds.
-  if (/selection|format|style|border|merge|freeze|scroll|zoom|row-height|column-width|hide|show/.test(id)) {
+  if (/selection|format|style|border|merge|freeze|scroll|zoom|row-height|column-width|col-width|hide|show/.test(id)) {
     return false;
   }
   if ([

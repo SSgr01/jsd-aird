@@ -329,14 +329,14 @@ export function ExperimentUploadPage() {
 
   async function retryTemplate(job: DataJob) {
     setRetryingId(job.id);
-    try { await dataApi.retryExperimentJob(job.id); await load(); void message.success(`“${job.sourceFileName}”已加入重新处理队列`); }
+    try { await dataApi.retryExperimentJob(job.id,job.revision); await load(); void message.success(`“${job.sourceFileName}”已加入重新处理队列`); }
     catch (error) { void message.error(error instanceof Error ? error.message : '重试失败'); }
     finally { setRetryingId(undefined); }
   }
 
   async function deleteTemplate(job: DataJob) {
     try {
-      await dataApi.deleteExperimentJob(job.id);
+      await dataApi.deleteExperimentJob(job.id,job.revision);
       setAssemblyStatuses((current) => { const next = { ...current }; delete next[job.id]; return next; });
       requestedAssemblyStatuses.current.delete(job.id);
       await load();

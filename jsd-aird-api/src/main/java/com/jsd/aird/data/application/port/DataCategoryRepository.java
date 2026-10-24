@@ -6,6 +6,8 @@ import java.util.UUID;
 import com.jsd.aird.shared.api.AllowedActions;
 
 public interface DataCategoryRepository {
+    void lockCategory(UUID organizationId,UUID categoryId);
+
 
     List<Category> list(UUID organizationId);
 
@@ -26,6 +28,7 @@ public interface DataCategoryRepository {
     void delete(UUID organizationId, UUID categoryId, UUID replacementCategoryId);
 
     record Category(UUID id, String name, String description, int sortOrder, long sourceCount) {
+        public String getRevision(){return com.jsd.aird.shared.json.RevisionToken.of(id,name,description,sortOrder);}
         public List<String> getAllowedActions() {
             return AllowedActions.category(false);
         }

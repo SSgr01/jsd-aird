@@ -57,7 +57,7 @@ describe('DataUploadPage Word template flow', () => {
     listJobsMock.mockResolvedValue({ items: [], page: 1, size: 8, total: 0, totalPages: 0 });
     stageSourceMock.mockResolvedValue({ fileId: 'source-file', sha256: 'sha', status: 'READY' });
     createJobMock.mockResolvedValue({
-      id: 'import-job', sourceFileId: 'source-file', sourceSha256: 'sha', sourceFileName: 'report.docx',
+      id: 'import-job', revision: 'a'.repeat(64), sourceFileId: 'source-file', sourceSha256: 'sha', sourceFileName: 'report.docx',
       sourceFormat: 'DOCX', templateVersionId: 'word-v1', status: 'QUEUED', progress: 0,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     });

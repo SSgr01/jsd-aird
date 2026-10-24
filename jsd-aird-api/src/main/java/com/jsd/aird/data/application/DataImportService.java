@@ -192,11 +192,12 @@ public class DataImportService {
     }
 
     @Transactional
-    public DataRepository.Job retryExperimentImport(UUID importJobId) {
+    public DataRepository.Job retryExperimentImport(UUID importJobId, String revision) {
         var actor = ActorContext.required();
         var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验导入任务不存在"));
         requireExperimentImportOwner(actor.organizationId(), importJobId);
+        com.jsd.aird.shared.json.RevisionToken.require(revision, job.getRevision());
         if (!Set.of("FAILED", "CANCELLED").contains(job.status())) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "仅失败或已取消的实验导入任务可以重试");
         }
@@ -207,8 +208,9 @@ public class DataImportService {
     }
 
     @Transactional
-    public DataRepository.Job reprocessDataCenterImport(UUID importJobId) {
+    public DataRepository.Job reprocessDataCenterImport(UUID importJobId, String revision) {
         var actor = ActorContext.required();
+        requireJobRevision(actor.organizationId(), importJobId, revision);
         beforeEdit(actor.organizationId(), importJobId);
         var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据导入任务不存在"));
@@ -224,12 +226,13 @@ public class DataImportService {
     }
 
     @Transactional
-    public void hideDataCenterImport(UUID importJobId) {
+    public void hideDataCenterImport(UUID importJobId, String revision) {
         var actor = ActorContext.required();
         assertNotFreeform(actor.organizationId(), importJobId);
         var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据导入任务不存在"));
         requireDataCenterImportOwner(actor.organizationId(), importJobId);
+        com.jsd.aird.shared.json.RevisionToken.require(revision, job.getRevision());
         if (Set.of("QUEUED", "PARSING", "VALIDATING", "COMMITTING").contains(job.status())) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "处理中任务不可删除，请等待处理结束");
         }
@@ -247,11 +250,12 @@ public class DataImportService {
     }
 
     @Transactional
-    public void hideExperimentImport(UUID importJobId) {
+    public void hideExperimentImport(UUID importJobId, String revision) {
         var actor = ActorContext.required();
         var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验导入任务不存在"));
         requireExperimentImportOwner(actor.organizationId(), importJobId);
+        com.jsd.aird.shared.json.RevisionToken.require(revision, job.getRevision());
         if (Set.of("QUEUED", "PARSING", "VALIDATING", "COMMITTING").contains(job.status())) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "处理中任务不可删除，请等待处理结束");
         }
@@ -312,8 +316,9 @@ public class DataImportService {
     }
 
     @Transactional
-    public void assignSourceCategory(UUID importJobId, UUID categoryId) {
+    public void assignSourceCategory(UUID importJobId, UUID categoryId, String revision) {
         var actor = ActorContext.required();
+        requireJobRevision(actor.organizationId(), importJobId, revision);
         assertNotFreeform(actor.organizationId(), importJobId);
         var sourceOwner = repository.findSourceOwner(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "来源文件不存在"));
@@ -326,6 +331,43 @@ public class DataImportService {
         if (repository.assignSourceCategory(actor.organizationId(), importJobId, categoryId) == 0) {
             throw new ApiException(ApiErrorCode.NOT_FOUND, "来源文件不存在");
         }
+    }
+
+    private void requireJobRevision(UUID organizationId, UUID id, String revision) {
+        var job = repository.findJobForUpdate(organizationId, id)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
+        com.jsd.aird.shared.json.RevisionToken.require(revision, job.getRevision());
+    }
+
+    @Transactional
+    public DataRepository.Job confirmSheetsAtRevision(UUID id,String revision,List<DataRepository.SheetUpdate> updates) {
+        requireJobRevision(ActorContext.required().organizationId(),id,revision); confirmSheets(id,updates); return get(id);
+    }
+    @Transactional
+    public DataRepository.Job saveMappingsAtRevision(UUID id,String revision,List<MappingCommand> commands) {
+        requireJobRevision(ActorContext.required().organizationId(),id,revision); saveMappings(id,commands); return get(id);
+    }
+    @Transactional
+    public DataRepository.Job correctValueAtRevision(UUID id,String revision,UUID recordId,String bindingId,String valuePath,JsonNode value,String reason) {
+        requireJobRevision(ActorContext.required().organizationId(),id,revision); correctValue(id,recordId,bindingId,valuePath,value,reason); return get(id);
+    }
+    @Transactional
+    public DataRepository.Job excludeRowAtRevision(UUID id,String revision,UUID recordId,boolean excluded,String reason) {
+        requireJobRevision(ActorContext.required().organizationId(),id,revision); excludeRow(id,recordId,excluded,reason); return get(id);
+    }
+    @Transactional
+    public DataRepository.Job resolveIssueAtRevision(UUID id,String revision,UUID issueId,String status,String reason) {
+        requireJobRevision(ActorContext.required().organizationId(),id,revision); resolveIssue(id,issueId,status,reason); return get(id);
+    }
+    @Transactional
+    public DataRepository.Job reanchorAtRevision(UUID id,String revision,String componentId,String sheetId,String sourceRange,String reason) {
+        requireJobRevision(ActorContext.required().organizationId(),id,revision); reanchorComponent(id,componentId,sheetId,sourceRange,reason); return get(id);
+    }
+    @Transactional
+    public DataRepository.Job parseAtRevision(UUID id,String revision,boolean force) {
+        requireJobRevision(ActorContext.required().organizationId(),id,revision);
+        if(force) reExtract(id); else parse(id);
+        return get(id);
     }
 
     public TemplateDataImportFacade.FieldRequest requestField(UUID importJobId, FieldRequestCommand command) {

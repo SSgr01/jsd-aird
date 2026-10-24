@@ -92,6 +92,10 @@ public interface DataRepository {
 
     List<Row> listRows(UUID organizationId, UUID importJobId);
 
+    default void forEachRow(UUID organizationId,UUID importJobId,java.util.function.Consumer<Row> consumer) {
+        listRows(organizationId,importJobId).forEach(consumer);
+    }
+
     void replaceValidation(UUID organizationId, UUID importJobId, List<Row> rows, List<Issue> issues, String status);
 
     List<Issue> listIssues(UUID organizationId, UUID importJobId);
@@ -136,6 +140,7 @@ public interface DataRepository {
                String currentStage, String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt,
                Integer importContractVersion, String contractHash, String compatibilityStatus,
                String importPurpose, UUID targetExperimentCategoryId) {
+        public String getRevision() { return com.jsd.aird.shared.json.RevisionToken.of(id, updatedAt, categoryId, status); }
         public Job(UUID id, UUID sourceFileId, String sourceSha256, String sourceFileName, String sourceFormat,
                    UUID templateVersionId, UUID categoryId, String status, int progress,
                    String currentStage, String parserVersion, String errorMessage, Instant createdAt, Instant updatedAt,
@@ -213,6 +218,7 @@ public interface DataRepository {
                       int progress, Instant createdAt, Instant updatedAt,
                       List<RelatedProjectView> relatedProjects, String recognitionMode,
                       String formalStatus, UUID experimentId, UUID experimentVersionId) {
+        public String getRevision() { return com.jsd.aird.shared.json.RevisionToken.of(importJobId, updatedAt, categoryId, status); }
         public SourceFile(UUID importJobId, UUID fileObjectId, String originalName, String sourceFormat,
                           UUID templateVersionId, UUID categoryId, String categoryName, String status,
                           int progress, Instant createdAt, Instant updatedAt,

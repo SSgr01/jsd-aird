@@ -37,8 +37,10 @@ public class DataCategoryService {
     }
 
     @Transactional
-    public DataCategoryRepository.Category rename(UUID id, String name, String description) {
+    public DataCategoryRepository.Category rename(UUID id, String name, String description,String revision) {
         var actor = ActorContext.required();
+        repository.lockCategory(actor.organizationId(),id);
+        com.jsd.aird.shared.json.RevisionToken.require(revision,require(actor.organizationId(),id).getRevision());
         require(actor.organizationId(), id);
         var normalizedName = normalizeName(name);
         ensureNameAvailable(actor.organizationId(), normalizedName, id);
@@ -46,8 +48,10 @@ public class DataCategoryService {
     }
 
     @Transactional
-    public void delete(UUID id, UUID replacementId) {
+    public void delete(UUID id, UUID replacementId,String revision) {
         var actor = ActorContext.required();
+        repository.lockCategory(actor.organizationId(),id);
+        com.jsd.aird.shared.json.RevisionToken.require(revision,require(actor.organizationId(),id).getRevision());
         if (replacementId != null) {
             if (id.equals(replacementId)) {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "替代分类不能是待删除分类本身");

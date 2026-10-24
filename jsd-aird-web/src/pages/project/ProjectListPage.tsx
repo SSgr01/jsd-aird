@@ -1,3 +1,6 @@
+import { useListPageBounds } from '@/services/query/use-list-page-bounds';
+import { useBusinessQuery } from '@/services/query/use-business-query';
+import { useListKeyword, useListUrl } from '@/services/query/use-list-url';
 import {
   AppstoreOutlined,
   DeleteOutlined,
@@ -29,9 +32,8 @@ import {
   Space,
   Tooltip,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import * as XLSX from 'xlsx';
 import dayjs from '@/utils/dayjs';
 import './project-pages.css';
 import './project-list.css';
@@ -110,19 +112,23 @@ function statusClass(value: ProjectStatus) {
 }
 
 export function ProjectListPage() {
-  const [rows, setRows] = useState<Project[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const url = useListUrl();
+  const [page, setPage] = url.field<number>('page', 1, false);
+  const [pageSize, setPageSize] = url.field<number>('size', DEFAULT_PAGE_SIZE, false);
   const [view, setView] = useState<ViewMode>('list');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const selectedVersions = useRef(new Map<string, number>());
+  const pendingRowDelete = useRef<Pick<Project, 'id' | 'version'> | null>(null);
+  const clearSelection = () => { selectedVersions.current.clear(); setSelected(new Set()); };
 
-  const [keyword, setKeyword] = useState('');
-  const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null);
-  const [owner, setOwner] = useState<string>();
-  const [priority, setPriority] = useState<ProjectPriority>();
-  const [status, setStatus] = useState<ProjectStatus>();
+  const [keyword, setKeyword] = useListKeyword(url);
+  const from = url.text('from');
+  const to = url.text('to');
+  const dateRange = useMemo<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(() => from || to ? [from ? dayjs(from) : null, to ? dayjs(to) : null] : null, [from, to]);
+  const setDateRange = (value: [dayjs.Dayjs | null, dayjs.Dayjs | null] | null) => url.update({ from: value?.[0]?.format('YYYY-MM-DD'), to: value?.[1]?.format('YYYY-MM-DD') }, true);
+  const [owner, setOwner] = url.field<string | undefined>('owner', undefined);
+  const [priority, setPriority] = url.field<ProjectPriority | undefined>('priority', undefined);
+  const [status, setStatus] = url.field<ProjectStatus | undefined>('status', undefined);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -138,33 +144,13 @@ export function ProjectListPage() {
   const [msg, holder] = message.useMessage();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const result = await getProjects({
-        keyword: keyword || undefined,
-        owner,
-        priority,
-        status,
-        startDateFrom: dateRange?.[0]?.format('YYYY-MM-DD') || undefined,
-        startDateTo: dateRange?.[1]?.format('YYYY-MM-DD') || undefined,
-        page,
-        size: pageSize,
-      });
-      setRows(result.items);
-      setTotal(result.total);
-    } catch (error) {
-      setRows([]);
-      setTotal(0);
-      msg.error(error instanceof Error ? error.message : '项目列表加载失败');
-    } finally {
-      setLoading(false);
-    }
-  }, [keyword, owner, priority, status, dateRange, page, pageSize, msg]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const filters = { keyword: keyword || undefined, owner, priority, status, startDateFrom: from, startDateTo: to, page, size: pageSize };
+  const listQuery = useBusinessQuery('projects', filters, (signal) => getProjects(filters, signal), { keepPage: true });
+  useListPageBounds(url, listQuery, DEFAULT_PAGE_SIZE);
+  const rows = listQuery.data?.items ?? [];
+  const total = listQuery.data?.total ?? 0;
+  const loading = listQuery.isPending;
+  const load = async () => { await listQuery.refetch(); };
 
   useEffect(() => {
     if (searchParams.get('create') !== '1') return;
@@ -200,6 +186,10 @@ export function ProjectListPage() {
   const indeterminate = rows.some((r) => selected.has(r.id)) && !allSelected;
 
   const toggleSelectAll = () => {
+    for (const row of rows) {
+      if (allSelected) selectedVersions.current.delete(row.id);
+      else if (!selected.has(row.id)) selectedVersions.current.set(row.id, row.version);
+    }
     if (allSelected) {
       setSelected((prev) => {
         const next = new Set(prev);
@@ -215,7 +205,10 @@ export function ProjectListPage() {
     }
   };
 
-  const toggleSelect = (id: string) => {
+  const toggleSelect = (row: Project) => {
+    const id = row.id;
+    if (selected.has(id)) selectedVersions.current.delete(id);
+    else selectedVersions.current.set(id, row.version);
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -231,7 +224,7 @@ export function ProjectListPage() {
     setPriority(undefined);
     setStatus(undefined);
     setPage(1);
-    setSelected(new Set());
+    clearSelection();
   };
 
   const handleExport = async () => {
@@ -253,6 +246,7 @@ export function ProjectListPage() {
           状态: formatProjectStatus(project.status),
           团队成员: project.teamMembers?.join('、') || '',
         }));
+        const XLSX = await import('xlsx');
         const ws = XLSX.utils.json_to_sheet(data);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, '项目列表');
@@ -289,6 +283,9 @@ export function ProjectListPage() {
 
   const handleDelete = () => {
     if (!selected.size) return;
+    // Freeze the versions the user selected. Polling must not silently replace
+    // them with newer versions before this destructive action is confirmed.
+    const targets = [...selected].map(id => ({ id, version: selectedVersions.current.get(id) ?? NaN }));
     Modal.confirm({
       title: '删除选中的项目？',
       content: `已选择 ${selected.size} 个项目，删除后不可恢复。`,
@@ -296,23 +293,28 @@ export function ProjectListPage() {
       okType: 'danger',
       onOk: async () => {
         try {
-          await deleteProjects([...selected]);
+          await deleteProjects(targets);
+          clearSelection();
           msg.success('项目已删除');
           await load();
-        } catch {
-          msg.error('删除失败');
+        } catch (error) {
+          clearSelection();
+          msg.error(error instanceof Error ? error.message : '删除失败');
         }
       },
     });
   };
 
-  const handleDeleteRow = async (id: string) => {
+  const handleDeleteRow = async (row: Pick<Project, 'id' | 'version'>) => {
+    const target = pendingRowDelete.current?.id === row.id ? pendingRowDelete.current : row;
     try {
-      await deleteProjects([id]);
+      await deleteProjects([target]);
       msg.success('项目已删除');
       await load();
-    } catch {
-      msg.error('删除失败');
+    } catch (error) {
+      msg.error(error instanceof Error ? error.message : '删除失败');
+    } finally {
+      pendingRowDelete.current = null;
     }
   };
 
@@ -422,7 +424,7 @@ export function ProjectListPage() {
         <div className="pm-page-actions">
           <span className="pm-selected">已选 {selected.size} 项</span>
           {selected.size > 0 && (
-            <Button type="link" size="small" onClick={() => setSelected(new Set())}>
+            <Button type="link" size="small" onClick={clearSelection}>
               清除已选
             </Button>
           )}
@@ -550,7 +552,7 @@ export function ProjectListPage() {
                   <div className="pm-card-head">
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <h4 className="pm-card-title" title={row.name}>
-                        <Link to={`/projects/${row.id}`}>{row.name}</Link>
+                        <Link to={`/projects/${row.id}`} state={{ returnTo: `/projects/list?${searchParams.toString()}` }}>{row.name}</Link>
                       </h4>
                       <div className="pm-card-code">
                         {row.projectCode}
@@ -558,7 +560,7 @@ export function ProjectListPage() {
                     </div>
                     <Checkbox
                       checked={selected.has(row.id)}
-                      onChange={() => toggleSelect(row.id)}
+                      onChange={() => toggleSelect(row)}
                     />
                   </div>
                   <div className="pm-card-info-grid">
@@ -580,8 +582,8 @@ export function ProjectListPage() {
                     <span className={statusClass(row.status)}>{formatProjectStatus(row.status)}</span>
                   </div>
                   <div className="pm-card-actions">
-                    <Link to={`/projects/${row.id}`}>查看</Link>
-                    <Popconfirm title="确认删除该项目？" description="删除后不可恢复。" onConfirm={() => handleDeleteRow(row.id)}>
+                    <Link to={`/projects/${row.id}`} state={{ returnTo: `/projects/list?${searchParams.toString()}` }}>查看</Link>
+                    <Popconfirm title="确认删除该项目？" description="删除后不可恢复。" onOpenChange={(open) => { if (open) pendingRowDelete.current = { id: row.id, version: row.version }; }} onConfirm={() => handleDeleteRow(row)}>
                       <Button type="link" danger>
                         删除
                       </Button>
@@ -615,12 +617,12 @@ export function ProjectListPage() {
                     <td>
                       <Checkbox
                         checked={selected.has(row.id)}
-                        onChange={() => toggleSelect(row.id)}
+                        onChange={() => toggleSelect(row)}
                       />
                     </td>
                     <td className="pm-code-column">{row.projectCode}</td>
                     <td className="pm-name-column pm-project-name-column">
-                      <Link className="pm-name-link" to={`/projects/${row.id}`} title={row.name}>
+                      <Link className="pm-name-link" to={`/projects/${row.id}`} state={{ returnTo: `/projects/list?${searchParams.toString()}` }} title={row.name}>
                         {row.name}
                       </Link>
                     </td>
@@ -637,8 +639,8 @@ export function ProjectListPage() {
                     <td>{(row.teamMembers ?? []).length} 人</td>
                     <td>
                       <div className="cm-row-actions management-table-actions">
-                        <Link to={`/projects/${row.id}`}>查看</Link>
-                        <Popconfirm title="确认删除该项目？" description="删除后不可恢复。" onConfirm={() => handleDeleteRow(row.id)}>
+                        <Link to={`/projects/${row.id}`} state={{ returnTo: `/projects/list?${searchParams.toString()}` }}>查看</Link>
+                        <Popconfirm title="确认删除该项目？" description="删除后不可恢复。" onOpenChange={(open) => { if (open) pendingRowDelete.current = { id: row.id, version: row.version }; }} onConfirm={() => handleDeleteRow(row)}>
                           <Button type="link" size="small" danger>
                             删除
                           </Button>

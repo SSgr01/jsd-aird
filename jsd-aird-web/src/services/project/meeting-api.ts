@@ -75,6 +75,6 @@ export async function deleteMeeting(projectId: string, id: string, version: numb
   await httpClient.delete(`/api/v1/projects/${projectId}/meetings/${id}`, { params: { version } });
 }
 
-export async function archiveMeetingToKb(projectId: string, id: string): Promise<void> {
-  await httpClient.post(`/api/v1/projects/${projectId}/meetings/${id}/archive-to-kb`);
+export async function archiveMeetingToKb(projectId: string, id: string, version: number): Promise<void> {
+  await httpClient.post(`/api/v1/projects/${projectId}/meetings/${id}/archive-to-kb`, undefined, { params: { version } });
 }

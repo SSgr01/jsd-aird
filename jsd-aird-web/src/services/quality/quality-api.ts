@@ -18,6 +18,7 @@ export interface QualityType {
   fields: QualityField[];
 }
 export interface QualityCategory {
+  revision: string;
   id: string;
   businessType: QualityTypeId;
   name: string;
@@ -117,19 +118,19 @@ const data = <T>(r: { data: ApiResponse<T> }) => r.data.data;
 export const qualityApi = {
   types: async () =>
     data(await httpClient.get<ApiResponse<QualityType[]>>('/api/v1/quality/data-types')),
-  categories: async (type: QualityTypeId) =>
+  categories: async (type: QualityTypeId, signal?: AbortSignal) =>
     data(
       await httpClient.get<ApiResponse<QualityCategory[]>>('/api/v1/quality/categories', {
-        params: { type },
+        params: { type }, signal,
       }),
     ),
   createCategory: async (input: { type: QualityTypeId; name: string; description: string }) =>
     data(await httpClient.post<ApiResponse<QualityCategory>>('/api/v1/quality/categories', input)),
-  updateCategory: async (id: string, input: { name: string; description: string }) =>
+  updateCategory: async (id: string, input: { revision: string; name: string; description: string }) =>
     data(
       await httpClient.put<ApiResponse<QualityCategory>>(`/api/v1/quality/categories/${id}`, input),
     ),
-  deleteCategory: async (id: string) => httpClient.delete(`/api/v1/quality/categories/${id}`),
+  deleteCategory: async (id: string, revision: string) => httpClient.delete(`/api/v1/quality/categories/${id}`, { params: { revision } }),
   records: async (params: {
     type: QualityTypeId;
     categoryId?: string;
@@ -137,10 +138,10 @@ export const qualityApi = {
     projectId?: string;
     page: number;
     size: number;
-  }) =>
+  }, signal?: AbortSignal) =>
     data(
       await httpClient.get<ApiResponse<PageData<QualityRecord>>>('/api/v1/quality/records', {
-        params,
+        params, signal,
       }),
     ),
   record: async (id: string) =>
@@ -168,13 +169,14 @@ export const qualityApi = {
     });
     return response.data;
   },
-  publishRecord: async (id: string) =>
+  publishRecord: async (id: string, revision: number) =>
     data(
       await httpClient.post<ApiResponse<QualityRecordVersion>>(
-        `/api/v1/quality/records/${id}/publish`,
+        `/api/v1/quality/records/${id}/publish`, { revision },
       ),
     ),
-  deleteRecord: async (id: string) => httpClient.delete(`/api/v1/quality/records/${id}`),
+  deleteRecord: async (id: string, revision: number) => httpClient.delete(`/api/v1/quality/records/${id}`, { params: { revision } }),
+  deleteRecords: async (records: Array<{id: string; lockVersion: number}>) => httpClient.post("/api/v1/quality/records/delete", { records }),
   versions: async (id: string) =>
     data(
       await httpClient.get<ApiResponse<QualityRecordVersion[]>>(
@@ -197,10 +199,10 @@ export const qualityApi = {
       taskName?: string;
       lockVersion: number;
     }>;
-    deleteIds: string[];
+    deletes: Array<{id: string; lockVersion: number}>;
   }) => httpClient.put('/api/v1/quality/records/batch', input),
-  move: async (ids: string[], categoryId: string) =>
-    httpClient.post('/api/v1/quality/records/move', { ids, categoryId }),
+  move: async (records: Array<{id: string; lockVersion: number}>, categoryId: string) =>
+    httpClient.post('/api/v1/quality/records/move', { records, categoryId }),
   createDefectFromRecord: async (id: string) =>
     data(await httpClient.post<ApiResponse<QualityRecord>>(`/api/v1/quality/records/${id}/create-defect`)),
   uploads: async (params: QualityUploadListParams) =>

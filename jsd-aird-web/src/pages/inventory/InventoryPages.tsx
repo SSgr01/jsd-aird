@@ -260,7 +260,7 @@ export function InventoryQueryPage() {
             const updated = await inventoryApi.updatePolicy(
               selected.productId,
               selected.scope,
-              values,
+              { ...values, revision: selected.policyRevision },
             );
             setSelected(updated);
             message.success('库存策略已保存');
@@ -382,7 +382,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
     setSaving(true);
     try {
       if (editing) {
-        await inventoryApi.updateTransaction(editing.id, {
+        await inventoryApi.updateTransaction(editing.id, { revision: editing.revision,
           businessDate: v.businessDate.format('YYYY-MM-DD'),
           documentNo: v.documentNo,
           reason: v.reason,
@@ -510,7 +510,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
             <Popconfirm
               title="确认生成反向冲销流水？"
               onConfirm={async () => {
-                await inventoryApi.reverse(r.id);
+                await inventoryApi.reverse(r.id,r.revision);
                 message.success('已冲销');
                 await load();
               }}
@@ -853,7 +853,7 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
     try {
       if (editing) {
         if (sample && 'dispatchNo' in editing) {
-          await inventoryApi.updateSample(editing.id, {
+          await inventoryApi.updateSample(editing.id, { revision: editing.revision,
             dispatchNo: v.dispatchNo,
             businessDate: v.businessDate.format('YYYY-MM-DD'),
             customerId: v.customerId,
@@ -869,7 +869,7 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             customerFeedback: v.customerFeedback,
           });
         } else {
-          await inventoryApi.updateShipment(editing.id, {
+          await inventoryApi.updateShipment(editing.id, { revision: editing.revision,
             shipmentNo: v.shipmentNo,
             businessDate: v.businessDate.format('YYYY-MM-DD'),
             customerId: v.customerId,

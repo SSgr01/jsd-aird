@@ -20,6 +20,18 @@ public class JdbcInventoryRepository implements InventoryRepository {
     private final JdbcTemplate jdbc;
     public JdbcInventoryRepository(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
+    public void lockShipment(UUID org,UUID id){
+        if(jdbc.query("SELECT id FROM mfg.inventory_shipment WHERE organization_id=? AND id=? FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),org,id).isEmpty())
+            throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,"库存记录不存在");
+    }
+    public void lockSample(UUID org,UUID id){
+        if(jdbc.query("SELECT id FROM mfg.inventory_sample_dispatch WHERE organization_id=? AND id=? FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),org,id).isEmpty())
+            throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,"库存记录不存在");
+    }
+    public void lockTransaction(UUID org,UUID id){
+        if(jdbc.query("SELECT id FROM mfg.inventory_transaction WHERE organization_id=? AND id=? FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),org,id).isEmpty())
+            throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,"库存记录不存在");
+    }
     public boolean productExists(UUID org, UUID productId, Scope scope) {
         return jdbc.queryForObject("SELECT count(*) FROM mfg.inventory_product WHERE organization_id=? AND id=? AND inventory_scope=? AND status='ACTIVE'", Integer.class, org, productId, scope.name()) > 0;
     }

@@ -1,5 +1,7 @@
 import { Button, Empty, Tag, Typography } from 'antd';
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
+import { FieldPanelToggle } from '@/components/field-panel/CollapsibleFieldPanel';
+import { useAppStore } from '@/stores/app-store';
 
 interface SheetSummary {
   id: string;
@@ -49,13 +51,18 @@ export function ExperimentImportDataPanel({ snapshot, confirmed, editable, busy,
   busy: boolean;
   onConfirm: () => void;
 }) {
+  const collapsed = useAppStore((state) => state.fieldPanelCollapsed);
+  const panelId = useId();
   const sheets = useMemo(() => summarize(snapshot), [snapshot]);
   const [selectedId, setSelectedId] = useState<string>();
   const selected = sheets.find((sheet) => sheet.id === selectedId) ?? sheets[0];
   const total = sheets.reduce((sum, sheet) => sum + sheet.count, 0);
-  return <aside className="data-workbench-panel experiment-template-data-panel experiment-import-data-panel">
+  return <aside id={panelId} className="data-workbench-panel experiment-template-data-panel experiment-import-data-panel collapsible-field-panel"
+    aria-label="字段数据确认" data-collapsed={collapsed}>
     <div className="data-workbench-panel-header">
       <div className="data-workbench-panel-title">
+        <FieldPanelToggle controls={panelId} />
+        {collapsed && <span className="field-panel-collapsed-label" aria-hidden="true">字段数据</span>}
         <Typography.Title level={5}>本次实验数据</Typography.Title>
         <Tag color={confirmed ? 'success' : 'warning'}>{confirmed ? '已确认' : '待确认'}</Tag>
       </div>

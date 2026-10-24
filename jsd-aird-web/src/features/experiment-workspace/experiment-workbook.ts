@@ -139,13 +139,21 @@ export function withoutOcrSourceSheet(snapshot: Record<string, unknown>): Record
     ? snapshot.sheetOrder.filter((sheetId) => typeof sheetId !== 'string' || !removed.has(sheetId))
     : snapshot.sheetOrder;
   const resources = Array.isArray(snapshot.resources)
-    ? snapshot.resources.filter((resource) => {
-        if (!resource || typeof resource !== 'object') return true;
+    ? snapshot.resources.map((resource: unknown): unknown => {
+        if (!resource || typeof resource !== 'object') return resource;
         const item = resource as Record<string, unknown>;
         const resourceData = item.data;
-        return item.name !== 'SHEET_DRAWING_PLUGIN'
-          || typeof resourceData !== 'string'
-          || !removedIds.some((sheetId) => resourceData.includes(`"${sheetId}"`));
+        if (item.name !== 'SHEET_DRAWING_PLUGIN' || typeof resourceData !== 'string') return resource;
+        try {
+          const data = JSON.parse(resourceData) as Record<string, unknown>;
+          if (!data || typeof data !== 'object' || Array.isArray(data)) return resource;
+          return { ...item, data: JSON.stringify(Object.fromEntries(
+            Object.entries(data).filter(([sheetId]) => !removed.has(sheetId)),
+          )) };
+        } catch {
+          // Preserve unknown resources rather than losing unrelated images.
+          return resource;
+        }
       })
     : snapshot.resources;
   return { ...snapshot, sheets, sheetOrder, resources };

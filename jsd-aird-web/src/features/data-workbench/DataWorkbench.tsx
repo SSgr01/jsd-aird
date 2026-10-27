@@ -9,7 +9,9 @@ import {
   TableOutlined,
 } from '@ant-design/icons';
 import { Button, Empty, Segmented, Select, Skeleton, Space, Spin, Tag, Typography } from 'antd';
-import { forwardRef, lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { forwardRef, lazy, Suspense, useEffect, useId, useMemo, useState, type ReactNode, type Ref } from 'react';
+import { FieldPanelToggle } from '@/components/field-panel/CollapsibleFieldPanel';
+import { useAppStore } from '@/stores/app-store';
 
 import type {
   DataFieldValueView,
@@ -18,8 +20,11 @@ import type {
   DataWorkbookSnapshot,
 } from '@/services/data/data-api';
 import type { EditorCellChange, EditorHandle, EditorSelection } from '@/features/template-workspace/types';
+import type { WorkbookStructureOperation } from '@/features/template-workspace/types';
 
 import { displayValue } from './value-display';
+import { customerFieldName, customerFieldPath, customerGroupName, customerLabelText, internalWorkbookLabel, workbenchLabelParts, workbookRecordOptions } from './workbench-labels';
+import type { WorkbookTemplateInstance } from '@/features/template-workspace/workbook-instance';
 
 const SheetsEditor = lazy(async () => {
   const module = await import('@/features/template-workspace/UniverSheetsEditor');
@@ -27,6 +32,10 @@ const SheetsEditor = lazy(async () => {
 });
 
 interface ShellProps {
+  rootRef?: Ref<HTMLElement>;
+  panelClassName?: string;
+  panelTitle?: string;
+  panelExtra?: ReactNode;
   breadcrumb: string;
   title: string;
   canvasLabel?: string;
@@ -42,9 +51,9 @@ interface ShellProps {
   children?: ReactNode;
 }
 
-export function DataWorkbenchShell({ breadcrumb, title, canvasLabel = 'Excel 工作区', leading, meta, actions, navigation, content, notice, canvas, panel, footer, children }: ShellProps) {
+export function DataWorkbenchShell({ rootRef, panelClassName, panelTitle = '字段数据', panelExtra, breadcrumb, title, canvasLabel = 'Excel 工作区', leading, meta, actions, navigation, content, notice, canvas, panel, footer, children }: ShellProps) {
   return (
-    <section className="data-workbench" aria-label={`${title}数据工作台`}>
+    <section ref={rootRef} className="data-workbench" aria-label={`${title}数据工作台`}>
       <header className="data-workbench-header">
         <div className="data-workbench-header-main">
           {leading ? <div className="data-workbench-leading">{leading}</div> : null}
@@ -62,12 +71,31 @@ export function DataWorkbenchShell({ breadcrumb, title, canvasLabel = 'Excel 工
       {notice ? <div className="data-workbench-notice">{notice}</div> : null}
       {content || <div className="data-workbench-grid">
         <section className="data-workbook-canvas" aria-label={canvasLabel}>{canvas}</section>
-        <aside className="data-workbench-panel">{panel}</aside>
+        <DataWorkbenchPanel title={panelTitle} extra={panelExtra} className={panelClassName}>{panel}</DataWorkbenchPanel>
       </div>}
       {footer ? <footer className="data-workbench-footer">{footer}</footer> : null}
       {children}
     </section>
   );
+}
+
+/** Shared panel chrome for record editing and both import workbenches. */
+export function DataWorkbenchPanel({ title, extra, className, children }: {
+  title: string; extra?: ReactNode; className?: string; children: ReactNode;
+}) {
+  const collapsed = useAppStore(state => state.fieldPanelCollapsed);
+  const contentId = useId();
+  return <aside className={['data-workbench-panel', 'collapsible-field-panel', className].filter(Boolean).join(' ')} aria-label={title} data-collapsed={collapsed}>
+    <div className="data-workbench-panel-header">
+      <div className="data-workbench-panel-title">
+        <FieldPanelToggle controls={contentId} />
+        {collapsed && <span className="field-panel-collapsed-label" aria-hidden="true">字段管理</span>}
+        <Typography.Title level={5}>{title}</Typography.Title>
+        {extra}
+      </div>
+    </div>
+    <div id={contentId} className="data-workbench-panel-content" hidden={collapsed}>{children}</div>
+  </aside>;
 }
 
 interface CanvasProps {
@@ -77,10 +105,14 @@ interface CanvasProps {
   editable?: boolean;
   onSelectionChange?: (selection: EditorSelection) => void;
   onCellChange?: (change: EditorCellChange) => void;
+  instance?: WorkbookTemplateInstance;
+  onInstanceChange?: (instance: WorkbookTemplateInstance) => void;
+  onDirty?: () => void;
+  onStructureChange?: (operation: WorkbookStructureOperation) => void;
 }
 
 export const DataWorkbookCanvas = forwardRef<EditorHandle, CanvasProps>(function DataWorkbookCanvas(
-  { workbook, loading, editorLabel = 'Excel 模板编辑器', editable, onSelectionChange, onCellChange },
+  { workbook, loading, editorLabel = 'Excel 模板编辑器', editable, onSelectionChange, onCellChange, instance, onInstanceChange, onDirty, onStructureChange },
   ref,
 ) {
   if (loading) return <div className="data-workbook-state"><Skeleton active paragraph={{ rows: 10 }} /></div>;
@@ -93,10 +125,13 @@ export const DataWorkbookCanvas = forwardRef<EditorHandle, CanvasProps>(function
         ref={ref}
         ariaLabel={editorLabel}
         snapshot={workbook.snapshot}
-        bindings={[]}
+        bindings={instance?.mapping ?? []}
+        instance={instance}
+        onInstanceChange={onInstanceChange}
+        onStructureChange={onStructureChange}
         editable={Boolean(editable && workbook.editable)}
         permissionDialogVisible={Boolean(editable && workbook.editable)}
-        onDirty={() => undefined}
+        onDirty={onDirty ?? (() => undefined)}
         onEditorValue={() => undefined}
         onSelectionChange={onSelectionChange}
         onCellChange={editable && workbook.editable ? onCellChange : undefined}
@@ -120,12 +155,13 @@ export function DataFieldCard({ field, active, onSelect, extra, children }: Fiel
   const corrected = field.correctedValue == null ? '' : displayValue(field.correctedValue);
   const normalizedChanged = normalized !== raw;
   const effectiveChanged = effective !== normalized && effective !== raw;
-  const label = customerDisplayLabel(field.fieldName);
-  const labelPath = customerDisplayLabel(field.labelPath);
+  const label = customerFieldName(field.fieldName, field.labelPath);
+  const labelPath = customerFieldPath(field.labelPath);
   const secondaryLabel = labelPath && !equivalentCustomerLabel(labelPath, label) ? labelPath : '';
   const currentValue = fieldCurrentValue(field);
   const rowStatus = fieldRowStatus(field);
-  const unit = customerDisplayLabel(field.unit);
+  const unit = /^[<>≤≥]?\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(currentValue)
+    ? customerDisplayLabel(field.unit) : '';
   return (
     <article className={`data-field-card${active ? ' is-active' : ''}`}>
       <button
@@ -135,7 +171,7 @@ export function DataFieldCard({ field, active, onSelect, extra, children }: Fiel
         onClick={onSelect}
       >
         <span className="data-field-card-name">
-          <strong>{label || field.fieldName}</strong>
+          <strong>{label}</strong>
           {secondaryLabel ? <small>{secondaryLabel}</small> : null}
         </span>
         <span className={`data-field-card-value${currentValue ? '' : ' is-empty'}`}>
@@ -211,6 +247,7 @@ export function DataFieldDataBrowser({
   const activeRegionId = selectedRegionId || selectedField?.componentId || regions[0]?.regionId;
   const region = regions.find((item) => item.regionId === activeRegionId) || regions[0];
   const regionRecords = records.filter((item) => !region || item.regionId === region.regionId);
+  const recordOptions = workbookRecordOptions(regionRecords, region, fields, workbook?.fieldDefinitions);
   const activeRecordId = selectedRecordId && regionRecords.some((item) => item.recordId === selectedRecordId)
     ? selectedRecordId : regionRecords[0]?.recordId;
   const visibleFields = activeRecordId
@@ -241,7 +278,7 @@ export function DataFieldDataBrowser({
   return <div className="data-panel-body data-field-data-browser" aria-label="字段数据">
     <div className="data-browser-heading">
       <div className="data-browser-identity">
-        <div><strong>{customerDisplayLabel(region?.name) || '字段数据'}</strong><span>{region ? structureLabel(region.structureType, region.recordAxis) : null}</span></div>
+        <div><strong>{customerGroupName(region?.name) || '字段数据'}</strong><span>{region ? structureLabel(region.structureType, region.recordAxis) : null}</span></div>
         <small>
           {region ? `${visibleFieldDefinitionCount(region, workbook)} 个字段${region.recordCount ? `，${region.recordCount} 条记录` : ''}` : emptyDescription}
           {selectedCell ? '，已同步左侧选中的单元格' : ''}
@@ -256,7 +293,7 @@ export function DataFieldDataBrowser({
         onChange={selectRegion}
         options={regions.map((item) => ({
           value: item.regionId,
-          label: `${customerDisplayLabel(item.name)}（${item.recordCount ? `${item.recordCount} 条记录` : `${item.fieldCount} 个字段`}）`,
+          label: `${customerGroupName(item.name) || '数据区域'}（${item.recordCount ? `${item.recordCount} 条记录` : `${item.fieldCount} 个字段`}）`,
         }))}
       />
     </label> : null}
@@ -266,7 +303,7 @@ export function DataFieldDataBrowser({
         size="small"
         aria-label="选择记录"
         value={activeRecordId}
-        options={regionRecords.map((item) => ({ value: item.recordId, label: customerDisplayLabel(item.label) }))}
+        options={recordOptions}
         onChange={(value) => selectRecord(String(value))}
       /> : <div className="data-record-navigator">
         <Button
@@ -286,7 +323,7 @@ export function DataFieldDataBrowser({
           aria-label="选择记录"
           value={activeRecordId}
           onChange={selectRecord}
-          options={regionRecords.map((item) => ({ value: item.recordId, label: customerDisplayLabel(item.label) }))}
+          options={recordOptions}
         />
         <span>{activeRecordIndex + 1} / {regionRecords.length}</span>
         <Button
@@ -355,7 +392,7 @@ export function DataFieldStructureBrowser({ workbook, selectedBindingId, descrip
         return <details className="field-tree-group field-region-group" key={region.regionId} open>
           <summary>
             <span>
-              <FolderOpenOutlined /> {region.name}
+              <FolderOpenOutlined /> {customerGroupName(region.name) || '数据区域'}
               <small className="field-region-meta">{structureLabel(region.structureType, region.recordAxis)}</small>
             </span>
             <span className="field-tree-group-meta">{regionFields.length}</span>
@@ -369,7 +406,7 @@ export function DataFieldStructureBrowser({ workbook, selectedBindingId, descrip
                     {isDetailField(field.mappingKind) ? <TableOutlined /> : <EditOutlined />}
                   </span>
                   <span className="field-tree-name">
-                    <strong>{field.displayName}</strong>
+                    <strong>{customerFieldName(field.displayName, field.labelPath)}</strong>
                     <small>{definitionMeta(field)}</small>
                   </span>
                   <span className="data-definition-status">{field.required ? '必填' : ''}</span>
@@ -497,14 +534,7 @@ function visibleFieldGroupName(group: { name: string; fields: DataFieldValueView
 }
 
 function customerDisplayLabel(value?: string) {
-  if (!value) return '';
-  return value
-    .replace(/_/g, ' ')
-    .replace(/\s+/g, ' ')
-    .replace(/([\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g, '$1')
-    .replace(/\s+([（(）)，、：；])/g, '$1')
-    .replace(/([（(])\s+/g, '$1')
-    .trim();
+  return customerLabelText(value);
 }
 
 function equivalentCustomerLabel(left?: string, right?: string) {
@@ -556,7 +586,7 @@ function customerFieldGroup(field: DataFieldValueView) {
 }
 
 function internalContractText(value?: string) {
-  return Boolean(value && /^(?:AUTO|TABLE|DATA|MATERIAL|PRODUCTION|WORKFLOW|FIELD)\..+$/i.test(value));
+  return internalWorkbookLabel(value);
 }
 
 function visibleFieldDefinitionCount(region: DataWorkbookRegion, workbook?: DataWorkbookSnapshot) {
@@ -566,12 +596,12 @@ function visibleFieldDefinitionCount(region: DataWorkbookRegion, workbook?: Data
 
 function labelGroup(value?: string) {
   if (!value) return '';
-  const parts = value.split(/\s*(?:>|\/|›)\s*/).filter(Boolean);
+  const parts = workbenchLabelParts(value);
   return parts.length > 1 ? parts.slice(0, -1).join(' / ') : '';
 }
 
 function customerGroupLabel(value: string) {
-  return value.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+  return customerGroupName(value);
 }
 
 function distinctBindings(fields: DataFieldValueView[]) {

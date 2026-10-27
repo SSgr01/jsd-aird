@@ -246,6 +246,19 @@ public class DataController {
         return success(workbookService.importJob(id));
     }
 
+    @PutMapping("/import-jobs/{id}/workbook-draft")
+    public ApiResponse<?> saveWorkbookDraft(@PathVariable UUID id,@Valid @RequestBody WorkbookDraftRequest request) {
+        var job=service.saveWorkbookDraft(id,request.revision(),request.snapshot(),request.templateInstance(),request.structureOperations());
+        return success(new WorkbookDraftResponse(job,workbookService.importJob(id)));
+    }
+    public record WorkbookDraftRequest(@NotBlank String revision,@NotNull JsonNode snapshot,@NotNull JsonNode templateInstance,JsonNode structureOperations) {}
+    public record WorkbookDraftResponse(DataRepository.Job job,DataWorkbookService.WorkbookContext workbook) {}
+    @PutMapping("/experiment-import-jobs/{id}/workbook-draft")
+    public ApiResponse<?> saveExperimentWorkbookDraft(@PathVariable UUID id,@Valid @RequestBody WorkbookDraftRequest request) {
+        var job=service.saveExperimentWorkbookDraft(id,request.revision(),request.snapshot(),request.templateInstance(),request.structureOperations());
+        return success(new WorkbookDraftResponse(job,workbookService.importJob(id)));
+    }
+
     @PutMapping("/import-jobs/{id}/components/{componentId}/anchor")
     public ApiResponse<DataRepository.Job> reanchorComponent(
             @PathVariable UUID id, @PathVariable String componentId,

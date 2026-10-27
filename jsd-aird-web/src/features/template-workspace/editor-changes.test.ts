@@ -50,7 +50,7 @@ describe('editor changes without full snapshots', () => {
     tracker.change(); tracker.enqueue(() => tracker.dispose()); tracker.enqueue(effect); tracker.flush();
     expect(effect).not.toHaveBeenCalled(); expect(notify).not.toHaveBeenCalled();
   });
-  it.each(['doc.operation.set-selections', 'sheet.operation.set-selections', 'ui.operation.open-replace-dialog'])('ignores %s', id => {
+  it.each(['doc.operation.set-selections', 'sheet.operation.set-selections', 'sheet.operation.scroll-to-range', 'ui.operation.open-replace-dialog'])('ignores %s', id => {
     expect(isPersistentMutation({ id, type: 1 })).toBe(false);
   });
   it('recognizes text, image, style and undo mutations without reading their large parameters', () => {

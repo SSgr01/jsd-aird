@@ -16,12 +16,19 @@ import { CollapsibleFieldPanel } from '@/components/field-panel/CollapsibleField
 
 import type {
   BusinessField,
+  EditorSelection,
   ExperimentImportConfiguration,
+  ExperimentListProjection,
   FieldModel,
   TemplateBinding,
   TemplateFormat,
 } from '@/features/template-workspace/types';
 import { bindingForField } from '@/features/template-workspace/field-model';
+import {
+  projectionFieldName, projectionGroup, projectionName, projectionUnit,
+  projectionFieldViews, updateProjectionField,
+  type ProjectionFieldTarget,
+} from '@/features/template-workspace/list-projection';
 import { isExperimentTemplate } from '@/features/template-workspace/experiment-semantics';
 import type {
   RecognitionReview,
@@ -32,6 +39,7 @@ import type {
 import { normalizeAddress, validateAddress } from './coordinates';
 import { RecognitionReviewPanel } from './RecognitionReviewPanel';
 import { ExperimentSemanticsPanel } from './ExperimentSemanticsPanel';
+import { resolveBindingSelection } from '@/features/template-workspace/selection-resolver';
 import type { ProjectionRangeTarget } from './ExperimentSemanticsPanel';
 import {
   locatorLabelRange,
@@ -43,6 +51,8 @@ export type CoordinateTarget = 'labelAddress' | 'address';
 export type FieldManagerTab = 'recognition' | 'structure' | 'properties' | 'experiment';
 
 interface Props {
+  selection?: EditorSelection;
+  onFocusBinding?: (binding: TemplateBinding) => void;
   editable: boolean;
   /** Allows production-order review to keep recognition actions editable while
    * keeping the template's field definition read-only. */
@@ -127,7 +137,28 @@ export function TemplateFieldManager({
   onDeleteField,
   onManageGroups,
   onPlaceWordField,
+  selection,
+  onFocusBinding,
 }: Props) {
+  const [projectionSelection, setProjectionSelection] = useState<{ id: string; target: ProjectionFieldTarget }>();
+  const selectedProjection = experimentConfiguration.listProjections.find(
+    (projection) => projection.listProjectionId === projectionSelection?.id,
+  );
+  const projectionViews = projectionFieldViews(experimentConfiguration.listProjections, fieldModel, mapping);
+  const selectedProjectionView = projectionViews.find((view) => view.projection.listProjectionId === projectionSelection?.id
+    && view.target === projectionSelection.target);
+  const selectionMatch = selection ? resolveBindingSelection([...projectionViews.map((view) => view.binding), ...mapping], selection) : undefined;
+  const selectionView = projectionViews.find((view) => view.binding.bindingId === selectionMatch?.binding.bindingId);
+  const selectionKey = selection ? `${selection.sheetId}:${selection.address}` : '';
+  const selectionProjectionId = selectionView?.projection.listProjectionId;
+  const selectionProjectionTarget = selectionView?.target;
+  useEffect(() => {
+    if (!selectionKey) return;
+    setProjectionSelection((current) => selectionProjectionId && selectionProjectionTarget
+      ? current?.id === selectionProjectionId && current.target === selectionProjectionTarget
+        ? current : { id: selectionProjectionId, target: selectionProjectionTarget }
+      : undefined);
+  }, [selectionKey, selectionProjectionId, selectionProjectionTarget]);
   const selectedField = fieldModel.fields.find(
     (field) => field.id === selectedFieldId && !isRegionField(field),
   );
@@ -135,6 +166,7 @@ export function TemplateFieldManager({
   const experimentTemplate = format === 'XLSX' && isExperimentTemplate(experimentConfiguration);
 
   const selectField = (field: BusinessField) => {
+    setProjectionSelection(undefined);
     onSelectField(field);
     onActiveTabChange('properties');
   };
@@ -164,7 +196,7 @@ export function TemplateFieldManager({
           type="button"
           role="tab"
           aria-selected={activeTab === 'properties'}
-          disabled={!selectedField}
+          disabled={!selectedField && !selectedProjection}
           onClick={() => onActiveTabChange('properties')}
         >
           字段属性
@@ -213,11 +245,41 @@ export function TemplateFieldManager({
           editable={fieldDefinitionEditable}
           fieldModel={fieldModel}
           recognitionReview={recognitionReview}
-          selectedFieldId={selectedFieldId}
+          selectedFieldId={selectedProjectionView?.field.id ?? selectedFieldId}
           onSelectField={selectField}
           onAddField={onAddField}
           onAddStructuredField={onAddStructuredField}
           onManageGroups={onManageGroups}
+          experimentConfiguration={experimentConfiguration}
+          onSelectProjection={(projection, target) => {
+            setProjectionSelection({ id: projection.listProjectionId, target });
+            const view = projectionViews.find((item) => item.projection.listProjectionId === projection.listProjectionId && item.target === target);
+            if (view) onFocusBinding?.(view.binding);
+            onActiveTabChange('properties');
+          }}
+        />
+      ) : selectedProjection && projectionSelection && selectedProjectionView ? (
+        <FieldProperties
+          key={selectedProjectionView.field.id}
+          editable={fieldDefinitionEditable}
+          format={format} groups={fieldModel.groups}
+          field={selectedProjectionView.field} binding={selectedProjectionView.binding}
+          onUpdateField={(_id, update) => onExperimentConfigurationChange({
+            ...experimentConfiguration,
+            listProjections: experimentConfiguration.listProjections.map((projection) =>
+              projection.listProjectionId === selectedProjection.listProjectionId
+                ? updateProjectionField(projection, projectionSelection.target, update) : projection),
+          })}
+          onUpdateCoordinates={(_id, update) => {
+            if (update.address === undefined || validateAddress(normalizeAddress(update.address), false)) return;
+            onExperimentConfigurationChange({ ...experimentConfiguration,
+              listProjections: experimentConfiguration.listProjections.map((projection) =>
+                projection.listProjectionId === selectedProjection.listProjectionId
+                  ? { ...projection, [projectionSelection.target]: normalizeAddress(update.address) } : projection),
+            });
+          }}
+          onPickCoordinate={() => onPickProjectionRange(selectedProjection.listProjectionId, projectionSelection.target)}
+          onDeleteField={() => undefined} onPlaceWordField={() => undefined}
         />
       ) : selectedField ? (
         <FieldProperties
@@ -251,6 +313,9 @@ export function FieldStructure({
   onAddStructuredField,
   onManageGroups,
   allowGroupManagement = true,
+  experimentConfiguration,
+  onSelectProjection,
+  hiddenFieldIds,
 }: Pick<
   Props,
   | 'editable'
@@ -261,17 +326,29 @@ export function FieldStructure({
   | 'onAddField'
   | 'onAddStructuredField'
   | 'onManageGroups'
-> & { allowGroupManagement?: boolean }) {
+> & {
+  allowGroupManagement?: boolean;
+  experimentConfiguration?: ExperimentImportConfiguration;
+  onSelectProjection?: (projection: ExperimentListProjection, target: ProjectionFieldTarget) => void;
+  hiddenFieldIds?: ReadonlySet<string>;
+}) {
   const fieldRefs = useRef(new Map<string, HTMLButtonElement>());
-  const regions = buildFieldRegionViews(fieldModel, recognitionReview);
-  const realFieldCount = fieldModel.fields.filter((field) => !isRegionField(field)).length;
+  const projections = experimentConfiguration?.listProjections ?? [];
+  const regions = buildFieldRegionViews(fieldModel, recognitionReview, projections);
+  const realFieldCount = fieldModel.fields.filter((field) => !isRegionField(field)).length + projections.length * 2;
   const pendingFieldCount = fieldModel.fields.filter(
     (field) => !isRegionField(field) && (field.candidate || field.reviewStatus !== 'CONFIRMED'),
-  ).length;
+  ).length + projections.reduce((count, projection) => count + Number(!projection.labelRange) + Number(!projection.valueRange), 0);
 
   useEffect(() => {
     if (!selectedFieldId) return;
-    fieldRefs.current.get(selectedFieldId)?.scrollIntoView?.({ block: 'nearest' });
+    const field = fieldRefs.current.get(selectedFieldId);
+    let group = field?.closest('details');
+    while (group) {
+      group.open = true;
+      group = group.parentElement?.closest('details');
+    }
+    field?.scrollIntoView?.({ block: 'nearest' });
   }, [selectedFieldId]);
 
   return (
@@ -318,7 +395,7 @@ export function FieldStructure({
                 </small>
               </span>
               <span className="field-tree-group-meta">
-                <span>{region.fields.length}</span>
+                <span>{region.fields.length + (region.projections?.length ?? 0) * 2}</span>
                 {editable && ['ROW_TABLE', 'COLUMN_TABLE'].includes(region.kind) && (
                   <Tooltip title={!region.root ? '结构区域尚未确认，请先确认结构' : '新增明细字段'}>
                     <button
@@ -340,6 +417,24 @@ export function FieldStructure({
               </span>
             </summary>
             <div className="field-tree-items">
+              {region.projections?.flatMap((projection) => (['labelRange', 'valueRange'] as const).map((target) => (
+                <button type="button" key={`${projection.listProjectionId}:${target}`}
+                  aria-current={selectedFieldId === `list:${projection.listProjectionId}:${target}`}
+                  ref={(node) => { if (node) fieldRefs.current.set(`list:${projection.listProjectionId}:${target}`, node); else fieldRefs.current.delete(`list:${projection.listProjectionId}:${target}`); }}
+                  disabled={!onSelectProjection}
+                  onClick={() => onSelectProjection?.(projection, target)}>
+                  <span className="field-tree-icon kind-scalar"><TableOutlined /></span>
+                  <span className="field-tree-name">
+                    <strong>{projectionFieldName(projection, target)}</strong>
+                    {hiddenFieldIds?.has(`list:${projection.listProjectionId}:${target}`) && <small>结果未展示</small>}
+                    <small>明细字段{target === 'valueRange' && projectionUnit(projection, fieldModel)
+                      ? ` · ${projectionUnit(projection, fieldModel)}` : ''} · {projection[target] || '位置待确认'}</small>
+                  </span>
+                  {projection[target]
+                    ? <span className="field-tree-status confirmed" aria-label="已配置"><CheckCircleOutlined /></span>
+                    : <span className="field-tree-status needs-review" aria-label="位置待确认"><ExclamationCircleOutlined /></span>}
+                </button>
+              )))}
               {buildFieldTree(region.fields).map((node) => (
                 <FieldTreeNode
                   key={node.field.id}
@@ -347,9 +442,10 @@ export function FieldStructure({
                   selectedFieldId={selectedFieldId}
                   fieldRefs={fieldRefs}
                   onSelectField={onSelectField}
+                  hiddenFieldIds={hiddenFieldIds}
                 />
               ))}
-              {!region.fields.length && (
+              {!region.fields.length && !region.projections?.length && (
                 <span className="field-tree-empty">
                   该区域暂未生成字段。请在“识别确认”中确认结构并识别字段。
                 </span>
@@ -370,6 +466,7 @@ type FieldRegionView = {
   range?: string;
   root?: BusinessField;
   fields: BusinessField[];
+  projections?: ExperimentListProjection[];
 };
 
 type FieldTreeNode = {
@@ -396,12 +493,14 @@ function FieldTreeNode({
   fieldRefs,
   onSelectField,
   depth = 0,
+  hiddenFieldIds,
 }: {
   node: FieldTreeNode;
   selectedFieldId?: string;
   fieldRefs: MutableRefObject<Map<string, HTMLButtonElement>>;
   onSelectField: (field: BusinessField) => void;
   depth?: number;
+  hiddenFieldIds?: ReadonlySet<string>;
 }) {
   return (
     <div className="field-tree-node">
@@ -411,6 +510,7 @@ function FieldTreeNode({
         fieldRefs={fieldRefs}
         onSelectField={onSelectField}
         depth={depth}
+        hiddenFieldIds={hiddenFieldIds}
       />
       {node.children.map((child) => (
         <FieldTreeNode
@@ -420,6 +520,7 @@ function FieldTreeNode({
           fieldRefs={fieldRefs}
           onSelectField={onSelectField}
           depth={depth + 1}
+          hiddenFieldIds={hiddenFieldIds}
         />
       ))}
     </div>
@@ -437,9 +538,10 @@ function isRegionField(field: BusinessField) {
 function buildFieldRegionViews(
   fieldModel: FieldModel,
   review?: RecognitionReview,
+  projections: ExperimentListProjection[] = [],
 ): FieldRegionView[] {
   const regionNodes = review?.regions ?? [];
-  const roots = fieldModel.fields.filter(isRegionField);
+  const roots = fieldModel.fields.filter((field) => isRegionField(field) && !field.structuralOnly);
   const used = new Set<string>();
   const result: FieldRegionView[] = [];
 
@@ -471,7 +573,8 @@ function buildFieldRegionViews(
       continue;
     const fields = fieldModel.fields.filter((field) => {
       if (isRegionField(field) || used.has(field.id)) return false;
-      const matched = field.parentFieldId === root.id || field.blockId === root.blockId;
+      const matched = field.parentFieldId === root.id
+        || (Boolean(root.blockId) && field.blockId === root.blockId);
       if (matched) used.add(field.id);
       return matched;
     });
@@ -485,6 +588,26 @@ function buildFieldRegionViews(
     });
   }
 
+  // Published/manual templates can have business groups without recognition
+  // regions. Use those definitions instead of discarding their grouping.
+  for (const group of [...fieldModel.groups].sort((left, right) => left.order - right.order)) {
+    const fields = fieldModel.fields.filter((field) =>
+      !isRegionField(field) && !used.has(field.id) && field.groupId === group.id,
+    );
+    if (!fields.length) continue;
+    fields.forEach((field) => used.add(field.id));
+    result.push({ id: `group:${group.id}`, name: group.name, kind: 'BUSINESS_GROUP', fields });
+  }
+  for (const projection of projections) {
+    const group = projectionGroup(projection, fieldModel);
+    const region = result.find((item) => item.id === `group:${group?.id}`)
+      ?? result.find((item) => group && item.fields.some((field) => field.groupId === group.id));
+    if (region) region.projections = [...(region.projections ?? []), projection];
+    else result.push({
+      id: `projection:${projection.listProjectionId}`, name: projectionName(projection, fieldModel),
+      kind: 'LIST_REGION', fields: [], projections: [projection],
+    });
+  }
   const unassigned = fieldModel.fields.filter(
     (field) => !isRegionField(field) && !used.has(field.id),
   );
@@ -543,12 +666,14 @@ function FieldTreeButton({
   fieldRefs,
   onSelectField,
   depth = 0,
+  hiddenFieldIds,
 }: {
   field: BusinessField;
   selectedFieldId?: string;
   fieldRefs: MutableRefObject<Map<string, HTMLButtonElement>>;
   onSelectField: (field: BusinessField) => void;
   depth?: number;
+  hiddenFieldIds?: ReadonlySet<string>;
 }) {
   return (
     <button
@@ -567,6 +692,7 @@ function FieldTreeButton({
       </span>
       <span className="field-tree-name">
         <strong title={fieldDisplayPath(field)}>{fieldDisplayPath(field)}</strong>
+        {hiddenFieldIds?.has(field.id) && <small>结果未展示</small>}
         <small>
           {field.standardRequired &&
           (field.requiresStandardConfirmation || field.fieldOrigin === 'PENDING_STANDARD')
@@ -654,7 +780,7 @@ export function FieldProperties({
   const locator = mergeLocators(field.locator, binding?.locator);
   const sourceLabelAddress = locatorLabelRange(locator);
   const sourceAddress = locatorValueRange(locator);
-  const canDeleteField = editable && !field.candidate && field.reviewStatus === 'CONFIRMED';
+  const canDeleteField = editable && !field.candidate && !field.projectionField && field.reviewStatus === 'CONFIRMED';
   const [labelAddress, setLabelAddress] = useState(sourceLabelAddress);
   const [address, setAddress] = useState(sourceAddress);
   const [labelError, setLabelError] = useState<string>();
@@ -689,6 +815,7 @@ export function FieldProperties({
       setAddress(value);
       setAddressError(error);
     }
+    if (!error && value === normalizeAddress(target === 'labelAddress' ? sourceLabelAddress : sourceAddress)) return;
     onUpdateCoordinates(field.id, { [target]: value });
   };
 
@@ -761,13 +888,13 @@ export function FieldProperties({
             value={labelAddress}
             error={labelError}
             placeholder={field.fieldType === 'TABLE_COLUMN' ? '例如 A5:C5' : '例如 A2'}
-            editable={editable}
+            editable={editable && field.labelStatus !== 'NOT_APPLICABLE'}
             picking={picking?.fieldId === field.id && picking.target === 'labelAddress'}
             onChange={setLabelAddress}
             onCommit={(value) => commitCoordinate('labelAddress', value)}
             onPick={() => onPickCoordinate(field.id, 'labelAddress')}
           />
-          {!labelAddress && field.fieldType !== 'MANUAL_VALUE' && (
+          {!labelAddress && field.fieldType !== 'MANUAL_VALUE' && field.labelStatus !== 'NOT_APPLICABLE' && (
             <span className="coordinate-help">
               尚未确认标签位置，请从工作表选择标签单元格后再发布。
             </span>
@@ -859,7 +986,7 @@ function BusinessPropertyFields({
           <span>字段分组</span>
           <Select
             value={field.groupId}
-            disabled={!editable}
+            disabled={!editable || Boolean(field.projectionField)}
             options={groups.map((group) => ({ value: group.id, label: group.name }))}
             onChange={(value) => onUpdateField(field.id, { groupId: value })}
           />
@@ -881,16 +1008,16 @@ function BusinessPropertyFields({
           <span>值类型</span>
           <Select
             value={field.valueType}
-            disabled={!editable || field.kind !== 'SCALAR'}
+            disabled={!editable || field.kind !== 'SCALAR' || Boolean(field.projectionField)}
             options={VALUE_TYPES}
-            onChange={(value) => onUpdateField(field.id, { valueType: value })}
+            onChange={(value) => onUpdateField(field.id, { valueType: value, ...(['date', 'datetime', 'time', 'boolean'].includes(value) ? { unit: '' } : {}) })}
           />
         </label>
         <label className="field-property">
           <span>单位</span>
           <Input
             value={field.unit}
-            disabled={!editable}
+            disabled={!editable || Boolean(field.projectionField) || ['date', 'datetime', 'time', 'boolean'].includes(field.valueType)}
             maxLength={40}
             placeholder="可留空"
             onChange={(event) => onUpdateField(field.id, { unit: event.target.value })}
@@ -900,7 +1027,7 @@ function BusinessPropertyFields({
           <span>是否必填</span>
           <Switch
             checked={field.required}
-            disabled={!editable || isRegionField(field)}
+            disabled={!editable || isRegionField(field) || Boolean(field.projectionField)}
             checkedChildren="是"
             unCheckedChildren="否"
             onChange={(checked) => onUpdateField(field.id, { required: checked })}
@@ -996,6 +1123,8 @@ function DeleteFieldButton({
 }
 
 function kindLabel(kind: string) {
+  if (kind === 'BUSINESS_GROUP') return '业务分组';
+  if (kind === 'LIST_REGION') return '明细区域';
   if (kind === 'ROW_TABLE') return '明细表';
   if (kind === 'COLUMN_TABLE') return '横向明细表';
   if (kind === 'FREE_TEXT') return '自由文本区';

@@ -49,6 +49,12 @@ import {
 } from '@/services/data/data-api';
 import { projectResourceApi, type ProjectRelationTarget, type RelatedProjectView } from '@/services/project/project-resource-api';
 import { dataParseProgress } from '@/services/data/data-progress';
+import { InstanceFieldEditor } from '@/features/template-workspace/InstanceFieldEditor';
+import { writeWorkbookInstance, type WorkbookTemplateInstance } from '@/features/template-workspace/workbook-instance';
+import { resolveInstanceDefinition } from '@/features/template-workspace/instance-definition';
+import { labWorkbookInstance } from '@/features/experiment-workspace/lab-structure-adapter';
+import { presentWorkbookFields } from '@/features/data-workbench/field-presentation';
+import { instanceWorkbookView } from '@/features/data-workbench/instance-workbook-view';
 
 type PanelTab = 'data' | 'structure';
 
@@ -94,6 +100,20 @@ export function DataImportJobPage({
   const [assemblyLinks, setAssemblyLinks] = useState<ExperimentAssemblyLink[]>([]);
   const [publication, setPublication] = useState<DataPublication>();
   const [workspaceView, setWorkspaceView] = useState('edit');
+  const [instance, setInstance] = useState<WorkbookTemplateInstance>();
+  const [structureDirty, setStructureDirty] = useState(false);
+  const structureDirtyRef = useRef(false);
+  const structureOperations = useRef<unknown[]>([]);
+  const markStructureDirty = () => {
+    structureDirtyRef.current = true; setStructureDirty(true);
+    window.requestAnimationFrame(() => {
+      const live = editorRef.current?.getSnapshot(), current = editorRef.current?.getTemplateInstance?.();
+      if (live && current) {
+        const view = instanceWorkbookView(live, current, true);
+        setWorkbook(previous => previous ? { ...previous, fields: view.fields, records: view.records, regions: view.regions, fieldDefinitions: view.fieldDefinitions } : previous);
+      }
+    });
+  };
   const [versionContainer, setVersionContainer] = useState<HTMLDivElement | null>(null);
   const hasUpdatePermission = usePermission(workspaceMode === 'EXPERIMENT' ? 'experiment.create' : 'data.update');
   const canUpdate = hasUpdatePermission && !['PENDING_REVIEW', 'APPROVED', 'PUBLISHED', 'DISABLED'].includes(publication?.status || '');
@@ -110,7 +130,10 @@ export function DataImportJobPage({
       const stillProcessing = ['PARSING', 'VALIDATING', 'COMMITTING'].includes(nextPreview.job.status);
       const nextWorkbook = options.skipWorkbook && stillProcessing
         ? undefined
-        : await dataApi.getImportWorkbookSnapshot(id).catch(() => undefined);
+        : await dataApi.getImportWorkbookSnapshot(id).catch((error: unknown) => {
+          if (stillProcessing || ['DOC', 'DOCX', 'IMAGE'].includes(nextPreview.job.sourceFormat)) return undefined;
+          throw error;
+        });
       setPreview(nextPreview);
       setLoadError(undefined);
       void projectResourceApi.links('DATA_IMPORT_JOB', id).then((relations) => {
@@ -118,9 +141,13 @@ export function DataImportJobPage({
         setProjectRelations(relations.map((item) => ({ projectId: item.projectId, stageId: item.stageId, taskId: item.taskId })));
       }).catch(() => { setRelatedProjects([]); setProjectRelations([]); });
       if (nextWorkbook) {
-        setWorkbook((current) => options.preserveSnapshot && current
-          ? { ...nextWorkbook, snapshot: current.snapshot }
-          : nextWorkbook);
+        const nextInstance = resolveInstanceDefinition(nextWorkbook.snapshot, nextWorkbook.templateInstance) ?? labWorkbookInstance(nextWorkbook.snapshot);
+        if (nextInstance) writeWorkbookInstance(nextWorkbook.snapshot, nextInstance);
+        const displayedWorkbook = presentWorkbookFields(nextWorkbook, nextInstance);
+        if (!structureDirtyRef.current && !options.preserveSnapshot) setInstance(nextInstance);
+        setWorkbook((current) => (options.preserveSnapshot || structureDirtyRef.current) && current
+          ? structureDirtyRef.current ? current : { ...displayedWorkbook, snapshot: current.snapshot }
+          : displayedWorkbook);
         setSelectedFieldKey((current) => current || fieldKey(nextWorkbook.fields[0]));
         const firstField = nextWorkbook.fields[0];
         const firstDefinition = firstField ? definitionForValue(nextWorkbook, firstField)
@@ -224,6 +251,15 @@ export function DataImportJobPage({
 
   const handleCellChange = async (change: EditorCellChange) => {
     const field = importFieldForCell(fields, change);
+    if (instance) {
+      if (field && !field.editable) {
+        await editorRef.current?.writeCell?.(change.sheetId, change.address, change.previousValue);
+        void message.warning('公式或只读字段不能直接修改'); return;
+      }
+      markStructureDirty();
+      setWorkbook(current => current ? { ...current, fields: current.fields.map(item => item.sheetId === change.sheetId && item.address === change.address ? { ...item, effectiveValue: change.value, correctedValue: change.value } : item) } : current);
+      return;
+    }
     if (!field?.editable || !field.recordId || !field.bindingId || !field.valuePath) {
       await editorRef.current?.writeCell?.(change.sheetId, change.address, change.previousValue).catch(() => undefined);
       void message.warning({
@@ -264,6 +300,7 @@ export function DataImportJobPage({
   const commit = async () => {
     setSaving(true);
     try {
+      if (structureDirtyRef.current) throw new Error('请先保存工作簿草稿，再确认数据');
       await dataApi.commit(id);
       await load();
       if (workspaceMode === 'EXPERIMENT') await loadAssembly();
@@ -278,6 +315,7 @@ export function DataImportJobPage({
   const reExtract = async () => {
     setSaving(true);
     try {
+      if (structureDirtyRef.current) throw new Error('请先保存工作簿草稿，再重新解析');
       await dataApi.reExtract(id,preview.job.revision);
       await load();
       void message.success('数据已重新读取并校验');
@@ -287,8 +325,28 @@ export function DataImportJobPage({
 
   const saveDraft = async () => {
     setSaving(true);
+    setLoadError(undefined);
     try {
       let savedJob = { ...preview.job, revision: correctionRevision.current ?? preview.job.revision };
+      if (instance && structureDirtyRef.current) {
+        for (const [key,value] of Object.entries(documentCorrections)) {
+          const field=fields.find(f=>fieldKey(f)===key);
+          if (!field?.sheetId || !field.address) throw new Error('字段位置已变化，请核对后保存');
+          await editorRef.current?.writeCell?.(field.sheetId,field.address,value);
+        }
+        const live = editorRef.current?.getSnapshot();
+        if (!live) throw new Error('工作簿尚未准备好');
+        const saved = await dataApi.saveWorkbookDraft(id, { revision: savedJob.revision, snapshot: live, templateInstance: editorRef.current?.getTemplateInstance?.() ?? instance, structureOperations: structureOperations.current }, workspaceMode === 'EXPERIMENT');
+        structureOperations.current = [];
+        structureDirtyRef.current = false; setStructureDirty(false); correctionRevision.current = undefined;
+        setDocumentCorrections({});
+        setPreview(current => current ? { ...current, job: saved.job } : current);
+        // Refresh extraction results without replaying normalized metadata as a new user edit.
+        setInstance(editorRef.current?.getTemplateInstance?.() ?? saved.workbook.templateInstance ?? instance);
+        setWorkbook(current => ({ ...saved.workbook, snapshot: current?.snapshot ?? saved.workbook.snapshot }));
+        await load({ silent: true, preserveSnapshot: true });
+        void message.success('工作簿草稿已保存并重新校验'); return;
+      }
       for (const [key, value] of Object.entries(documentCorrections)) {
         const field = fields.find((item) => fieldKey(item) === key);
         if (!field?.editable || !field.recordId) throw new Error('字段位置已变化，请重新核对后保存');
@@ -303,7 +361,7 @@ export function DataImportJobPage({
       setPreview(current => current ? { ...current, job: savedJob } : current);
       await load();
       void message.success('导入草稿已保存');
-    } catch (error) { void message.error(error instanceof Error ? error.message : '草稿保存失败，未保存内容仍保留'); }
+    } catch (error) { const reason=error instanceof Error ? error.message : '未保存内容仍保留'; setLoadError(`草稿保存失败：${reason}`); void message.error(reason); }
     finally { setSaving(false); }
   };
 
@@ -337,14 +395,14 @@ export function DataImportJobPage({
       title={preview.job.sourceFileName}
       leading={<Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate(workspaceMode === 'EXPERIMENT' ? '/experiments/upload' : (canCreate ? '/data/upload' : '/data/view'))}>{workspaceMode === 'EXPERIMENT' ? '返回实验上传' : (canCreate ? '返回上传' : '返回数据查看')}</Button>}
       meta={meta}
-      navigation={workspaceMode === 'DATA' && <nav className="workspace-view-tabs data-workspace-view-tabs" aria-label="数据工作台视图"><Tabs activeKey={workspaceView === 'edit' && !canUpdate ? 'preview' : workspaceView} onChange={setWorkspaceView} items={[{ key: 'preview', label: <span><EyeOutlined /> 预览</span> }, { key: 'edit', label: '编辑', disabled: !canUpdate }, { key: 'versions', label: '版本记录' }]} /></nav>}
+      navigation={<nav className="workspace-view-tabs data-workspace-view-tabs" aria-label="数据工作台视图"><Tabs activeKey={workspaceView === 'edit' && !canUpdate ? 'preview' : workspaceView} onChange={setWorkspaceView} items={[{ key: 'preview', label: <span><EyeOutlined /> 预览</span> }, { key: 'edit', label: '编辑', disabled: !canUpdate }, ...(workspaceMode === 'DATA' ? [{ key: 'versions', label: '版本记录' }] : [])]} /></nav>}
       content={workspaceMode === 'DATA' && workspaceView === 'versions' ? <div ref={setVersionContainer} /> : undefined}
       actions={<>
         {canUpdate && workbook?.editable && <Button loading={saving} disabled={Boolean(savingCell) || processing} onClick={() => void saveDraft()}>保存草稿</Button>}
         {workspaceMode === 'DATA' && <DataPublicationPanel jobId={id} refreshKey={preview.job.updatedAt}
           versionContainer={versionContainer}
           canConfirm={preview.job.status === 'WAITING_CONFIRM' && !blockers.length && !['INCOMPATIBLE', 'REVIEW_REQUIRED'].includes(compatibility)}
-          disabled={saving || Boolean(savingCell) || Object.keys(documentCorrections).length > 0}
+          disabled={saving || Boolean(savingCell) || structureDirty || Object.keys(documentCorrections).length > 0}
           onStateChange={setPublication} onChanged={() => void load()} />}
         <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
         {canUpdate && !processing && preview.job.status !== 'COMPLETED' && <Button loading={saving} onClick={() => void reExtract()}>重新解析</Button>}
@@ -354,7 +412,7 @@ export function DataImportJobPage({
         {workspaceMode === 'EXPERIMENT' && canUpdate && preview.job.status !== 'COMPLETED' ? <Button
           type="primary"
           icon={<CheckOutlined />}
-          disabled={blockers.length > 0 || preview.job.status !== 'WAITING_CONFIRM' || ['INCOMPATIBLE', 'REVIEW_REQUIRED'].includes(compatibility)}
+          disabled={structureDirty || blockers.length > 0 || preview.job.status !== 'WAITING_CONFIRM' || ['INCOMPATIBLE', 'REVIEW_REQUIRED'].includes(compatibility)}
           loading={saving}
           onClick={() => void commit()}
         >生成实验草稿</Button> : null}
@@ -363,18 +421,20 @@ export function DataImportJobPage({
         {loadError ? <Alert
           showIcon
           type="warning"
-          message="任务数据刷新失败，当前显示的是上一次成功加载的数据"
+          message={loadError.startsWith('草稿保存失败：') ? '草稿保存失败，当前未保存修改仍保留' : '任务数据刷新失败，当前显示的是上一次成功加载的数据'}
           description={loadError}
           action={<Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load()}>重试</Button>}
           closable
           onClose={() => setLoadError(undefined)}
         /> : null}
         <WorkbenchNotice preview={preview} processing={processing} onIssue={(issue) => {
+          if(issue.issueType === 'INSTANCE_STRUCTURE_UNCONFIRMED') { setActiveTab('structure'); return; }
           if (issue.sheetId && issue.address && !requiresTemplateChange(issue.issueType)) { editorRef.current?.focusCell?.(issue.sheetId, issue.address); setActiveTab('data'); }
           else navigate(workspaceMode === 'EXPERIMENT' ? '/experiments/upload' : '/data/upload');
         }} />
         {!processing && preview.job.status !== 'COMPLETED' && confirmationBlockReason(preview) && <Alert type="warning" showIcon
           message={confirmationBlockReason(preview)} action={<Button onClick={() => navigate(workspaceMode === 'EXPERIMENT' ? '/experiments/upload' : '/data/upload')}>重新选择模板或文件</Button>} />}
+        {structureDirty && <Alert type="info" showIcon message="工作簿结构或内容已修改，请保存草稿后确认数据。" />}
         {Object.keys(documentCorrections).length > 0 && <Alert type="info" showIcon message="有尚未保存的字段修改，请保存草稿后提交审核。" />}
       </>}
       canvas={['DOC', 'DOCX', 'IMAGE'].includes(preview.job.sourceFormat) ? <OriginalDocumentCanvas file={sourceFile} /> : <DataWorkbookCanvas
@@ -382,9 +442,15 @@ export function DataImportJobPage({
         workbook={workbook}
         loading={!workbook && processing}
         editable={Boolean(workspaceView === 'edit' && canUpdate && workbook?.editable && workbook.fields.some((field) => field.editable) && !savingCell && !saving)}
+        instance={instance}
+        onInstanceChange={next => { setInstance(next); markStructureDirty(); }}
+        onStructureChange={operation => { structureOperations.current.push(operation); markStructureDirty(); }}
+        onDirty={markStructureDirty}
         onSelectionChange={handleSelection}
         onCellChange={(change) => void handleCellChange(change)}
       />}
+      panelTitle={workspaceMode === 'EXPERIMENT' ? '本次实验数据' : '本次导入数据'}
+      panelExtra={<Tag color={preview.job.status === 'COMPLETED' ? 'success' : 'warning'}>{preview.job.status === 'COMPLETED' ? '已确认' : '待确认'}</Tag>}
       panel={<>
         <Tabs
           className="data-workbench-tabs"
@@ -410,6 +476,14 @@ export function DataImportJobPage({
                   value={documentCorrections[fieldKey(field) || ''] ?? formatImportValue(field.effectiveValue)}
                   onChange={(event) => { correctionRevision.current ??= preview.job.revision; setDocumentCorrections((current) => ({ ...current, [fieldKey(field) || '']: event.target.value })); }} />
                 <Button disabled={saving || Boolean(savingCell)} loading={savingCell === fieldKey(field)} onClick={() => {
+                  if (instance && field.sheetId && field.address) {
+                    setSavingCell(fieldKey(field));
+                    void editorRef.current?.writeCell?.(field.sheetId,field.address,documentCorrections[fieldKey(field) || ''] ?? formatImportValue(field.effectiveValue))
+                      .then(() => { markStructureDirty(); return saveDraft(); })
+                      .catch((error:unknown)=>void message.error(error instanceof Error?error.message:'修正失败'))
+                      .finally(()=>setSavingCell(undefined));
+                    return;
+                  }
                   setSavingCell(fieldKey(field));
                   void dataApi.correctValue(id, field.recordId!, {
                     revision: correctionRevision.current ?? preview.job.revision,
@@ -426,15 +500,16 @@ export function DataImportJobPage({
                 !['DOC', 'DOCX', 'IMAGE'].includes(preview.job.sourceFormat) ? <Button size="small" onClick={() => selectField(field)}>定位并修正</Button> : null
               ) : null}
             </Space>}
-            renderFieldMeta={(field) => <Space wrap size={4}><Tag>类型：{fieldTypeLabel(field.valueType)}</Tag>{field.required ? <Tag color="orange">必填</Tag> : null}{field.identity ? <Tag color="blue">记录标识</Tag> : null}</Space>}
+            renderFieldMeta={(field) => field.valueSource === 'FORMULA' ? <Typography.Text type="secondary">公式结果由系统计算</Typography.Text> : null}
           />
         ) : null}
         {activeTab === 'structure' ? (
-          <DataFieldStructureBrowser
-            workbook={workbook}
-            selectedBindingId={selectedBindingId}
-            onSelectField={selectDefinition}
-          />
+          instance ? <InstanceFieldEditor instance={instance} ownerId={id} editable={workspaceView === 'edit' && canUpdate && !saving && Boolean(workbook?.editable)} selection={selectedCell}
+            onFocusBinding={binding => editorRef.current?.focusBinding(binding)}
+            onChange={next => { setInstance(next); void editorRef.current?.setTemplateInstance?.(next); markStructureDirty(); }}
+            onFocus={field => { const b = instance.mapping.find(b => b.bindingId === field.bindingId); if(b) editorRef.current?.focusBinding(b); }}
+            onWriteLabel={(field,value) => { const b = instance.mapping.find(b => b.bindingId === field.bindingId); if(b) void editorRef.current?.writeLabel?.(b,value); }} />
+          : <DataFieldStructureBrowser workbook={workbook} selectedBindingId={selectedBindingId} onSelectField={selectDefinition} />
         ) : null}
       </>}
       footer={preview.job.status === 'COMPLETED' ? (
@@ -466,7 +541,6 @@ export function DataImportJobPage({
     </DataWorkbenchShell>
   );
 }
-
 function formatImportValue(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value;
@@ -486,6 +560,7 @@ function WorkbenchNotice({ preview, processing, onIssue }: { preview: DataPrevie
       : preview.job.compatibilityStatus === 'REVIEW_REQUIRED'
         ? <Alert banner showIcon type="warning" message="文件与所选模板的结构不一致，无法可靠读取，请重新选择模板或文件。" />
         : undefined;
+  if (!statusNotice && !preview.issues.some(issue => !['RESOLVED', 'IGNORED'].includes(issue.status))) return null;
   return <Space direction="vertical" size={8} style={{ width: '100%' }}>
     {statusNotice}
     <DataImportQualityNotice issues={preview.issues} sheets={preview.sheets} onLocate={onIssue} />
@@ -504,12 +579,4 @@ function definitionForValue(workbook: DataWorkbookSnapshot | undefined, field: D
 function cellRow(address: string) {
   const match = /([1-9][0-9]*)$/.exec(address.replace(/\$/g, ''));
   return match ? Number(match[1]) : undefined;
-}
-
-function fieldTypeLabel(value?: string) {
-  const labels: Record<string, string> = {
-    TEXT: '文本', STRING: '文本', NUMBER: '数值', DECIMAL: '小数', INTEGER: '整数',
-    DATE: '日期', DATETIME: '日期时间', BOOLEAN: '是/否', ENUM: '选项',
-  };
-  return labels[(value || 'TEXT').toUpperCase()] || '文本';
 }

@@ -12,6 +12,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 class HistorySampleProjectionTest {
     private final ObjectMapper json=new ObjectMapper();
     private final UUID dataset=UUID.randomUUID();
+    @Test void unifiedMassesAggregateRepeatedFeedsAndUseCanonicalMeasurements()throws Exception {
+        var materialId=UUID.randomUUID().toString();
+        var data=project("""
+          {"sourceGroups":[{"sampleKey":"a"}],
+           "formulaItems":[
+             {"sampleKey":"a","materialCode":"RESIN","materialName":"RESIN","actualQty":20,"rawValue":"20g","compositionBasis":"MASS_AMOUNT","unit":"g"},
+             {"sampleKey":"a","materialCode":"RESIN","materialName":"RESIN","actualQty":30,"rawValue":30,"compositionBasis":"MASS_AMOUNT","unit":"g"}],
+           "processSteps":[{"sampleKey":"a","operation":"固化时间","value":1800,"rawValue":"30 min","parseStatus":"EXACT","valueStatus":"RECORDED","unit":"s"}],
+           "testResults":[{"sampleKey":"a","testItem":"临时项目","value":90,"trainingEligible":false},
+                          {"sampleKey":"a","testItem":"未测项目","value":null,"valueStatus":"NOT_MEASURED"}]}
+          """,catalog(Map.of("RESIN",materialId)));
+        var mass=columnCode(data,"RESIN用量");var time=columnCode(data,"固化时间");
+        assertThat(data.path("rows").get(0).path("values").path(mass).asInt()).isEqualTo(50);
+        assertThat(data.path("rows").get(0).path("values").path(time).asInt()).isEqualTo(1800);
+        assertThat(data.path("columns").findValuesAsText("semanticType")).contains("MATERIAL_AMOUNT");
+        assertThat(data.path("columns").findValuesAsText("name")).doesNotContain("临时项目","未测项目");
+    }
     private com.fasterxml.jackson.databind.JsonNode project(String value) throws Exception {
         return project(value,MaterialCatalogSnapshot.empty());
     }

@@ -118,10 +118,19 @@ export function readFieldModel(
         const storedPath = bindingPath
           ?? preferSemanticPath(field.pathSegments, undefined)
           ?? namedPath;
-        const pathSegments = mergeSemanticPaths(storedPath, snapshotPath) ?? namedPath;
+        const semanticPath = mergeSemanticPaths(storedPath, snapshotPath) ?? namedPath;
+        // Older published templates used group IDs as path prefixes. IDs stay
+        // stable in storage; display their configured names, never guessed text.
+        const pathSegments = semanticPath?.map((segment, index) =>
+          index < semanticPath.length - 1
+            ? normalized.groups.find((group) => group.id === segment)?.name ?? segment
+            : segment,
+        );
         return {
           ...field,
           locator,
+          mappingKind: binding?.mappingKind ?? field.mappingKind,
+          fieldType: binding?.mappingKind === 'REPEAT_FIELD' ? 'TABLE_COLUMN' : field.fieldType,
           pathSegments,
           labelStatus: field.fieldType === 'REGION' ? 'NOT_APPLICABLE' : locator.label ? 'RESOLVED' : 'UNRESOLVED',
         };

@@ -1,10 +1,6 @@
 import { generateUUID } from '@/utils/uuid';
 
-import {
-  addBusinessField,
-  templateLocalFieldCode,
-  writeFieldModel,
-} from './field-model';
+import { addBusinessField, templateLocalFieldCode, writeFieldModel } from './field-model';
 import type {
   BusinessField,
   EditorSelection,
@@ -17,7 +13,7 @@ export type CustomFieldKind = 'SCALAR' | 'REPEAT_FIELD';
 
 export interface CreateCustomFieldInput {
   ownerId: string;
-  origin: Extract<FieldOrigin, 'TEMPLATE_LOCAL' | 'ORDER_LOCAL'>;
+  origin: Extract<FieldOrigin, 'TEMPLATE_LOCAL' | 'ORDER_LOCAL' | 'INSTANCE_LOCAL'>;
   kind: CustomFieldKind;
   name: string;
   valueType?: string;
@@ -47,17 +43,18 @@ export function createCustomFieldWorkspace(
     ? `${parent.dataPath}/*/${key}`
     : `${input.origin === 'ORDER_LOCAL' ? '/orderLocalFields' : '/customFields'}/${key}`;
   const groupId = input.groupId || parent?.groupId || model.groups[0]?.id || 'group-other';
-  const fieldCode = input.origin === 'TEMPLATE_LOCAL'
-    ? templateLocalFieldCode(input.ownerId, { id, name: input.name, dataPath })
-    : `ORDER_LOCAL.${shortKey(input.ownerId)}.${key.toUpperCase()}`;
-  const valueMode = structuredValueMode(parent);
+  const fieldCode =
+    input.origin === 'TEMPLATE_LOCAL'
+      ? templateLocalFieldCode(input.ownerId, { id, name: input.name, dataPath })
+      : `${input.origin}.${shortKey(input.ownerId)}.${key.toUpperCase()}`;
+  const valueMode = input.kind === 'SCALAR' ? 'SCALAR' : structuredValueMode(parent);
   const valueRange = normalizeRange(input.valueRange);
   const labelRange = normalizeRange(input.labelRange);
   const mappingKind = input.kind;
   const parentSheet = parentBinding?.locator ?? {};
   const sheet = input.sheet ?? {
-    sheetId: String(parentSheet.sheetId || ''),
-    sheetName: String(parentSheet.sheetName || ''),
+    sheetId: locatorText(parentSheet.sheetId || ''),
+    sheetName: locatorText(parentSheet.sheetName || ''),
   };
   const field: BusinessField = {
     id,
@@ -71,6 +68,7 @@ export function createCustomFieldWorkspace(
     parentBlockId: parent?.parentBlockId ?? parent?.blockId,
     groupId,
     name: input.name.trim() || '新字段',
+    ...(parent?.structuralOnly ? { pathSegments: [model.groups.find(group => group.id === groupId)?.name ?? '', input.name.trim() || '新字段'].filter(Boolean) } : {}),
     kind: 'SCALAR',
     valueType: input.valueType || 'string',
     required: false,
@@ -78,6 +76,7 @@ export function createCustomFieldWorkspace(
     editability: 'EDITABLE',
     valueSource: 'USER_INPUT',
     mappingKind,
+    fieldType: input.kind === 'REPEAT_FIELD' ? 'TABLE_COLUMN' : 'FIELD',
     repeatAxis: parent?.repeatAxis,
     recordHeight: parent?.recordHeight,
     recordWidth: parent?.recordWidth,
@@ -130,9 +129,10 @@ export function createCustomFieldWorkspace(
     },
   };
   const added = addBusinessField(schema, model, field);
-  const nextModel = parent && input.kind === 'REPEAT_FIELD'
-    ? appendParentColumn(added.model, parent.id, field)
-    : added.model;
+  const nextModel =
+    parent && input.kind === 'REPEAT_FIELD'
+      ? appendParentColumn(added.model, parent.id, field)
+      : added.model;
   return {
     field,
     binding,
@@ -150,42 +150,83 @@ export function expandAdjacentRepeatRegion(
 ): { mapping: TemplateBinding[]; model: FieldModel } {
   if (child.mappingKind !== 'REPEAT_FIELD' || !child.parentBindingId) return { mapping, model };
   const parent = mapping.find((item) => item.bindingId === child.parentBindingId);
-  if (!parent || parent.mappingKind !== 'REPEAT_REGION' || parent.repeatAxis !== 'ROW') {
+  if (
+    !parent ||
+    parent.mappingKind !== 'REPEAT_REGION' ||
+    !['ROW', 'COLUMN'].includes(parent.repeatAxis || '')
+  ) {
     return { mapping, model };
   }
-  const parentSheet = String(parent.locator.sheetId || parent.locator.sheetName || '');
-  const childSheet = String(child.locator.sheetId || child.locator.sheetName || '');
+  const parentSheet = locatorText(parent.locator.sheetId || parent.locator.sheetName || '');
+  const childSheet = locatorText(child.locator.sheetId || child.locator.sheetName || '');
   if (!parentSheet || parentSheet !== childSheet) return { mapping, model };
-  const dataRange = parseRange(String(parent.locator.dataRange || parent.locator.range || ''));
-  const childRange = parseRange(String(child.locator.logicalInputRange || child.locator.valueRange || child.locator.address || ''));
-  if (!dataRange || !childRange
-      || (childRange.left !== dataRange.right + 1 && childRange.left !== dataRange.right)
-      || childRange.right !== childRange.left
-      || childRange.top < dataRange.top || childRange.bottom > dataRange.bottom) {
+  const dataRange = parseRange(locatorText(parent.locator.dataRange || parent.locator.range || ''));
+  const childRange = parseRange(
+    locatorText(
+      child.locator.logicalInputRange || child.locator.valueRange || child.locator.address || '',
+    ),
+  );
+  const columnRecords = parent.repeatAxis === 'COLUMN';
+  if (!dataRange || !childRange) return { mapping, model };
+  if (
+    columnRecords
+      ? (childRange.top !== dataRange.bottom + 1 && childRange.top !== dataRange.bottom) ||
+        childRange.bottom !== childRange.top ||
+        childRange.left < dataRange.left ||
+        childRange.right > dataRange.right
+      : (childRange.left !== dataRange.right + 1 && childRange.left !== dataRange.right) ||
+        childRange.right !== childRange.left ||
+        childRange.top < dataRange.top ||
+        childRange.bottom > dataRange.bottom
+  )
     return { mapping, model };
-  }
+  const edge = columnRecords ? 'bottom' : 'right';
   const nextLocator = { ...parent.locator };
-  for (const key of ['range', 'recordRange', 'dataRange', 'valueRange', 'logicalInputRange', 'address', 'headerRange'] as const) {
-    const range = parseRange(String(nextLocator[key] || ''));
-    if (range && range.right < childRange.right) nextLocator[key] = formatRange({ ...range, right: childRange.right });
+  for (const key of [
+    'range',
+    'recordRange',
+    'dataRange',
+    'valueRange',
+    'logicalInputRange',
+    'address',
+    'headerRange',
+  ] as const) {
+    const range = parseRange(locatorText(nextLocator[key] || ''));
+    if (range && range[edge] < childRange[edge])
+      nextLocator[key] = formatRange({ ...range, [edge]: childRange[edge] });
   }
   const nestedValue = nextLocator.value;
   if (nestedValue && typeof nestedValue === 'object' && !Array.isArray(nestedValue)) {
     const value = { ...nestedValue } as Record<string, unknown>;
-    const valueRange = parseRange(String(value.range || ''));
-    if (valueRange && valueRange.right < childRange.right) {
-      value.range = formatRange({ ...valueRange, right: childRange.right });
+    const valueRange = parseRange(locatorText(value.range || ''));
+    if (valueRange && valueRange[edge] < childRange[edge]) {
+      value.range = formatRange({ ...valueRange, [edge]: childRange[edge] });
       nextLocator.value = value;
     }
   }
-  const nextWidth = Math.max(Number(parent.recordWidth || 0), childRange.right - dataRange.left + 1);
+  const dimension = columnRecords ? 'recordHeight' : 'recordWidth';
+  const nextSize = Math.max(
+    Number(parent[dimension] || 0),
+    columnRecords ? childRange.bottom - dataRange.top + 1 : childRange.right - dataRange.left + 1,
+  );
   return {
-    mapping: mapping.map((item) => item.bindingId === parent.bindingId
-      ? { ...item, locator: nextLocator, recordWidth: nextWidth } : item),
+    mapping: mapping.map((item) =>
+      item.bindingId === parent.bindingId
+        ? { ...item, locator: nextLocator, [dimension]: nextSize }
+        : item,
+    ),
     model: {
       ...model,
-      fields: model.fields.map((field) => field.bindingId === parent.bindingId
-        ? { ...field, locator: nextLocator, valueRange: String(nextLocator.valueRange || field.valueRange || ''), recordWidth: nextWidth } : field),
+      fields: model.fields.map((field) =>
+        field.bindingId === parent.bindingId
+          ? {
+              ...field,
+              locator: nextLocator,
+              valueRange: locatorText(nextLocator.valueRange || field.valueRange || ''),
+              [dimension]: nextSize,
+            }
+          : field,
+      ),
     },
   };
 }
@@ -193,7 +234,8 @@ export function expandAdjacentRepeatRegion(
 function parseRange(value: string) {
   const match = /^([A-Z]+)([1-9][0-9]*)(?::([A-Z]+)([1-9][0-9]*))?$/i.exec(value);
   if (!match) return null;
-  const column = (letters: string) => [...letters.toUpperCase()].reduce((total, char) => total * 26 + char.charCodeAt(0) - 64, 0);
+  const column = (letters: string) =>
+    [...letters.toUpperCase()].reduce((total, char) => total * 26 + char.charCodeAt(0) - 64, 0);
   return {
     left: column(match[1] || ''),
     top: Number(match[2] || 0),
@@ -206,7 +248,7 @@ function formatRange(range: { left: number; top: number; right: number; bottom: 
   const column = (number: number) => {
     let result = '';
     for (let value = number; value > 0; value = Math.floor((value - 1) / 26)) {
-      result = String.fromCharCode(65 + (value - 1) % 26) + result;
+      result = String.fromCharCode(65 + ((value - 1) % 26)) + result;
     }
     return result;
   };
@@ -216,27 +258,29 @@ function formatRange(range: { left: number; top: number; right: number; bottom: 
 function appendParentColumn(model: FieldModel, parentId: string, field: BusinessField): FieldModel {
   return {
     ...model,
-    fields: model.fields.map((item) => item.id === parentId
-      ? {
-          ...item,
-          columns: [
-            ...(item.columns ?? []),
-            {
-              code: field.dataPath?.split('/').at(-1) || field.id,
-              bindingId: field.bindingId,
-              fieldId: field.id,
-              fieldCode: field.fieldCode,
-              dataPath: field.dataPath,
-              name: field.name,
-              valueType: field.valueType,
-              labelRange: field.labelRange,
-              valueRange: field.valueRange,
-              editability: 'EDITABLE',
-              valueSource: 'USER_INPUT',
-            },
-          ],
-        }
-      : item),
+    fields: model.fields.map((item) =>
+      item.id === parentId
+        ? {
+            ...item,
+            columns: [
+              ...(item.columns ?? []),
+              {
+                code: field.dataPath?.split('/').at(-1) || field.id,
+                bindingId: field.bindingId,
+                fieldId: field.id,
+                fieldCode: field.fieldCode,
+                dataPath: field.dataPath,
+                name: field.name,
+                valueType: field.valueType,
+                labelRange: field.labelRange,
+                valueRange: field.valueRange,
+                editability: 'EDITABLE',
+                valueSource: 'USER_INPUT',
+              },
+            ],
+          }
+        : item,
+    ),
   };
 }
 
@@ -255,4 +299,8 @@ function firstCell(value: string) {
 
 function shortKey(value: string) {
   return value.replaceAll('-', '').slice(0, 12).toUpperCase() || 'ORDER';
+}
+
+function locatorText(value: unknown): string {
+  return typeof value === 'string' ? value : '';
 }

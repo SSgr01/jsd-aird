@@ -41,7 +41,7 @@ import {
   type RepeatDisplayColumn,
 } from '@/features/template-workspace/repeat-data';
 import { synchronizeStructuredData } from '@/features/template-workspace/structured-data';
-import { migrateWorkspaceStructure } from '@/features/template-workspace/structure-migration';
+import { createWorkbookInstance, type WorkbookTemplateInstance } from '@/features/template-workspace/workbook-instance';
 import {
   resolveBindingSelection,
   selectionCycleKey,
@@ -51,7 +51,6 @@ import type {
   EditorSelection,
   BusinessField,
   TemplateBinding,
-  WorkbookStructureOperation,
 } from '@/features/template-workspace/types';
 import type { ProductionWorkspace } from '@/features/production-orders/types';
 import {
@@ -227,7 +226,7 @@ export function ProductionWorkspacePage() {
       );
       setWorkspace({ ...workspace, schema: created.schema, mapping: created.mapping });
       setSelectedId(created.binding.bindingId);
-      if (values.labelRange) {
+      if (workspace.format !== 'XLSX' && values.labelRange) {
         await editorRef.current?.writeLabel?.(created.binding, created.field.name);
       }
       setCustomFieldOpen(false);
@@ -339,19 +338,11 @@ export function ProductionWorkspacePage() {
     });
   };
 
-  const handleStructureChange = useCallback((operation: WorkbookStructureOperation) => {
+  const handleInstanceChange = useCallback((instance: WorkbookTemplateInstance) => {
     const { workspace } = latestSaveRef.current;
     if (!workspace) return;
-    const fieldModel = readFieldModel(workspace.schema, workspace.mapping);
-    const migrated = migrateWorkspaceStructure(workspace.mapping, fieldModel, operation);
-    const next = {
-      ...workspace,
-      mapping: migrated.mapping,
-      schema: writeFieldModel(workspace.schema, migrated.model),
-    };
-    latestSaveRef.current = { ...latestSaveRef.current, workspace: next };
-    setWorkspace(next);
-    markDirty();
+    const next = { ...workspace, mapping: instance.mapping, schema: writeFieldModel(workspace.schema, instance.model) };
+    latestSaveRef.current = { ...latestSaveRef.current, workspace: next }; setWorkspace(next); markDirty();
   }, []);
 
   const confirmIngest = async () => {
@@ -539,7 +530,8 @@ export function ProductionWorkspacePage() {
                 onDirty={markDirty}
                 onEditorValue={onEditorValue}
                 onSelectionChange={onSelectionChange}
-                onStructureChange={handleStructureChange}
+                instance={createWorkbookInstance(readFieldModel(workspace.schema, workspace.mapping), workspace.mapping)}
+                onInstanceChange={handleInstanceChange}
               />
             ) : (
               <div className={editable ? undefined : 'document-readonly'}>

@@ -59,6 +59,10 @@ public class TemplateImportContractCompiler {
                 .put("identityFallback", "IMPORT_SCOPED")
                 .put("compatibilityPolicy", "STRICT_SIMPLE_REGIONS");
         contract.set("fields", contractFields(schema));
+        // Instance geometry explicitly declares repeated records, including in
+        // a single-file experiment. Do not apply legacy static-column guessing.
+        if (schema != null && schema.path("x-jsd-workbook-instance").path("version").asInt() == 2)
+            contract.put("instanceStructureVersion", 2);
         var components = components(mappings, schema, experimentTemplate);
         attachSheetFingerprints(components, layoutSummary);
         if (experimentTemplate) {

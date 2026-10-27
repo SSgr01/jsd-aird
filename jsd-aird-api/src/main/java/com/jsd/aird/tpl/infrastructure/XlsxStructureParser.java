@@ -187,6 +187,7 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
                 snapshotSheet.set("freeze", freezePane(sheet));
                 snapshotSheet.set("rowHeader", objectMapper.createObjectNode().put("width", 46));
                 snapshotSheet.set("columnHeader", objectMapper.createObjectNode().put("height", 20));
+                snapshotSheet.withObject("/custom").set("print",com.jsd.aird.shared.office.WorkbookPrintSettings.read(objectMapper,sheet,dimensions.lastRow(),dimensions.lastColumn()));
                 snapshotSheets.set(sheetId, snapshotSheet);
             }
 
@@ -220,6 +221,8 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
             snapshot.set("styles", snapshotStyles);
             snapshot.set("sheetOrder", sheetOrder);
             snapshot.set("sheets", snapshotSheets);
+            com.jsd.aird.shared.lab.LabWorkbook.restoreMetadata(objectMapper,snapshot);
+            com.jsd.aird.shared.excel.WorkbookStructure.restoreMetadata(objectMapper,snapshot);
 
             issues.add(new ParseIssue(
                     "INFO",
@@ -239,6 +242,10 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
             case STRING -> {
                 result.put("v", cell.getStringCellValue());
                 result.put("t", 1);
+                var text=cell.getStringCellValue();
+                if(text.matches("[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z")&&org.apache.poi.ss.usermodel.DateUtil.isADateFormat(cell.getCellStyle().getDataFormat(),cell.getCellStyle().getDataFormatString())) {
+                    try {result.put("v",org.apache.poi.ss.usermodel.DateUtil.getExcelDate(java.time.OffsetDateTime.parse(text).toLocalDateTime())).put("t",2);}catch(java.time.DateTimeException ignored) { /* Original text remains authoritative. */ }
+                }
             }
             case NUMERIC -> {
                 result.put("v", cell.getNumericCellValue());

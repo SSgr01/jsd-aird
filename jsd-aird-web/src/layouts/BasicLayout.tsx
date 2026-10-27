@@ -267,7 +267,8 @@ export function BasicLayout() {
   const location = useLocation();
   const isTemplateWorkspace = /^\/templates\/[^/]+\/workspace$/.test(location.pathname);
   const isExperimentPage = ['/experiments/new', '/experiments/upload', '/experiments/list'].includes(location.pathname);
-  const isExperimentWorkspace = /^\/experiments\/(?!imports\/)[^/]+$/.test(location.pathname) && !isExperimentPage;
+  const isExperimentWorkspace = /^\/experiments\/template-imports\/[^/]+$/.test(location.pathname)
+    || /^\/experiments\/(?!imports\/)[^/]+$/.test(location.pathname) && !isExperimentPage;
   const isDataWorkspace = /^\/data\/(?:import-jobs|assets)\/[^/]+$/.test(location.pathname);
   const isProjectDocumentWorkspace = /^\/projects\/[^/]+\/documents\/[^/]+$/.test(location.pathname);
   const isKnowledgeWorkbench = location.pathname.startsWith('/knowledge/review/') || location.pathname.startsWith('/knowledge/documents/');

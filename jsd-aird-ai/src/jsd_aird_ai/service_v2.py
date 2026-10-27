@@ -31,7 +31,7 @@ from baybe.targets import NumericalTarget
 from jsd_aird_ai.contracts_v2 import ApplicabilityV2, BinaryResultV2, CategoricalResultV2, ContinuousResultV2, DomainStatusV2, OrdinalResultV2, ScoreRequestV2, ScoreResponseV2, TargetBlockedV2, TargetFailedV2, TargetSuccessV2, ValueTypeV2, FormulaV2, FormulaComponentV2, RecommendRequestV2, RecommendResponseV2, RecommendedCandidateV2
 from jsd_aird_ai.errors import ErrorCode, FormulaModelError
 from jsd_aird_ai.settings import Settings
-from jsd_aird_ai.workbench_training import candidates as workbench_candidates, fitted_metrics, prepare_data
+from jsd_aird_ai.workbench_training import candidates as workbench_candidates, fitted_metrics, prepare_data, validation_groups
 
 
 def _sha(data: bytes) -> str:
@@ -107,12 +107,13 @@ class FormulaModelV2Service:
         fold_count = min(5, sample_count // 2) if numeric_y else min(5, int(counts.min()))
         # Repeated inputs belong to one fold, including replicates with different Y,
         # so seeing the same input during training cannot inflate validation scores.
-        group_keys = [tuple(sorted(row.items())) for row in feature_rows]
-        group_ids = {key: index for index, key in enumerate(dict.fromkeys(group_keys))}
-        groups = np.asarray([group_ids[key] for key in group_keys])
-        grouped = len(group_ids) < sample_count
+        groups, grouping = validation_groups(feature_rows, checks.get("sourceExperimentIds", []))
+        group_count = len(np.unique(groups))
+        grouped = group_count < sample_count
         if grouped:
-            fold_count = min(fold_count, len(group_ids))
+            fold_count = min(fold_count, group_count)
+            if fold_count < 2:
+                raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "独立实验不足2份，无法进行可靠验证；请补充其他实验记录")
             splitter = (GroupKFold(n_splits=fold_count, shuffle=True, random_state=seed) if numeric_y else
                         StratifiedGroupKFold(n_splits=fold_count, shuffle=True, random_state=seed))
             splits = splitter.split(feature_rows, target, groups)
@@ -152,7 +153,7 @@ class FormulaModelV2Service:
         metrics.update(selectedAlgorithm=selected_algorithm, selectedCandidateId=selected_id,
                        selectionMetric="mae" if numeric_y else "logLoss", selectionDirection="MINIMIZE",
                        candidateCount=len(results), validationFolds=fold_count,
-                       validationGrouping="IDENTICAL_X" if grouped else "ROWS",
+                       validationGrouping=grouping if grouped else "ROWS",
                        baselineMetrics=self._baseline_metrics(target, folds, target_type, classes),
                        dataChecks=checks, failedCandidates=failures,
                        preprocessing=dict(numericScaling="STANDARD", categoricalEncoding="ONE_HOT", fitScope="TRAIN_FOLD"))

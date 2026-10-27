@@ -40,7 +40,7 @@ def prepare_data(x_columns: list[dict], y_column: dict, rows: list[dict]) -> tup
     fields = [dict(code=c["code"], name=c.get("name") or c["code"], role="Y" if i == len(x_columns) else "X",
                    missingCount=0, invalidCount=0, distinctCount=0)
               for i, c in enumerate(columns)]
-    features, targets = [], []
+    features, targets, source_experiments = [], [], []
     groups: dict[tuple, list[dict]] = defaultdict(list)
     distinct = [set() for _ in columns]
     for index, row in enumerate(rows):
@@ -60,6 +60,7 @@ def prepare_data(x_columns: list[dict], y_column: dict, rows: list[dict]) -> tup
         record = dict(zip([c["code"] for c in x_columns], cleaned[:-1]))
         features.append(record)
         targets.append(cleaned[-1])
+        source_experiments.append(str(row.get("sourceExperimentId") or ""))
         for items, value in zip(distinct, cleaned):
             items.add(value)
         groups[tuple(cleaned[:-1])].append(dict(
@@ -71,6 +72,7 @@ def prepare_data(x_columns: list[dict], y_column: dict, rows: list[dict]) -> tup
     conflicts = [(key, items) for key, items in groups.items() if len({item["result"] for item in items}) > 1]
     checks = dict(
         selectedRowCount=len(rows), usableRowCount=len(targets), excludedRowCount=len(rows) - len(targets),
+        sourceExperimentIds=source_experiments,
         fields=fields,
         constantXColumns=[dict(code=f["code"], name=f["name"]) for f in fields[:-1] if f["distinctCount"] == 1],
         duplicateInputGroupCount=sum(len(items) > 1 for items in groups.values()),
@@ -81,6 +83,33 @@ def prepare_data(x_columns: list[dict], y_column: dict, rows: list[dict]) -> tup
                                   records=items[:5], rowCount=len(items)) for key, items in conflicts[:5]],
     )
     return np.asarray(features, dtype=object), np.asarray(targets, dtype=float if y_column["kind"] == "NUMERIC" else str), checks
+
+
+def validation_groups(features: list[dict] | np.ndarray, experiment_ids: list[str]) -> tuple[np.ndarray, str]:
+    """Keep both replicates and all groups from one source experiment in one fold."""
+    parent = list(range(len(features)))
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+    seen_x, seen_experiments = {}, {}
+    for index, row in enumerate(features):
+        key = tuple(sorted(row.items()))
+        if key in seen_x:
+            parent[find(index)] = find(seen_x[key])
+        else:
+            seen_x[key] = index
+        experiment = experiment_ids[index] if index < len(experiment_ids) else ""
+        if experiment:
+            if experiment in seen_experiments:
+                parent[find(index)] = find(seen_experiments[experiment])
+            else:
+                seen_experiments[experiment] = index
+    roots = [find(index) for index in range(len(features))]
+    ids = {root: index for index, root in enumerate(dict.fromkeys(roots))}
+    grouping = "EXPERIMENT_AND_IDENTICAL_X" if seen_experiments else "IDENTICAL_X"
+    return np.asarray([ids[root] for root in roots]), grouping
 
 
 class NonConstantFeatures(TransformerMixin, BaseEstimator):

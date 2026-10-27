@@ -488,6 +488,25 @@ public class TemplateWorkspaceService {
         if (experiment.summary().status() == ExperimentStatus.VOIDED) {
             throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "作废实验不支持另存为模板");
         }
+        var labSource=currentExperimentSnapshot(experiment);
+        if(com.jsd.aird.shared.lab.LabWorkbook.supported(labSource)&&experiment.templateVersionId()!=null) {
+            var source=get(experiment.templateVersionId());
+            authorizationService.require(new PermissionCheck(actor.organizationId(),actor.userId(),"template.update","TEMPLATE",source.versionId(),"WRITE"));
+            if(source.status()!=TemplateStatus.PUBLISHED)throw new ApiException(ApiErrorCode.BAD_REQUEST,"公共模板已有更新，请从当前发布版本创建修订");
+            if(repository.findPublishedDataTemplates(actor.organizationId()).stream().noneMatch(item->item.versionId().equals(source.versionId())))throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"公共模板已有新版本，请先合并到当前发布版本再申请发布");
+            var model=experiment.editModel();if(model.path("templateInstance").path("issues").size()>0)throw new ApiException(ApiErrorCode.BINDING_INVALID,"请先确认实验中的新增字段和配方数据");
+            var draft=createRevision(source.versionId());
+            var clean=com.jsd.aird.shared.lab.LabWorkbook.blank(labSource);
+            var definition=(ObjectNode)com.jsd.aird.shared.lab.LabWorkbook.definition(clean);
+            for(var f:definition.path("fields"))if(f.path("local").asBoolean())((ObjectNode)f).put("local",false).put("confirmed",true).put("trainingEligible",true);
+            var pack=new UnifiedLabTemplateCatalog(objectMapper).describe(source.templateCode(),clean,objectMapper.createObjectNode());
+            var p=pack.payload();var staged=stageWorkbookSnapshot(p.path("snapshot"),draft.versionId(),actor);
+            var layout=(ObjectNode)p.path("layout");layout.put("derivedFromVersionId",source.versionId().toString());
+            var empty=objectMapper.createObjectNode();var hash=canonicalizer.workspaceHash(draft.versionId().toString(),p.path("schema"),p.path("mapping"),empty,staged.sha256(),source.editorAppVersion(),source.pluginManifestHash());
+            if(repository.updateDraft(new TemplateRepository.DraftUpdate(actor.organizationId(),draft.versionId(),draft.lockVersion(),p.path("schema"),layout,staged.id(),staged.sha256(),source.editorAppVersion(),source.pluginManifestHash(),source.snapshotFormatVersion(),canonicalizer.hash(p.path("schema")),canonicalizer.hash(p.path("mapping")),canonicalizer.hash(empty),hash,false,actor.userId()))==0)throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
+            repository.replaceMappings(draft.versionId(),source.format(),p.path("mapping"));requestFileActivation(staged.id());
+            return get(draft.versionId());
+        }
         var name = trimToNull(requestedName);
         if (name == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "模板名称不能为空");
         if (name.length() > 160) throw new ApiException(ApiErrorCode.BAD_REQUEST, "模板名称不能超过 160 个字符");
@@ -1804,6 +1823,7 @@ public class TemplateWorkspaceService {
         var layoutSummary = objectMapper.createObjectNode()
                 .put("reconciliationRequired", source.reconciliationRequired())
                 .put("derivedFromVersionId", sourceVersionId.toString());
+        if(source.inlineSnapshot().isObject())layoutSummary.set("initialSnapshot",source.inlineSnapshot().deepCopy());
         if (source.documentStructure().isObject()) layoutSummary.set("documentStructure", source.documentStructure().deepCopy());
         if (source.origin() != null && source.origin().isObject()) layoutSummary.set("origin", source.origin().deepCopy());
         if (source.wordDocument().isObject()) {

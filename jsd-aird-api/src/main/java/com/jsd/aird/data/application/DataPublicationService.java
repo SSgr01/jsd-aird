@@ -365,6 +365,7 @@ public class DataPublicationService {
             payload.set("mappings", json.valueToTree(repository.listMappings(org(), jobId)));
             if(includeRows)payload.set("rows", json.valueToTree(repository.listRows(org(), jobId)));
             payload.set("issues", json.valueToTree(repository.listIssues(org(), jobId)));
+            repository.findWorkbookDraft(org(),jobId).ifPresent(draft->payload.set("workbookDraft",json.valueToTree(draft)));
         }
         return payload;
     }

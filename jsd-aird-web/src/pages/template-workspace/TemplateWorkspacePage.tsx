@@ -84,7 +84,7 @@ import {
   hasUnplacedWordFields,
   type PublishReviewSyncState,
 } from '@/features/template-workspace/publish-readiness';
-import { migrateWorkspaceStructure } from '@/features/template-workspace/structure-migration';
+import { createWorkbookInstance, type WorkbookTemplateInstance } from '@/features/template-workspace/workbook-instance';
 import {
   locatorLabelRange,
   locatorValueRange,
@@ -1425,7 +1425,7 @@ export function TemplateWorkspacePage() {
         : binding,
     );
     setMapping(updatedMapping);
-    if (update.name !== undefined && update.name !== currentField.name) {
+    if (workspace?.format !== 'XLSX' && update.name !== undefined && update.name !== currentField.name) {
       const binding = updatedMapping.find((item) => bindingMatchesIdentity(item, {
         bindingId: currentField.bindingId,
         relationId: currentField.relationId,
@@ -1747,20 +1747,12 @@ export function TemplateWorkspacePage() {
     [fieldModel.fields, fieldModel.groups, mapping, markDirty, message, recognitionReview, versionId],
   );
 
-  const handleStructureChange = useCallback(
-    (operation: WorkbookStructureOperation) => {
-      const { mapping, fieldModel, schema } = latestSaveRef.current;
-      const migrated = migrateWorkspaceStructure(mapping, fieldModel, operation);
-      const nextSchema = writeFieldModel(schema, migrated.model);
-      latestSaveRef.current = { ...latestSaveRef.current, mapping: migrated.mapping, fieldModel: migrated.model, schema: nextSchema };
-      setMapping(migrated.mapping);
-      setFieldModel(migrated.model);
-      setSchema(nextSchema);
-      setStructureOperations((current) => [...current, operation]);
-      markDirty();
-    },
-    [markDirty],
-  );
+  const handleInstanceChange = useCallback((instance: WorkbookTemplateInstance) => {
+    const { schema } = latestSaveRef.current;
+    const nextSchema = writeFieldModel({ ...schema, ...(instance.execution ? { 'x-jsd-experiment-import': instance.execution } : {}) }, instance.model);
+    latestSaveRef.current = { ...latestSaveRef.current, mapping: instance.mapping, fieldModel: instance.model, schema: nextSchema };
+    setMapping(instance.mapping); setFieldModel(instance.model); setSchema(nextSchema); markDirty();
+  }, [markDirty]);
 
   const addField = (groupId?: string) => {
     if (!versionId) return;
@@ -2282,7 +2274,9 @@ export function TemplateWorkspacePage() {
                     onEditorLabel={handleEditorLabel}
                     onSelectionChange={handleSelection}
                     onUnboundCellChange={handleUnboundCellChange}
-                    onStructureChange={handleStructureChange}
+                    instance={createWorkbookInstance(fieldModel, mapping, readExperimentImport(schema))}
+                    onInstanceChange={handleInstanceChange}
+                    onStructureChange={operation => setStructureOperations(current => [...current, operation])}
                   />
                 ) : (
                   <div className={editable ? undefined : 'document-readonly'}>
@@ -2303,6 +2297,8 @@ export function TemplateWorkspacePage() {
                 fieldModel={fieldModel}
                 mapping={mapping}
                 selectedFieldId={selectedFieldId}
+                selection={activeSelection}
+                onFocusBinding={(binding) => editorRef.current?.focusBinding(binding)}
                 selectedRecognitionItemId={selectedRecognitionItemId}
                 selectedQualityIssueId={selectedQualityIssueId}
                 picking={picking}

@@ -63,6 +63,13 @@ public final class SnapshotWorkbookExporter {
             }
             copyImages(snapshot, workbook, names);
             copyCellImages(snapshot, workbook, names);
+            if(com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot))writeLabMetadata(workbook,snapshot);
+            else if(com.jsd.aird.shared.excel.WorkbookStructure.instance(snapshot).isObject()) {
+                var encoded=objectMapper.writeValueAsString(com.jsd.aird.shared.excel.WorkbookStructure.metadata(objectMapper,snapshot));
+                var meta=workbook.createSheet(com.jsd.aird.shared.excel.WorkbookStructure.META_SHEET);int row=0;
+                for(int i=0;i<encoded.length();i+=30000)meta.createRow(row++).createCell(0).setCellValue(encoded.substring(i,Math.min(encoded.length(),i+30000)));
+                workbook.setSheetVisibility(workbook.getSheetIndex(meta),SheetVisibility.VERY_HIDDEN);
+            }
             if (manifest != null) writeManifest(workbook, manifest);
             workbook.setForceFormulaRecalculation(true);
             workbook.write(output);
@@ -349,7 +356,15 @@ public final class SnapshotWorkbookExporter {
                 var sourceCell = cellEntry.getValue();
                 if (sourceCell.has("f")) {
                     var formula = sourceCell.path("f").asText().replaceFirst("^=", "");
-                    if (!formula.isBlank()) cell.setCellFormula(formula);
+                    if (!formula.isBlank()) {
+                        cell.setCellFormula(formula);
+                        // POI setters retain the formula and populate its cached result.
+                        // Excel still recalculates on open; readers/print previews also
+                        // receive the current snapshot result (including numeric zero).
+                        if (sourceCell.path("v").isNumber()) cell.setCellValue(sourceCell.path("v").asDouble());
+                        else if (sourceCell.path("v").isBoolean()) cell.setCellValue(sourceCell.path("v").asBoolean());
+                        else if (sourceCell.hasNonNull("v")) cell.setCellValue(sourceCell.path("v").asText());
+                    }
                 } else if (sourceCell.path("v").isBoolean()) cell.setCellValue(sourceCell.path("v").asBoolean());
                 else if (sourceCell.path("v").isNumber()) cell.setCellValue(sourceCell.path("v").asDouble());
                 else if (sourceCell.has("v")) cell.setCellValue(sourceCell.path("v").asText());
@@ -400,6 +415,7 @@ public final class SnapshotWorkbookExporter {
             var columnSplit = Math.max(0, freeze.path("xSplit").asInt(freeze.path("startColumn").asInt(0)));
             if (rowSplit > 0 || columnSplit > 0) target.createFreezePane(columnSplit, rowSplit);
         }
+        WorkbookPrintSettings.apply(source,target);
     }
 
     private XSSFCellStyle createStyle(XSSFWorkbook workbook, JsonNode source) {
@@ -448,6 +464,13 @@ public final class SnapshotWorkbookExporter {
         putText(sheet, 2, "schemaHash", manifest.schemaHash()); putText(sheet, 3, "mappingHash", manifest.mappingHash());
         putText(sheet, 4, "source", manifest.source()); if (manifest.revisionId() != null) putText(sheet, 5, "revisionId", manifest.revisionId());
         workbook.setSheetVisibility(workbook.getSheetIndex(sheet), SheetVisibility.VERY_HIDDEN);
+    }
+
+    private void writeLabMetadata(XSSFWorkbook workbook,JsonNode snapshot) throws Exception {
+        var encoded=objectMapper.writeValueAsString(com.jsd.aird.shared.lab.LabWorkbook.metadata(objectMapper,snapshot));
+        var sheet=workbook.createSheet(com.jsd.aird.shared.lab.LabWorkbook.META_SHEET);
+        int row=0;for(int i=0;i<encoded.length();i+=30000)sheet.createRow(row++).createCell(0).setCellValue(encoded.substring(i,Math.min(encoded.length(),i+30000)));
+        workbook.setSheetVisibility(workbook.getSheetIndex(sheet),SheetVisibility.VERY_HIDDEN);
     }
 
     private void putText(org.apache.poi.ss.usermodel.Sheet sheet, int rowIndex, String key, String value) {

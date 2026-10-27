@@ -1,6 +1,4 @@
 import {
-  CheckCircleOutlined,
-  ExclamationCircleOutlined,
   EyeOutlined,
   SelectOutlined,
 } from '@ant-design/icons';
@@ -134,9 +132,6 @@ export function ExperimentSemanticsPanel({
 
   return (
     <section className="experiment-semantics-pane" role="tabpanel">
-      <div className="field-manager-help experiment-data-help">
-        这里配置导入时如何整理实验数据：识别实验、样品、配方或批次编号，关联配方材料和用量，并归类测试结果。通常由系统自动完成，只需处理下方标出的异常。
-      </div>
       <div className="experiment-semantic-summary">
         <div>
           <span>系统已识别为</span>
@@ -156,20 +151,11 @@ export function ExperimentSemanticsPanel({
         </div>
       </div>
 
-      <Alert
-        showIcon
-        type={issueCount ? 'warning' : 'success'}
-        icon={issueCount ? <ExclamationCircleOutlined /> : <CheckCircleOutlined />}
-        message={issueCount ? '实验数据已识别，请处理标出的项目' : '实验数据设置已完成'}
-        description={issueCount
-          ? '系统已自动整理大部分字段，无需逐项设置。请只处理下方标出的内容。'
-          : '系统已根据字段名称和表格结构生成导入设置。'}
-        action={(
+      <div className="experiment-semantic-actions">
           <Button size="small" icon={<EyeOutlined />} onClick={() => setShowDetails((value) => !value)}>
             {showDetails ? '收起结果' : '查看结果'}
           </Button>
-        )}
-      />
+      </div>
 
       {showDetails && (
         <div className="field-property-section experiment-semantics-list">

@@ -35,11 +35,17 @@ public final class HistorySampleProjection {
                 var values=row.putObject("values");var refs=row.putObject("sourceRefs");var states=row.putObject("cellStates");var conflicts=new HashSet<String>();
                 for(var domain:List.of("formulaItems","processSteps","testResults"))for(var item:observations(model,domain)) {
                     if(!belongs(item,group,groups))continue;
+                    if(item.has("trainingEligible")&&!item.path("trainingEligible").asBoolean())continue;
                     var label=text(item,"targetName","testItem","materialName","labelPath","operation","name","field");
                     if(label.isBlank()||metadata(label))continue;
                     boolean formula=domain.equals("formulaItems");
                     var unit=cleanUnit(text(item,"unit","rawUnit"));
                     var raw=raw(model,item,formula?"ratio":"value");
+                    boolean massAmount=formula&&"MASS_AMOUNT".equals(item.path("compositionBasis").asText());
+                    if(massAmount&&item.path("actualQty").isNumber())raw=item.path("actualQty");
+                    if(!formula&&item.path("valueStatus").asText().matches("NOT_MEASURED|NOT_APPLICABLE"))continue;
+                    if(!formula&&item.path("parseStatus").asText().matches("LIMIT|RANGE|CONFLICT"))continue;
+                    if(!formula&&!item.has("direction")&&item.path("value").isNumber()&&"EXACT".equals(item.path("parseStatus").asText()))raw=item.path("value");
                     if(unit.isBlank()&&snapshotPercentage(model,item))unit="%";
                     if(unit.isBlank())unit=MeasurementValueParser.inferredUnit(raw.asText());
                     if(unit.isBlank()&&label.matches(".*[/／][µμu]m$"))unit="μm";
@@ -59,7 +65,7 @@ public final class HistorySampleProjection {
                                 &&(codeId==null||!suppliedId.equals(codeId));
                         var materialId=identityConflict?"":!suppliedId.isBlank()?suppliedId:Objects.toString(codeId,"");
                         var basis=text(item,"compositionBasis","basis");
-                        column.put("semanticType","MATERIAL_RATIO")
+                        column.put("semanticType",massAmount?"MATERIAL_AMOUNT":"MATERIAL_RATIO")
                                 .put("mappingStatus",materialId.isBlank()?"UNMAPPED":"MAPPED")
                                 .put("compositionBasis",basis.isBlank()?"UNSPECIFIED":basis);
                         if(!materialId.isBlank()) {
@@ -73,7 +79,7 @@ public final class HistorySampleProjection {
                             code="ratio-unmapped:"+datasetId+":"+normal(materialCode.isBlank()?identity:materialCode)
                                     +"|"+normal(unit)+"|"+normal(basis);
                         }
-                        var ratioName=label.endsWith("比例")?label:label+"比例";
+                        var ratioName=massAmount?label+"用量":label.endsWith("比例")?label:label+"比例";
                         column.put("name",ratioName);
                     } else {
                         var method=text(item,"testMethod");var stage=text(item,"testStage");
@@ -94,7 +100,7 @@ public final class HistorySampleProjection {
                     var prior=columns.putIfAbsent(code,column);
                     if(prior!=null&&numeric)prior.put("kind","NUMERIC");
                     var locations=refs.withArray(code);item.path("sourceRefs").forEach(ref -> locations.add(ref.deepCopy()));
-                    if(number!=null&&snapshotPercentage(model,item)) {
+                    if(number!=null&&!item.has("valueStatus")&&snapshotPercentage(model,item)) {
                         if(!Set.of("%","PERCENT").contains(unit)) {
                             states.put(code,"CONFLICT");
                             issue(issues,row,code,raw,"原单元格使用百分比格式，但字段单位为“"+unit+"”，请确认原始单位后再使用");
@@ -110,7 +116,8 @@ public final class HistorySampleProjection {
                     JsonNode value=number!=null?json.getNodeFactory().numberNode(number):raw;
                     if(numeric&&number==null) {issue(issues,row,code,raw,"请将实测数值与观察描述分开填写，并确认单位和判定方法");continue;}
                     if(value.asText().contains("\n")&&categorical){issue(issues,row,code,raw,"包含多个等级或结果，请在指标映射中确认最终结果的判定规则");continue;}
-                    put(values,conflicts,code,value,issues,row);
+                    if(massAmount&&value.isNumber()&&values.path(code).isNumber())values.put(code,values.path(code).decimalValue().add(value.decimalValue()));
+                    else put(values,conflicts,code,value,issues,row);
                 }
                 // Native single-sample fields remain usable. Imported layout keys require an explicit sample association.
                 model.path("dynamicValues").fields().forEachRemaining(entry->{

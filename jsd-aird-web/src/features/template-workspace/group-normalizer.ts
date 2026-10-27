@@ -76,12 +76,15 @@ export function normalizeFieldModel(model: FieldModel): FieldModel {
   const pathFor = (field: FieldModel['fields'][number], visiting = new Set<string>()): string[] => {
     if (visiting.has(field.id)) return [field.name].filter(Boolean);
     const explicitPath = (field.pathSegments ?? []).map((segment) => segment.trim()).filter(Boolean);
+    const parent = field.parentFieldId ? fieldsById.get(field.parentFieldId) : undefined;
+    if (parent?.structuralOnly && (explicitPath.length <= 1 || explicitPath[0] === parent.name)) {
+      return [groups.find(group => group.id === field.groupId)?.name ?? '', ...explicitPath.slice(1, -1), field.name].filter(Boolean);
+    }
     // Recognition can provide a semantic path even when the physical parent
     // region is intentionally not represented as a business field. Preserve
     // that path instead of collapsing every table child to the same name.
     if (explicitPath.length > 1) return explicitPath;
     const nextVisiting = new Set(visiting).add(field.id);
-    const parent = field.parentFieldId ? fieldsById.get(field.parentFieldId) : undefined;
     return [
       ...(parent ? pathFor(parent, nextVisiting) : []),
       field.name,

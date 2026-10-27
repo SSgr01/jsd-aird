@@ -14,6 +14,15 @@ import java.util.concurrent.*;
 import static org.assertj.core.api.Assertions.*;
 
 class CapacityFilterTest {
+    @Test void workbookDraftUsesTheExistingWorkspacePayloadAndHeavyBudget()throws Exception {
+        var filter=filter(Map.of("app.capacity.json-bytes",16,"app.capacity.workspace-json-bytes",64));
+        for(var owner:List.of("import-jobs","experiment-import-jobs")) {
+            var request=new MockHttpServletRequest("PUT","/api/v1/data/"+owner+"/id/workbook-draft");request.setContent(new byte[32]);
+            var response=new MockHttpServletResponse();
+            filter.doFilter(request,response,(req,res)->{assertThat(OperationBudget.kind()).isEqualTo(OperationBudget.Kind.HEAVY);req.getInputStream().readAllBytes();});
+            assertThat(response.getStatus()).isEqualTo(200);
+        }
+    }
     @Test void earlyCapacityErrorsKeepCorsAndTheRequestId()throws Exception{
         var filter=filter(Map.of("app.capacity.json-bytes",16));
         var configuration=new org.springframework.web.cors.CorsConfiguration();configuration.setAllowedOrigins(List.of("https://client.example"));configuration.setAllowedMethods(List.of("POST"));configuration.setExposedHeaders(List.of("Retry-After","X-Request-Id"));configuration.setAllowCredentials(true);

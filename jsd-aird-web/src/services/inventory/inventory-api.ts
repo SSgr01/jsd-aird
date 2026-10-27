@@ -64,6 +64,8 @@ export interface SampleDispatch {
   businessDate: string;
   productId: string;
   productName: string;
+  specification?: string;
+  packageQuantity?: number;
   scope: InventoryScope;
   quantityKg: number;
   customerId?: string;
@@ -78,6 +80,7 @@ export interface SampleDispatch {
   senderName?: string;
   customerRequirement?: string;
   customerFeedback?: string;
+  status: 'PENDING' | 'COMPLETED';
   transactionId: string;
   operator: string;
   createdAt: string;
@@ -94,10 +97,29 @@ export interface Shipment {
   customerId?: string;
   customerName: string;
   senderName?: string;
+  batchNo?: string;
+  specification?: string;
+  packageQuantity?: number;
+  totalQuantityKg?: number;
+  recipientName?: string;
+  recipientPhone?: string;
+  shippingAddress?: string;
+  courierCompany?: string;
+  trackingNo?: string;
   note?: string;
-  transactionId: string;
+  coaNo?: string;
+  status: 'PENDING' | 'COMPLETED';
+  transactionId?: string;
   operator: string;
   createdAt: string;
+}
+export interface ShipmentHeader {
+  id: string;
+  shipmentNo: string;
+  businessDate: string;
+  detailCount: number;
+  completedCount: number;
+  totalQuantityKg: number;
 }
 export interface InventoryTransactionUpdateInput {
   revision: string;
@@ -111,7 +133,9 @@ export interface SampleDispatchUpdateInput {
   revision: string;
   dispatchNo: string;
   businessDate: string;
-  customerId: string;
+  specification?: string;
+  packageQuantity?: number;
+  customerId?: string;
   recipientName: string;
   recipientPhone?: string;
   sampleAddress?: string;
@@ -122,6 +146,7 @@ export interface SampleDispatchUpdateInput {
   senderName?: string;
   customerRequirement?: string;
   customerFeedback?: string;
+  status?: 'PENDING' | 'COMPLETED';
 }
 export interface ShipmentUpdateInput {
   revision: string;
@@ -129,7 +154,15 @@ export interface ShipmentUpdateInput {
   businessDate: string;
   customerId: string;
   senderName?: string;
+  batchNo?: string;
+  recipientName?: string;
+  recipientPhone?: string;
+  shippingAddress?: string;
+  courierCompany?: string;
+  trackingNo?: string;
   note?: string;
+  coaNo?: string;
+  status?: 'PENDING' | 'COMPLETED';
 }
 export interface InitialImport {
   id: string;
@@ -245,6 +278,13 @@ export const inventoryApi = {
       })
     ).data.data;
   },
+  async sampleRecipientPreference(customerId: string) {
+    return (
+      await httpClient.get<ApiResponse<{ recipientName: string; recipientPhone: string; sampleAddress: string } | null>>(
+        `/api/v1/inventory/samples/recipient-preference/${customerId}`,
+      )
+    ).data.data;
+  },
   async createSample(input: Record<string, unknown>) {
     return (
       await httpClient.post<ApiResponse<SampleDispatch>>('/api/v1/inventory/samples', input, {
@@ -252,9 +292,36 @@ export const inventoryApi = {
       })
     ).data.data;
   },
+  async createSampleForNewCustomer(sample: Record<string, unknown>, customerName: string) {
+    return (
+      await httpClient.post<ApiResponse<SampleDispatch>>(
+        '/api/v1/inventory/samples/new-customer',
+        { sample, customerName },
+        { headers: { 'Idempotency-Key': key(sample, `SAMPLE:${typeof sample.dispatchNo === 'string' ? sample.dispatchNo : ''}`) } },
+      )
+    ).data.data;
+  },
+  async updateSampleStatuses(ids: string[]) {
+    return (
+      await httpClient.put<ApiResponse<number>>('/api/v1/inventory/samples/status', { ids, status: 'COMPLETED' })
+    ).data.data;
+  },
+  async updateShipmentStatuses(ids: string[]) {
+    return (
+      await httpClient.put<ApiResponse<number>>('/api/v1/inventory/shipments/status', { ids, status: 'COMPLETED' })
+    ).data.data;
+  },
   async updateSample(id: string, input: SampleDispatchUpdateInput) {
     return (
       await httpClient.put<ApiResponse<SampleDispatch>>(`/api/v1/inventory/samples/${id}`, input)
+    ).data.data;
+  },
+  async updateSampleForNewCustomer(id: string, sample: SampleDispatchUpdateInput, customerName: string) {
+    return (
+      await httpClient.put<ApiResponse<SampleDispatch>>(
+        `/api/v1/inventory/samples/${id}/new-customer`,
+        { sample, customerName },
+      )
     ).data.data;
   },
   async shipments(params: Record<string, unknown> = {}) {
@@ -262,16 +329,70 @@ export const inventoryApi = {
       await httpClient.get<ApiResponse<Page<Shipment>>>('/api/v1/inventory/shipments', { params })
     ).data.data;
   },
+  async shipmentHeaders(params: Record<string, unknown> = {}) {
+    return (await httpClient.get<ApiResponse<Page<ShipmentHeader>>>('/api/v1/inventory/shipment-headers', { params })).data.data;
+  },
+  async shipmentHeader(shipmentNo: string) {
+    return (await httpClient.get<ApiResponse<ShipmentHeader>>(`/api/v1/inventory/shipment-headers/${encodeURIComponent(shipmentNo)}`)).data.data;
+  },
+  async shipmentDetails(shipmentNo: string, params: Record<string, unknown> = {}) {
+    return (await httpClient.get<ApiResponse<Page<Shipment>>>(`/api/v1/inventory/shipment-headers/${encodeURIComponent(shipmentNo)}/details`, { params })).data.data;
+  },
+  async completeShipmentHeader(shipmentNo: string) {
+    return (await httpClient.put<ApiResponse<number>>(
+      `/api/v1/inventory/shipment-headers/${encodeURIComponent(shipmentNo)}/status`,
+    )).data.data;
+  },
+  async completeShipmentHeaders(shipmentNos: string[]) {
+    return (await httpClient.put<ApiResponse<{ headerCount: number; detailCount: number }>>(
+      '/api/v1/inventory/shipment-headers/status', { shipmentNos },
+    )).data.data;
+  },
+  async createShipmentHeader(input: { shipmentNo: string; businessDate: string }) {
+    return (await httpClient.post<ApiResponse<ShipmentHeader>>('/api/v1/inventory/shipment-headers', input)).data.data;
+  },
+  async updateShipmentHeaderDate(shipmentNo: string, businessDate: string) {
+    return (await httpClient.put<ApiResponse<ShipmentHeader>>(
+      `/api/v1/inventory/shipment-headers/${encodeURIComponent(shipmentNo)}`, { shipmentNo, businessDate },
+    )).data.data;
+  },
+  async createShipmentBatch(shipmentNo: string, details: Record<string, unknown>[]) {
+    return (await httpClient.post<ApiResponse<Shipment[]>>(
+      `/api/v1/inventory/shipment-headers/${encodeURIComponent(shipmentNo)}/details/batch`, details,
+    )).data.data;
+  },
+  async importShipment(shipmentNo: string, details: Record<string, unknown>[]) {
+    return (await httpClient.post<ApiResponse<Shipment[]>>(
+      `/api/v1/inventory/shipment-headers/${encodeURIComponent(shipmentNo)}/import`, details,
+    )).data.data;
+  },
   async createShipment(input: Record<string, unknown>) {
     return (
       await httpClient.post<ApiResponse<Shipment>>('/api/v1/inventory/shipments', input, {
-        headers: { 'Idempotency-Key': key(input, `SHIPMENT:${String(input.shipmentNo ?? '')}`) },
+        headers: { 'Idempotency-Key': key(input, '') },
       })
+    ).data.data;
+  },
+  async createShipmentForNewCustomer(shipment: Record<string, unknown>, customerName: string) {
+    return (
+      await httpClient.post<ApiResponse<Shipment>>(
+        '/api/v1/inventory/shipments/new-customer',
+        { shipment, customerName },
+        { headers: { 'Idempotency-Key': key(shipment, '') } },
+      )
     ).data.data;
   },
   async updateShipment(id: string, input: ShipmentUpdateInput) {
     return (
       await httpClient.put<ApiResponse<Shipment>>(`/api/v1/inventory/shipments/${id}`, input)
+    ).data.data;
+  },
+  async updateShipmentForNewCustomer(id: string, shipment: ShipmentUpdateInput, customerName: string) {
+    return (
+      await httpClient.put<ApiResponse<Shipment>>(
+        `/api/v1/inventory/shipments/${id}/new-customer`,
+        { shipment, customerName },
+      )
     ).data.data;
   },
   async uploadInitial(file: File) {

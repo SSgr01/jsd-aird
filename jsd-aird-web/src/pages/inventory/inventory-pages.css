@@ -149,6 +149,89 @@
   margin: 6px 0;
 }
 
+.shipment-sheet-layout {
+  width: min(100%, 1100px);
+  margin: 0 auto;
+}
+.inventory-record-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+.inventory-record-actions > .ant-space {
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
+.shipment-sheet-actions,
+.shipment-sheet-pagination {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+}
+.shipment-sheet-pagination {
+  justify-content: flex-end;
+  color: #475467;
+}
+.shipment-sheet-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.shipment-sheet-mobile-title { display: none; }
+.shipment-sheet {
+  width: 100%;
+  min-width: 720px;
+  table-layout: fixed;
+  border-collapse: collapse;
+  background: #fff;
+  color: #263238;
+  font-size: 14px;
+}
+.shipment-sheet th,
+.shipment-sheet td {
+  height: 33px;
+  padding: 5px 8px;
+  border: 1px solid #aeb7b0;
+  text-align: center;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+.shipment-sheet thead .shipment-sheet-title th {
+  height: 42px;
+  font-size: 22px;
+  letter-spacing: 0;
+}
+.shipment-sheet thead .shipment-sheet-date th {
+  height: 32px;
+}
+.shipment-sheet .shipment-sheet-customer { width: 11%; }
+.shipment-sheet .shipment-sheet-product { width: 17%; }
+.shipment-sheet .shipment-sheet-batch { width: 11%; }
+.shipment-sheet .shipment-sheet-number { width: 10%; }
+.shipment-sheet .shipment-sheet-courier { width: 14%; }
+.shipment-sheet .shipment-sheet-note { width: 17%; }
+.shipment-sheet tbody tr:not(.shipment-sheet-empty):hover {
+  background: #f2f5f3;
+}
+.shipment-sheet-select,
+.shipment-sheet-note-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  gap: 6px;
+}
+.shipment-sheet-select input { flex: none; }
+.shipment-sheet-select span,
+.shipment-sheet-note-content span { min-width: 0; }
+.shipment-sheet-select .anticon { color: #28734b; }
+.shipment-sheet-note-content .ant-btn { flex: none; color: #475467; }
+.shipment-sheet-empty td { height: 33px; }
+
 @media (max-width: 900px) {
   .inventory-page {
     padding: 20px 16px;
@@ -170,6 +253,29 @@
 }
 
 @media (max-width: 600px) {
+  .shipment-sheet-mobile-title {
+    display: block;
+    height: 42px;
+    padding: 7px 8px;
+    border: 1px solid #aeb7b0;
+    border-bottom: 0;
+    background: #fff;
+    color: #263238;
+    text-align: center;
+    font-size: 20px;
+  }
+  .shipment-sheet-title { display: none; }
+  .inventory-record-actions { width: 100%; }
+  .inventory-heading > .ant-space {
+    width: 100%;
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+  .inventory-heading > .ant-space > .ant-space-item,
+  .inventory-heading > .ant-space > .ant-space-item > .ant-space {
+    max-width: 100%;
+    min-width: 0;
+  }
   .inventory-entry-modal .ant-row > .ant-col {
     max-width: 100%;
     flex: 0 0 100%;

@@ -88,13 +88,13 @@ class InventoryConcurrencyPostgresTest {
     @Test void concurrentShipmentFormsCannotOverwriteEachOther() throws Exception {
         var id=UUID.randomUUID();db.jdbc.update("INSERT INTO "+db.table("shipment")+"(id,organization_id,product_id,inventory_scope,shipment_no,business_date,quantity_kg,actor_id) VALUES(?,?,?,'RND','SHIP',current_date,1,?)",id,ORG,PRODUCT,USER);
         var original=repository.findShipment(ORG,id).orElseThrow().getRevision();
-        assertThat(race(i->service.updateShipment(id,new InventoryService.ShipmentUpdateInput(original,"SHIP",LocalDate.now(),USER,"sender","edit-"+i))))
+        assertThat(race(i->service.updateShipment(id,new InventoryService.ShipmentUpdateInput(original,"SHIP",LocalDate.now(),USER,"sender","edit-"+i,null,"recipient","123","address",null,null,null,null))))
             .containsExactlyInAnyOrder("saved","conflict");
     }
     @Test void concurrentSampleFormsCannotOverwriteEachOther() throws Exception {
         var id=UUID.randomUUID();db.jdbc.update("INSERT INTO "+db.table("sample")+"(id,organization_id,product_id,inventory_scope,dispatch_no,business_date,quantity_kg,actor_id) VALUES(?,?,?,'RND','SAMPLE',current_date,1,?)",id,ORG,PRODUCT,USER);
         var original=repository.findSample(ORG,id).orElseThrow().getRevision();
-        assertThat(race(i->service.updateSample(id,new InventoryService.SampleUpdateInput(original,"SAMPLE",LocalDate.now(),USER,"recipient","123",null,null,null,null,null,null,null,"edit-"+i))))
+        assertThat(race(i->service.updateSample(id,new InventoryService.SampleUpdateInput(original,"SAMPLE",LocalDate.now(),"1",BigDecimal.ONE,USER,"recipient","123","address",null,null,null,null,null,null,"edit-"+i,null))))
             .containsExactlyInAnyOrder("saved","conflict");
     }
     @Test void failureAfterLedgerWriteRollsBackLedgerAndBalanceTogether() {

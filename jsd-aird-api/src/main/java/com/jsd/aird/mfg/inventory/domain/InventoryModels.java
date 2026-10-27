@@ -27,12 +27,30 @@ public final class InventoryModels {
     public record Movement(UUID productId, Scope scope, Direction direction, String reason, BigDecimal quantityKg,
                            LocalDate businessDate, String documentNo, String businessType, UUID businessId, String note,
                            String actorName) {}
-    public record Sample(UUID id, String dispatchNo, LocalDate businessDate, UUID productId, String productName,
-                         Scope scope, BigDecimal quantityKg, UUID customerId, String customerName, String recipientName,
+    public record Sample(UUID id, String dispatchNo, LocalDate businessDate, UUID productId, String productName, String specification,
+                         Scope scope, BigDecimal quantityKg, BigDecimal packageQuantity, UUID customerId, String customerName, String recipientName,
                          String recipientPhone, String sampleAddress, String courierCompany, String trackingNo,
                          String clientContact, String clientContactPhone, String senderName, String customerRequirement,
-                         String customerFeedback, UUID transactionId, String operator, Instant createdAt) { public String getRevision(){return com.jsd.aird.shared.json.RevisionToken.ofRecord(this);} }
+                         String customerFeedback, String status, UUID transactionId, String operator, Instant createdAt) { public String getRevision(){return com.jsd.aird.shared.json.RevisionToken.ofRecord(this);} }
     public record Shipment(UUID id, String shipmentNo, LocalDate businessDate, UUID productId, String productName,
                            Scope scope, BigDecimal quantityKg, UUID customerId, String customerName, String senderName,
-                           String note, UUID transactionId, String operator, Instant createdAt) { public String getRevision(){return com.jsd.aird.shared.json.RevisionToken.ofRecord(this);} }
+                           String batchNo, String specification, BigDecimal packageQuantity, BigDecimal totalQuantityKg,
+                           String recipientName, String recipientPhone, String shippingAddress,
+                           String courierCompany, String trackingNo, String note, String status,
+                           UUID transactionId, String operator, Instant createdAt, String coaNo) {
+        public Shipment(UUID id, String shipmentNo, LocalDate businessDate, UUID productId, String productName,
+                        Scope scope, BigDecimal quantityKg, UUID customerId, String customerName, String senderName,
+                        String batchNo, String specification, BigDecimal packageQuantity, BigDecimal totalQuantityKg,
+                        String recipientName, String recipientPhone, String shippingAddress,
+                        String courierCompany, String trackingNo, String note, String status,
+                        UUID transactionId, String operator, Instant createdAt) {
+            this(id, shipmentNo, businessDate, productId, productName, scope, quantityKg, customerId, customerName,
+                    senderName, batchNo, specification, packageQuantity, totalQuantityKg, recipientName,
+                    recipientPhone, shippingAddress, courierCompany, trackingNo, note, status, transactionId,
+                    operator, createdAt, null);
+        }
+        public String getRevision(){return com.jsd.aird.shared.json.RevisionToken.ofRecord(this);}
+    }
+    public record ShipmentHeader(UUID id, String shipmentNo, LocalDate businessDate,
+                                 long detailCount, long completedCount, BigDecimal totalQuantityKg) {}
 }

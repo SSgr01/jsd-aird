@@ -36,14 +36,14 @@ class InventoryConsistencyTest {
     }
 
     @Test void staleShipmentCannotOverwriteCurrentDetailsAndRevisionSerializesWithoutRecursion(){
-        var current=new Shipment(id,"NEW",LocalDate.now(),product,"Product",Scope.RND,BigDecimal.ONE,null,null,"sender","new note",UUID.randomUUID(),"operator",Instant.EPOCH);
-        when(repository.findShipment(org,id)).thenReturn(Optional.of(current));
+        var current=new Shipment(id,"NEW",LocalDate.now(),product,"Product",Scope.RND,BigDecimal.ONE,null,null,"sender",null,"1",BigDecimal.ONE,BigDecimal.ONE,"recipient","123","address",null,null,"new note","PENDING",UUID.randomUUID(),"operator",Instant.EPOCH);
+        when(repository.lockShipment(org,id)).thenReturn(Optional.of(current));
         var json=new ObjectMapper().findAndRegisterModules().valueToTree(current);
         assertThat(json.get("revision").asText()).isEqualTo(current.getRevision());
-        assertThatThrownBy(()->service.updateShipment(id,new InventoryService.ShipmentUpdateInput("a".repeat(64),"OLD",LocalDate.now(),null,"old sender","old note")))
+        assertThatThrownBy(()->service.updateShipment(id,new InventoryService.ShipmentUpdateInput("a".repeat(64),"OLD",LocalDate.now(),null,"old sender","old note",null,"recipient","123","address",null,null,null,null)))
                 .isInstanceOf(ApiException.class).satisfies(e->assertThat(((ApiException)e).errorCode()).isEqualTo(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT));
         verify(repository).lockShipment(org,id);
-        verify(repository,never()).updateShipment(any(),any(),any(),any(),any(),any(),any(),any());
+        verify(repository,never()).updateShipment(any(),any(),any());
         verifyNoInteractions(audit);
     }
 }

@@ -136,6 +136,7 @@ export const qualityApi = {
     categoryId?: string;
     keyword?: string;
     projectId?: string;
+    status?: string;
     page: number;
     size: number;
   }, signal?: AbortSignal) =>
@@ -144,6 +145,10 @@ export const qualityApi = {
         params, signal,
       }),
     ),
+  recordByBusinessNo: async (type: QualityTypeId, businessNo: string) =>
+    data(await httpClient.get<ApiResponse<QualityRecord>>('/api/v1/quality/records/by-number', {
+      params: { type, businessNo },
+    })),
   record: async (id: string) =>
     data(await httpClient.get<ApiResponse<QualityRecord>>(`/api/v1/quality/records/${id}`)),
   renameRecord: async (id: string, input: {

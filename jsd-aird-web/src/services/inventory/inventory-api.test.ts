@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { httpClient } from '@/services/http/client';
 import { inventoryApi } from './inventory-api';
 
-vi.mock('@/services/http/client', () => ({ httpClient: { get: vi.fn(), post: vi.fn() } }));
+vi.mock('@/services/http/client', () => ({ httpClient: { get: vi.fn(), post: vi.fn(), put: vi.fn() } }));
 describe('inventoryApi', () => {
   beforeEach(() => vi.clearAllMocks());
   it('passes inventory filters to the balance endpoint', async () => {
@@ -54,6 +54,35 @@ describe('inventoryApi', () => {
         scope: 'RND',
       }),
     );
+  });
+  it('creates a shipment and customer together with a stable idempotency key', async () => {
+    vi.mocked(httpClient.post).mockResolvedValueOnce({ data: { data: { id: 'shipment-1' } } });
+    const shipment = { shipmentNo: 'CH-001', packageQuantity: 3, specification: '2.5', idempotencyKey: 'detail-request-1' };
+    await inventoryApi.createShipmentForNewCustomer(shipment, '新客户');
+    expect(httpClient.post).toHaveBeenCalledWith(
+      '/api/v1/inventory/shipments/new-customer',
+      { shipment, customerName: '新客户' },
+      { headers: { 'Idempotency-Key': 'detail-request-1' } },
+    );
+  });
+  it('marks selected shipments completed through the status endpoint', async () => {
+    vi.mocked(httpClient.put).mockResolvedValueOnce({ data: { data: 2 } });
+    await expect(inventoryApi.updateShipmentStatuses(['shipment-1', 'shipment-2'])).resolves.toBe(2);
+    expect(httpClient.put).toHaveBeenCalledWith('/api/v1/inventory/shipments/status', {
+      ids: ['shipment-1', 'shipment-2'], status: 'COMPLETED',
+    });
+  });
+  it('completes the pending details of one shipment header', async () => {
+    vi.mocked(httpClient.put).mockResolvedValueOnce({ data: { data: 2 } });
+    await expect(inventoryApi.completeShipmentHeader('CH 001')).resolves.toBe(2);
+    expect(httpClient.put).toHaveBeenCalledWith('/api/v1/inventory/shipment-headers/CH%20001/status');
+  });
+  it('sends selected shipment headers for bulk completion', async () => {
+    vi.mocked(httpClient.put).mockResolvedValueOnce({ data: { data: { headerCount: 2, detailCount: 3 } } });
+    await expect(inventoryApi.completeShipmentHeaders(['CH-1', 'CH-2'])).resolves.toEqual({ headerCount: 2, detailCount: 3 });
+    expect(httpClient.put).toHaveBeenCalledWith('/api/v1/inventory/shipment-headers/status', {
+      shipmentNos: ['CH-1', 'CH-2'],
+    });
   });
   it('uploads initial stock as multipart form data', async () => {
     vi.mocked(httpClient.post).mockResolvedValueOnce({

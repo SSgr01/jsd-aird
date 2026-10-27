@@ -54,7 +54,11 @@ public interface QualityDataStore {
     Category createCategory(UUID organizationId, UUID userId, String type, String name, String description);
     Category updateCategory(UUID organizationId, UUID categoryId, String name, String description);
     void deleteCategory(UUID organizationId, UUID categoryId);
-    PageResponse<RecordView> records(UUID organizationId, String role, String type, UUID categoryId, String keyword, UUID projectId, int page, int size);
+    PageResponse<RecordView> records(UUID organizationId, String role, String type, UUID categoryId, String keyword, UUID projectId, String status, int page, int size);
+    default PageResponse<RecordView> records(UUID organizationId, String role, String type, UUID categoryId, String keyword, UUID projectId, int page, int size) {
+        return records(organizationId, role, type, categoryId, keyword, projectId, null, page, size);
+    }
+    Optional<RecordView> recordByBusinessNo(UUID organizationId, String role, String type, String businessNo);
     RecordView record(UUID organizationId, UUID recordId);
     RecordView record(UUID organizationId, String role, UUID recordId);
     List<VersionView> versions(UUID organizationId, UUID recordId);

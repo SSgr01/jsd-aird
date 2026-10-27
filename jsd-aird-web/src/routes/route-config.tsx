@@ -25,6 +25,7 @@ const InventoryQueryPage = routePage(async () => ({ default: (await import('@/pa
 const InventoryLedgerPage = routePage(async () => ({ default: (await import('@/pages/inventory/InventoryPages')).InventoryLedgerPage }));
 const SampleRecordsPage = routePage(async () => ({ default: (await import('@/pages/inventory/InventoryPages')).SampleRecordsPage }));
 const ShipmentRecordsPage = routePage(async () => ({ default: (await import('@/pages/inventory/InventoryPages')).ShipmentRecordsPage }));
+const ShipmentDetailsPage = routePage(async () => ({ default: (await import('@/pages/inventory/InventoryPages')).ShipmentDetailsPage }));
 const InventoryControlPage = routePage(async () => ({ default: (await import('@/pages/inventory/InventoryControlPage')).InventoryControlPage }));
 const KnowledgeDocumentPage = routePage(async () => ({ default: (await import('@/pages/knowledge/KnowledgeDocumentPage')).KnowledgeDocumentPage }));
 const KnowledgeUploadTaskDetailPage = routePage(async () => ({ default: (await import('@/pages/knowledge/KnowledgeUploadTaskDetailPage')).KnowledgeUploadTaskDetailPage }));
@@ -149,6 +150,7 @@ const applicationRoutes: RouteObject[] = [
       },
       { path: 'inventory/samples', element: <SampleRecordsPage /> },
       { path: 'inventory/shipments', element: <ShipmentRecordsPage /> },
+      { path: 'inventory/shipment-details', element: <ShipmentDetailsPage /> },
       { path: 'inventory/products', element: <InventoryControlPage mode="products" /> },
       { path: 'inventory/warnings', element: <InventoryControlPage mode="warnings" /> },
       { path: 'inventory/batches', element: <InventoryControlPage mode="batches" /> },

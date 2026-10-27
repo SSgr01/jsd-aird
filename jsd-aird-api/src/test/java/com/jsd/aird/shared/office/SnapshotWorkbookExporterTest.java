@@ -43,4 +43,20 @@ class SnapshotWorkbookExporterTest {
         var result = exporter.export(snapshot, mapping, objectMapper.createObjectNode(), null);
         assertThat(result.warnings()).extracting(SnapshotWorkbookExporter.Warning::code).contains("BINDING_MISSING");
     }
+    @Test
+    void keepsFormulaAndItsCurrentCachedResultIncludingZeroAndEmptyText() throws Exception {
+        var snapshot=objectMapper.readTree("""
+                {"sheetOrder":["s"],"sheets":{"s":{"id":"s","name":"Sheet1","cellData":{"0":{"0":{"f":"=1+2","v":3},"1":{"f":"=1-1","v":0},"2":{"f":"=T(1)","v":""}}}}}}
+                """);
+        var result=exporter.export(snapshot,objectMapper.createArrayNode(),objectMapper.createObjectNode(),null);
+        try(var workbook=new XSSFWorkbook(new ByteArrayInputStream(result.content()))) {
+            var row=workbook.getSheetAt(0).getRow(0);
+            assertThat(row.getCell(0).getCellType()).isEqualTo(org.apache.poi.ss.usermodel.CellType.FORMULA);
+            assertThat(row.getCell(0).getCellFormula()).isEqualTo("1+2");
+            assertThat(row.getCell(0).getNumericCellValue()).isEqualTo(3);
+            assertThat(row.getCell(1).getNumericCellValue()).isZero();
+            assertThat(row.getCell(2).getStringCellValue()).isEmpty();
+            assertThat(workbook.getForceFormulaRecalculation()).isTrue();
+        }
+    }
 }

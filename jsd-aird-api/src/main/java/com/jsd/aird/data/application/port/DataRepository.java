@@ -53,6 +53,10 @@ public interface DataRepository {
 
     Optional<Job> findJobForUpdate(UUID organizationId, UUID importJobId);
 
+    default Optional<WorkbookDraft> findWorkbookDraft(UUID organizationId, UUID importJobId) { return Optional.empty(); }
+    default void saveWorkbookDraft(UUID organizationId, UUID importJobId, JsonNode snapshot, JsonNode instance, JsonNode operations, UUID actorId) { throw new UnsupportedOperationException("Workbook draft storage is unavailable"); }
+    record WorkbookDraft(JsonNode snapshot, JsonNode instance, JsonNode operations) {}
+
     int hideExperimentJob(UUID organizationId, UUID importJobId);
     int hideDataCenterJob(UUID organizationId, UUID importJobId);
     void saveAttemptHistory(UUID organizationId, UUID importJobId, String reason, UUID actorId);

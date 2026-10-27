@@ -30,7 +30,8 @@ public class ExperimentController {
     @GetMapping("/experiments/{id}/data-review") public ApiResponse<?> dataReview(@PathVariable UUID id){return ok(service.templateDataReview(id));}
     @PostMapping("/experiments/{id}/confirm-data") public ApiResponse<?> confirmData(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.confirmTemplateData(id,r.revision));}
     @GetMapping("/experiments/{id}/sources") public ApiResponse<?> sources(@PathVariable UUID id){return ok(service.sourceReferences(id));}
-    @GetMapping("/experiments/{id}/export") public ResponseEntity<byte[]> export(@PathVariable UUID id){return download(exportService.export(id));}
+    @GetMapping("/experiments/{id}/export") public ResponseEntity<byte[]> export(@PathVariable UUID id,@RequestParam(defaultValue="RESULT")String view){return download(exportService.export(id,view));}
+    @GetMapping("/experiments/{id}/presentation") public ApiResponse<?> presentation(@PathVariable UUID id,@RequestParam long revision){return ok(service.presentation(id,revision));}
     @PostMapping("/experiments/{id}/draft") public ApiResponse<?> draft(@PathVariable UUID id,@Valid @RequestBody DraftRequest r){return ok(service.save(id,r.revision,new ExperimentService.DraftCommand(r.experimentNo,r.title,r.categoryId,r.categoryName,r.projectId,r.stageId,r.taskId,r.ownerName,r.experimentDate,r.templateVersionId,r.templateSnapshotHash,r.templateSnapshot,r.editModel)));}
     /** ELN soft-delete endpoint. Project-scoped callers use ProjectExperimentController. */
     @DeleteMapping("/experiments/{id}/eln-delete") public ApiResponse<?> delete(@PathVariable UUID id,@RequestParam long revision){service.delete(id,revision);return ok(null);}

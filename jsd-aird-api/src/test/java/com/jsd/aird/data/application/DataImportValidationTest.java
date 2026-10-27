@@ -27,6 +27,43 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 class DataImportValidationTest {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"INTEGER,/", "DATE,/", "DATETIME,未测", "TIME,不适用", "DURATION,/", "BOOLEAN,/"})
+    void laboratoryStatusMarkersDoNotBecomeTypeErrors(String type,String raw) {
+        givenJob();when(templates.getVersion(ORGANIZATION_ID,templateVersionId)).thenReturn(definition(false));
+        var detail=mapper.createObjectNode().put("bindingId","typed").put("dataPath","/typed");detail.withObject("/experimentField").put("domain","TEST").put("field","VALUE");
+        when(repository.listMappings(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Mapping(UUID.randomUUID(),"sheet-1","A","验收字段","TYPED","验收字段","MAP",type,null,null,detail,"CONFIRMED")));
+        when(repository.listRows(ORGANIZATION_ID,jobId)).thenReturn(List.of(row("A",raw)));
+        service.validateInternal(ORGANIZATION_ID,jobId);
+        var issues=ArgumentCaptor.forClass(List.class);verify(repository).replaceValidation(eq(ORGANIZATION_ID),eq(jobId),any(),issues.capture(),eq("WAITING_CONFIRM"));assertThat(issues.getValue()).isEmpty();
+    }
+    @Test void spreadsheetDatesUseFullPrecisionSourceEvidence() {
+        givenJob();when(templates.getVersion(ORGANIZATION_ID,templateVersionId)).thenReturn(definition(false));
+        var detail=mapper.createObjectNode().put("bindingId","typed").put("dataPath","/typed");
+        when(repository.listMappings(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Mapping(UUID.randomUUID(),"sheet-1","A","验收字段","TYPED","验收字段","MAP","DATETIME",null,null,detail,"CONFIRMED")));
+        var base=row("A","46321.52426");var meta=base.sourceMetadata().deepCopy();((com.fasterxml.jackson.databind.node.ObjectNode)meta).withObject("/cells/A").put("rawNumericValue","46321.52425925926").put("numberFormat","yyyy-mm-dd hh:mm:ss");
+        when(repository.listRows(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Row(base.id(),base.sheetId(),base.rowNumber(),base.rawValues(),base.normalizedValues(),base.correctedValues(),base.status(),meta)));
+        service.validateInternal(ORGANIZATION_ID,jobId);
+        var rows=ArgumentCaptor.forClass(List.class);var issues=ArgumentCaptor.forClass(List.class);verify(repository).replaceValidation(eq(ORGANIZATION_ID),eq(jobId),rows.capture(),issues.capture(),eq("WAITING_CONFIRM"));assertThat(issues.getValue()).isEmpty();
+        assertThat(((DataRepository.Row)rows.getValue().getFirst()).normalizedValues().path("TYPED").path("normalizedValue").asText()).isEqualTo("2026-10-26 12:34:56");
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "DATE,2026/10/26,2026-10-26", "DATETIME,2026-10-26 12:34:56,2026-10-26 12:34:56",
+        "TIME,12:34:56,12:34:56", "DURATION,01:30:00,5400", "BOOLEAN,否,false", "INTEGER,80,80"
+    })
+    void importValidationUsesTheDeclaredFieldType(String type,String raw,String expected) {
+        givenJob();when(templates.getVersion(ORGANIZATION_ID,templateVersionId)).thenReturn(definition(false));
+        var detail=mapper.createObjectNode().put("bindingId","typed").put("dataPath","/typed");
+        when(repository.listMappings(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Mapping(UUID.randomUUID(),"sheet-1","A","验收字段","TYPED","验收字段","MAP",type,null,null,detail,"CONFIRMED")));
+        when(repository.listRows(ORGANIZATION_ID,jobId)).thenReturn(List.of(row("A",raw)));
+        service.validateInternal(ORGANIZATION_ID,jobId);
+        var rows=ArgumentCaptor.forClass(List.class);var issues=ArgumentCaptor.forClass(List.class);
+        verify(repository).replaceValidation(eq(ORGANIZATION_ID),eq(jobId),rows.capture(),issues.capture(),eq("WAITING_CONFIRM"));
+        assertThat(issues.getValue()).isEmpty();
+        var result=(DataRepository.Row)rows.getValue().getFirst();
+        assertThat(result.normalizedValues().path("TYPED").path("normalizedValue").asText()).isEqualTo(expected);
+    }
 
     private static final UUID ORGANIZATION_ID = UUID.fromString("00000000-0000-0000-0000-000000000001");
     private static final UUID USER_ID = UUID.fromString("00000000-0000-0000-0000-000000000002");

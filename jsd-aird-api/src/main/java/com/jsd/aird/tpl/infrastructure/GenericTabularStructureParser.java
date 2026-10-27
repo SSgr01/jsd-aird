@@ -56,6 +56,8 @@ public class GenericTabularStructureParser implements TabularStructureParser {
                 int lastColumn = -1;
                 int firstRow = Math.max(0, sheet.getFirstRowNum());
                 int lastRow = Math.min(sheet.getLastRowNum(), MAX_ROWS - 1);
+                // All locators are physical Excel coordinates. Preserve leading empty rows.
+                for (int rowIndex = 0; rowIndex < firstRow; rowIndex++) rows.add(List.of());
                 for (int rowIndex = firstRow; rowIndex <= lastRow; rowIndex++) {
                     Row row = sheet.getRow(rowIndex);
                     var values = readRow(row, formatter, evaluator);

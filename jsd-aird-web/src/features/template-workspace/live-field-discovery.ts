@@ -1,4 +1,15 @@
 /** Pure guards used by the live, non-AI field discovery path. */
+export function mutationCells(params?: object) {
+  const input = params as { subUnitId?: string; cellValue?: Record<string, Record<string, unknown>> } | undefined;
+  if (!input?.subUnitId || !input.cellValue) return [];
+  return Object.entries(input.cellValue).flatMap(([row, cells]) => !/^\d+$/.test(row) || !cells || typeof cells !== 'object' ? [] : Object.entries(cells).flatMap(([column, cell]) => {
+    if (!/^\d+$/.test(column) || cell && typeof cell === 'object' && !('v' in cell || 'f' in cell || 'p' in cell)) return [];
+    let index = Number(column) + 1, letters = '';
+    while (index > 0) { index--; letters = String.fromCharCode(65 + index % 26) + letters; index = Math.floor(index / 26); }
+    return [{ sheetId: input.subUnitId!, address: `${letters}${Number(row) + 1}` }];
+  }));
+}
+
 export function isSingleCellAddress(address: string) {
   const normalized = address.trim().toUpperCase().replace(/\$/g, '');
   if (!normalized) return false;

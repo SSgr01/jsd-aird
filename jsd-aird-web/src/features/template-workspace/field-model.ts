@@ -1,5 +1,6 @@
 import type { RecognitionSuggestion } from '@/services/templates/template-api';
 import { generateUUID } from '@/utils/uuid';
+import { updateFieldDefinition, removeFieldDefinitions } from './field-editing';
 
 import type { BusinessField, FieldKind, FieldModel, TemplateBinding } from './types';
 import { groupCode, normalizeFieldModel, normalizeGroupName } from './group-normalizer';
@@ -118,12 +119,21 @@ export function readFieldModel(
         const storedPath = bindingPath
           ?? preferSemanticPath(field.pathSegments, undefined)
           ?? namedPath;
-        const pathSegments = mergeSemanticPaths(storedPath, snapshotPath) ?? namedPath;
+        const semanticPath = mergeSemanticPaths(storedPath, snapshotPath) ?? namedPath;
+        // Older published templates used group IDs as path prefixes. IDs stay
+        // stable in storage; display their configured names, never guessed text.
+        const pathSegments = semanticPath?.map((segment, index) =>
+          index < semanticPath.length - 1
+            ? normalized.groups.find((group) => group.id === segment)?.name ?? segment
+            : segment,
+        );
         return {
           ...field,
           locator,
+          mappingKind: binding?.mappingKind ?? field.mappingKind,
+          fieldType: binding?.mappingKind === 'REPEAT_FIELD' ? 'TABLE_COLUMN' : field.fieldType,
           pathSegments,
-          labelStatus: field.fieldType === 'REGION' ? 'NOT_APPLICABLE' : locator.label ? 'RESOLVED' : 'UNRESOLVED',
+          labelStatus: field.fieldType === 'REGION' ? 'NOT_APPLICABLE' : field.labelTextMissing || !locator.label ? 'UNRESOLVED' : 'RESOLVED',
         };
       }),
     });
@@ -823,10 +833,7 @@ export function updateBusinessField(
   fieldId: string,
   update: Partial<BusinessField>,
 ) {
-  const next = structuredClone(model);
-  next.fields = next.fields.map((field) =>
-    field.id === fieldId ? { ...field, ...update } : field,
-  );
+  const next = updateFieldDefinition(structuredClone(model), [], fieldId, update).model;
   const updatedField = next.fields.find((field) => field.id === fieldId);
   const nextSchema = updatedField ? updateFieldSchema(schema, updatedField) : schema;
   return { model: next, schema: writeFieldModel(nextSchema, next) };
@@ -851,10 +858,7 @@ export function removeBusinessField(
   fieldId: string,
 ) {
   const field = model.fields.find((item) => item.id === fieldId);
-  const nextModel = {
-    ...structuredClone(model),
-    fields: model.fields.filter((item) => item.id !== fieldId && item.parentFieldId !== fieldId),
-  };
+  const nextModel = removeFieldDefinitions(structuredClone(model), [], [fieldId]).model;
   const nextSchema = structuredClone(schema);
   if (field?.dataPath) {
     if (field.parentFieldId) removeArrayItemSchemaAtPath(nextSchema, field.dataPath);

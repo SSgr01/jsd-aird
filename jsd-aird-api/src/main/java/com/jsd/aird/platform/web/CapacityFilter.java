@@ -41,8 +41,8 @@ public class CapacityFilter extends OncePerRequestFilter {
             String path=request.getRequestURI();boolean stream=Objects.toString(request.getHeader("Accept"),"").contains("text/event-stream") || path.endsWith("/events") || path.matches("/api/v1/files/[0-9a-fA-F-]+/content");
             boolean upload=Objects.toString(request.getContentType(),"").toLowerCase(Locale.ROOT).startsWith("multipart/");
             boolean read=request.getMethod().equals("GET") || request.getMethod().equals("HEAD");
-            boolean workspaceCommand=path.contains("workspace") || path.endsWith("/draft") || path.endsWith("/edit-model") || path.endsWith("/word-preview") || path.equals("/api/v1/quality/records/batch");
-            boolean expensive=upload || workspaceCommand || path.endsWith("/publish") || path.endsWith("/export") || path.endsWith("/rollback");
+            boolean workspaceCommand=path.contains("workspace") || path.endsWith("/workbook-draft") || path.endsWith("/workbook-snapshot") || path.endsWith("/draft") || path.endsWith("/edit-model") || path.endsWith("/word-preview") || path.equals("/api/v1/quality/records/batch");
+            boolean expensive=upload || workspaceCommand || path.endsWith("/re-extract") || path.endsWith("/publish") || path.endsWith("/export") || path.endsWith("/rollback");
             leases.add((stream?streams:requests).enter(limits.admissionMillis()));
             if(!read || upload || expensive)leases.add((expensive?heavy:writes).enter(limits.admissionMillis()));
             if(upload)leases.add(temporary.reserve(545259520L));

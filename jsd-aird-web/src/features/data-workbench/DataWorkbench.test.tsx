@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 
 import type { DataFieldValueView, DataWorkbookSnapshot } from '@/services/data/data-api';
+import { useAppStore } from '@/stores/app-store';
 
 import {
   DataFieldCard,
@@ -36,6 +37,43 @@ const field: DataFieldValueView = {
 };
 
 describe('DataWorkbench', () => {
+  beforeEach(() => useAppStore.setState({ fieldPanelCollapsed: false }));
+  it('collapses and restores the shared panel without losing its content or selection', () => {
+    render(<DataWorkbenchShell breadcrumb="实验中心 / 导入确认" title="测试.xlsx"
+      canvas={<div>工作表</div>} panelTitle="本次实验数据"
+      panel={<input aria-label="保留填写值" defaultValue="90g" />} />);
+    fireEvent.click(screen.getByRole('button', { name: '收起字段面板' }));
+    expect(screen.queryByRole('textbox', { name: '保留填写值' })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Excel 工作区' })).toHaveTextContent('工作表');
+    fireEvent.click(screen.getByRole('button', { name: '展开字段面板' }));
+    expect(screen.getByRole('textbox', { name: '保留填写值' })).toHaveValue('90g');
+  });
+  it('browses old imported records by business names while callbacks retain their internal IDs', () => {
+    const records = Array.from({ length: 8 }, (_, index) => ({ recordId: `record-${index}`,
+      regionId: 'comparison', label: `IMPORT:STRUCT:sheet-1:comparison:COLUMN:${index + 1}`, sequence: index + 1, excluded: false }));
+    const select = vi.fn();
+    const workbook: DataWorkbookSnapshot = { fileName: '实验.xlsx', format: 'XLSX', snapshot: {}, sheets: [], editable: true,
+      regions: [{ regionId: 'comparison', name: 'comparison', structureType: 'COLUMN_TABLE', recordAxis: 'COLUMN', fieldCount: 1, recordCount: 8, fieldGroups: [] }],
+      records, fields: records.map((record, index) => ({ ...field, recordId: record.recordId, recordGroupId: record.recordId,
+        componentId: 'comparison', fieldName: '样品/方案编号', fieldCode: 'sample.number', labelPath: 'conditions > 样品/方案编号', groupPath: 'conditions',
+        rawValue: index < 6 ? `GEN-T00${index + 1}` : '', effectiveValue: index < 6 ? `GEN-T00${index + 1}` : '', identity: false })),
+    };
+    render(<DataFieldDataBrowser workbook={workbook} onSelectField={select} />);
+    expect(screen.getByText('实验对照组')).toBeInTheDocument();
+    expect(screen.queryByText(/IMPORT:STRUCT/)).not.toBeInTheDocument();
+    expect(screen.getByText('实验条件 > 样品/方案编号')).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: '选择记录' }));
+    fireEvent.click(screen.getByText('对照组 8'));
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ recordId: 'record-7', componentId: 'comparison' }));
+    expect(screen.queryByText(/IMPORT:STRUCT|conditions|comparison/)).not.toBeInTheDocument();
+  });
+
+  it('keeps mixed results and their explicit units instead of appending the field default', () => {
+    render(<DataFieldCard field={{ ...field, fieldName: '黏度', rawValue: '18.2 s/F4', effectiveValue: '18.2 s/F4', unit: 'cP' }} />);
+    expect(screen.getByRole('button', { name: /黏度.*18.2 s\/F4/ })).toBeInTheDocument();
+    expect(screen.queryByText('cP')).not.toBeInTheDocument();
+  });
+
   it('renders the shared spreadsheet and field panel shell', () => {
     render(<DataWorkbenchShell
       breadcrumb="数据中心 / 导入确认"
@@ -143,8 +181,8 @@ describe('DataWorkbench', () => {
       ],
       records: [{ recordId: 'record-1', regionId: 'detail', label: '第 1 条记录', sequence: 1, excluded: false }],
       fields: [
-        { ...field, componentId: 'detail', recordGroupId: 'record-1', bindingId: 'binding-approval', fieldCode: 'APPROVAL', fieldName: '制 定', labelPath: '制_定', groupPath: '制_定', rawValue: '', normalizedValue: '', effectiveValue: '', required: false },
-        { ...field, componentId: 'detail', recordGroupId: 'record-1', bindingId: 'binding-acid', fieldCode: 'ACID', fieldName: '酸值', labelPath: '检测指标 / 酸值', groupPath: '检测指标', rawValue: 12.5, normalizedValue: 12.5, effectiveValue: 12.5, valueType: 'NUMBER', unit: 'mg KOH/g' },
+        { ...field, componentId: 'detail', recordGroupId: 'record-1', bindingId: 'binding-approval', fieldCode: 'APPROVAL', fieldName: '制 定', labelPath: '制_定', groupPath: '制_定', rawValue: '', normalizedValue: '', effectiveValue: '', required: false, identity: false },
+        { ...field, componentId: 'detail', recordGroupId: 'record-1', bindingId: 'binding-acid', fieldCode: 'ACID', fieldName: '酸值', labelPath: '检测指标 / 酸值', groupPath: '检测指标', rawValue: 12.5, normalizedValue: 12.5, effectiveValue: 12.5, valueType: 'NUMBER', unit: 'mg KOH/g', identity: false },
       ],
     };
 

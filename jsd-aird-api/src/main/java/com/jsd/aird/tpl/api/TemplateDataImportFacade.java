@@ -48,6 +48,16 @@ public interface TemplateDataImportFacade {
 
     ParsedTabularFile parse(UUID organizationId, UUID templateVersionId, UUID fileId);
 
+    /** Resolve added rows/columns against this file without changing the published template. */
+    default ImportExecution prepareImport(UUID organizationId, UUID templateVersionId, UUID fileId) {
+        return new ImportExecution(getVersion(organizationId,templateVersionId),getBindings(organizationId,templateVersionId),parse(organizationId,templateVersionId,fileId));
+    }
+    record ImportExecution(DataTemplateDefinition definition,List<ImportBinding> bindings,ParsedTabularFile parsed) {}
+
+    default ImportExecution prepareWorkbookImport(UUID organizationId, UUID templateVersionId, JsonNode snapshot, JsonNode instance) {
+        throw new UnsupportedOperationException("Workbook instance extraction is unavailable");
+    }
+
     FieldRequest requestField(UUID organizationId, UUID templateVersionId, FieldRequestCommand command);
 
     /**

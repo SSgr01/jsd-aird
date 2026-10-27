@@ -30,6 +30,32 @@ final class StructuredDataExtractor {
         this.objectMapper = objectMapper;
     }
 
+    Result applyInstanceIdentities(Result result,JsonNode instance,String importKey) {
+        if(instance==null||instance.path("version").asInt()!=2)return result;
+        var rows=result.rows().stream().map(row->{
+            var metadata=(ObjectNode)row.sourceMetadata().deepCopy();String id=null;
+            for(var record:instance.path("records")) {
+                if(!record.path("sheetId").asText().equals(row.sheetId()))continue;
+                for(var cell:metadata.path("cells")) {
+                    boolean child=false;
+                    for(var binding:instance.path("mapping"))if(binding.path("bindingId").equals(cell.path("bindingId"))&&binding.path("parentBindingId").equals(record.path("regionId"))){child=true;break;}
+                    int index=cell.path(record.path("axis").asText().equals("ROW")?"rowNumber":"columnNumber").asInt();
+                    if(child&&index==record.path("index").asInt()){id=record.path("id").asText();break;}
+                }
+                if(id!=null)break;
+            }
+            for(var cell:metadata.path("cells"))if(cell instanceof ObjectNode object&&cell.has("listProjectionId"))for(var item:instance.path("items")) {
+                int index=cell.path(item.path("axis").asText().equals("ROW")?"rowNumber":"columnNumber").asInt();
+                if(item.path("regionId").equals(cell.path("listProjectionId"))&&index==item.path("index").asInt())object.put("itemSourceKey",item.path("id").asText());
+            }
+            if(id==null)return row;
+            metadata.put("recordKey","INSTANCE:"+id).put("sourceGroupKey",id).put("sampleKey",id).put("logicalSampleKey",id);
+            var rowId=UUID.nameUUIDFromBytes((importKey+":"+id).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return new DataRepository.Row(rowId,row.sheetId(),row.rowNumber(),row.rawValues(),row.normalizedValues(),row.correctedValues(),row.status(),metadata,row.excluded(),row.exclusionReason());
+        }).toList();
+        return new Result(result.shape(),result.mappings(),rows);
+    }
+
     Optional<Result> extract(
             TemplateDataImportFacade.ParsedSheet sheet,
             List<TemplateDataImportFacade.FieldDefinition> definitions,
@@ -63,7 +89,6 @@ final class StructuredDataExtractor {
             var componentId = entry.getKey();
             var component = entry.getValue();
             var identityRule = identityRule(importContract, componentId);
-            var listProjections = listProjections(importContract, componentId);
             var hasFormRegion = component.stream().anyMatch(binding ->
                     binding.mappingKind() != null
                             && binding.mappingKind().toUpperCase(Locale.ROOT).contains("FORM_REGION"));
@@ -75,6 +100,14 @@ final class StructuredDataExtractor {
                         v9Experiment, identityRule);
                 if (!form.rows().isEmpty()) formResults.put(entry.getKey(), form);
             }
+        }
+        // Contract component order is not significant. Collect the common form
+        // before extracting tables, including when the table appears first.
+        for (var entry : components.entrySet()) {
+            var componentId = entry.getKey();
+            var component = entry.getValue();
+            var identityRule = identityRule(importContract, componentId);
+            var listProjections = listProjections(importContract, componentId);
             var structuredFields = component.stream().filter(this::isStructuredField).toList();
             Result structured = null;
             if (!structuredFields.isEmpty()) {
@@ -360,6 +393,7 @@ final class StructuredDataExtractor {
 
     private boolean singleFileWithoutIdentity(JsonNode identityRule, JsonNode importContract) {
         if (importContract == null
+                || importContract.path("instanceStructureVersion").asInt() == 2
                 || !"EXPERIMENT_DATA".equals(importContract.path("templateUsage").asText(""))
                 || !"SINGLE_FILE".equals(importContract.path("experimentImport").path("recordMode").asText(""))) {
             return false;

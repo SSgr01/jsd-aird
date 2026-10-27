@@ -1,3 +1,5 @@
+import { updateFieldDefinition } from '@/features/template-workspace/field-editing';
+import { deleteWorkbookField, addWorkbookField } from '@/features/template-workspace/workbook-instance';
 import { DocsEditor, SheetsEditor } from '@/features/template-workspace/editor-runtime';
 import { ContentLoading } from '@/components/loading/ContentLoading';
 import { trackSnapshot } from '@/features/template-workspace/workspace-loading';
@@ -50,7 +52,6 @@ import {
   prepareFormalSchema,
   readFieldModel,
   removeBusinessField,
-  templateLocalFieldCode,
   updateBusinessField,
   writeFieldModel,
 } from '@/features/template-workspace/field-model';
@@ -62,7 +63,7 @@ import {
   synchronizeStructuredData,
   type BindingValuePair,
 } from '@/features/template-workspace/structured-data';
-import { createCustomFieldWorkspace, expandAdjacentRepeatRegion } from '@/features/template-workspace/custom-field-operations';
+import { expandAdjacentRepeatRegion } from '@/features/template-workspace/custom-field-operations';
 import {
   groupCode,
   normalizeFieldModel,
@@ -84,18 +85,13 @@ import {
   hasUnplacedWordFields,
   type PublishReviewSyncState,
 } from '@/features/template-workspace/publish-readiness';
-import { migrateWorkspaceStructure } from '@/features/template-workspace/structure-migration';
+import { createWorkbookInstance, type WorkbookTemplateInstance } from '@/features/template-workspace/workbook-instance';
 import {
   locatorLabelRange,
   locatorValueRange,
   mergeLocators,
   synchronizeLocatorCoordinates,
 } from '@/features/template-workspace/locator';
-import {
-  isSingleCellAddress,
-  isStructuredDataCell,
-  potentialFieldLabel,
-} from '@/features/template-workspace/live-field-discovery';
 import type {
   BusinessField,
   EditorHandle,
@@ -132,8 +128,8 @@ import {
   type FieldManagerTab,
   TemplateFieldManager,
 } from './TemplateFieldManager';
+import type { ProjectionRangeTarget } from '@/features/template-workspace/list-projection';
 import { RecognitionReviewPanel } from './RecognitionReviewPanel';
-import type { ProjectionRangeTarget } from './ExperimentSemanticsPanel';
 import { normalizeAddress, validateAddress } from './coordinates';
 
 
@@ -153,7 +149,6 @@ export function TemplateWorkspacePage() {
   const savedGenerationRef = useRef(0);
   const autoAppendKeysRef = useRef(new Set<string>());
   const selectionCycleRef = useRef({ key: '', index: 0 });
-  const unboundChangeTimersRef = useRef(new Map<string, number>());
   const [workspace, setWorkspace] = useState<TemplateWorkspace>();
   const [snapshot, setSnapshot] = useState<Record<string, unknown>>();
   const [schema, setSchema] = useState<Record<string, unknown>>({});
@@ -180,10 +175,7 @@ export function TemplateWorkspacePage() {
   const [loadError, setLoadError] = useState<string>();
   const [versionHistory, setVersionHistory] = useState<TemplateVersionHistoryItem[]>([]);
   const [picking, setPicking] = useState<{ fieldId: string; target: CoordinateTarget }>();
-  const [projectionPicking, setProjectionPicking] = useState<{
-    projectionId: string;
-    target: ProjectionRangeTarget;
-  }>();
+  const [projectionPicking, setProjectionPicking] = useState<{ projectionId: string; target: ProjectionRangeTarget }>();
   const [groupManagerOpen, setGroupManagerOpen] = useState(false);
   const [groupDrafts, setGroupDrafts] = useState<FieldModel['groups']>([]);
   const [fieldManagerTab, setFieldManagerTab] = useState<FieldManagerTab>('structure');
@@ -357,8 +349,6 @@ export function TemplateWorkspacePage() {
   }, [saveState]);
 
   useEffect(() => () => {
-    unboundChangeTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-    unboundChangeTimersRef.current.clear();
   }, []);
 
   const markDirty = useCallback(() => {
@@ -1054,72 +1044,6 @@ export function TemplateWorkspacePage() {
     );
   };
 
-  const handleEditorLabel = (binding: TemplateBinding, value: unknown) => {
-    const { fieldModel, schema, mapping, workspace } = latestSaveRef.current;
-    const field = fieldModel.fields.find((item) => fieldMatchesIdentity(item, {
-      bindingId: binding.bindingId,
-      relationId: binding.relationId,
-      fieldId: binding.fieldId,
-    }));
-    if (!field) return;
-    const name = editorLabelText(value);
-    if (field.name === name) return;
-
-    const updated = updateBusinessField(schema, fieldModel, field.id, {
-      name,
-      reviewStatus: 'CONFIRMED',
-    });
-    setSchema(updated.schema);
-    setFieldModel(updated.model);
-    const nextMapping = mapping.map((item) =>
-        bindingMatchesIdentity(item, {
-          bindingId: binding.bindingId,
-          relationId: binding.relationId,
-          fieldId: binding.fieldId,
-        })
-          ? {
-              ...item,
-              ...(workspace?.format === 'DOCX'
-                ? { locator: { ...item.locator, text: name } }
-                : {}),
-              diagnostic: { ...item.diagnostic, displayName: name },
-            }
-          : item,
-    );
-    latestSaveRef.current = { ...latestSaveRef.current, schema: updated.schema, fieldModel: updated.model, mapping: nextMapping };
-    setMapping(nextMapping);
-    setRecognitionReview((current) => {
-      if (!current) return current;
-      const matchingItem = current.items.find(
-        (item) => fieldMatchesIdentity(field, {
-          bindingId: item.payload.bindingId,
-          relationId: item.payload.relationId,
-          fieldId: item.payload.fieldId,
-          recognitionItemId: item.id,
-        }),
-      );
-      if (!matchingItem) return current;
-      const renamed = {
-        ...current,
-        items: current.items.map((item) =>
-          item.id === matchingItem.id
-            ? {
-                ...item,
-                fieldName: name,
-                payload: { ...item.payload, fieldName: name },
-              }
-            : item,
-        ),
-      };
-      return updateRecognitionReview(renamed, new Map([[matchingItem.id, 'CONFIRMED']]));
-    });
-    if (field.recognitionItemId) {
-      setRecognitionActions((current) => ({
-        ...current,
-        [field.recognitionItemId as string]: 'CONFIRM',
-      }));
-    }
-  };
 
   const confirmRecognitionItem = async (item: RecognitionReviewItem, selectedAlternativeId?: string) => {
     if (workspace?.format === 'DOCX' && !isRecognitionRegionRoot(item)) {
@@ -1353,7 +1277,7 @@ export function TemplateWorkspacePage() {
     const updated = updateBusinessField(baseSchema, baseModel, currentField.id, normalizedUpdate);
     setSchema(updated.schema);
     setFieldModel(updated.model);
-    const updatedMapping = baseMapping.map((binding) =>
+    const rawUpdatedMapping = baseMapping.map((binding) =>
       bindingMatchesIdentity(binding, {
         bindingId: currentField.bindingId,
         relationId: currentField.relationId,
@@ -1424,8 +1348,9 @@ export function TemplateWorkspacePage() {
           }
         : binding,
     );
+    const updatedMapping = updateFieldDefinition(updated.model, rawUpdatedMapping, currentField.id, {}).mapping;
     setMapping(updatedMapping);
-    if (update.name !== undefined && update.name !== currentField.name) {
+    if (workspace?.format !== 'XLSX' && update.name !== undefined && update.name !== currentField.name) {
       const binding = updatedMapping.find((item) => bindingMatchesIdentity(item, {
         bindingId: currentField.bindingId,
         relationId: currentField.relationId,
@@ -1551,20 +1476,12 @@ export function TemplateWorkspacePage() {
     (selection: EditorSelection) => {
       setActiveSelection(selection);
       if (projectionPicking) {
-        setSchema((current) => {
+        setSchema(current => {
           const configuration = readExperimentImport(current);
-          return writeExperimentImport(current, {
-            ...configuration,
-            listProjections: configuration.listProjections.map((projection) =>
-              projection.listProjectionId === projectionPicking.projectionId
-                ? { ...projection, [projectionPicking.target]: normalizeAddress(selection.address) }
-                : projection),
-          });
+          return writeExperimentImport(current, { ...configuration, listProjections: configuration.listProjections.map(projection =>
+            projection.listProjectionId === projectionPicking.projectionId ? { ...projection, [projectionPicking.target]: normalizeAddress(selection.address) } : projection) });
         });
-        setProjectionPicking(undefined);
-        markDirty();
-        void message.success('配方区域已更新');
-        return;
+        setProjectionPicking(undefined); markDirty(); return;
       }
       if (picking) {
         const pickingField = fieldModel.fields.find((item) => item.id === picking.fieldId);
@@ -1617,226 +1534,32 @@ export function TemplateWorkspacePage() {
     [fieldModel.fields, mapping, message, picking, projectionPicking, recognitionReview?.items],
   );
 
-  const handleUnboundCellChange = useCallback(
-    (selection: EditorSelection, value: unknown) => {
-      if (!versionId) return;
-      if (!isSingleCellAddress(selection.address)) return;
-      // A structural region binding only describes the envelope. It must not
-      // block discovering an unbound scalar label inside a FORM_REGION. A
-      // concrete FIELD binding, however, remains protected from duplication.
-      const selectionMatch = resolveBindingSelection(mapping, selection);
-      if (selectionMatch?.binding.role === 'FIELD') return;
-      if (isStructuredDataCell(
-        selection,
-        mapping,
-        (recognitionReview?.regions ?? []).map((region) => ({
-          kind: region.kind,
-          sheetId: region.sheetId,
-          range: region.range,
-          structures: region.structures,
-        })),
-      )) return;
-      const label = potentialFieldLabel(value);
-      const labelAddress = selection.address.split(':')[0] ?? selection.address;
-      if (!label) return;
-      const timerKey = `${selection.sheetId}|${normalizeAddress(labelAddress)}`;
-      const pendingTimer = unboundChangeTimersRef.current.get(timerKey);
-      if (pendingTimer) window.clearTimeout(pendingTimer);
-      const timer = window.setTimeout(() => {
-        unboundChangeTimersRef.current.delete(timerKey);
-        if (
-          mapping.some(
-            (binding) =>
-              stringValue(binding.locator.sheetId) === selection.sheetId &&
-              normalizeAddress(stringValue(binding.locator.labelAddress)) ===
-                normalizeAddress(labelAddress),
-          )
-        )
-          return;
-        if (
-          fieldModel.fields.some((field) => {
-            const locator = field.locator ?? {};
-            return stringValue(locator.sheetId) === selection.sheetId
-              && normalizeAddress(stringValue(locator.labelAddress || field.labelRange)) === normalizeAddress(labelAddress);
-          })
-        ) return;
-        const id = generateUUID();
-        const bindingId = generateUUID();
-        const region = findFormRegionForCell(recognitionReview, selection.sheetId, labelAddress);
-        const group =
-          fieldModel.groups.find((item) => item.groupCode === 'BASIC_INFORMATION') ??
-          fieldModel.groups[0];
-        const groupId = group?.id ?? 'group-basic';
-        const dataPath = `/customFields/field_${id.replaceAll('-', '')}`;
-        const field: BusinessField = {
-          id,
-          bindingId,
-          dataPath,
-          groupId,
-          name: label,
-          kind: 'SCALAR',
-          valueType: 'string',
-          required: false,
-          reviewStatus: 'NEEDS_CONFIRMATION',
-          confidence: 0.6,
-          interpretation: `系统发现了新标签“${label}”，请核对填写位置。`,
-          fieldCode: templateLocalFieldCode(versionId, { id, name: label, dataPath }),
-          fieldOrigin: 'TEMPLATE_LOCAL',
-          standardSelectionStatus: 'CUSTOM',
-          standardMatchStatus: 'UNMATCHED',
-          requiresStandardConfirmation: false,
-          editability: 'EDITABLE',
-          valueSource: 'USER_INPUT',
-          regionId: region?.regionId,
-          blockId: region?.blockId,
-          parentBlockId: region?.blockId,
-        };
-        setFieldModel((current) =>
-          normalizeFieldModel({
-            ...current,
-            groups: current.groups.length
-              ? current.groups
-              : [
-                  {
-                    id: groupId,
-                    name: '基础信息',
-                    groupCode: 'BASIC_INFORMATION',
-                    order: 0,
-                  },
-                ],
-            fields: [...current.fields, field],
-          }),
-        );
-        setSchema((current) => addCustomFieldSchema(current, field));
-        setMapping((current) => [
-          ...current,
-          {
-            bindingId,
-            fieldCode: field.fieldCode,
-            dataPath,
-            role: 'FIELD',
-            locatorType: 'CELL_RANGE',
-            locator: {
-              sheetId: selection.sheetId,
-              sheetName: selection.sheetName,
-              labelAddress,
-              labelRange: labelAddress,
-              anchorAddress: '',
-              logicalInputRange: '',
-              address: '',
-              valueMode: 'ANCHOR',
-            },
-            syncDirection: 'TWO_WAY',
-            primaryBinding: true,
-            bindingStatus: 'MISSING',
-            diagnostic: {
-              source: 'LIVE_DISCOVERED',
-              displayName: label,
-              regionId: region?.regionId,
-              blockId: region?.blockId,
-            },
-          },
-        ]);
-        setSelectedFieldId(id);
-        setFieldManagerTab('structure');
-        markDirty();
-        void message.info(`已发现新字段“${label}”，请核对填写位置`);
-      }, 800);
-      unboundChangeTimersRef.current.set(timerKey, timer);
-    },
-    [fieldModel.fields, fieldModel.groups, mapping, markDirty, message, recognitionReview, versionId],
-  );
-
-  const handleStructureChange = useCallback(
-    (operation: WorkbookStructureOperation) => {
-      const { mapping, fieldModel, schema } = latestSaveRef.current;
-      const migrated = migrateWorkspaceStructure(mapping, fieldModel, operation);
-      const nextSchema = writeFieldModel(schema, migrated.model);
-      latestSaveRef.current = { ...latestSaveRef.current, mapping: migrated.mapping, fieldModel: migrated.model, schema: nextSchema };
-      setMapping(migrated.mapping);
-      setFieldModel(migrated.model);
-      setSchema(nextSchema);
-      setStructureOperations((current) => [...current, operation]);
-      markDirty();
-    },
-    [markDirty],
-  );
+  const handleInstanceChange = useCallback((instance: WorkbookTemplateInstance) => {
+    const { schema } = latestSaveRef.current;
+    let projectedSchema = schema;
+    for (const old of latestSaveRef.current.fieldModel.fields) if (!instance.model.fields.some(field => field.id === old.id)) projectedSchema = removeBusinessField(projectedSchema, latestSaveRef.current.fieldModel, old.id).schema;
+    for (const field of instance.model.fields) if (JSON.stringify(field) !== JSON.stringify(latestSaveRef.current.fieldModel.fields.find(old => old.id === field.id))) projectedSchema = updateBusinessField(projectedSchema, instance.model, field.id, {}).schema;
+    const nextSchema = writeFieldModel({ ...projectedSchema, ...(instance.execution ? { 'x-jsd-experiment-import': instance.execution } : {}) }, instance.model);
+    latestSaveRef.current = { ...latestSaveRef.current, mapping: instance.mapping, fieldModel: instance.model, schema: nextSchema };
+    setMapping(instance.mapping); setFieldModel(instance.model); setSchema(nextSchema); markDirty();
+  }, [markDirty]);
 
   const addField = (groupId?: string) => {
     if (!versionId) return;
-    const id = generateUUID();
-    const bindingId = generateUUID();
-    const selectedGroupId = groupId ?? fieldModel.groups[0]?.id ?? 'group-other';
-    const dataPath = `/customFields/field_${id.replaceAll('-', '')}`;
-    const field: BusinessField = {
-      id,
-      bindingId,
-      dataPath,
-      groupId: selectedGroupId,
-      name: '新字段',
-      kind: 'SCALAR',
-      valueType: 'string',
-      required: false,
-      reviewStatus: 'CONFIRMED',
-      fieldCode: templateLocalFieldCode(versionId, { id, name: '新字段', dataPath }),
-      fieldOrigin: 'TEMPLATE_LOCAL',
-      standardSelectionStatus: 'CUSTOM',
-      standardMatchStatus: 'CONFIRMED',
-      requiresStandardConfirmation: false,
-    };
-    const nextModel = { ...fieldModel, fields: [...fieldModel.fields, field] };
-    setFieldModel(nextModel);
-    setSchema(addCustomFieldSchema(writeFieldModel(schema, nextModel), field));
-    setMapping((current) => [
-      ...current,
-      {
-        bindingId,
-        fieldCode: field.fieldCode,
-        dataPath,
-        role: 'FIELD',
-        locatorType: workspace?.format === 'DOCX' ? 'DOC_CUSTOM_RANGE' : 'CELL_RANGE',
-        locator: {},
-        syncDirection: 'TWO_WAY',
-        primaryBinding: true,
-        bindingStatus: workspace?.format === 'DOCX' ? 'MISSING' : 'VALID',
-        diagnostic: { source: 'CUSTOMER_CREATED', displayName: field.name },
-      },
-    ]);
-    setSelectedFieldId(id);
-    markDirty();
+    const current = editorRef.current?.getTemplateInstance?.() ?? createWorkbookInstance(fieldModel, mapping, readExperimentImport(schema));
+    const created = addWorkbookField(current, { ownerId: versionId, origin: 'TEMPLATE_LOCAL', selection: editorRef.current?.getSelection?.() ?? activeSelection, snapshot: editorRef.current?.getSnapshot(), groupId });
+    if (workspace?.format === 'XLSX') void editorRef.current?.setTemplateInstance?.(created.instance);
+    else handleInstanceChange(created.instance);
+    setSelectedFieldId(created.fieldId); setFieldManagerTab('properties'); markDirty();
   };
 
-  const addStructuredField = (
-    parent: BusinessField,
-    kind: 'REPEAT_FIELD',
-  ) => {
-    if (!versionId || !parent.bindingId) return;
-    const parentBinding = mapping.find((binding) => binding.bindingId === parent.bindingId);
-    if (!parentBinding) return;
-    try {
-      const created = createCustomFieldWorkspace(schema, fieldModel, mapping, {
-        ownerId: versionId,
-        origin: 'TEMPLATE_LOCAL',
-        kind,
-        name: '新明细字段',
-        parentField: parent,
-        parentBinding,
-        sheet: {
-          sheetId: typeof parentBinding.locator.sheetId === 'string'
-            ? parentBinding.locator.sheetId : activeSelection?.sheetId || '',
-          sheetName: typeof parentBinding.locator.sheetName === 'string'
-            ? parentBinding.locator.sheetName : activeSelection?.sheetName || '',
-        },
-      });
-      setSchema(created.schema);
-      setFieldModel(created.model);
-      setMapping(created.mapping);
-      setSelectedFieldId(created.field.id);
-      setFieldManagerTab('properties');
-      markDirty();
-    } catch (reason) {
-      void message.error(reason instanceof Error ? reason.message : '字段添加失败');
-    }
+  const addStructuredField = (parent: BusinessField) => {
+    if (!versionId) return;
+    const current = editorRef.current?.getTemplateInstance?.() ?? createWorkbookInstance(fieldModel, mapping, readExperimentImport(schema));
+    const created = addWorkbookField(current, { ownerId: versionId, origin: 'TEMPLATE_LOCAL', parentId: parent.id, groupId: parent.groupId });
+    if (workspace?.format === 'XLSX') void editorRef.current?.setTemplateInstance?.(created.instance);
+    else handleInstanceChange(created.instance);
+    setSelectedFieldId(created.fieldId); setFieldManagerTab('properties'); markDirty();
   };
 
   const deleteField = (field: BusinessField) => {
@@ -1855,6 +1578,14 @@ export function TemplateWorkspacePage() {
             recognitionItemId: item.id,
           }),
         );
+        if (workspace?.format === 'XLSX') {
+          const current = editorRef.current?.getTemplateInstance?.() ?? createWorkbookInstance(fieldModel, mapping, readExperimentImport(schema));
+          const next = deleteWorkbookField(current, field.id);
+          void editorRef.current?.setTemplateInstance?.(next);
+          setSelectedFieldId(undefined);
+          if (recognizedItem) recordRecognitionAction(recognizedItem.id, 'IGNORE', 'IGNORED');
+          markDirty(); return;
+        }
         const removed = removeBusinessField(schema, fieldModel, field.id);
         setSchema(removed.schema);
         setFieldModel(removed.model);
@@ -2254,18 +1985,6 @@ export function TemplateWorkspacePage() {
                   <Button onClick={() => setPicking(undefined)}>取消选择</Button>
                 </div>
               )}
-              {projectionPicking && (
-                <div className="selection-guide" role="status">
-                  <div>
-                    <strong>
-                      请在 Excel 中框选
-                      {projectionPicking.target === 'labelRange' ? '材料名称区域' : '配方数值区域'}
-                    </strong>
-                    <span>拖动选择连续区域，系统会自动保存范围。</span>
-                  </div>
-                  <Button onClick={() => setProjectionPicking(undefined)}>取消选择</Button>
-                </div>
-              )}
               <Suspense
                 fallback={
                   <ContentLoading label="加载编辑器…" />
@@ -2279,10 +1998,11 @@ export function TemplateWorkspacePage() {
                     editable={editable}
                     onDirty={handleEditorDirty}
                     onEditorValue={handleEditorValue}
-                    onEditorLabel={handleEditorLabel}
                     onSelectionChange={handleSelection}
-                    onUnboundCellChange={handleUnboundCellChange}
-                    onStructureChange={handleStructureChange}
+                    fieldCreationOrigin="TEMPLATE_LOCAL"
+                    instance={createWorkbookInstance(fieldModel, mapping, readExperimentImport(schema))}
+                    onInstanceChange={handleInstanceChange}
+                    onStructureChange={operation => setStructureOperations(current => [...current, operation])}
                   />
                 ) : (
                   <div className={editable ? undefined : 'document-readonly'}>
@@ -2303,6 +2023,8 @@ export function TemplateWorkspacePage() {
                 fieldModel={fieldModel}
                 mapping={mapping}
                 selectedFieldId={selectedFieldId}
+                selection={activeSelection}
+                onFocusBinding={(binding) => editorRef.current?.focusBinding(binding)}
                 selectedRecognitionItemId={selectedRecognitionItemId}
                 selectedQualityIssueId={selectedQualityIssueId}
                 picking={picking}
@@ -2327,10 +2049,7 @@ export function TemplateWorkspacePage() {
                 onUpdateField={updateField}
                 onUpdateCoordinates={updateCoordinates}
                 onPickCoordinate={(fieldId, target) => setPicking({ fieldId, target })}
-                onPickProjectionRange={(projectionId, target) => {
-                  setPicking(undefined);
-                  setProjectionPicking({ projectionId, target });
-                }}
+                onPickProjectionRange={(projectionId, target) => { setPicking(undefined); setProjectionPicking({ projectionId, target }); }}
                 onAddField={addField}
                 onAddStructuredField={addStructuredField}
                 onDeleteField={deleteField}
@@ -2798,13 +2517,6 @@ function updateRecognitionReview(
   };
 }
 
-function editorLabelText(value: unknown) {
-  if (value === null || value === undefined) return '';
-  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
-    ? String(value)
-    : '';
-}
-
 function nextRecognitionItem(review?: RecognitionReview, excludedId?: string) {
   if (!review) return undefined;
   const active = review.items.filter((item) => item.id !== excludedId && item.status !== 'IGNORED');
@@ -2951,70 +2663,6 @@ function duplicatePositionCount(mapping: TemplateBinding[]) {
     positions.set(key, (positions.get(key) ?? 0) + 1);
   }
   return [...positions.values()].filter((count) => count > 1).length;
-}
-
-function addCustomFieldSchema(schema: Record<string, unknown>, field: BusinessField) {
-  const next = structuredClone(schema);
-  const properties = isRecord(next.properties) ? next.properties : {};
-  const customFields = isRecord(properties.customFields)
-    ? properties.customFields
-    : { type: 'object', properties: {} };
-  const customProperties = isRecord(customFields.properties) ? customFields.properties : {};
-  const key = field.dataPath?.split('/').at(-1) ?? field.id;
-  customProperties[key] = { type: 'string', title: field.name };
-  customFields.properties = customProperties;
-  properties.customFields = customFields;
-  next.properties = properties;
-  return next;
-}
-
-interface A1Range {
-  startRow: number;
-  endRow: number;
-  startColumn: number;
-  endColumn: number;
-}
-
-function parseA1Range(value: string): A1Range | undefined {
-  const match = /^([A-Z]{1,4})([1-9][0-9]*)(?::([A-Z]{1,4})([1-9][0-9]*))?$/i.exec(value);
-  if (!match) return undefined;
-  const startColumn = columnNumber(match[1] ?? '');
-  const startRow = Number(match[2]);
-  const endColumn = columnNumber(match[3] ?? match[1] ?? '');
-  const endRow = Number(match[4] ?? match[2]);
-  return {
-    startRow: Math.min(startRow, endRow),
-    endRow: Math.max(startRow, endRow),
-    startColumn: Math.min(startColumn, endColumn),
-    endColumn: Math.max(startColumn, endColumn),
-  };
-}
-
-function findFormRegionForCell(
-  review: RecognitionReview | undefined,
-  sheetId: string,
-  address: string,
-) {
-  const cell = parseA1Range(address);
-  if (!cell) return undefined;
-  return review?.regions?.find((region) => {
-    if (region.kind !== 'FORM_REGION' || region.sheetId && region.sheetId !== sheetId) return false;
-    const range = parseA1Range(region.range || '');
-    return Boolean(
-      range
-      && cell.startRow >= range.startRow
-      && cell.startRow <= range.endRow
-      && cell.startColumn >= range.startColumn
-      && cell.startColumn <= range.endColumn,
-    );
-  });
-}
-
-function columnNumber(value: string) {
-  return [...value.toUpperCase()].reduce(
-    (result, letter) => result * 26 + letter.charCodeAt(0) - 64,
-    0,
-  );
 }
 
 function stringValue(value: unknown) {

@@ -39,9 +39,9 @@ describe('ExperimentTemplateDataPanel', () => {
     const { container } = render(<ExperimentTemplateDataPanel review={review} values={{}} editable
       confirmed={false} busy={false} onChange={vi.fn()} onConfirm={vi.fn()} onFocus={vi.fn()} />);
     const panel = container.querySelector('.experiment-template-data-panel');
-    expect(panel?.children[1]).toHaveClass('data-workbench-tabs');
-    expect(panel?.children[2]).toHaveClass('data-panel-body');
-    expect(panel?.lastElementChild).toHaveClass('data-workbench-footer');
+    const content = panel?.querySelector('.data-workbench-panel-content');
+    expect(content?.querySelector('.data-workbench-tabs')?.nextElementSibling).toHaveClass('data-panel-body');
+    expect(content?.lastElementChild).toHaveClass('data-workbench-footer');
     fireEvent.click(screen.getByRole('tab', { name: '字段映射' }));
     expect(screen.getByText(/模板字段和填写位置已锁定/)).toBeInTheDocument();
   });

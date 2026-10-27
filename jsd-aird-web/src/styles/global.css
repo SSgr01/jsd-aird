@@ -369,8 +369,8 @@ a:active,
 
 /* Data import review uses one focused spreadsheet workbench. */
 .data-workbench {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   width: 100%;
   height: 100dvh;
   min-width: 0;
@@ -379,8 +379,13 @@ a:active,
   background: var(--app-background);
 }
 
+.app-content-workspace > .data-workbench {
+  height: 100%;
+}
+
 .data-workbench-header {
   display: flex;
+  flex: 0 0 auto;
   min-width: 0;
   align-items: center;
   justify-content: space-between;
@@ -433,6 +438,7 @@ a:active,
 }
 
 .data-workbench-notice {
+  flex: 0 0 auto;
   padding: 10px 16px 0;
   background: var(--app-background);
 }
@@ -446,6 +452,7 @@ a:active,
 
 .data-workbench-grid {
   display: grid;
+  flex: 1;
   grid-template-columns: minmax(560px, 1fr) clamp(420px, 34vw, 520px);
   min-width: 0;
   min-height: 0;
@@ -489,16 +496,38 @@ a:active,
 }
 
 .data-workbench-panel {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
 }
-/* 实验模板数据面板：标题、页签、字段列表、底部按钮各占一行，
-   字段列表独占剩余高度并自行滚动，避免被底部按钮遮挡。 */
-.experiment-template-data-panel {
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+.data-workbench-panel-content {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
 }
-.experiment-import-data-panel {
-  grid-template-rows: auto minmax(0, 1fr) auto;
+.data-workbench-panel-content[hidden] {
+  display: none;
+}
+.data-workbench-panel-content > .data-panel-body,
+.data-workbench-panel-content > .instance-field-editor {
+  flex: 1;
+  min-height: 0;
+}
+.data-workbench-panel-content > .data-workbench-tabs,
+.data-workbench-panel-content > .data-workbench-footer,
+.data-workbench-panel-notice {
+  flex: 0 0 auto;
+}
+.data-workbench-panel-notice {
+  padding: 0 14px;
+}
+.data-workbench-panel-notice:empty {
+  display: none;
+}
+.data-workbench-grid:has(> .collapsible-field-panel[data-collapsed='true']) {
+  grid-template-columns: minmax(0, 1fr) 40px;
 }
 .experiment-import-review-column {
   display: flex;
@@ -550,24 +579,22 @@ a:active,
 .experiment-import-value span:last-child {
   overflow-wrap: anywhere;
 }
-.experiment-template-data-panel .data-workbench-panel-header {
+.data-workbench-panel-header {
   display: grid;
   gap: 8px;
   padding: 12px 14px 8px;
+  flex: 0 0 auto;
 }
-.experiment-template-data-panel .data-workbench-panel-title {
+.data-workbench-panel-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
-.experiment-template-data-panel .data-workbench-panel-title .ant-typography {
+.data-workbench-panel-title .ant-typography {
   margin: 0;
 }
-.experiment-template-data-panel .data-workbench-tabs {
-  padding: 0 14px;
-}
-.experiment-template-data-panel > .data-panel-body {
+.experiment-template-data-panel .data-workbench-panel-content > .data-panel-body {
   padding-top: 0;
 }
 .data-workbench-tabs {
@@ -1102,6 +1129,7 @@ a:active,
 }
 
 .data-workbench-footer {
+  flex: 0 0 auto;
   display: flex;
   min-height: 58px;
   align-items: center;
@@ -2767,6 +2795,7 @@ a:active,
 }
 
 @media (max-width: 1099px) {
+  .data-workbench-grid:has(> .collapsible-field-panel[data-collapsed='true']),
   .template-workspace-grid:has(.collapsible-field-panel[data-collapsed='true']),
   .experiment-workspace-shell .workspace-main-stage > .template-workspace-grid.has-field-bindings:has(.collapsible-field-panel[data-collapsed='true']) {
     grid-template-columns: minmax(0, 1fr);
@@ -2775,6 +2804,7 @@ a:active,
 
   .collapsible-field-panel[data-collapsed='true'] {
     height: 44px;
+    min-height: 44px;
     flex-direction: row;
   }
 
@@ -3084,7 +3114,20 @@ a:active,
   color: var(--app-text-secondary);
   font-size: 12px;
   border-bottom: 1px solid var(--app-border);
+  flex-wrap: wrap;
 }
+
+.instance-field-editor {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.instance-field-editor[hidden], .field-definition-pane[hidden] { display: none; }
+.field-definition-pane { flex: 1; min-height: 0; overflow-y: auto; }
+.field-definition-pane .field-structure-pane { overflow: visible; }
+.field-definition-pane > .ant-alert, .field-definition-pane > div > .ant-alert { margin: 8px 12px; }
 
 .field-manager-toolbar > div {
   display: flex;
@@ -3331,79 +3374,6 @@ a:active,
 .required-property .ant-switch { margin-top: 7px; }
 .field-property-section-title { color: var(--app-text); font-size: 13px; }
 
-.experiment-semantics-pane {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  height: 100%;
-  overflow: auto;
-  padding: 12px;
-}
-
-.experiment-semantic-summary {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  overflow: hidden;
-  border: 1px solid var(--app-border);
-  border-radius: 8px;
-  background: var(--app-surface);
-}
-
-.experiment-semantic-summary > div {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  padding: 12px;
-  border-right: 1px solid var(--app-border);
-  border-bottom: 1px solid var(--app-border);
-}
-
-.experiment-semantic-summary > div:nth-child(2n) { border-right: 0; }
-.experiment-semantic-summary > div:nth-last-child(-n + 2) { border-bottom: 0; }
-.experiment-semantic-summary span { color: var(--app-text-secondary); font-size: 11px; }
-.experiment-semantic-summary strong { color: var(--app-text); font-size: 14px; }
-.experiment-semantic-summary .has-issue strong { color: var(--app-warning); }
-
-.experiment-semantics-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.experiment-semantics-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--app-border);
-  border-radius: 6px;
-  background: var(--app-surface);
-}
-
-.experiment-semantics-card small { color: var(--app-text-secondary); line-height: 1.55; }
-.experiment-semantic-domain-list,
-.experiment-semantics-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-
-.experiment-semantics-card-title,
-.experiment-semantic-field {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.experiment-semantic-field > span {
-  min-width: 88px;
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.experiment-semantic-field .ant-select {
-  flex: 1;
-  min-width: 0;
-}
 .field-sheet-name { color: var(--app-text-secondary); font-size: 12px; }
 
 .coordinate-input-row {
@@ -4487,6 +4457,7 @@ a:active,
 
 .template-business-workspace .workspace-header {
   min-height: 70px;
+  flex-wrap: wrap;
   gap: 18px;
   /* The user menu is fixed above the workspace header. Keep a real right
      gutter in the final (later) workspace theme rule as well; otherwise this
@@ -4498,6 +4469,7 @@ a:active,
 }
 .template-business-workspace .workspace-identity {
   min-width: 0;
+  flex: 1 1 320px;
   gap: 14px;
 }
 .template-business-workspace .workspace-title-block {
@@ -4510,7 +4482,8 @@ a:active,
   line-height: 1.45;
 }
 .template-business-workspace .workspace-header > .ant-space {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  max-width: 100%;
   gap: 10px !important;
 }
 .template-business-workspace .workspace-header .ant-btn {

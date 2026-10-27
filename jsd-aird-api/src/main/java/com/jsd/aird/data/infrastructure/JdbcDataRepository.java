@@ -33,6 +33,22 @@ public class JdbcDataRepository implements DataRepository {
     }
 
     @Override
+    public Optional<WorkbookDraft> findWorkbookDraft(UUID organizationId, UUID jobId) {
+        return jdbc.query("SELECT snapshot_jsonb::text,instance_jsonb::text,operations_jsonb::text FROM data.import_workbook_draft WHERE organization_id=? AND import_job_id=?",
+                (rs,n)->new WorkbookDraft(readDraftJson(rs.getString(1)),readDraftJson(rs.getString(2)),readDraftJson(rs.getString(3))),organizationId,jobId).stream().findFirst();
+    }
+    private JsonNode readDraftJson(String text) { try{return objectMapper.readTree(text);}catch(Exception ex){throw new IllegalStateException("Invalid workbook draft",ex);} }
+    @Override
+    public void saveWorkbookDraft(UUID organizationId,UUID jobId,JsonNode snapshot,JsonNode instance,JsonNode operations,UUID actorId) {
+        jdbc.update("""
+                INSERT INTO data.import_workbook_draft(organization_id,import_job_id,snapshot_jsonb,instance_jsonb,operations_jsonb,updated_by)
+                VALUES(?,?,?,?,?,?) ON CONFLICT(organization_id,import_job_id) DO UPDATE SET
+                snapshot_jsonb=excluded.snapshot_jsonb,instance_jsonb=excluded.instance_jsonb,
+                operations_jsonb=excluded.operations_jsonb,updated_by=excluded.updated_by,updated_at=clock_timestamp()
+                """,organizationId,jobId,pgJson(snapshot),pgJson(instance),pgJson(operations),actorId);
+    }
+
+    @Override
     public void insertJob(NewJob job) {
         jdbc.update("""
                 INSERT INTO data.import_job (

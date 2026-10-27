@@ -1,11 +1,17 @@
 import { fireEvent, render, screen, within, waitFor } from '@testing-library/react';
-import { useState } from 'react';
+import { useState, type ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { BusinessField, EditorSelection, ExperimentImportConfiguration, FieldModel, TemplateBinding } from '@/features/template-workspace/types';
 import { FieldStructure, TemplateFieldManager, type FieldManagerTab } from './TemplateFieldManager';
-import { InstanceFieldEditor } from '@/features/template-workspace/InstanceFieldEditor';
+import { InstanceFieldEditor as InstanceEditor } from '@/features/template-workspace/InstanceFieldEditor';
 import { createWorkbookInstance } from '@/features/template-workspace/workbook-instance';
 import type { WorkbookTemplateInstance } from '@/features/template-workspace/workbook-instance';
+function InstanceFieldEditor(props: Omit<ComponentProps<typeof InstanceEditor>, 'view' | 'onViewChange'> & { initialView?: 'data' | 'structure' | 'properties' }) {
+  const [view,setView] = useState<'data' | 'structure' | 'properties'>(props.initialView ?? 'structure');
+  return <><div role="tablist" aria-label="字段面板">
+    {(['data','structure','properties'] as const).map((key,index) => <button key={key} role="tab" aria-selected={view === key} onClick={() => setView(key)}>{['字段数据','字段结构','字段属性'][index]}</button>)}
+  </div><InstanceEditor {...props} view={view} onViewChange={setView} /></>;
+}
 
 const field = (id: string, name: string, groupId: string): BusinessField => ({
   id, name, groupId, kind: 'SCALAR', valueType: 'string', required: false, reviewStatus: 'CONFIRMED',
@@ -46,16 +52,47 @@ function Workspace({ selection, onFocusBinding, editable = false }: {
 }
 
 describe('field structure for configured templates', () => {
+  it('shows an explicit empty state when properties are opened before selecting a field', () => {
+    render(<InstanceFieldEditor initialView="properties" instance={createWorkbookInstance(model,mapping,configuration)} ownerId="empty" editable={false} onChange={vi.fn()} onFocus={vi.fn()} />);
+    expect(screen.getByText('请先在字段结构或表格中选择字段')).toBeInTheDocument();
+  });
+  it('has one navigation level and preserves the mounted structure while editing properties', () => {
+    const { container } = render(<InstanceFieldEditor instance={createWorkbookInstance(model,mapping,configuration)} ownerId="flat" editable={false} onChange={vi.fn()} onFocus={vi.fn()} />);
+    expect(screen.getAllByRole('tablist')).toHaveLength(1);
+    expect(screen.getAllByRole('tab')).toHaveLength(3);
+    expect(screen.queryByRole('tab',{ name:'字段列表' })).not.toBeInTheDocument();
+    const structure = container.querySelector('.field-definition-pane')!;
+    structure.scrollTop = 140;
+    fireEvent.click(screen.getByRole('button',{ name:/用量 明细字段/ }));
+    expect(screen.getByRole('tab',{ name:'字段属性' })).toHaveAttribute('aria-selected','true');
+    expect(screen.getByRole('textbox',{ name:'单位' })).toHaveValue('g');
+    expect(screen.queryByText('系统已识别为')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab',{ name:'字段结构' }));
+    expect(container.querySelector('.field-definition-pane')).toBe(structure);
+    expect(structure.scrollTop).toBe(140);
+    expect(screen.getByRole('button',{ name:/用量 明细字段/ })).toHaveAttribute('aria-current','true');
+  });
+  it('does not leave data browsing when a sheet cell is selected', async () => {
+    render(<InstanceFieldEditor initialView="data" instance={createWorkbookInstance(model,mapping,configuration)} ownerId="data" editable={false} onChange={vi.fn()} onFocus={vi.fn()}
+      selection={{ sheetId:'s',sheetName:'原表',address:'D54' }} />);
+    await waitFor(() => expect(screen.getByRole('tab',{ name:'字段数据' })).toHaveAttribute('aria-selected','true'));
+    fireEvent.click(screen.getByRole('tab',{ name:'字段属性' }));
+    expect(screen.getByRole('textbox',{ name:'字段名称' })).toHaveValue('用量');
+  });
+  it('removes the experiment configuration entry while retaining recipe definitions', () => {
+    render(<Workspace onFocusBinding={vi.fn()} />);
+    expect(screen.queryByRole('tab',{ name:'实验数据设置' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button',{ name:/物料编码 明细字段/ })).toBeInTheDocument();
+  });
   it('inherits business grouping through a geometry root when adding an instance field', () => {
     const child = { ...field('substrate', '实验素材', 'conditions'), bindingId: 'substrate' };
-    const childBinding: TemplateBinding = { ...mapping[0]!, bindingId: 'substrate', parentBindingId: 'comparison', role: 'FIELD', mappingKind: 'REPEAT_FIELD', locator: { sheetId: 's', address: 'C8:H8' } };
+    const childBinding: TemplateBinding = { ...mapping[0]!, bindingId: 'substrate', parentBindingId: 'comparison', role: 'FIELD', mappingKind: 'REPEAT_FIELD', locator: { sheetId: 's', labelRange:'B8', address: 'C8:H8' } };
     const instance = createWorkbookInstance({ ...model, fields: [child] }, [...mapping, childBinding], configuration);
     // Server-seeded versions need not carry a redundant parentFieldId on every child.
     delete instance.model.fields.find(f => f.id === child.id)!.parentFieldId;
     const changed = vi.fn<(instance: WorkbookTemplateInstance) => void>();
-    render(<InstanceFieldEditor instance={instance} ownerId="test" editable onChange={changed} onFocus={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: /实验素材/ }));
-    fireEvent.click(screen.getByRole('tab', { name: '字段列表' }));
+    render(<InstanceFieldEditor instance={instance} ownerId="test" editable onChange={changed} onFocus={vi.fn()} selection={{ sheetId:'s',sheetName:'测试实验',address:'B8' }} />);
+    fireEvent.click(screen.getByRole('tab', { name: '字段结构' }));
     fireEvent.click(screen.getByRole('button', { name: /新增字段/ }));
     const added = changed.mock.lastCall?.[0].model.fields.find(f => f.fieldOrigin === 'INSTANCE_LOCAL');
     expect(added).toMatchObject({ groupId: 'conditions', fieldType: 'TABLE_COLUMN', mappingKind: 'REPEAT_FIELD', pathSegments: ['实验条件', '新字段'] });
@@ -152,7 +189,7 @@ describe('field structure for configured templates', () => {
     render(<InstanceFieldEditor editable={false} instance={instance} ownerId="test" onChange={vi.fn()} onFocus={vi.fn()}
       selection={{ sheetId: 's', sheetName: '测试实验', address: 'D54' }} />);
     await waitFor(() => expect(screen.getByRole('textbox', { name: '字段名称' })).toHaveValue('用量'));
-    fireEvent.click(screen.getByRole('tab', { name: '字段列表' }));
+    fireEvent.click(screen.getByRole('tab', { name: '字段结构' }));
     expect(screen.getByRole('button', { name: /物料编码 明细字段/ })).toBeInTheDocument();
   });
 });

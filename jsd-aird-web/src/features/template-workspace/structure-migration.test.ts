@@ -35,6 +35,12 @@ const binding: TemplateBinding = {
 };
 
 describe('workbook structure migration', () => {
+  it.each(['row', 'col'] as const)('recognizes the SDK native remove-%s-by-range command', axis => {
+    expect(operationFromUniverCommand({ id: `sheet.command.remove-${axis}-by-range`, params: {
+      subUnitId: 's1', range: { startRow: 59, endRow: 60, startColumn: 2, endColumn: 3 },
+    } })).toMatchObject({ type: axis === 'row' ? 'DELETE_ROWS' : 'DELETE_COLUMNS', index: axis === 'row' ? 60 : 3, count: 2 });
+    expect(operationFromUniverCommand({ id: `sheet.command.remove-${axis}` })).toBeUndefined();
+  });
   it('uses the SDK destination range for right/below insertion without offsetting twice', () => {
     expect(
       operationFromUniverCommand({

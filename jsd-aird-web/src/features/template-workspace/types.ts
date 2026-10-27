@@ -142,6 +142,7 @@ export interface BusinessField {
   displayRole?: 'REGION' | 'FIELD';
   fieldType?: TemplateFieldType;
   labelStatus?: LabelStatus;
+  labelTextMissing?: boolean;
   pathSegments?: string[];
   kind: FieldKind;
   valueType: string;
@@ -482,6 +483,7 @@ export interface TemplateVersionHistoryItem {
 }
 
 export interface EditorHandle {
+  getSelection?(): EditorSelection | undefined;
   getTemplateInstance?(): WorkbookTemplateInstance | undefined;
   setTemplateInstance?(instance: WorkbookTemplateInstance): Promise<void>;
   flushChanges?(): void;

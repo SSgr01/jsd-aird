@@ -16,6 +16,7 @@ import UniverPresetSheetsCoreZhCN from '@univerjs/preset-sheets-core/locales/zh-
 import { UniverSheetsDrawingPreset } from '@univerjs/preset-sheets-drawing';
 import UniverPresetSheetsDrawingZhCN from '@univerjs/preset-sheets-drawing/locales/zh-CN';
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { App } from 'antd';
 
 import '@univerjs/preset-sheets-core/lib/index.css';
 import '@univerjs/preset-sheets-drawing/lib/index.css';
@@ -32,13 +33,16 @@ import { operationFromUniverCommand } from './structure-migration';
 import { sheetsFeatureLocale, sheetsFeaturePresets } from './sheets-features';
 import { isWorkbookContentCommand } from './office-content';
 import { EditorChanges, isPersistentMutation } from './editor-changes';
-import { copyWorkbookCells, readWorkbookInstance, discoverWorkbookField, recordUnboundCell, migrateWorkbookInstance, structureCopies, retargetAggregateFormula, type WorkbookTemplateInstance, type WorkbookCell } from './workbook-instance';
+import { copyWorkbookCells, readWorkbookInstance, discoverWorkbookField, renameWorkbookFieldAt, recordUnboundCell, migrateWorkbookInstance, structureCopies, retargetAggregateFormula, workbookAddress, type WorkbookTemplateInstance, type WorkbookCell } from './workbook-instance';
 import { generateUUID } from '@/utils/uuid';
+import { templateLocalFieldCode } from './field-model';
+import { WorkbookUndoBatch } from './undo-batch';
+import { workbookOperationBlock, isGuardedWorkbookOperation, copyableSheetMetadata } from './workbook-operation-guard';
 import { writesReadOnlyValue } from './read-only-values';
 import { sectionMergeExtensions, migratedWorkbookMerges } from './section-merges';
 import { templatePasteStyleHook } from './paste-styles';
 import { fieldNumberFormatEdits, fieldNumberFormat } from './field-number-format';
-import { instanceSheets } from './workbook-instance';
+import { instanceSheets, workbookWithExplicitRowHeights } from './workbook-instance';
 import type {
   EditorHandle,
   EditorCellChange,
@@ -64,6 +68,7 @@ interface Props {
   instance?: WorkbookTemplateInstance;
   onInstanceChange?: (instance: WorkbookTemplateInstance) => void;
   onReady?: () => void;
+  fieldCreationOrigin?: 'TEMPLATE_LOCAL' | 'INSTANCE_LOCAL';
 }
 
 export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function UniverSheetsEditor(
@@ -83,9 +88,12 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     onInstanceChange,
     onReady,
     instance,
+    fieldCreationOrigin = 'INSTANCE_LOCAL',
   },
   ref,
 ) {
+  const { message } = App.useApp();
+  const messageRef = useRef(message); messageRef.current = message;
   const containerRef = useRef<HTMLDivElement>(null);
   const [initializationError, setInitializationError] = useState<Error>();
   const univerRef = useRef<ReturnType<typeof createUniver>['univer']>();
@@ -109,6 +117,10 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
   const incomingInstanceSignature = useRef('');
   instanceRef.current = instance;
   const suppressUnboundRef = useRef(false);
+  const applyingInstanceRef = useRef(false);
+  const undoBatchRef = useRef(new WorkbookUndoBatch());
+  const creationOriginRef = useRef(fieldCreationOrigin);
+  creationOriginRef.current = fieldCreationOrigin;
   const editableRef = useRef(editable);
   const highlightRef = useRef<Array<{ dispose(): void }>>([]);
   const highlightTimersRef = useRef<number[]>([]);
@@ -175,15 +187,15 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
   const beginStructureBatch = () => {
     const service = univerRef.current?.__getInjector().get(IUndoRedoService);
     const workbook = apiRef.current?.getActiveWorkbook();
-    return workbook
-      ? service?.beginUndoRedoGroup(workbook.getId(), generateUUID(), 'append')
-      : undefined;
+    return undoBatchRef.current.begin(() => workbook && service ? service.beginUndoRedoGroup(workbook.getId(), generateUUID(), 'append') : undefined);
   };
-  const applyInstance = (next: WorkbookTemplateInstance, notify: boolean) => {
+  const applyInstance = (next: WorkbookTemplateInstance, notify: boolean, writeLabels = true) => {
     const workbook = apiRef.current?.getActiveWorkbook();
     const sheet = workbook?.getSheets()[0];
     if (!sheet) return;
     const batch = beginStructureBatch();
+    const wasApplying = applyingInstanceRef.current;
+    applyingInstanceRef.current = true;
     try {
       const previous = readWorkbookInstance(workbook.save() as unknown as Record<string, unknown>);
       if (previous) for (const edit of fieldNumberFormatEdits(previous.model, next.model, next.mapping)) {
@@ -210,7 +222,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         const old = previous?.model.fields.find(f => f.id === field.id);
         const binding = next.mapping.find(b => b.bindingId === field.bindingId);
         const label = binding && resolveLabelWriteRange(apiRef.current, binding);
-        if (label && ((old && old.name !== field.name) || (!label.getValue() && !['新字段','新明细字段'].includes(field.name)))) label.setValue(field.name);
+        if (writeLabels && field.labelStatus !== 'UNRESOLVED' && label && ((old && old.name !== field.name) || (!label.getValue() && !['新字段','新明细字段'].includes(field.name)))) label.setValue(field.name);
       }
       writeInstanceMetadata(sheet.getSheetId(), { ...sheet.getCustomMetadata(), templateInstance: next });
       bindingsRef.current = next.mapping;
@@ -218,7 +230,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         callbacksRef.current.onInstanceChange?.(next);
         callbacksRef.current.onDirty();
       }
-    } finally { batch?.dispose(); }
+    } finally { applyingInstanceRef.current = wasApplying; batch?.dispose(); }
   };
   useEffect(() => {
     const container = containerRef.current;
@@ -247,6 +259,10 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     let recentUnboundKey = '';
     let recentUnboundAt = 0;
     let cellChangeEventsArmed = false;
+    let fieldEditGroup: { dispose(): void } | undefined;
+    let fieldEditCommand: object | undefined;
+    let structureOwner: object | undefined;
+    let sheetScope: { command: object; ids: Set<string>; instance?: WorkbookTemplateInstance; group?: { dispose(): void } } | undefined;
 
     const initializeRuntime = () => {
       if (cancelled) return;
@@ -290,7 +306,9 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       ownedApi = univerAPI;
       univerRef.current = univer;
       apiRef.current = univerAPI;
-      const workbook = univerAPI.createWorkbook(snapshot);
+      const workbook = univerAPI.createWorkbook(workbookWithExplicitRowHeights(snapshot));
+      const structureOperationFor = (command: { id: string; params?: object }) => operationFromUniverCommand(command.id === 'sheet.command.set-worksheet-name'
+        ? { ...command, params: { ...command.params, subUnitId: (command.params as { subUnitId?: string })?.subUnitId ?? workbook.getActiveSheet()?.getSheetId() } } : command);
       clipboardSubscription = univer.__getInjector().get(ISheetClipboardService).addClipboardHook(templatePasteStyleHook(
         (sheetId, row, column) => workbook.getSheetBySheetId(sheetId)?.getSheet().getCellStyle(row, column),
       ));
@@ -320,7 +338,10 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       };
       const publishInstance = () => {
         const current = readWorkbookInstance(workbook.save() as unknown as Record<string, unknown>);
-        if (current) { bindingsRef.current = current.mapping; callbacksRef.current.onInstanceChange?.(current); }
+        if (current) { bindingsRef.current = current.mapping; callbacksRef.current.onInstanceChange?.(current);
+          labelValues.clear(); bindingValues.clear();
+          for (const binding of current.mapping) { labelValues.set(labelCacheKey(binding), readLabelCell(univerAPI, binding)); bindingValues.set(valueCacheKey(binding), readCell(univerAPI, binding)); }
+        }
       };
 
       contentRevisionRef.current = 0;
@@ -378,18 +399,26 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       ) => {
         if (!cellChangeEventsArmed) return;
         if (!isSingleCellAddress(selection.address)) return;
-        // Live discovery is only for a brand-new label typed into an empty
-        // cell. Clicking a cell or editing an existing template label must
-        // never create another field.
+        if (applyingInstanceRef.current || suppressUnboundRef.current || sameValue(value, previousValue)) return;
+        const live = workbook.save() as unknown as Record<string, unknown>;
+        const current = readWorkbookInstance(live);
+        const renamed = current && renameWorkbookFieldAt(current, selection, value);
+        if (renamed?.matched) { if (renamed.instance) applyInstance(renamed.instance, true, false); return; }
         if (!isNewFieldLabelChange(previousValue, value)) return;
+        const at = parseA1Range(selection.address);
+        if (at && instanceSheets(live).find(sheet => sheet.id === selection.sheetId)?.cellData?.[String(at.startRow - 1)]?.[String(at.startColumn - 1)]?.f) return;
         const key = `${selection.sheetId}|${selection.address}|${stableValueKey(value)}`;
         const now = Date.now();
         if (key === recentUnboundKey && now - recentUnboundAt < 120) return;
         recentUnboundKey = key;
         recentUnboundAt = now;
-        const live = workbook.save() as unknown as Record<string, unknown>;
-        const current = readWorkbookInstance(live);
         const discovered = current && discoverWorkbookField(current, selection, value, live);
+        if (discovered && creationOriginRef.current === 'TEMPLATE_LOCAL') {
+          for (const field of discovered.model.fields) if (!current?.model.fields.some(old => old.id === field.id)) {
+            field.fieldOrigin = 'TEMPLATE_LOCAL'; field.fieldCode = templateLocalFieldCode(current?.mapping[0]?.bindingId ?? 'template', field);
+            for (const binding of discovered.mapping) if (binding.bindingId === field.bindingId) binding.fieldCode = field.fieldCode;
+          }
+        }
         if (discovered) {
           applyInstance(discovered, true);
         } else callbacksRef.current.onUnboundCellChange?.(selection, value);
@@ -401,8 +430,9 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       ) => {
         if (!cellChangeEventsArmed) return;
         if (!isSingleCellAddress(selection.address) || sameValue(value, previousValue)) return;
-        const current=readWorkbookInstance(workbook.save() as unknown as Record<string,unknown>);
-        const checked=current&&recordUnboundCell(current,selection,value);
+        const live = workbook.save() as unknown as Record<string, unknown>;
+        const current=readWorkbookInstance(live);
+        const checked=current&&recordUnboundCell(current,selection,value,live);
         if(checked){const first=workbook.getSheets()[0];if(first)writeInstanceMetadata(first.getSheetId(),{...first.getCustomMetadata(),templateInstance:checked});callbacksRef.current.onInstanceChange?.(checked);}
         callbacksRef.current.onCellChange?.({ ...selection, value, previousValue });
       };
@@ -416,7 +446,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       ) => {
         const unitId = (command.params as { unitId?: string } | undefined)?.unitId;
         if (unitId && unitId !== workbook.getId()) return;
-        if (!editableRef.current) return;
+        if (!editableRef.current || applyingInstanceRef.current) return;
         if (options?.fromChangeset || options?.syncOnly || options?.applyFormulaCalculationResult)
           return;
         if (command.id === 'univer.command.undo' || command.id === 'univer.command.redo') {
@@ -430,7 +460,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
           });
           changes.change(); return;
         }
-        const structureOperation = operationFromUniverCommand(command);
+        const structureOperation = structureOperationFor(command);
         const cellMutation = isCellMutationCommand(command.id, command.params);
         const contentMutation =
           isWorkbookContentCommand(command) && isPersistentMutation(command, options);
@@ -441,9 +471,13 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         // incorrectly shown as “未保存”.
         if (!cellChangeEventsArmed) return;
         if (contentMutation) changes.change();
-        if (structureOperation && structureBefore) {
+        let appliedStructure = false;
+        if (structureOperation && structureBefore && command === structureOwner) {
+          appliedStructure = true;
           const before = structureBefore;
           structureBefore = undefined;
+          const wasApplying = applyingInstanceRef.current;
+          applyingInstanceRef.current = true;
           try {
             const targetSheet = workbook.getSheetBySheetId(structureOperation.sheetId);
             for (const copy of structureCopies(before, structureOperation)) {
@@ -459,18 +493,25 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
             }
             mergeCommands.syncExecuteCommand(mergeMutationId, { sheetId: structureOperation.sheetId, ranges: expectedMerges });
             const next = migrateWorkbookInstance(before, structureOperation);
-            const aggregates = (before.execution?.listProjections ?? []).flatMap(p => {
-              const updated = next.execution?.listProjections.find(n=>n.listProjectionId===p.listProjectionId);
-              const parent=before.mapping.find(b=>b.bindingId===p.parentBindingId||b.componentId===p.componentId);
-              return updated?.totalRange && parent?.locator.sheetId===structureOperation.sheetId ? [{ target:updated.totalRange, changes:[{before:p.valueRange,after:updated.valueRange,axis:p.itemAxis},{before:p.labelRange,after:updated.labelRange,axis:p.itemAxis}] }] : [];
-            });
-            for(const binding of before.mapping){const target=next.mapping.find(b=>b.bindingId===binding.bindingId);if(binding.locator.sheetId!==structureOperation.sheetId||typeof target?.locator.totalRange!=='string')continue;
-              const old=stringLocator(binding.locator.dataRange)||stringLocator(binding.locator.valueRange),range=stringLocator(target.locator.dataRange)||stringLocator(target.locator.valueRange);
-              if(old&&range)aggregates.push({target:target.locator.totalRange,changes:[{before:old,after:range,axis:binding.repeatAxis==='COLUMN'?'COLUMN':'ROW'}]});
+            const formulaChanges: Array<{ before: string; after: string; axis: 'ROW' | 'COLUMN' }> = [];
+            for (const projection of before.execution?.listProjections ?? []) {
+              const updated = next.execution?.listProjections.find(item => item.listProjectionId === projection.listProjectionId);
+              const parent = before.mapping.find(binding => binding.bindingId === projection.parentBindingId || projection.componentId && binding.componentId === projection.componentId);
+              if (!updated || parent?.locator.sheetId !== structureOperation.sheetId) continue;
+              for (const axis of [projection.itemAxis, projection.recordAxis]) formulaChanges.push({ before: projection.valueRange, after: updated.valueRange, axis });
+              formulaChanges.push({ before: projection.labelRange, after: updated.labelRange, axis: projection.itemAxis });
             }
-            for(const aggregate of aggregates){const range=targetSheet?.getRange(aggregate.target);if(!range)continue;const cells=range.getCellDatas();let changed=false;
-              const values=cells.map(row=>row.map(cell=>{if(!cell?.f)return cell??{};const formula=retargetAggregateFormula(cell.f,aggregate.changes);changed ||= formula!==cell.f;return {...cell,f:formula};}));
-              if(changed)range.setValues(values);
+            for (const binding of before.mapping.filter(item => item.mappingKind === 'REPEAT_REGION' && item.locator.sheetId === structureOperation.sheetId)) {
+              const updated = next.mapping.find(item => item.bindingId === binding.bindingId);
+              if (updated) formulaChanges.push({ before: stringLocator(binding.locator.dataRange) || locatorValueRange(binding.locator),
+                after: stringLocator(updated.locator.dataRange) || locatorValueRange(updated.locator), axis: binding.repeatAxis === 'COLUMN' ? 'COLUMN' : 'ROW' });
+            }
+            // Older contracts omit totalRange. Update actual dependent formula tokens instead of relying on that optional hint.
+            const liveSheet = instanceSheets(workbook.save() as unknown as Record<string, unknown>).find(sheet => sheet.id === structureOperation.sheetId);
+            for (const [row, columns] of Object.entries(liveSheet?.cellData ?? {})) for (const [column, cell] of Object.entries(columns)) {
+              if (!cell.f) continue;
+              const formula = retargetAggregateFormula(cell.f, formulaChanges);
+              if (formula !== cell.f) targetSheet?.getRange(workbookAddress(Number(row), Number(column))).setValues([[{ ...cell, f: formula }]] as Parameters<ReturnType<NonNullable<typeof targetSheet>['getRange']>['setValues']>[0]);
             }
             const first = workbook.getSheets()[0];
             if (first) writeInstanceMetadata(first.getSheetId(), { ...first.getCustomMetadata(), templateInstance: next });
@@ -479,9 +520,10 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
             // SDK merge undo mutations can overlap neighbouring sections after rows move.
             // Restore exact merge geometry last on undo, and last on redo, inside this group.
             mergeCheckpoint(structureOperation.sheetId, expectedMerges, 'after');
-          } finally { sectionMerges = []; structureGroup?.dispose(); structureGroup = undefined; }
+          } finally { applyingInstanceRef.current = wasApplying; structureOwner = undefined; sectionMerges = []; structureGroup?.dispose(); structureGroup = undefined; }
         }
-        if (structureOperation)
+        if (structureOperation && !appliedStructure) return;
+        if (appliedStructure && structureOperation)
           changes.enqueue(() => callbacksRef.current.onStructureChange?.(structureOperation));
         if (!structureOperation && !cellMutation) return;
         // Capture the cell before Univer moves the selection after Enter or a
@@ -525,7 +567,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
                 labelValues.set(cacheKey, labelValue);
               } else if (!sameValue(labelValues.get(cacheKey), labelValue)) {
                 labelValues.set(cacheKey, labelValue);
-                callbacksRef.current.onEditorLabel?.(binding, labelValue);
+                if (!readWorkbookInstance(workbook.save() as unknown as Record<string, unknown>)) callbacksRef.current.onEditorLabel?.(binding, labelValue);
               }
             }
             if (editedSelection && !suppressUnboundRef.current) {
@@ -593,18 +635,37 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       const commands = univer.__getInjector().get(ICommandService);
       let restoringHistory = false;
       beforeCommandSubscription = commands.beforeCommandExecuted((command, options) => {
-        if (command.id === 'univer.command.undo' || command.id === 'univer.command.redo') restoringHistory = true;
+        if (cellChangeEventsArmed && editableRef.current && !applyingInstanceRef.current && !restoringHistory && !structureGroup && !options?.fromChangeset && !options?.syncOnly && isGuardedWorkbookOperation(command.id)) {
+          const unitId = (command.params as { unitId?: string })?.unitId;
+          if (!unitId || unitId === workbook.getId()) {
+            const reason = workbookOperationBlock(command, { instance: readWorkbookInstance(workbook.save() as unknown as Record<string, unknown>),
+              bindings: bindingsRef.current, sheetId: workbook.getActiveSheet()?.getSheetId() ?? '', selection: latestSelection });
+            if (reason) { void messageRef.current.warning({ key: 'workbook-operation', content: reason }); throw new CanceledError(); }
+          }
+        }
+        if (cellChangeEventsArmed && editableRef.current && !applyingInstanceRef.current && !restoringHistory && !sheetScope && ['sheet.command.copy-sheet','sheet.command.remove-sheet'].includes(command.id)) {
+          sheetScope = { command, ids: new Set(workbook.getSheets().map(sheet => sheet.getSheetId())),
+            instance: readWorkbookInstance(workbook.save() as unknown as Record<string, unknown>), group: beginStructureBatch() };
+        }
+        if (command.id === 'univer.command.undo' || command.id === 'univer.command.redo') { changes.flush(); restoringHistory = true; }
+        if (cellChangeEventsArmed && editableRef.current && !applyingInstanceRef.current && !restoringHistory && !structureGroup && !fieldEditGroup
+          && !structureOperationFor(command) && isCellMutationCommand(command.id, command.params) && !options?.fromChangeset
+          && command.type === CommandType.COMMAND) { fieldEditGroup = beginStructureBatch(); fieldEditCommand = command; }
         if (cellChangeEventsArmed && editableRef.current && !structureGroup && !restoringHistory && !options?.fromChangeset
           && command.type === CommandType.MUTATION && isCellMutationCommand(command.id, command.params)
           && writesReadOnlyValue(bindingsRef.current, command.params)) throw new CanceledError();
-        const operation = operationFromUniverCommand(command);
+        const operation = structureOperationFor(command);
         if (cellChangeEventsArmed && editableRef.current && operation && !structureBefore && !options?.fromChangeset) {
           const beforeSnapshot = workbook.save() as unknown as Record<string, unknown>;
           structureBefore = readWorkbookInstance(beforeSnapshot);
-          const direction = (command.params as { direction?: number }).direction;
-          sectionMerges = sectionMergeExtensions(instanceSheets(beforeSnapshot).find(sheet => sheet.id === operation.sheetId), operation, direction === Direction.DOWN || direction === Direction.RIGHT);
+          structureOwner = command;
+          const direction = (command.params as { direction?: number } | undefined)?.direction;
+          const sections = (structureBefore?.execution?.listProjections ?? []).filter(projection => projection.itemAxis === (operation.type.endsWith('ROWS') ? 'ROW' : 'COLUMN')
+            && structureBefore?.mapping.find(binding => binding.bindingId === projection.parentBindingId || projection.componentId && binding.componentId === projection.componentId)?.locator.sheetId === operation.sheetId)
+            .map(projection => ({ range: projection.labelRange, name: projection.displayName ?? '' }));
+          sectionMerges = sectionMergeExtensions(instanceSheets(beforeSnapshot).find(sheet => sheet.id === operation.sheetId), operation, direction === Direction.DOWN || direction === Direction.RIGHT, sections);
           const beforeSheet = instanceSheets(beforeSnapshot).find(sheet => sheet.id === operation.sheetId);
-          expectedMerges = migratedWorkbookMerges(beforeSheet, operation, direction === Direction.DOWN || direction === Direction.RIGHT);
+          expectedMerges = migratedWorkbookMerges(beforeSheet, operation, direction === Direction.DOWN || direction === Direction.RIGHT, sections);
           if (structureBefore) {
             structureGroup = beginStructureBatch();
             mergeCheckpoint(operation.sheetId, beforeSheet?.mergeData ?? [], 'before');
@@ -613,6 +674,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         if (
           !cellChangeEventsArmed ||
           !editableRef.current ||
+          applyingInstanceRef.current ||
           !isPersistentMutation(command, options) ||
           !isCellMutationCommand(command.id, command.params)
         )
@@ -636,7 +698,22 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       });
       commandSubscription = commands.onCommandExecuted((command, options) => {
         try { synchronizeAfterCommand(command, options); }
-        finally { if (command.id === 'univer.command.undo' || command.id === 'univer.command.redo') restoringHistory = false; }
+        finally {
+          if (command === sheetScope?.command) {
+            try {
+              for (const sheet of workbook.getSheets()) if (!sheetScope.ids.has(sheet.getSheetId())) {
+                const custom = sheet.getCustomMetadata();
+                if (custom?.templateInstance || custom?.labTemplate) writeInstanceMetadata(sheet.getSheetId(), copyableSheetMetadata(custom));
+              }
+              if (sheetScope.instance && !readWorkbookInstance(workbook.save() as unknown as Record<string, unknown>)) {
+                const first = workbook.getSheets()[0];
+                if (first) writeInstanceMetadata(first.getSheetId(), { ...first.getCustomMetadata(), templateInstance: sheetScope.instance });
+              }
+            } finally { sheetScope.group?.dispose(); sheetScope = undefined; }
+          }
+          if (command === fieldEditCommand) { try { changes.flush(); } finally { fieldEditGroup?.dispose(); fieldEditGroup = undefined; fieldEditCommand = undefined; } }
+          if (command.id === 'univer.command.undo' || command.id === 'univer.command.redo') restoringHistory = false;
+        }
       });
       selectionSubscription = workbook.onSelectionChange((selections) => {
         const selection = selections.at(-1);
@@ -718,6 +795,8 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       commandSubscription?.dispose();
       beforeCommandSubscription?.dispose();
       pendingCellValues.clear();
+      fieldEditGroup?.dispose();
+      sheetScope?.group?.dispose();
       changesRef.current?.dispose();
       changesRef.current = undefined;
       selectionSubscription?.dispose();
@@ -897,6 +976,11 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
   useImperativeHandle(
     ref,
     () => ({
+      getSelection() {
+        const sheet = apiRef.current?.getActiveWorkbook()?.getActiveSheet();
+        const range = sheet?.getActiveRange();
+        return sheet && range ? { sheetId: sheet.getSheetId(), sheetName: sheet.getSheetName(), address: range.getA1Notation() } : undefined;
+      },
       flushChanges() {
         changesRef.current?.flush();
       },

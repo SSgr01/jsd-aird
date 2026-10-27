@@ -28,6 +28,10 @@ export function operationFromUniverCommand(command: {
   params?: object;
 }): WorkbookStructureOperation | undefined {
   const params = asRecord(command.params);
+  if (command.id === 'sheet.command.set-worksheet-name' && text(params.subUnitId) && text(params.name)) return {
+    operationId: generateUUID(), type: 'RENAME_SHEET', sheetId: text(params.subUnitId),
+    previousSheetName: text(params.oldName), nextSheetName: text(params.name), source: 'CUSTOMER',
+  };
   const range = asRecord(params.range);
   const sheetId = text(params.subUnitId);
   if (!sheetId || !validCommandRange(range)) return undefined;
@@ -46,7 +50,7 @@ export function operationFromUniverCommand(command: {
       count: rowCount,
     };
   }
-  if (command.id === 'sheet.command.remove-row') {
+  if (['sheet.command.remove-row', 'sheet.command.remove-row-by-range'].includes(command.id)) {
     return { ...base, type: 'DELETE_ROWS', index: number(range.startRow) + 1, count: rowCount };
   }
   if (command.id === 'sheet.command.insert-col') {
@@ -57,7 +61,7 @@ export function operationFromUniverCommand(command: {
       count: columnCount,
     };
   }
-  if (command.id === 'sheet.command.remove-col') {
+  if (['sheet.command.remove-col', 'sheet.command.remove-col-by-range'].includes(command.id)) {
     return {
       ...base,
       type: 'DELETE_COLUMNS',

@@ -56,7 +56,7 @@ import { labWorkbookInstance } from '@/features/experiment-workspace/lab-structu
 import { presentWorkbookFields } from '@/features/data-workbench/field-presentation';
 import { instanceWorkbookView } from '@/features/data-workbench/instance-workbook-view';
 
-type PanelTab = 'data' | 'structure';
+type PanelTab = 'data' | 'structure' | 'properties';
 
 const jobStatusLabels: Record<string, string> = {
   PARSING: '解析中', VALIDATING: '校验中', WAITING_MAPPING: '待确认数据', WAITING_CONFIRM: '待确认数据',
@@ -459,6 +459,7 @@ export function DataImportJobPage({
           items={[
             { key: 'data', label: '字段数据' },
             { key: 'structure', label: '字段结构' },
+            ...(instance ? [{ key: 'properties', label: '字段属性' }] : []),
           ]}
         />
         {activeTab === 'data' ? (
@@ -503,14 +504,11 @@ export function DataImportJobPage({
             renderFieldMeta={(field) => field.valueSource === 'FORMULA' ? <Typography.Text type="secondary">公式结果由系统计算</Typography.Text> : null}
           />
         ) : null}
-        {activeTab === 'structure' ? (
-          instance ? <InstanceFieldEditor instance={instance} ownerId={id} editable={workspaceView === 'edit' && canUpdate && !saving && Boolean(workbook?.editable)} selection={selectedCell}
+        {instance ? <InstanceFieldEditor view={activeTab} onViewChange={setActiveTab} getSelection={() => editorRef.current?.getSelection?.()} getSnapshot={() => editorRef.current?.getSnapshot()} instance={instance} ownerId={id} editable={workspaceView === 'edit' && canUpdate && !saving && Boolean(workbook?.editable)} selection={selectedCell}
             onFocusBinding={binding => editorRef.current?.focusBinding(binding)}
             onChange={next => { setInstance(next); void editorRef.current?.setTemplateInstance?.(next); markStructureDirty(); }}
             onFocus={field => { const b = instance.mapping.find(b => b.bindingId === field.bindingId); if(b) editorRef.current?.focusBinding(b); }}
-            onWriteLabel={(field,value) => { const b = instance.mapping.find(b => b.bindingId === field.bindingId); if(b) void editorRef.current?.writeLabel?.(b,value); }} />
-          : <DataFieldStructureBrowser workbook={workbook} selectedBindingId={selectedBindingId} onSelectField={selectDefinition} />
-        ) : null}
+            /> : activeTab === 'structure' ? <DataFieldStructureBrowser workbook={workbook} selectedBindingId={selectedBindingId} onSelectField={selectDefinition} /> : null}
       </>}
       footer={preview.job.status === 'COMPLETED' ? (
         workspaceMode === 'EXPERIMENT' ? (

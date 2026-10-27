@@ -9,6 +9,12 @@ const sheet: InstanceSheet = { id: 's', name: '表', cellData: { '50': { '0': { 
 ] };
 const insert = (index: number): WorkbookStructureOperation => ({ operationId: 'op', source: 'CUSTOMER', sheetId: 's', type: 'INSERT_ROWS', index, count: 2 });
 describe('merged section insertion', () => {
+  it('keeps appended list items under their configured heading when the subtotal belongs visually to the next group', () => {
+    expect(migratedWorkbookMerges(sheet, insert(61), false, [{ range: 'B52:B60', name: '配方' }])).toEqual([
+      { startRow: 50, endRow: 61, startColumn: 0, endColumn: 0 },
+      { startRow: 62, endRow: 64, startColumn: 0, endColumn: 0 },
+    ]);
+  });
   it('moves neighbouring sections and keeps exact geometry for structural undo checkpoints', () => {
     expect(migratedWorkbookMerges(sheet, insert(61), true)).toEqual([
       { startRow: 50, endRow: 61, startColumn: 0, endColumn: 0 },

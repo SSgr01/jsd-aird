@@ -80,3 +80,4 @@ export function updateProjectionField(projection: ExperimentListProjection, targ
     },
   };
 }
+export type ProjectionRangeTarget = 'labelRange' | 'valueRange';

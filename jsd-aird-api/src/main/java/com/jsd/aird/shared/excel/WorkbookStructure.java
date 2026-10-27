@@ -97,7 +97,7 @@ public final class WorkbookStructure {
         for (var sheet : snapshot.path("sheets")) sheetIds.add(sheet.path("id").asText());
         var ids = new HashSet<String>(); var codes = new HashSet<String>();
         var issues = json.createArrayNode();
-        for (var issue : out.path("issues")) if (!Set.of("FIELD_UNCONFIRMED","UNBOUND_VALUE").contains(issue.path("code").asText())) issues.add(issue.deepCopy());
+        for (var issue : out.path("issues")) if (!Set.of("FIELD_UNCONFIRMED","UNBOUND_VALUE","PARTIAL_RECORD").contains(issue.path("code").asText())) issues.add(issue.deepCopy());
         var bindingById = new HashMap<String,JsonNode>();
         for (var binding : out.path("mapping")) {
             var id = binding.path("bindingId").asText();
@@ -123,28 +123,53 @@ public final class WorkbookStructure {
             var seen = new HashSet<String>();
             for (var item : out.path(key)) if (item.path("id").asText().isBlank() || !seen.add(item.path("id").asText()) || !sheetIds.contains(item.path("sheetId").asText()) || item.path("index").asInt()<1 || !Set.of("ROW","COLUMN").contains(item.path("axis").asText())) throw invalid("重复区域身份或位置无效");
         }
+        for (var binding : out.path("mapping")) if (binding.path("mappingKind").asText().equals("REPEAT_REGION")) {
+            boolean rows=!binding.path("repeatAxis").asText().equals("COLUMN");
+            var bounds=range(first(binding.path("locator"),"dataRange","address","range"));
+            if(bounds==null)continue;
+            int first=rows?bounds[0]:bounds[1],last=rows?bounds[2]:bounds[3];
+            int size=Math.max(1,binding.path(rows?"recordHeight":"recordWidth").asInt(1)),stride=Math.max(size,binding.path("recordStride").asInt(1));
+            var records=new ArrayList<JsonNode>();for(var record:out.path("records"))if(record.path("regionId").equals(binding.path("bindingId")))records.add(record);
+            records.sort(Comparator.comparingInt(record->record.path("index").asInt()));
+            boolean partial=false;for(int n=0;n<records.size();n++)if(records.get(n).path("size").asInt(1)!=size||records.get(n).path("index").asInt()!=first+n*stride)partial=true;
+            int length=last-first+1;if(length%stride!=0&&(length-size)%stride!=0)partial=true;
+            if(partial)issues.addObject().put("code","PARTIAL_RECORD").put("sheetId",binding.path("locator").path("sheetId").asText()).put("message","行列操作拆分了重复记录，请核对区域边界或撤销该操作");
+        }
         var unbound=new HashSet<String>();
         for(var old:source.path("issues"))if(old.path("code").asText().equals("UNBOUND_VALUE")) {
             var r=range(old.path("address").asText());if(r==null)continue;
-            for(var sheet:snapshot.path("sheets"))if(sheet.path("id").equals(old.path("sheetId"))&&!cellValue(sheet,r[0],r[1]).asText("").isBlank()&&!covered(out,sheet.path("id").asText(),r[0],r[1])){issues.add(old.deepCopy());unbound.add(sheet.path("id").asText()+":"+old.path("address").asText());}
+            for(var sheet:snapshot.path("sheets"))if(sheet.path("id").equals(old.path("sheetId"))&&!cellValue(sheet,r[0],r[1]).asText("").isBlank()&&!covered(out,sheet.path("id").asText(),r[0],r[1])&&!isGroupHeading(out,sheet,r[0],r[1])){issues.add(old.deepCopy());unbound.add(sheet.path("id").asText()+":"+old.path("address").asText());}
         }
         for(var sheet:snapshot.path("sheets")) {
             var iterator=sheet.path("cellData").fields();
             while(iterator.hasNext()){var row=iterator.next();int r=Integer.parseInt(row.getKey())+1;var columns=row.getValue().fields();
                 while(columns.hasNext()){var cell=columns.next();int c=Integer.parseInt(cell.getKey())+1;if(cell.getValue().hasNonNull("f")||cell.getValue().path("v").asText("").isBlank())continue;
                     boolean data=false;for(var b:out.path("mapping"))if(b.path("mappingKind").asText().equals("REPEAT_REGION")&&b.path("locator").path("sheetId").equals(sheet.path("id"))&&contains(range(first(b.path("locator"),"dataRange","address","range")),r,c)){data=true;break;}
-                    if(!data||covered(out,sheet.path("id").asText(),r,c))continue;
+                    if(!data||covered(out,sheet.path("id").asText(),r,c)||isGroupHeading(out,sheet,r,c))continue;
                     var address=address(r,c);if(unbound.add(sheet.path("id").asText()+":"+address))issues.addObject().put("code","UNBOUND_VALUE").put("sheetId",sheet.path("id").asText()).put("address",address).put("message","此处有内容但没有对应字段，请核对填写位置");
                 }
             }
         }
         out.set("issues",issues); attach(snapshot,out); return out;
     }
+    private static boolean isGroupHeading(JsonNode instance,JsonNode sheet,int row,int col) {
+        var value=cellValue(sheet,row,col).asText("").replaceAll("\\s","");
+        boolean named=false;for(var group:instance.path("model").path("groups"))if(group.path("name").asText().replaceAll("\\s","").equals(value))named=true;
+        if(!named)return false;
+        for(var merge:sheet.path("mergeData"))if(merge.path("startRow").asInt()==row-1&&merge.path("startColumn").asInt()==col-1&&merge.path("endRow").asInt()>merge.path("startRow").asInt())return true;
+        return false;
+    }
     private static boolean contains(int[] range,int row,int col){return range!=null&&row>=range[0]&&row<=range[2]&&col>=range[1]&&col<=range[3];}
     private static boolean covered(JsonNode instance,String sid,int row,int col){
         for(var b:instance.path("mapping"))if(!b.path("mappingKind").asText().equals("REPEAT_REGION")&&b.path("locator").path("sheetId").asText().equals(sid))for(var key:List.of("valueRange","address","labelRange","labelAddress"))if(contains(range(b.path("locator").path(key).asText()),row,col))return true;
-        for(var p:instance.path("execution").path("listProjections"))for(var key:List.of("labelRange","valueRange","unitRange"))if(contains(range(p.path(key).asText()),row,col))return true;
+        for(var p:instance.path("execution").path("listProjections"))if(projectionSheet(instance,p).equals(sid))for(var key:List.of("labelRange","valueRange","unitRange"))if(contains(range(p.path(key).asText()),row,col))return true;
+        for(var region:instance.path("model").path("staticRegions"))if(region.path("sheetId").asText().equals(sid)&&contains(range(region.path("address").asText()),row,col))return true;
         return false;
+    }
+    private static String projectionSheet(JsonNode instance,JsonNode projection){
+        for(var binding:instance.path("mapping"))if(binding.path("bindingId").equals(projection.path("parentBindingId")))return binding.path("locator").path("sheetId").asText();
+        for(var binding:instance.path("mapping"))if(!projection.path("componentId").asText().isBlank()&&binding.path("componentId").equals(projection.path("componentId")))return binding.path("locator").path("sheetId").asText();
+        return "";
     }
     private static String address(int row,int col){var text=new StringBuilder();for(int n=col;n>0;n=(n-1)/26)text.insert(0,(char)('A'+(n-1)%26));return text.append(row).toString();}
     public static int[] range(String value) {
@@ -161,10 +186,16 @@ public final class WorkbookStructure {
         var out=(ObjectNode)model.deepCopy();var instance=validate(json,snapshot,instance(snapshot));
         var existing=model.path("templateInstance");
         if(existing.path("version").asInt()==2&&existing.path("definition").isObject()) {
-            for(var key:List.of("definition","sampleOrder","materialLines","businessBindings","issues"))if(existing.has(key))instance.set(key,existing.path(key).deepCopy());
+            for(var key:List.of("definition","sampleOrder","materialLines","businessBindings"))if(existing.has(key))instance.set(key,existing.path(key).deepCopy());
         }
         out.set("templateInstance",instance);out.set("documentSnapshot",snapshot.deepCopy());
         var values=out.path("dynamicValues") instanceof ObjectNode object?object:out.putObject("dynamicValues");
+        var livePaths=new HashSet<String>();for(var binding:instance.path("mapping"))livePaths.add(binding.path("dataPath").asText());
+        for(var binding:existing.path("mapping")) {
+            var path=binding.path("dataPath").asText();
+            if(!binding.path("mappingKind").asText().equals("REPEAT_REGION")&&path.startsWith("/")&&!path.contains("*")&&!path.matches(".*[\\[\\]].*")
+                &&livePaths.stream().noneMatch(current->current.equals(path)||current.startsWith(path+"/")))removePath(values,path);
+        }
         var fields=json.createObjectNode();
         for(var binding:instance.path("mapping")) {
             if(binding.path("mappingKind").asText().equals("REPEAT_REGION"))continue;
@@ -183,6 +214,11 @@ public final class WorkbookStructure {
         var segments=path.substring(1).split("/");var target=root;
         for(int i=0;i<segments.length-1;i++){var key=segments[i].replace("~1","/").replace("~0","~");if(!(target.path(key) instanceof ObjectNode))target.putObject(key);target=(ObjectNode)target.path(key);}
         target.set(segments[segments.length-1].replace("~1","/").replace("~0","~"),value.deepCopy());
+    }
+    private static void removePath(ObjectNode root,String path) {
+        var segments=path.substring(1).split("/");JsonNode target=root;
+        for(int n=0;n<segments.length-1;n++)target=target.path(segments[n].replace("~1","/").replace("~0","~"));
+        if(target instanceof ObjectNode object)object.remove(segments[segments.length-1].replace("~1","/").replace("~0","~"));
     }
     private static ApiException invalid(String message){return new ApiException(ApiErrorCode.VALIDATION_ERROR,message);}
 }

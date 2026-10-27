@@ -3124,25 +3124,10 @@ a:active,
   min-height: 0;
   overflow: hidden;
 }
-.instance-field-editor > .field-manager-tabs {
-  flex: 0 0 auto;
-  border-bottom: 1px solid var(--app-border);
-}
-.instance-field-editor-content {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-}
-.instance-field-editor-content .field-structure-pane,
-.instance-field-editor-content .field-properties-pane {
-  overflow: visible;
-}
-.instance-field-editor-content .ant-alert {
-  margin: 8px 12px;
-}
-.experiment-semantic-actions {
-  padding: 8px 12px;
-}
+.instance-field-editor[hidden], .field-definition-pane[hidden] { display: none; }
+.field-definition-pane { flex: 1; min-height: 0; overflow-y: auto; }
+.field-definition-pane .field-structure-pane { overflow: visible; }
+.field-definition-pane > .ant-alert, .field-definition-pane > div > .ant-alert { margin: 8px 12px; }
 
 .field-manager-toolbar > div {
   display: flex;
@@ -3389,79 +3374,6 @@ a:active,
 .required-property .ant-switch { margin-top: 7px; }
 .field-property-section-title { color: var(--app-text); font-size: 13px; }
 
-.experiment-semantics-pane {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  height: 100%;
-  overflow: auto;
-  padding: 12px;
-}
-
-.experiment-semantic-summary {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  overflow: hidden;
-  border: 1px solid var(--app-border);
-  border-radius: 8px;
-  background: var(--app-surface);
-}
-
-.experiment-semantic-summary > div {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  padding: 12px;
-  border-right: 1px solid var(--app-border);
-  border-bottom: 1px solid var(--app-border);
-}
-
-.experiment-semantic-summary > div:nth-child(2n) { border-right: 0; }
-.experiment-semantic-summary > div:nth-last-child(-n + 2) { border-bottom: 0; }
-.experiment-semantic-summary span { color: var(--app-text-secondary); font-size: 11px; }
-.experiment-semantic-summary strong { color: var(--app-text); font-size: 14px; }
-.experiment-semantic-summary .has-issue strong { color: var(--app-warning); }
-
-.experiment-semantics-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.experiment-semantics-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--app-border);
-  border-radius: 6px;
-  background: var(--app-surface);
-}
-
-.experiment-semantics-card small { color: var(--app-text-secondary); line-height: 1.55; }
-.experiment-semantic-domain-list,
-.experiment-semantics-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-
-.experiment-semantics-card-title,
-.experiment-semantic-field {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.experiment-semantic-field > span {
-  min-width: 88px;
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.experiment-semantic-field .ant-select {
-  flex: 1;
-  min-width: 0;
-}
 .field-sheet-name { color: var(--app-text-secondary); font-size: 12px; }
 
 .coordinate-input-row {
@@ -4545,6 +4457,7 @@ a:active,
 
 .template-business-workspace .workspace-header {
   min-height: 70px;
+  flex-wrap: wrap;
   gap: 18px;
   /* The user menu is fixed above the workspace header. Keep a real right
      gutter in the final (later) workspace theme rule as well; otherwise this
@@ -4556,6 +4469,7 @@ a:active,
 }
 .template-business-workspace .workspace-identity {
   min-width: 0;
+  flex: 1 1 320px;
   gap: 14px;
 }
 .template-business-workspace .workspace-title-block {
@@ -4568,7 +4482,8 @@ a:active,
   line-height: 1.45;
 }
 .template-business-workspace .workspace-header > .ant-space {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  max-width: 100%;
   gap: 10px !important;
 }
 .template-business-workspace .workspace-header .ant-btn {

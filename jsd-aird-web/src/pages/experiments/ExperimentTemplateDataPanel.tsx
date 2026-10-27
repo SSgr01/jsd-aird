@@ -9,6 +9,7 @@ import { getAtPath } from '@/features/template-workspace/path-utils';
 import type { DataFieldValueView, DataWorkbookSnapshot } from '@/services/data/data-api';
 import type { ExperimentTemplateDataReview } from '@/services/experiments/experiment-api';
 import type { EditorSelection } from '@/features/template-workspace/types';
+import type { FieldPanelView } from '@/features/template-workspace/field-definition-selection';
 
 interface Props {
   review?: ExperimentTemplateDataReview;
@@ -27,7 +28,7 @@ interface Props {
   onWriteValue?: (field: DataFieldValueView, value: string) => Promise<void>;
   notice?: ReactNode;
   confirmationBlocked?: boolean;
-  structureEditor?: ReactNode;
+  structureEditor?: (view: FieldPanelView, onViewChange: (view: 'structure' | 'properties') => void) => ReactNode;
 }
 
 const EMPTY_REVIEW = {
@@ -122,7 +123,7 @@ export function ExperimentTemplateDataPanel({
   confirmationBlocked,
   structureEditor,
 }: Props) {
-  const [activeTab, setActiveTab] = useState<'data' | 'structure' | 'mapping'>('data');
+  const [activeTab, setActiveTab] = useState<FieldPanelView | 'mapping'>('data');
   const [selectedBindingId, setSelectedBindingId] = useState<string>();
   const [selectedFieldKey, setSelectedFieldKey] = useState<string>();
   const [corrections, setCorrections] = useState<Record<string, string>>({});
@@ -255,10 +256,11 @@ export function ExperimentTemplateDataPanel({
       <Tabs
         className="data-workbench-tabs"
         activeKey={activeTab}
-        onChange={(key) => setActiveTab(key as 'data' | 'structure' | 'mapping')}
+        onChange={(key) => setActiveTab(key as FieldPanelView | 'mapping')}
         items={[
           { key: 'data', label: '字段数据' },
           { key: 'structure', label: '字段结构' },
+          ...(structureEditor ? [{ key: 'properties', label: '字段属性' }] : []),
           ...(!instanceWorkbook ? [{ key: 'mapping', label: '字段映射' }] : []),
         ]}
       />
@@ -321,7 +323,8 @@ export function ExperimentTemplateDataPanel({
           }
         />
       ) : null}
-      {activeTab === 'structure' ? (structureEditor ?? (
+      {structureEditor?.(activeTab === 'mapping' ? 'data' : activeTab, setActiveTab)}
+      {activeTab === 'structure' && !structureEditor ? (
         <DataFieldStructureBrowser
           workbook={workbook}
           selectedBindingId={selectedBindingId}
@@ -338,7 +341,7 @@ export function ExperimentTemplateDataPanel({
             else onFocus(field.bindingId);
           }}
         />
-      )) : null}
+      ) : null}
       {activeTab === 'mapping' ? (
         <div className="data-panel-body">
           <Typography.Paragraph type="secondary">

@@ -27,9 +27,10 @@ import { bindingForField } from '@/features/template-workspace/field-model';
 import {
   projectionFieldName, projectionGroup, projectionName, projectionUnit,
   projectionFieldViews, updateProjectionField,
-  type ProjectionFieldTarget,
+  type ProjectionFieldTarget, type ProjectionRangeTarget,
 } from '@/features/template-workspace/list-projection';
-import { isExperimentTemplate } from '@/features/template-workspace/experiment-semantics';
+import { useFieldDefinitionSelection } from '@/features/template-workspace/field-definition-selection';
+import { EXPERIMENT_FIELD_OPTIONS, semanticFromValue, semanticValue } from '@/features/template-workspace/experiment-semantics';
 import type {
   RecognitionReview,
   RecognitionReviewItem,
@@ -38,9 +39,6 @@ import type {
 
 import { normalizeAddress, validateAddress } from './coordinates';
 import { RecognitionReviewPanel } from './RecognitionReviewPanel';
-import { ExperimentSemanticsPanel } from './ExperimentSemanticsPanel';
-import { resolveBindingSelection } from '@/features/template-workspace/selection-resolver';
-import type { ProjectionRangeTarget } from './ExperimentSemanticsPanel';
 import {
   locatorLabelRange,
   locatorValueRange,
@@ -48,7 +46,7 @@ import {
 } from '@/features/template-workspace/locator';
 
 export type CoordinateTarget = 'labelAddress' | 'address';
-export type FieldManagerTab = 'recognition' | 'structure' | 'properties' | 'experiment';
+export type FieldManagerTab = 'recognition' | 'structure' | 'properties';
 
 interface Props {
   selection?: EditorSelection;
@@ -140,33 +138,23 @@ export function TemplateFieldManager({
   selection,
   onFocusBinding,
 }: Props) {
-  const [projectionSelection, setProjectionSelection] = useState<{ id: string; target: ProjectionFieldTarget }>();
+  const { target, setTarget } = useFieldDefinitionSelection({ model: fieldModel, mapping,
+    projections: experimentConfiguration.listProjections, selection, view: activeTab,
+    selectedFieldId, onViewChange: onActiveTabChange });
+  const projectionSelection = target.projection;
   const selectedProjection = experimentConfiguration.listProjections.find(
     (projection) => projection.listProjectionId === projectionSelection?.id,
   );
   const projectionViews = projectionFieldViews(experimentConfiguration.listProjections, fieldModel, mapping);
   const selectedProjectionView = projectionViews.find((view) => view.projection.listProjectionId === projectionSelection?.id
     && view.target === projectionSelection.target);
-  const selectionMatch = selection ? resolveBindingSelection([...projectionViews.map((view) => view.binding), ...mapping], selection) : undefined;
-  const selectionView = projectionViews.find((view) => view.binding.bindingId === selectionMatch?.binding.bindingId);
-  const selectionKey = selection ? `${selection.sheetId}:${selection.address}` : '';
-  const selectionProjectionId = selectionView?.projection.listProjectionId;
-  const selectionProjectionTarget = selectionView?.target;
-  useEffect(() => {
-    if (!selectionKey) return;
-    setProjectionSelection((current) => selectionProjectionId && selectionProjectionTarget
-      ? current?.id === selectionProjectionId && current.target === selectionProjectionTarget
-        ? current : { id: selectionProjectionId, target: selectionProjectionTarget }
-      : undefined);
-  }, [selectionKey, selectionProjectionId, selectionProjectionTarget]);
   const selectedField = fieldModel.fields.find(
-    (field) => field.id === selectedFieldId && !isRegionField(field),
+    (field) => field.id === target.fieldId && !isRegionField(field),
   );
   const selectedBinding = selectedField ? bindingForField(selectedField, mapping) : undefined;
-  const experimentTemplate = format === 'XLSX' && isExperimentTemplate(experimentConfiguration);
 
   const selectField = (field: BusinessField) => {
-    setProjectionSelection(undefined);
+    setTarget({ fieldId: field.id });
     onSelectField(field);
     onActiveTabChange('properties');
   };
@@ -201,18 +189,23 @@ export function TemplateFieldManager({
         >
           字段属性
         </button>
-        {experimentTemplate && (
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'experiment'}
-            onClick={() => onActiveTabChange('experiment')}
-          >
-            实验数据设置
-          </button>
-        )}
       </div>
       }>
+      <div className="field-definition-pane" hidden={activeTab !== 'structure'}>
+        <FieldStructure
+          editable={fieldDefinitionEditable} fieldModel={fieldModel} recognitionReview={recognitionReview}
+          selectedFieldId={selectedProjectionView?.field.id ?? target.fieldId}
+          onSelectField={selectField} onAddField={onAddField} onAddStructuredField={onAddStructuredField}
+          onManageGroups={onManageGroups} experimentConfiguration={experimentConfiguration}
+          onSelectProjection={(projection, target) => {
+            setTarget({ projection: { id: projection.listProjectionId, target } });
+            const view = projectionViews.find(item => item.projection.listProjectionId === projection.listProjectionId && item.target === target);
+            if (view) onFocusBinding?.(view.binding);
+            onActiveTabChange('properties');
+          }}
+        />
+      </div>
+      <div className="field-definition-pane" hidden={activeTab === 'structure'}>
       {activeTab === 'recognition' && recognitionReview?.recognitionRunId && editable ? (
         <RecognitionReviewPanel
           review={recognitionReview}
@@ -229,34 +222,6 @@ export function TemplateFieldManager({
           onApplyQualityIssue={onApplyQualityIssue}
           onIgnoreQualityIssue={onIgnoreQualityIssue}
           onRollbackQualityIssue={onRollbackQualityIssue}
-        />
-      ) : activeTab === 'experiment' && experimentTemplate ? (
-        <ExperimentSemanticsPanel
-          editable={editable}
-          configuration={experimentConfiguration}
-          fieldModel={fieldModel}
-          mapping={mapping}
-          onChange={onExperimentConfigurationChange}
-          onUpdateField={onUpdateField}
-          onPickProjectionRange={onPickProjectionRange}
-        />
-      ) : activeTab === 'structure' ? (
-        <FieldStructure
-          editable={fieldDefinitionEditable}
-          fieldModel={fieldModel}
-          recognitionReview={recognitionReview}
-          selectedFieldId={selectedProjectionView?.field.id ?? selectedFieldId}
-          onSelectField={selectField}
-          onAddField={onAddField}
-          onAddStructuredField={onAddStructuredField}
-          onManageGroups={onManageGroups}
-          experimentConfiguration={experimentConfiguration}
-          onSelectProjection={(projection, target) => {
-            setProjectionSelection({ id: projection.listProjectionId, target });
-            const view = projectionViews.find((item) => item.projection.listProjectionId === projection.listProjectionId && item.target === target);
-            if (view) onFocusBinding?.(view.binding);
-            onActiveTabChange('properties');
-          }}
         />
       ) : selectedProjection && projectionSelection && selectedProjectionView ? (
         <FieldProperties
@@ -299,6 +264,7 @@ export function TemplateFieldManager({
       ) : (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="请先选择字段" />
       )}
+      </div>
     </CollapsibleFieldPanel>
   );
 }
@@ -379,7 +345,7 @@ export function FieldStructure({
         </div>
       </div>
       <div className="field-manager-help">
-        普通字段：在空白位置输入名称后自动发现；明细字段请点击对应区域右侧“＋”。在数据区填写业务值不会创建字段。
+        在区域标题位置输入名称，可自动创建位置明确的字段；其他位置可使用“新增字段”设置。填写结果或物料编码不会创建字段。
       </div>
 
       <div className="field-region-tree">
@@ -780,7 +746,7 @@ export function FieldProperties({
   const locator = mergeLocators(field.locator, binding?.locator);
   const sourceLabelAddress = locatorLabelRange(locator);
   const sourceAddress = locatorValueRange(locator);
-  const canDeleteField = editable && !field.candidate && !field.projectionField && field.reviewStatus === 'CONFIRMED';
+  const canDeleteField = editable && !field.candidate && !field.projectionField && (field.reviewStatus === 'CONFIRMED' || ['TEMPLATE_LOCAL', 'INSTANCE_LOCAL', 'ORDER_LOCAL'].includes(field.fieldOrigin ?? ''));
   const [labelAddress, setLabelAddress] = useState(sourceLabelAddress);
   const [address, setAddress] = useState(sourceAddress);
   const [labelError, setLabelError] = useState<string>();
@@ -826,7 +792,7 @@ export function FieldProperties({
           {reviewText && <FieldReviewNotice field={field} text={reviewText} />}
           {(field.candidate || field.reviewStatus === 'NEEDS_CONFIRMATION') && (
             <div className="field-property-alert full" role="status">
-              待确认字段请在“识别确认”中选择忽略；确认后可在此删除。
+              {field.candidate ? '请在“识别确认”中选择忽略，或确认字段的填写位置。' : '填写字段名称并设置填写位置；不需要的自定义字段可直接删除。'}
             </div>
           )}
           <BusinessPropertyFields
@@ -855,7 +821,7 @@ export function FieldProperties({
         {reviewText && <FieldReviewNotice field={field} text={reviewText} />}
         {(field.candidate || field.reviewStatus === 'NEEDS_CONFIRMATION') && (
           <div className="field-property-alert full" role="status">
-            待确认字段请在“识别确认”中选择忽略；确认后可在此删除。
+            {field.candidate ? '请在“识别确认”中选择忽略，或确认字段的填写位置。' : '填写字段名称并设置填写位置；不需要的自定义字段可直接删除。'}
           </div>
         )}
         <BusinessPropertyFields
@@ -864,6 +830,18 @@ export function FieldProperties({
           groups={groups}
           onUpdateField={onUpdateField}
         />
+        {(field.experimentSemanticStatus === 'NEEDS_REVIEW' || field.experimentSemanticIssue) && (
+          <div className="field-property-section">
+            <div className="field-property-section-title">数据类别</div>
+            <small>{field.experimentSemanticIssue || '请选择此字段的数据类别。'}</small>
+            <Select aria-label="数据类别" disabled={!editable} value={semanticValue(field.experimentField)}
+              options={EXPERIMENT_FIELD_OPTIONS} onChange={(value: string) => onUpdateField(field.id, {
+                experimentField: semanticFromValue(value), experimentSemanticStatus: 'CONFIRMED',
+                experimentSemanticConfidence: 1, experimentSemanticSource: 'HUMAN',
+                experimentSemanticIssue: undefined, experimentSemanticAlternatives: undefined,
+              })} />
+          </div>
+        )}
 
         <div className="field-property-section">
           <div className="field-property-section-title">Excel 位置</div>

@@ -229,7 +229,11 @@ describe('reusable workbook structure', () => {
         2,
         1,
       ),
-    ).toEqual([[{ v: '', s: 'style', custom: { fieldId: 'f' } }, { f: '=B3+$B$2+"A1"' }]]);
+    ).toEqual([[{ v: null, t: null, s: 'style', custom: { fieldId: 'f' } }, { f: '=B3+$B$2+"A1"' }]]);
+  });
+  it('clears copied numeric and boolean input types so blank records do not become zero', () => {
+    expect(copyWorkbookCells([[{ v: 0.6, t: 2, s: 'percent' }, { v: true, t: 3 }]], 0, 1))
+      .toEqual([[{ v: null, t: null, s: 'percent' }, { v: null, t: null }]]);
   });
   it('serializes the whole logical instance with the workbook for consistent undo and reopen', () => {
     const snapshot = { sheets: { s: { id: 's', name: '表' } } },

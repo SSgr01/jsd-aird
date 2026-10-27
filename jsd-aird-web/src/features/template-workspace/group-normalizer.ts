@@ -56,7 +56,7 @@ export function normalizeFieldModel(model: FieldModel): FieldModel {
     const locator = mergeLocators(field.locator);
     const labelStatus: LabelStatus = fieldType === 'REGION'
       ? 'NOT_APPLICABLE'
-      : locator.label ? 'RESOLVED' : 'UNRESOLVED';
+      : field.labelTextMissing || !locator.label ? 'UNRESOLVED' : 'RESOLVED';
     return {
       ...field,
       name: typeof field.name === 'string' ? field.name : '',

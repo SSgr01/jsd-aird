@@ -93,6 +93,7 @@ import { ExperimentTemplateDataPanel } from './ExperimentTemplateDataPanel';
 import { ExperimentImportDataPanel } from './ExperimentImportDataPanel';
 import { labDefinition, labBindings } from '@/features/experiment-workspace/lab-template';
 import { InstanceFieldEditor } from '@/features/template-workspace/InstanceFieldEditor';
+import type { FieldPanelView } from '@/features/template-workspace/field-definition-selection';
 import { labWorkbookInstance } from '@/features/experiment-workspace/lab-structure-adapter';
 import { readWorkbookInstance, writeWorkbookInstance, validateWorkbookInstance } from '@/features/template-workspace/workbook-instance';
 import { resolveInstanceDefinition } from '@/features/template-workspace/instance-definition';
@@ -1462,12 +1463,12 @@ export function ExperimentWorkspacePage({
     const displayed = view === 'preview' && presentationSnapshot ? resultBinding(binding, presentationSnapshot, presentationLocations) : binding;
     if (displayed) editorRef.current?.focusBinding(displayed);
   };
-  const instanceStructureEditor = currentInstance ? <InstanceFieldEditor instance={currentInstance} ownerId={id} editable={editable && !busy} selection={workbenchSelection}
+  const instanceStructureEditor = currentInstance ? (panelView: FieldPanelView, onPanelViewChange: (view: 'structure' | 'properties') => void) => <InstanceFieldEditor view={panelView} onViewChange={onPanelViewChange} getSelection={() => editorRef.current?.getSelection?.()} getSnapshot={() => editorRef.current?.getSnapshot()} instance={currentInstance} ownerId={id} editable={editable && !busy} selection={workbenchSelection}
     hiddenFieldIds={hiddenFieldIds} displayBindings={displayBindings}
     onFocusBinding={focusInstanceBinding}
     onChange={next => { void editorRef.current?.setTemplateInstance?.(next); markDirty(); }}
     onFocus={field => { const b=currentInstance.mapping.find(b=>b.bindingId===field.bindingId);if(b)focusInstanceBinding(b); }}
-    onWriteLabel={(field,value)=>{const b=currentInstance.mapping.find(b=>b.bindingId===field.bindingId);if(b)void editorRef.current?.writeLabel?.(b,value);}} /> : undefined;
+    /> : undefined;
   const workspaceCanvas = (
     <Suspense fallback={<ContentLoading label="加载编辑器…" />}>
       {documentFormatOf(editModel, snapshot) === 'word' ? (

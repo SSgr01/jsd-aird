@@ -1,4 +1,9 @@
 import { generateUUID } from '@/utils/uuid';
+import { potentialFieldLabel, isStructuredDataCell } from './live-field-discovery';
+import { locatorValueRange, locatorLabelRange } from './locator';
+import { updateFieldDefinition, removeFieldDefinitions } from './field-editing';
+import { offsetWorkbookFormula, expandAggregateReferences } from './formula-references';
+import { createCustomFieldWorkspace } from './custom-field-operations';
 import {
   migrateRange,
   migrateWorkspaceStructure,
@@ -56,6 +61,16 @@ export interface InstanceSheet {
 }
 export function instanceSheets(snapshot: Record<string, unknown>): InstanceSheet[] {
   return Object.values((snapshot.sheets ?? {}) as Record<string, InstanceSheet>);
+}
+
+/** Imported custom row heights are explicit; an old auto-height cache must not shrink them on reopen. */
+export function workbookWithExplicitRowHeights(snapshot: Record<string, unknown>) {
+  const next = structuredClone(snapshot);
+  for (const sheet of instanceSheets(next)) for (const row of Object.values(sheet.rowData ?? {})) {
+    if (typeof row.h === 'number' && row.h > 0 && row.ia === undefined) row.ia = 0;
+    if (row.ia === 0) delete row.ah;
+  }
+  return next;
 }
 export function readWorkbookInstance(
   snapshot: Record<string, unknown>,
@@ -181,43 +196,34 @@ export function migrateWorkbookInstance(
     count = operation.count;
   if (!index || !count) return instance;
   const insert = operation.type.startsWith('INSERT');
-  if (!insert) {
-    const removed = new Set(
-      source.mapping
-        .filter(
-          (b) =>
-            b.mappingKind === 'REPEAT_FIELD' &&
-            b.locator.sheetId === operation.sheetId &&
-            instance.mapping.find((n) => n.bindingId === b.bindingId)?.bindingStatus ===
-              'MISSING' &&
-            (source.mapping.find((p) => p.bindingId === b.parentBindingId)?.repeatAxis === 'COLUMN'
-              ? 'COLUMN'
-              : 'ROW') !== axis,
-        )
-        .map((b) => b.bindingId),
-    );
-    instance.mapping = instance.mapping.filter((b) => !removed.has(b.bindingId));
-    instance.model.fields = instance.model.fields.filter(
-      (f) => !f.bindingId || !removed.has(f.bindingId),
-    );
+  if (insert) for (const binding of instance.mapping) {
+    const old = source.mapping.find(item => item.bindingId === binding.bindingId);
+    const region = old?.mappingKind === 'REPEAT_REGION' ? old : source.mapping.find(item => item.bindingId === old?.parentBindingId);
+    if (!old || !region || old.locator.sheetId !== operation.sheetId || (region.repeatAxis === 'COLUMN' ? 'COLUMN' : 'ROW') !== axis) continue;
+    const bounds = parseRange(locatorText(region.locator.dataRange || region.locator.address));
+    if (!bounds || index !== (rows ? bounds.startRow : bounds.startColumn)) continue;
+    for (const key of ['dataRange', 'valueRange', 'address', 'range', 'logicalInputRange', 'recordRange', 'anchorAddress', 'anchorRange', 'valueAddress', 'valueAnchor']) {
+      const previous = parseRange(locatorText(old.locator[key])), current = parseRange(locatorText(binding.locator[key]));
+      if (!previous || !current || index !== (rows ? previous.startRow : previous.startColumn)) continue;
+      const anchor = ['anchorAddress', 'valueAddress', 'valueAnchor'].includes(key);
+      binding.locator[key] = formatRange({ ...current, ...(rows ? { startRow: index, ...(anchor ? { endRow: index } : {}) } : { startColumn: index, ...(anchor ? { endColumn: index } : {}) }) });
+    }
+    if (binding.locator.value && typeof binding.locator.value === 'object') binding.locator.value = { ...binding.locator.value,
+      range: locatorText(binding.locator.valueRange || binding.locator.logicalInputRange || binding.locator.address),
+      address: locatorText(binding.locator.valueRange || binding.locator.address).split(':')[0] };
   }
-  const move = (list: InstanceIdentity[]) =>
-    list.flatMap((identity) => {
-      if (identity.sheetId !== operation.sheetId || identity.axis !== axis) return [identity];
-      if (
-        !insert &&
-        identity.index <= index + count - 1 &&
-        identity.index + identity.size - 1 >= index
-      )
-        return [];
-      return [
-        {
-          ...identity,
-          index:
-            identity.index >= index ? identity.index + (insert ? count : -count) : identity.index,
-        },
-      ];
-    });
+  const move = (list: InstanceIdentity[]) => list.flatMap(identity => {
+    if (identity.sheetId !== operation.sheetId || identity.axis !== axis) return [identity];
+    const end = identity.index + identity.size - 1;
+    if (insert) {
+      if (index > identity.index && index <= end) return [{ ...identity, size: identity.size + count }];
+      return [{ ...identity, index: identity.index >= index ? identity.index + count : identity.index }];
+    }
+    const overlap = Math.max(0, Math.min(end, index + count - 1) - Math.max(identity.index, index) + 1);
+    if (overlap === identity.size) return [];
+    return [{ ...identity, size: identity.size - overlap,
+      index: identity.index >= index ? Math.max(index, identity.index - count) : identity.index }];
+  });
   instance.records = move(instance.records);
   instance.items = move(instance.items);
   const add = (
@@ -230,11 +236,6 @@ export function migrateWorkbookInstance(
   ) => {
     if (!insert || index < first || index > end + 1) return;
     if ((index - first) % stride || count % stride) {
-      instance.issues.push({
-        code: 'PARTIAL_RECORD',
-        sheetId: operation.sheetId,
-        message: '插入位置或数量拆分了重复记录，请核对区域边界',
-      });
       return;
     }
     for (let n = 0; n < count; n += stride)
@@ -292,6 +293,12 @@ export function migrateWorkbookInstance(
       if (!value) continue;
       const moved = migrateRange(value, operation);
       projection[key] = moved.value;
+      const previous = parseRange(value), current = parseRange(moved.value);
+      if (insert && previous && current && index === (rows ? previous.startRow : previous.startColumn)
+        && (projection.itemAxis === axis && ['labelRange', 'valueRange', 'unitRange'].includes(key)
+          || projection.recordAxis === axis && ['valueRange', 'totalRange'].includes(key))) {
+        projection[key] = formatRange({ ...current, ...(rows ? { startRow: index } : { startColumn: index }) });
+      }
       // An append at the item's tail belongs to the configured item region.
       if (
         insert &&
@@ -347,12 +354,54 @@ export function migrateWorkbookInstance(
         });
     }
   }
-  instance.model.fields = instance.model.fields.map((f) => ({
-    ...f,
-    locator: instance.mapping.find((b) => b.bindingId === f.bindingId)?.locator ?? f.locator,
+  const removedFields: string[] = [];
+  for (const field of instance.model.fields) {
+    const old = source.mapping.find(binding => binding.bindingId === field.bindingId);
+    const binding = instance.mapping.find(item => item.bindingId === field.bindingId);
+    if (!old || !binding || old.locator.sheetId !== operation.sheetId) continue;
+    const value = locatorValueRange(old.locator);
+    const migratedValue = value && migrateRange(value, operation);
+    if (!insert && migratedValue && migratedValue.removed) { removedFields.push(field.id); continue; }
+    const label = locatorLabelRange(old.locator);
+    const lostLabel = !insert && label && migrateRange(label, operation).removed;
+    const range = parseRange(value);
+    const parent = source.mapping.find(item => item.bindingId === old.parentBindingId);
+    const recordAxis = parent?.repeatAxis === 'COLUMN' ? 'COLUMN' : 'ROW';
+    const overlaps = !insert && range && index <= (rows ? range.endRow : range.endColumn) && index + count - 1 >= (rows ? range.startRow : range.startColumn);
+    if (lostLabel || overlaps && !(old.mappingKind === 'REPEAT_FIELD' && recordAxis === axis)) {
+      field.reviewStatus = 'NEEDS_CONFIRMATION';
+      if (lostLabel) field.labelStatus = 'UNRESOLVED';
+    }
+    field.locator = binding.locator;
+  }
+  for (const id of removedFields) {
+    const cleaned = deleteWorkbookField(instance, id);
+    instance.model = cleaned.model; instance.mapping = cleaned.mapping; instance.execution = cleaned.execution;
+    instance.records = cleaned.records; instance.items = cleaned.items; instance.issues = cleaned.issues;
+  }
+  instance.model.fields = instance.model.fields.map(field => ({ ...field,
+    locator: instance.mapping.find(binding => binding.bindingId === field.bindingId)?.locator ?? field.locator,
+    valueRange: locatorValueRange(instance.mapping.find(binding => binding.bindingId === field.bindingId)?.locator) || field.valueRange,
+    labelRange: locatorLabelRange(instance.mapping.find(binding => binding.bindingId === field.bindingId)?.locator) || field.labelRange,
+    columns: field.columns?.map(column => ({ ...column,
+      locator: instance.mapping.find(binding => binding.bindingId === column.bindingId)?.locator ?? column.locator,
+    })),
   }));
   instance.records.sort((a, b) => a.index - b.index);
   instance.items.sort((a, b) => a.index - b.index);
+  instance.issues = instance.issues.filter(issue => issue.code !== 'PARTIAL_RECORD');
+  for (const binding of instance.mapping.filter(item => item.mappingKind === 'REPEAT_REGION')) {
+    const regionAxis = binding.repeatAxis === 'COLUMN' ? 'COLUMN' : 'ROW';
+    const range = parseRange(locatorText(binding.locator.dataRange || binding.locator.address));
+    if (!range) continue;
+    const first = regionAxis === 'ROW' ? range.startRow : range.startColumn;
+    const last = regionAxis === 'ROW' ? range.endRow : range.endColumn;
+    const size = Math.max(1, (regionAxis === 'ROW' ? binding.recordHeight : binding.recordWidth) || 1);
+    const stride = Math.max(size, binding.recordStride || 1);
+    const records = instance.records.filter(record => record.regionId === binding.bindingId).sort((a, b) => a.index - b.index);
+    if (records.some((record, n) => record.size !== size || record.index !== first + n * stride)
+      || ((last - first + 1) % stride !== 0 && (last - first + 1 - size) % stride !== 0)) instance.issues.push({ code: 'PARTIAL_RECORD', sheetId: String(binding.locator.sheetId), message: '行列操作拆分了重复记录，请核对区域边界或撤销该操作' });
+  }
   return instance;
 }
 
@@ -372,61 +421,7 @@ export function retargetAggregateFormula(
   formula: string,
   changes: Array<{ before: string; after: string; axis: 'ROW' | 'COLUMN' }>,
 ): string {
-  return formula
-    .split(/("(?:[^"]|"")*")/)
-    .map((part, index) =>
-      index % 2
-        ? part
-        : part.replace(
-            /(?<![A-Za-z0-9_!$])(\$?)([A-Z]{1,3})(\$?)([1-9][0-9]*):(\$?)([A-Z]{1,3})(\$?)([1-9][0-9]*)/g,
-            (
-              match: string,
-              ac: string,
-              c1: string,
-              ar: string,
-              r1: string,
-              bc: string,
-              c2: string,
-              br: string,
-              r2: string,
-            ) => {
-              const range = parseRange(`${c1}${r1}:${c2}${r2}`);
-              if (!range) return match;
-              for (const change of changes) {
-                const before = parseRange(change.before),
-                  after = parseRange(change.after);
-                if (!before || !after) continue;
-                if (
-                  change.axis === 'ROW' &&
-                  range.startRow === before.startRow &&
-                  range.endRow === before.endRow &&
-                  range.startColumn >= before.startColumn &&
-                  range.endColumn <= before.endColumn
-                )
-                  return `${ac}${c1}${ar}${after.startRow}:${bc}${c2}${br}${after.endRow}`;
-                if (
-                  change.axis === 'COLUMN' &&
-                  range.startColumn === before.startColumn &&
-                  range.endColumn === before.endColumn &&
-                  range.startRow >= before.startRow &&
-                  range.endRow <= before.endRow
-                ) {
-                  const left = workbookAddress(range.startRow - 1, after.startColumn - 1).replace(
-                      /[0-9]+$/,
-                      '',
-                    ),
-                    right = workbookAddress(range.endRow - 1, after.endColumn - 1).replace(
-                      /[0-9]+$/,
-                      '',
-                    );
-                  return `${ac}${left}${ar}${r1}:${bc}${right}${br}${r2}`;
-                }
-              }
-              return match;
-            },
-          ),
-    )
-    .join('');
+  return expandAggregateReferences(formula, changes);
 }
 /** Plan copies using the pre-operation geometry; SDK applies these inside the same undo transaction. */
 export function structureCopies(
@@ -549,6 +544,7 @@ export function recordUnboundCell(
   source: WorkbookTemplateInstance,
   selection: { sheetId: string; address: string },
   value: unknown,
+  snapshot?: Record<string, unknown>,
 ): WorkbookTemplateInstance | undefined {
   const at = parseRange(selection.address);
   if (!at || at.startRow !== at.endRow || at.startColumn !== at.endColumn) return;
@@ -562,7 +558,11 @@ export function recordUnboundCell(
       at.endColumn <= r.endColumn
     );
   };
-  const known =
+  const sheet = snapshot && instanceSheets(snapshot).find(item => item.id === selection.sheetId);
+  const heading = typeof value === 'string' && source.model.groups.some(group => group.name.replace(/\s/g, '') === value.replace(/\s/g, ''))
+    && sheet?.mergeData?.some(merge => merge.startRow === at.startRow - 1 && merge.startColumn === at.startColumn - 1
+      && merge.endRow > merge.startRow);
+  const known = heading || source.model.staticRegions?.some(region => region.sheetId === selection.sheetId && includes(region.address)) ||
     source.mapping.some(
       (b) =>
         b.mappingKind !== 'REPEAT_REGION' &&
@@ -570,7 +570,7 @@ export function recordUnboundCell(
         ['valueRange', 'address', 'labelRange', 'labelAddress'].some((k) => includes(b.locator[k])),
     ) ||
     (source.execution?.listProjections ?? []).some(
-      (p) => includes(p.labelRange) || includes(p.valueRange),
+      (p) => projectionSheet(source, p) === selection.sheetId && (includes(p.labelRange) || includes(p.valueRange) || includes(p.unitRange)),
     );
   const existing = source.issues.some(
     (i) =>
@@ -613,9 +613,13 @@ export function discoverWorkbookField(
   value: unknown,
   snapshot?: Record<string, unknown>,
 ): WorkbookTemplateInstance | undefined {
-  if (typeof value !== 'string' || !value.trim() || /^[\d\s.,+\-/]+$/.test(value)) return undefined;
+  const name = potentialFieldLabel(value);
+  if (!name) return undefined;
   const at = parseRange(selection.address);
   if (!at || at.startRow !== at.endRow || at.startColumn !== at.endColumn) return undefined;
+  if (source.model.staticRegions?.some(region => region.sheetId === selection.sheetId && rangeContains(region.address, selection.address))) return undefined;
+  if (source.mapping.some(binding => binding.locator.sheetId === selection.sheetId && binding.mappingKind !== 'REPEAT_REGION'
+    && [locatorLabelRange(binding.locator), locatorValueRange(binding.locator)].some(range => rangeContains(range, selection.address)))) return undefined;
   const candidates = source.mapping
     .filter((b) => b.mappingKind === 'REPEAT_REGION' && b.locator.sheetId === selection.sheetId)
     .flatMap((parent) => {
@@ -643,6 +647,7 @@ export function discoverWorkbookField(
         return [];
       if (
         (source.execution?.listProjections ?? []).some((p) => {
+          if (projectionSheet(source, p) !== selection.sheetId) return false;
           const r = parseRange(p.labelRange);
           return (
             r &&
@@ -656,6 +661,7 @@ export function discoverWorkbookField(
         return [];
       return [{ parent, range, column, children }];
     });
+  if (!candidates.length) return discoverScalarField(source, selection, name, snapshot);
   if (candidates.length !== 1) return undefined;
   const { parent, range, column, children } = candidates[0]!;
   const nearest = children
@@ -725,8 +731,8 @@ export function discoverWorkbookField(
     fieldCode: code,
     dataPath: `/customFields/${id}`,
     parentFieldId: source.model.fields.find((f) => f.bindingId === parent.bindingId)?.id,
-    groupId: neighbor?.groupId ?? source.model.groups[0]?.id ?? 'other',
-    name: value.trim(),
+    groupId: section?.id ?? neighbor?.groupId ?? source.model.groups[0]?.id ?? 'other',
+    name,
     kind: 'SCALAR',
     valueType: 'string',
     fieldType: 'TABLE_COLUMN',
@@ -737,7 +743,7 @@ export function discoverWorkbookField(
     standardSelectionStatus: 'CUSTOM',
     standardMatchStatus: 'CONFIRMED',
     requiresStandardConfirmation: false,
-    pathSegments: [source.model.groups.find(group => group.id === neighbor?.groupId)?.name ?? '', value.trim()].filter(Boolean),
+    pathSegments: [section?.name ?? source.model.groups.find(group => group.id === neighbor?.groupId)?.name ?? '', name].filter(Boolean),
     unit: '',
     required: false,
     reviewStatus: 'CONFIRMED',
@@ -752,6 +758,187 @@ export function discoverWorkbookField(
     experimentField: semantic,
   });
   return instance;
+}
+
+export function projectionSheet(instance: WorkbookTemplateInstance, projection: NonNullable<WorkbookTemplateInstance['execution']>['listProjections'][number]) {
+  return instance.mapping.find(binding => binding.bindingId === projection.parentBindingId
+    || projection.componentId && binding.componentId === projection.componentId)?.locator.sheetId;
+}
+
+function rangeContains(range: string, address: string) {
+  const outer = parseRange(range), inner = parseRange(address);
+  return Boolean(outer && inner && outer.startRow <= inner.startRow && outer.endRow >= inner.endRow
+    && outer.startColumn <= inner.startColumn && outer.endColumn >= inner.endColumn);
+}
+
+export function workbookFieldContext(instance: WorkbookTemplateInstance, selection: { sheetId: string; address: string }, snapshot?: Record<string, unknown>) {
+  const at = parseRange(selection.address);
+  const sheet = snapshot && instanceSheets(snapshot).find(item => item.id === selection.sheetId);
+  const section = at && sheet?.mergeData?.filter(merge => merge.startColumn < at.startColumn - 1
+    && merge.startRow <= at.startRow - 1 && merge.endRow >= at.startRow - 1)
+    .sort((a, b) => b.startColumn - a.startColumn)
+    .map(merge => sheet.cellData?.[String(merge.startRow)]?.[String(merge.startColumn)]?.v)
+    .map(title => instance.model.groups.find(group => typeof title === 'string' && group.name.replace(/\s/g, '') === title.replace(/\s/g, ''))).find(Boolean);
+  const fields = instance.model.fields.map(field => {
+    const binding = instance.mapping.find(item => item.bindingId === field.bindingId);
+    return { ...field, locator: field.locator ?? binding?.locator, mappingKind: field.mappingKind ?? binding?.mappingKind };
+  }).filter(field => field.displayRole !== 'REGION' && field.mappingKind !== 'REPEAT_REGION'
+    && field.locator?.sheetId === selection.sheetId && (!section || field.groupId === section.id));
+  const nearest = fields.map(field => ({ field, at: parseRange(locatorLabelRange(field.locator) || locatorValueRange(field.locator)) }))
+    .filter(item => item.at && at).sort((a, b) => Math.abs(a.at!.startRow - at!.startRow) + Math.abs(a.at!.startColumn - at!.startColumn)
+      - Math.abs(b.at!.startRow - at!.startRow) - Math.abs(b.at!.startColumn - at!.startColumn))[0]?.field;
+  return { groupId: section?.id ?? nearest?.groupId, field: nearest, section };
+}
+
+function discoverScalarField(source: WorkbookTemplateInstance, selection: { sheetId: string; sheetName: string; address: string }, name: string, snapshot?: Record<string, unknown>) {
+  if (isStructuredDataCell(selection, source.mapping, [])) return;
+  if (source.model.staticRegions?.some(region => region.sheetId === selection.sheetId && rangeContains(region.address, selection.address))) return;
+  const at = parseRange(selection.address)!;
+  const context = workbookFieldContext(source, selection, snapshot);
+  const forms = [...source.model.blocks.filter(block => block.type === 'FORM_REGION' && block.sheetId === selection.sheetId)];
+  // Older templates have scalar bindings but no explicit FORM_REGION nodes.
+  // Their configured label/input envelope supplies the same boundary, without inspecting result text.
+  if (!forms.length) {
+    const ranges = source.model.fields.filter(field => field.groupId === context.groupId && field.displayRole !== 'REGION').flatMap(field => {
+      const binding = source.mapping.find(item => item.bindingId === field.bindingId);
+      if (!binding || binding.mappingKind !== 'SCALAR' || binding.locator.sheetId !== selection.sheetId) return [];
+      return [locatorLabelRange(binding.locator), locatorValueRange(binding.locator)].flatMap(value => { const range = parseRange(value); return range ? [range] : []; });
+    });
+    if (ranges.length > 1) forms.push({ blockId: `form:${context.groupId}`, sheetId: selection.sheetId, type: 'FORM_REGION', businessName: '', range: formatRange({
+      startRow: Math.min(...ranges.map(range => range.startRow)), endRow: Math.max(...ranges.map(range => range.endRow)),
+      startColumn: Math.min(...ranges.map(range => range.startColumn)), endColumn: Math.max(...ranges.map(range => range.endColumn)),
+    }) });
+  }
+  const blocks = forms.filter(block => rangeContains(block.range, selection.address));
+  if (!blocks.length && !context.section) return;
+  const candidates = source.model.fields.flatMap(field => {
+    const binding = source.mapping.find(item => item.bindingId === field.bindingId);
+    if (!binding || binding.mappingKind !== 'SCALAR' || binding.role === 'REPEAT_REGION' || field.displayRole === 'REGION' || binding.locator.sheetId !== selection.sheetId) return [];
+    if (context.groupId && field.groupId !== context.groupId) return [];
+    const label = parseRange(locatorLabelRange(binding.locator)), value = parseRange(locatorValueRange(binding.locator));
+    if (!label || !value) return [];
+    if (blocks.length ? !blocks.some(block => rangeContains(block.range, locatorLabelRange(binding.locator))) : !field.groupId || !snapshot) return [];
+    const dx = value.startColumn - label.startColumn, dy = value.startRow - label.startRow;
+    if (!(dy === 0 && dx > 0 && at.startColumn === label.startColumn || dx === 0 && dy > 0 && at.startRow === label.startRow)) return [];
+    const range = formatRange({ startRow: at.startRow + dy, endRow: at.startRow + dy + value.endRow - value.startRow,
+      startColumn: at.startColumn + dx, endColumn: at.startColumn + dx + value.endColumn - value.startColumn });
+    if (blocks.length && !blocks.some(block => rangeContains(block.range, range))) return [];
+    return [{ field, range, position: dy === 0 ? label.startRow : label.startColumn, current: dy === 0 ? at.startRow : at.startColumn }];
+  });
+  if (!candidates.length) return;
+  const adjacent = candidates.filter(candidate => !candidates.some(other => Math.sign(other.position - other.current) === Math.sign(candidate.position - candidate.current)
+    && Math.abs(other.position - other.current) < Math.abs(candidate.position - candidate.current)));
+  const ranges = [...new Set(adjacent.map(item => item.range))];
+  const input = ranges.length === 1 && !source.mapping.some(binding => binding.locator.sheetId === selection.sheetId && binding.mappingKind !== 'REPEAT_REGION'
+    && [locatorValueRange(binding.locator), locatorLabelRange(binding.locator)].some(range => rangesOverlap(range, ranges[0]!))) ? ranges[0] : undefined;
+  const created = createCustomFieldWorkspace({}, source.model, source.mapping, { ownerId: source.mapping[0]?.bindingId ?? 'workbook', origin: 'INSTANCE_LOCAL', kind: 'SCALAR',
+    name, groupId: context.groupId ?? candidates[0]!.field.groupId, sheet: selection, labelRange: selection.address, valueRange: input });
+  const next = structuredClone(source);
+  next.model = created.model; next.mapping = created.mapping;
+  const semantic = instanceLocalSemantic(context.field);
+  next.model.fields = next.model.fields.map(field => field.id === created.field.id ? { ...field, unit: '', pathSegments: [next.model.groups.find(group => group.id === field.groupId)?.name ?? '', name].filter(Boolean),
+    experimentField: semantic, experimentSemanticStatus: next.execution?.templateUsage === 'EXPERIMENT_DATA' ? 'AUTO_CONFIRMED' : undefined } : field);
+  next.mapping = next.mapping.map(binding => binding.bindingId === created.binding.bindingId ? { ...binding, experimentField: semantic } : binding);
+  return next;
+}
+
+function rangesOverlap(left: string, right: string) {
+  const a = parseRange(left), b = parseRange(right);
+  return Boolean(a && b && a.startRow <= b.endRow && a.endRow >= b.startRow && a.startColumn <= b.endColumn && a.endColumn >= b.startColumn);
+}
+
+export function updateWorkbookField(source: WorkbookTemplateInstance, id: string, changes: Partial<BusinessField>) {
+  const next = structuredClone(source);
+  const updated = updateFieldDefinition(next.model, next.mapping, id, { ...changes, reviewStatus: 'CONFIRMED' });
+  next.model = updated.model; next.mapping = updated.mapping;
+  return next;
+}
+
+export function addWorkbookField(source: WorkbookTemplateInstance, options: {
+  ownerId: string; origin: 'TEMPLATE_LOCAL' | 'INSTANCE_LOCAL'; selection?: { sheetId: string; sheetName: string; address: string };
+  snapshot?: Record<string, unknown>; parentId?: string; groupId?: string;
+}) {
+  const context = options.selection ? workbookFieldContext(source, options.selection, options.snapshot) : undefined;
+  let parent = source.model.fields.find(field => field.id === options.parentId);
+  if (!parent && context?.field?.parentFieldId) parent = source.model.fields.find(field => field.id === context.field!.parentFieldId);
+  if (parent && !options.parentId && options.selection) {
+    const binding = source.mapping.find(item => item.bindingId === parent!.bindingId);
+    const bounds = parseRange(locatorText(binding?.locator.dataRange || binding?.locator.address));
+    const at = parseRange(options.selection.address);
+    const label = parseRange(locatorLabelRange(context?.field?.locator));
+    if (!bounds || !at || !(rangeContains(formatRange(bounds), options.selection.address)
+      || binding?.repeatAxis === 'COLUMN' && label?.startColumn === at.startColumn && at.startRow >= bounds.startRow && at.startRow <= bounds.endRow
+      || binding?.repeatAxis !== 'COLUMN' && label?.startRow === at.startRow && at.startColumn >= bounds.startColumn && at.startColumn <= bounds.endColumn)) parent = undefined;
+  }
+  if (!parent && options.selection) {
+    const region = source.mapping.find(binding => binding.mappingKind === 'REPEAT_REGION' && binding.locator.sheetId === options.selection!.sheetId
+      && (() => {
+        const bounds = parseRange(locatorText(binding.locator.dataRange || binding.locator.address)), at = parseRange(options.selection!.address);
+        if (!bounds || !at) return false;
+        if (rangeContains(formatRange(bounds), options.selection!.address)) return true;
+        return source.mapping.some(child => child.parentBindingId === binding.bindingId && (() => {
+          const label = parseRange(locatorLabelRange(child.locator));
+          return binding.repeatAxis === 'COLUMN'
+            ? label?.startColumn === at.startColumn && at.startRow >= bounds.startRow && at.startRow <= bounds.endRow
+            : label?.startRow === at.startRow && at.startColumn >= bounds.startColumn && at.startColumn <= bounds.endColumn;
+        })());
+      })());
+    if (region) parent = source.model.fields.find(field => field.bindingId === region.bindingId);
+  }
+  const created = createCustomFieldWorkspace({}, source.model, source.mapping, { ownerId: options.ownerId, origin: options.origin,
+    kind: parent ? 'REPEAT_FIELD' : 'SCALAR', name: '新字段', groupId: options.groupId ?? context?.groupId ?? parent?.groupId,
+    parentField: parent, parentBinding: parent && source.mapping.find(binding => binding.bindingId === parent.bindingId),
+    sheet: options.selection ?? { sheetId: locatorText(parent?.locator?.sheetId ?? source.mapping[0]?.locator.sheetId), sheetName: locatorText(parent?.locator?.sheetName ?? source.mapping[0]?.locator.sheetName) },
+  });
+  const semantic = instanceLocalSemantic(context?.field);
+  const next = structuredClone(source); next.model = created.model; next.mapping = created.mapping;
+  next.model.fields = next.model.fields.map(field => field.id === created.field.id ? { ...field, experimentField: semantic,
+    experimentSemanticStatus: next.execution?.templateUsage === 'EXPERIMENT_DATA' ? 'AUTO_CONFIRMED' : undefined } : field);
+  next.mapping = next.mapping.map(binding => binding.bindingId === created.binding.bindingId ? { ...binding, experimentField: semantic } : binding);
+  if (!parent) {
+    const components = [...new Set(source.mapping.filter(binding => binding.mappingKind === 'SCALAR' && binding.locator.sheetId === created.binding.locator.sheetId)
+      .map(binding => binding.componentId || binding.locator.componentId).filter((id): id is string => typeof id === 'string' && Boolean(id)))];
+    if (components.length === 1) next.mapping = next.mapping.map(binding => binding.bindingId === created.binding.bindingId
+      ? { ...binding, componentId: components[0], locator: { ...binding.locator, componentId: components[0] } } : binding);
+  }
+  return { instance: next, fieldId: created.field.id };
+}
+
+export function renameWorkbookField(source: WorkbookTemplateInstance, bindingId: string, value: unknown) {
+  const field = source.model.fields.find(item => item.bindingId === bindingId && item.displayRole !== 'REGION');
+  if (!field) return;
+  const name = typeof value === 'string' ? value.trim().replace(/[：:]$/, '').trim() : typeof value === 'number' || typeof value === 'boolean' ? String(value) : '';
+  if (name === field.name && field.labelStatus !== 'UNRESOLVED') return;
+  const next = updateWorkbookField(source, field.id, name ? { name, labelStatus: 'RESOLVED' } : { labelStatus: 'UNRESOLVED', labelTextMissing: true, reviewStatus: 'NEEDS_CONFIRMATION' });
+  if (!name) next.model.fields.find(item => item.id === field.id)!.reviewStatus = 'NEEDS_CONFIRMATION';
+  return next;
+}
+
+export function renameWorkbookFieldAt(source: WorkbookTemplateInstance, selection: { sheetId: string; address: string }, value: unknown) {
+  const address = selection.address.replaceAll('$', '').toUpperCase();
+  const labels = source.mapping.filter(binding => binding.mappingKind !== 'REPEAT_REGION' && binding.locator.sheetId === selection.sheetId
+    && locatorLabelRange(binding.locator).split(':')[0] === address);
+  let current = source, changed = false;
+  for (const binding of labels) {
+    const next = renameWorkbookField(current, binding.bindingId, value);
+    if (next) { current = next; changed = true; }
+  }
+  return { matched: labels.length > 0, instance: changed ? current : undefined };
+}
+
+export function deleteWorkbookField(source: WorkbookTemplateInstance, id: string) {
+  const next = structuredClone(source);
+  const removed = removeFieldDefinitions(next.model, next.mapping, [id]);
+  next.model = removed.model; next.mapping = removed.mapping;
+  const projections = next.execution?.listProjections.filter(projection => !removed.bindingIds.has(projection.parentBindingId ?? '')
+    && !source.mapping.some(binding => removed.bindingIds.has(binding.bindingId) && binding.mappingKind === 'REPEAT_REGION'
+      && binding.componentId && binding.componentId === projection.componentId));
+  const projectionIds = new Set(projections?.map(projection => projection.listProjectionId));
+  if (next.execution && projections) next.execution.listProjections = projections;
+  next.records = next.records.filter(record => !removed.bindingIds.has(record.regionId));
+  next.items = next.items.filter(item => projectionIds.has(item.regionId));
+  next.issues = next.issues.filter(issue => !issue.fieldId || !removed.fieldIds.has(issue.fieldId));
+  return next;
 }
 
 export function workbookAddress(row: number, column: number): string {
@@ -770,38 +957,12 @@ export function copyWorkbookCells(
   return cells.map((row) =>
     row.map((source) => {
       const cell: WorkbookCell = source ? structuredClone(source) : {};
-      if (cell.f)
-        cell.f = cell.f
-          .split(/("(?:[^"]|"")*")/)
-          .map((part, index) =>
-            index % 2
-              ? part
-              : part.replace(
-                  /(\$?)([A-Z]{1,3})(\$?)([1-9][0-9]*)/g,
-                  (
-                    _all: string,
-                    absoluteColumn: string,
-                    letters: string,
-                    absoluteRow: string,
-                    number: string,
-                  ) => {
-                    let col = 0;
-                    for (const letter of letters) col = col * 26 + letter.charCodeAt(0) - 64;
-                    const address = workbookAddress(
-                      Number(number) - 1 + (absoluteRow ? 0 : rowOffset),
-                      col - 1 + (absoluteColumn ? 0 : columnOffset),
-                    );
-                    return address.replace(
-                      /^([A-Z]+)(\d+)$/,
-                      (_match, column: string, row: string) =>
-                        `${absoluteColumn}${column}${absoluteRow}${row}`,
-                    );
-                  },
-                ),
-          )
-          .join('');
+      if (cell.f) cell.f = offsetWorkbookFormula(cell.f, columnOffset, rowOffset);
       else {
-        cell.v = '';
+        // Univer coerces an empty string with a copied NUMBER/BOOLEAN type to 0.
+        // Clear both the value and its source type while retaining display formats.
+        cell.v = null;
+        cell.t = null;
         delete cell.p;
       }
       return cell;

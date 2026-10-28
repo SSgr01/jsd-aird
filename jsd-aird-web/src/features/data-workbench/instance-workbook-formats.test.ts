@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { instanceWorkbookView } from './instance-workbook-view';
+import { workbookCellInput, workbookCellValue } from './cell-format';
 import { createWorkbookInstance } from '@/features/template-workspace/workbook-instance';
 import type { BusinessField, FieldModel, TemplateBinding } from '@/features/template-workspace/types';
 
@@ -17,6 +18,19 @@ describe('workbench field format matrix', () => {
     expect(shown('number', 0.09, '0.00%')).toBe(9);
     expect(shown('number', 9, '0.00"%"')).toBe(9);
     expect(shown('number', 9, '0.00\\%')).toBe(9);
+  });
+  it('round trips entered percentage points without scaling quoted or escaped literals', () => {
+    for (const input of [43, '43', '43%', '43％']) {
+      const stored = workbookCellInput(input, '0.00%');
+      expect(stored).toBe(0.43);
+      expect(workbookCellValue(stored, 'number', '0.00%')).toBe(43);
+    }
+    expect(workbookCellInput(0, '0%')).toBe(0);
+    expect(workbookCellInput('43', '0.00"%"')).toBe(43);
+    expect(workbookCellInput('43', '0.00\\%')).toBe(43);
+    expect(workbookCellInput('43%', '0.00')).toBe('43%');
+    expect(workbookCellInput('未测', '0.00%')).toBe('未测');
+    expect(workbookCellInput(0.43, '0.00%', true)).toBe(0.43);
   });
   it('preserves date and datetime components without timezone drift', () => {
     const day = (Date.UTC(2026, 9, 26) - Date.UTC(1899, 11, 30)) / 86400000;

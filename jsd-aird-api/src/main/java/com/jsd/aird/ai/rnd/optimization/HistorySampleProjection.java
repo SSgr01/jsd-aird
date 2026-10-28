@@ -11,7 +11,7 @@ import java.util.*;
 
 /** A report is a source document; samples, not documents, are learning observations. */
 public final class HistorySampleProjection {
-    public static final int VERSION = 4;
+    public static final int VERSION = 5;
     private final ObjectMapper json;
     public HistorySampleProjection(ObjectMapper json) { this.json = json; }
 
@@ -118,6 +118,7 @@ public final class HistorySampleProjection {
                     if(value.asText().contains("\n")&&categorical){issue(issues,row,code,raw,"包含多个等级或结果，请在指标映射中确认最终结果的判定规则");continue;}
                     if(massAmount&&value.isNumber()&&values.path(code).isNumber())values.put(code,values.path(code).decimalValue().add(value.decimalValue()));
                     else put(values,conflicts,code,value,issues,row);
+
                 }
                 // Native single-sample fields remain usable. Imported layout keys require an explicit sample association.
                 model.path("dynamicValues").fields().forEachRemaining(entry->{
@@ -281,7 +282,7 @@ public final class HistorySampleProjection {
     private String cleanUnit(String unit) {
         var value=MeasurementValueParser.unit(unit);
         if(Set.of("份","质量份","重量份","体积份","次","秒").contains(value))return value;
-        return value.matches("[%°℃A-Za-z0-9μ²/·.Ω]+")?value:"";
+        return value.replace(" ", "").matches("[%°℃A-Za-z0-9μ²/·.Ω]+")?value:"";
     }
     static String normal(String text) { return Normalizer.normalize(text,Normalizer.Form.NFKC).strip().replaceAll("\\s+"," ").toLowerCase(Locale.ROOT); }
     static String text(JsonNode node,String...keys) {for(var key:keys){var value=node.path(key);if(value.isValueNode()&&!value.isNull()&&!value.asText().isBlank())return value.asText().strip();}return "";}

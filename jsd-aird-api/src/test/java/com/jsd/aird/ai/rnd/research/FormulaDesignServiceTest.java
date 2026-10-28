@@ -95,6 +95,30 @@ class FormulaDesignServiceTest {
         assertThat(b.frozenInputScheme().path("fields").get(0).path("encoding").has("formulaMaterialId")).isFalse();
     }
 
+    @Test void exposesGramMaterialRangesAndDoesNotTreatThemAsSeparateConditions() throws Exception {
+        ActorContext.set(ActorContext.developmentDefault()); var b=workbenchBinding();
+        var scheme=(ObjectNode)b.frozenInputScheme().deepCopy(); var fields=scheme.path("fields");
+        var rows=json.createArrayNode(); var values=rows.addObject().putObject("values");
+        var domain=json.createObjectNode();var features=domain.putArray("features");
+        for(int i=0;i<2;i++) {
+            var field=(ObjectNode)fields.get(i);var code="formula:"+field.path("materialId").asText()+"|g|mass_amount";
+            field.put("code",code).put("name","材料用量").put("unit","g").put("semanticType","MATERIAL_AMOUNT").put("compositionBasis","MASS_AMOUNT");
+            values.put(code,i==0?250:50); features.add(code);
+        }
+        features.add("temperature");domain.putArray("minimum").add(100).add(20).add(20);domain.putArray("maximum").add(400).add(120).add(30);
+        var dictionary=WorkbenchFormulaSupport.dictionary(json,scheme,rows);
+        when(b.frozenInputScheme()).thenReturn(scheme);when(b.frozenDictionary()).thenReturn(dictionary);when(b.modelDomain()).thenReturn(domain);
+        var base=json.createObjectNode();base.putArray("targets").addObject().put("targetId",b.targetId().toString());
+        base.putArray("selected").addObject().put("targetId",b.targetId().toString());
+        base.set("requiredInputs",fields.deepCopy());base.putArray("configurationConflicts");
+        when(predictionContext.context(anyList())).thenReturn(base);when(predictions.targetBindings(any(),anyList())).thenReturn(List.of(b));
+        var context=service.context(List.of(b.targetId()));
+        assertThat(context.path("materialIntersection")).hasSize(2);
+        assertThat(context.path("materialIntersection").get(0).path("supportedRanges").get(0).path("maximum").asInt()).isEqualTo(400);
+        assertThat(context.path("requiredInputs")).hasSize(1);
+        assertThat(context.path("configurationConflicts")).isEmpty();
+    }
+
     @Test void explainsIncompleteProportionsAndSingleRatioTargets()throws Exception {
         ActorContext.set(ActorContext.developmentDefault());var b=workbenchBinding();
         ((com.fasterxml.jackson.databind.node.ObjectNode)b.frozenDictionary()).put("compositionStatus","INCOMPLETE");
@@ -134,7 +158,7 @@ class FormulaDesignServiceTest {
         candidate.set("formula",formula.deepCopy());
         assertThat((Boolean)ReflectionTestUtils.invokeMethod(service,"candidateMatchesRequest",candidate,request,payload)).isTrue();
         request.withObject("fixedInputs").put("formula:"+a,40);
-        assertThatThrownBy(()->ReflectionTestUtils.invokeMethod(service,"validateFormulaRequest",request,List.of(b))).hasMessageContaining("材料比例请在配方材料中设置");
+        assertThatThrownBy(()->ReflectionTestUtils.invokeMethod(service,"validateFormulaRequest",request,List.of(b))).hasMessageContaining("材料用量请在配方材料中设置");
     }
 
 

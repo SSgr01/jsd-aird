@@ -435,7 +435,10 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         const current=readWorkbookInstance(live);
         const checked=current&&recordUnboundCell(current,selection,value,live);
         if(checked){const first=workbook.getSheets()[0];if(first)writeInstanceMetadata(first.getSheetId(),{...first.getCustomMetadata(),templateInstance:checked});callbacksRef.current.onInstanceChange?.(checked);}
-        callbacksRef.current.onCellChange?.({ ...selection, value, previousValue });
+        let numberFormat: string | undefined;
+        try { numberFormat = workbook.getSheetBySheetId(selection.sheetId)?.getRange(selection.address).getNumberFormats()[0]?.[0]; }
+        catch { /* Sheet may have been removed during the edit. */ }
+        callbacksRef.current.onCellChange?.({ ...selection, value, previousValue, numberFormat });
       };
       const synchronizeAfterCommand = (
         command: { id: string; type?: number; params?: object },
@@ -1049,14 +1052,14 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       focusBinding,
       focusCell: focusSourceRange,
       focusRange: focusSourceRange,
-      writeCell(sheetId, address, value) {
+      writeCell(sheetId, address, value, options) {
         const workbook = apiRef.current?.getActiveWorkbook();
         const sheet = workbook?.getSheetBySheetId(sheetId) ?? workbook?.getSheetByName(sheetId);
         const range = sheet && validCell(address) ? sheet.getRange(address) : null;
         if (!range) return Promise.reject(new Error(`无法定位单元格 ${address}`));
         suppressUnboundRef.current = true;
         const pattern = range.getNumberFormats()[0]?.[0] ?? '';
-        const safeValue = workbookCellInput(value == null ? '' : value, pattern);
+        const safeValue = workbookCellInput(value == null ? '' : value, pattern, options?.raw);
         range.setValue(safeValue as never);
         return verifyWrite(() => range.getRawValue(), safeValue).finally(() => {
           suppressUnboundRef.current = false;

@@ -158,12 +158,12 @@ public class WorkbenchModelRegistrationService {
         return request;
     }
     private void collectMaterialId(JsonNode column,java.util.Set<String> candidates) {
-        if(!"MATERIAL_RATIO".equals(column.path("semanticType").asText())||!"MAPPED".equals(column.path("mappingStatus").asText()))return;
+        if(!java.util.Set.of("MATERIAL_RATIO","MATERIAL_AMOUNT").contains(column.path("semanticType").asText())||!"MAPPED".equals(column.path("mappingStatus").asText()))return;
         try { candidates.add(UUID.fromString(column.path("materialId").asText()).toString()); }
         catch(IllegalArgumentException ignored) { }
     }
     static void sanitizeMaterialColumn(JsonNode column,java.util.Set<String> validIds) {
-        if(!(column instanceof ObjectNode object)||!"MATERIAL_RATIO".equals(column.path("semanticType").asText())
+        if(!(column instanceof ObjectNode object)||!java.util.Set.of("MATERIAL_RATIO","MATERIAL_AMOUNT").contains(column.path("semanticType").asText())
                 ||!"MAPPED".equals(column.path("mappingStatus").asText()))return;
         var id=column.path("materialId").asText();
         if(!validIds.contains(id)) { object.put("mappingStatus","UNMAPPED");object.remove("materialId"); }

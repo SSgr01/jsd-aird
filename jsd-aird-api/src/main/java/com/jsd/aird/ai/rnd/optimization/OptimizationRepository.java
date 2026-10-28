@@ -69,10 +69,12 @@ public class OptimizationRepository {
             ) samples ON true
             WHERE e.organization_id=? AND e.deleted=false AND e.status='COMPLETED'
               AND v.status='COMPLETED'
+              AND t.template_code IN (?,?)
               AND (t.name ILIKE ? OR e.title ILIKE ? OR e.experiment_no ILIKE ?)
             GROUP BY tv.id,t.name ORDER BY max(v.created_at) DESC,t.name
             """, (r,n)->new HistoryDatasetRow(r.getObject("dataset_id",UUID.class),r.getString("dataset_name"),
-                r.getInt("row_count"),instant(r,"updated_at")),org,like,like,like);
+                r.getInt("row_count"),instant(r,"updated_at")),org,com.jsd.aird.shared.lab.UnifiedLabTemplateCodes.TEST,
+                com.jsd.aird.shared.lab.UnifiedLabTemplateCodes.SYNTHESIS,like,like,like);
     }
 
     public List<HistoryRecordRow> historyRecords(UUID org, UUID templateVersionId) {
@@ -80,11 +82,15 @@ public class OptimizationRepository {
             SELECT e.id experiment_id,v.id version_id,e.experiment_no,e.title,v.edit_model_jsonb,v.created_at
             FROM rnd.experiment e
             JOIN rnd.experiment_version v ON v.organization_id=e.organization_id AND v.id=e.current_version_id
+            JOIN tpl.template_version tv ON tv.id=v.template_version_id
+            JOIN tpl.template t ON t.id=tv.template_id AND t.organization_id=e.organization_id
             WHERE e.organization_id=? AND e.deleted=false AND e.status='COMPLETED' AND v.status='COMPLETED'
               AND v.template_version_id=?
+              AND t.template_code IN (?,?)
             ORDER BY v.created_at,e.experiment_no,e.id
             """,(r,n)->new HistoryRecordRow(r.getObject("experiment_id",UUID.class),r.getObject("version_id",UUID.class),
-                r.getString("experiment_no"),r.getString("title"),read(r,"edit_model_jsonb"),instant(r,"created_at")),org,templateVersionId);
+                r.getString("experiment_no"),r.getString("title"),read(r,"edit_model_jsonb"),instant(r,"created_at")),org,templateVersionId,
+                com.jsd.aird.shared.lab.UnifiedLabTemplateCodes.TEST,com.jsd.aird.shared.lab.UnifiedLabTemplateCodes.SYNTHESIS);
     }
 
     public MaterialCatalogSnapshot materialCatalog(UUID organizationId) {

@@ -12,6 +12,59 @@ import static org.assertj.core.api.Assertions.assertThat;
 class HistorySampleProjectionTest {
     private final ObjectMapper json=new ObjectMapper();
     private final UUID dataset=UUID.randomUUID();
+    @Test void preservesUnitsContainingSpaces() throws Exception {
+        var data=project("""
+            {"processSteps":[{"operation":"理论羟值","value":42,"unit":"mg KOH/g"}]}
+            """);
+        assertThat(data.path("columns").get(0).path("unit").asText()).isEqualTo("mg KOH/g");
+    }
+    @Test void bothUnifiedTemplatesProduceGramFeaturesFromCompleteFormulas() throws Exception {
+        var parser=new com.jsd.aird.tpl.infrastructure.XlsxStructureParser(json);
+        var templates=new com.jsd.aird.tpl.application.UnifiedLabTemplateCatalog(json);
+        var resin=UUID.randomUUID().toString();var additive=UUID.randomUUID().toString();
+        for(var kind:List.of("test","synthesis")) {
+            var code=kind.equals("test")?com.jsd.aird.tpl.application.UnifiedLabTemplateCatalog.TEST:com.jsd.aird.tpl.application.UnifiedLabTemplateCatalog.SYNTHESIS;
+            var pack=templates.compile(code,parser.parseInstance(getClass().getResourceAsStream("/templates/unified/"+kind+".xlsx"))).payload();
+            var snapshot=pack.path("snapshot").deepCopy();var sheet=com.jsd.aird.shared.lab.LabWorkbook.sheet(snapshot);
+            int sampleRow=kind.equals("test")?6:8;int materialRow=kind.equals("test")?51:9;
+            com.jsd.aird.shared.lab.LabWorkbook.cell(sheet,sampleRow,2).put("v","TEST-SAMPLE");
+            com.jsd.aird.shared.lab.LabWorkbook.cell(sheet,materialRow,1).put("v","RESIN");
+            com.jsd.aird.shared.lab.LabWorkbook.cell(sheet,materialRow,2).put("v",70);
+            com.jsd.aird.shared.lab.LabWorkbook.cell(sheet,materialRow+1,1).put("v","ADD");
+            com.jsd.aird.shared.lab.LabWorkbook.cell(sheet,materialRow+1,2).put("v",30);
+            var prepared=com.jsd.aird.shared.lab.LabWorkbook.prepare(json,snapshot,pack.path("snapshot"),kind);
+            var model=com.jsd.aird.shared.lab.LabWorkbook.extract(json,prepared,json.createObjectNode(),kind);
+            var data=new HistorySampleProjection(json).dataset(dataset,kind,List.of(
+                    new OptimizationRepository.HistoryRecordRow(UUID.randomUUID(),UUID.randomUUID(),"TEST",kind,model,Instant.EPOCH)),
+                    Map.of(),catalog(Map.of("RESIN",resin,"ADD",additive)));
+            assertThat(data.path("rows")).as(kind).hasSize(1);
+            assertThat(data.path("rows").get(0).path("values").path("formula:"+resin+"|g|mass_amount").asDouble()).as(kind).isEqualTo(70);
+            assertThat(data.path("rows").get(0).path("values").path("formula:"+additive+"|g|mass_amount").asDouble()).as(kind).isEqualTo(30);
+        }
+    }
+    @Test void completeMassFormulaAggregatesRepeatedFeedsWithoutDerivingRatios() throws Exception {
+        var resin=UUID.randomUUID().toString();var additive=UUID.randomUUID().toString();
+        var data=project("""
+            {"sourceGroups":[{"sampleKey":"complete"},{"sampleKey":"incomplete"}],"formulaItems":[
+             {"sampleKey":"complete","materialCode":"RESIN","materialName":"RESIN","actualQty":20,"unit":"g","compositionBasis":"MASS_AMOUNT","formulaComplete":true,"massPercent":20},
+             {"sampleKey":"complete","materialCode":"RESIN","materialName":"RESIN","actualQty":30,"unit":"g","compositionBasis":"MASS_AMOUNT","formulaComplete":true,"massPercent":30},
+             {"sampleKey":"complete","materialCode":"ADD","materialName":"ADD","actualQty":50,"unit":"g","compositionBasis":"MASS_AMOUNT","formulaComplete":true,"massPercent":50},
+             {"sampleKey":"incomplete","materialCode":"RESIN","materialName":"RESIN","actualQty":20,"unit":"g","compositionBasis":"MASS_AMOUNT","formulaComplete":false,"massPercent":20}]}
+            """,catalog(Map.of("RESIN",resin,"ADD",additive)));
+        var complete=data.path("rows").get(0).path("values");var incomplete=data.path("rows").get(1).path("values");
+        assertThat(complete.has("formula:"+resin)).isFalse();
+        assertThat(complete.path("formula:"+additive+"|g|mass_amount").decimalValue()).isEqualByComparingTo("50");
+        assertThat(complete.path("formula:"+resin+"|g|mass_amount").decimalValue()).isEqualByComparingTo("50");
+        assertThat(incomplete.has("formula:"+resin)).isFalse();
+    }
+    @Test void invalidDerivedPercentIsNotPromotedToAFormulaRatio() throws Exception {
+        var material=UUID.randomUUID().toString();
+        var data=project("""
+            {"sourceGroups":[{"sampleKey":"a"}],"formulaItems":[
+             {"sampleKey":"a","materialCode":"RESIN","materialName":"RESIN","actualQty":20,"unit":"g","compositionBasis":"MASS_AMOUNT","formulaComplete":true,"massPercent":101}]}
+            """,catalog(Map.of("RESIN",material)));
+        assertThat(data.path("rows").get(0).path("values").has("formula:"+material)).isFalse();
+    }
     @Test void unifiedMassesAggregateRepeatedFeedsAndUseCanonicalMeasurements()throws Exception {
         var materialId=UUID.randomUUID().toString();
         var data=project("""

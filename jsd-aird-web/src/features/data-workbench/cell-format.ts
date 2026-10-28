@@ -8,10 +8,11 @@ export function percentageFormat(pattern: string) {
 }
 
 /** Convert a value typed in the workbench as displayed back to the cell's stored value. */
-export function workbookCellInput(value: unknown, pattern: string): unknown {
+export function workbookCellInput(value: unknown, pattern: string, raw = false): unknown {
+  if (raw) return value;
   const tokens = numberFormatTokens(pattern).toLowerCase();
   const text = typeof value === 'string' ? value.trim() : undefined;
-  const numberText = text?.replace(/[％%]\s*$/, '').trim();
+  const numberText = percentageFormat(pattern) ? text?.replace(/[％%]\s*$/, '').trim() : text;
   const numeric = typeof value === 'number' && Number.isFinite(value)
     ? value
     : numberText && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(numberText)

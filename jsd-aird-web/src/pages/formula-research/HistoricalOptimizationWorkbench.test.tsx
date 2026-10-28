@@ -225,6 +225,24 @@ describe('HistoricalOptimizationWorkbench', () => {
     expect(api.submit).not.toHaveBeenCalled()
   })
 
+  it('allows gram-based material ranges without a 100 percent total', async () => {
+    const source = { ...compositionDataset, columns: compositionDataset.columns.map(column => column.materialId
+      ? { ...column, unit: 'g', compositionBasis: 'MASS_AMOUNT', semanticType: 'MATERIAL_AMOUNT' } : column) }
+    api.historyDataset.mockResolvedValue(source)
+    api.historyDatasets.mockResolvedValue({ items: [{ id: source.id, name: source.name, rowCount: 8, updatedAt: '' }] })
+    render(<App><MemoryRouter><HistoricalOptimizationWorkbench /></MemoryRouter></App>)
+    fireEvent.click(await screen.findByText(source.name))
+    await waitFor(() => expect(chooseXYButton()).toBeEnabled())
+    fireEvent.click(chooseXYButton())
+    for (const material of ['助剂比例', '树脂 A 比例', '树脂 B 比例']) fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(material) }))
+    fireEvent.click(screen.getByRole('radio', { name: /耐磨次数/ }))
+    fireEvent.click(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')!)
+    fireEvent.change(screen.getByRole('spinbutton', { name: '助剂比例最小值' }), { target: { value: '110' } })
+    fireEvent.change(screen.getByRole('spinbutton', { name: '助剂比例最大值' }), { target: { value: '150' } })
+    expect(screen.getByRole('button', { name: '开始优化' })).toBeEnabled()
+    expect(screen.queryByText(/合计为 100%/)).not.toBeInTheDocument()
+  })
+
   it('saves measured results, starts the next round, and restores it after a refresh', async () => {
     const secondRun = {
       ...completedRun,

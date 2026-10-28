@@ -12,7 +12,7 @@ import java.util.*;
 
 /** Offline compilation of reviewed customer forms. No AI, sample data or filesystem dependency at runtime. */
 public final class UnifiedLabTemplateCatalog {
-    public static final String TEST="EXP_TEST_UNIFIED",SYNTHESIS="EXP_SYNTHESIS_UNIFIED";
+    public static final String TEST=com.jsd.aird.shared.lab.UnifiedLabTemplateCodes.TEST,SYNTHESIS=com.jsd.aird.shared.lab.UnifiedLabTemplateCodes.SYNTHESIS;
     public static final int PACKAGE_VERSION=1;
     private final ObjectMapper json;
     public UnifiedLabTemplateCatalog(ObjectMapper json){this.json=json;}

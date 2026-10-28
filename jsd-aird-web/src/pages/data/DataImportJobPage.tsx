@@ -53,6 +53,7 @@ import { resolveInstanceDefinition } from '@/features/template-workspace/instanc
 import { labWorkbookInstance } from '@/features/experiment-workspace/lab-structure-adapter';
 import { presentWorkbookFields } from '@/features/data-workbench/field-presentation';
 import { instanceWorkbookView } from '@/features/data-workbench/instance-workbook-view';
+import { workbookCellValue } from '@/features/data-workbench/cell-format';
 import { AutoSaveFieldInput } from '@/features/data-workbench/AutoSaveFieldInput';
 import { DataReviewFooter } from '@/features/data-workbench/DataReviewFooter';
 import { FieldDefinitionReview } from '@/features/data-workbench/FieldDefinitionReview';
@@ -266,17 +267,18 @@ export function DataImportJobPage({
 
   const handleCellChange = async (change: EditorCellChange) => {
     const field = importFieldForCell(fields, change);
+    const displayedValue = workbookCellValue(change.value, field?.valueType ?? '', change.numberFormat ?? '');
     if (instance) {
       if (field && !field.editable) {
-        await editorRef.current?.writeCell?.(change.sheetId, change.address, change.previousValue);
+        await editorRef.current?.writeCell?.(change.sheetId, change.address, change.previousValue, { raw: true });
         void message.warning('公式或只读字段不能直接修改'); return;
       }
       markStructureDirty();
-      setWorkbook(current => current ? { ...current, fields: current.fields.map(item => item.sheetId === change.sheetId && item.address === change.address ? { ...item, effectiveValue: change.value, correctedValue: change.value } : item) } : current);
+      setWorkbook(current => current ? { ...current, fields: current.fields.map(item => item.sheetId === change.sheetId && item.address === change.address ? { ...item, effectiveValue: displayedValue, correctedValue: displayedValue } : item) } : current);
       return;
     }
     if (!field?.editable || !field.recordId || !field.bindingId || !field.valuePath) {
-      await editorRef.current?.writeCell?.(change.sheetId, change.address, change.previousValue).catch(() => undefined);
+      await editorRef.current?.writeCell?.(change.sheetId, change.address, change.previousValue, { raw: true }).catch(() => undefined);
       void message.warning({
         key: 'data-workbench-readonly-cell',
         content: field ? '该单元格是公式、派生值或只读内容，不能直接修改' : '该单元格尚未绑定可修正字段',
@@ -291,21 +293,21 @@ export function DataImportJobPage({
         revision: correctionRevision.current ?? preview.job.revision,
         bindingId: field.bindingId,
         valuePath: field.valuePath,
-        correctedValue: change.value,
+        correctedValue: displayedValue,
         reason: '导入确认页直接修正',
       });
       correctionRevision.current = Object.keys(documentCorrections).length ? savedJob.revision : undefined;
       setWorkbook((current) => current ? {
         ...current,
         fields: current.fields.map((item) => fieldKey(item) === fieldKey(field)
-          ? { ...item, correctedValue: change.value, effectiveValue: change.value }
+          ? { ...item, correctedValue: displayedValue, effectiveValue: displayedValue }
           : item),
       } : current);
       await load({ silent: true, preserveSnapshot: true });
       void message.success('修正值已保存并重新校验');
     } catch (error) {
       correctionRevision.current ??= preview.job.revision;
-      setDocumentCorrections(current => ({ ...current, [fieldKey(field) || '']: formatImportValue(change.value) }));
+      setDocumentCorrections(current => ({ ...current, [fieldKey(field) || '']: formatImportValue(displayedValue) }));
       void message.error(error instanceof Error ? error.message : '修正值保存失败，当前修改仍保留');
     } finally {
       setSavingCell(undefined);

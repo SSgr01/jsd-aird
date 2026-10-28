@@ -119,7 +119,14 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
         var workspace = repository.findPublishedDataTemplate(organizationId, templateVersionId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据中心模板不存在或未发布"));
         var definition=definition(organizationId, workspace);
-        if(definition.importContract()!=null&&"EXPERIMENT_DATA".equals(definition.importContract().path("templateUsage").asText()))requireCurrentLabTemplate(organizationId,workspace.templateCode());
+        // Keep the import gate consistent with the published-template list: historical
+        // contracts that only describe batches are ordinary data, even if their raw
+        // templateUsage was once marked EXPERIMENT_DATA.
+        if (definition.importContractVersion() >= TemplateImportContractCompiler.EXPERIMENT_IMPORT_CONTRACT_VERSION
+                && definition.importContract() != null
+                && "EXPERIMENT_DATA".equals(definition.importContract().path("templateUsage").asText())) {
+            requireCurrentLabTemplate(organizationId, workspace.templateCode());
+        }
         return definition;
     }
 
@@ -372,7 +379,18 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
                 if(file.originalName().toLowerCase(java.util.Locale.ROOT).endsWith(".xlsx"))try(var stored=storage.get(file.objectKey())) {
                     var snapshot=workbookInstanceParser.parseInstance(stored.stream()).snapshot();
                     var instance=com.jsd.aird.shared.excel.WorkbookStructure.instance(snapshot);
-                    if(instance.isObject())return prepareWorkbookImport(organizationId,versionId,snapshot,instance);
+                    if(instance instanceof ObjectNode importedInstance) {
+                        // An exported workbook can be extended in Excel before it is
+                        // uploaded again. This is a fresh import, not a saved draft.
+                        com.jsd.aird.shared.excel.WorkbookStructure.expandImportedRegions(objectMapper,snapshot,importedInstance,fileId.toString());
+                        return prepareWorkbookImport(organizationId,versionId,snapshot,importedInstance);
+                    }
+                    boolean repeating=false;for(var binding:workspace.mapping())if("REPEAT_REGION".equals(binding.path("mappingKind").asText()))repeating=true;
+                    if(repeating) {
+                        var generated=com.jsd.aird.shared.excel.WorkbookStructure.seed(objectMapper,snapshot,workspace.schema(),workspace.mapping(),fileId.toString());
+                        com.jsd.aird.shared.excel.WorkbookStructure.expandImportedRegions(objectMapper,snapshot,generated,fileId.toString());
+                        return prepareWorkbookImport(organizationId,versionId,snapshot,generated);
+                    }
                 }catch(ApiException ex){throw ex;}catch(Exception ex){throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"工作簿结构读取失败："+ex.getMessage());}
             }
             return TemplateDataImportFacade.super.prepareImport(organizationId,versionId,fileId);
@@ -383,7 +401,7 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
             var prepared=com.jsd.aird.shared.lab.LabWorkbook.prepare(objectMapper,source,readSnapshot(organizationId,workspace),fileId.toString());
             // Recompute mass totals from the raw g inputs. POI cannot evaluate all of
             // Univer's array formulas, and an uploaded formula cache is not evidence.
-            com.jsd.aird.shared.lab.LabWorkbook.extract(objectMapper,prepared,objectMapper.createObjectNode(),fileId.toString());
+            var labModel=com.jsd.aird.shared.lab.LabWorkbook.extract(objectMapper,prepared,objectMapper.createObjectNode(),fileId.toString());
             var pack=new UnifiedLabTemplateCatalog(objectMapper).describe(workspace.templateCode(),prepared,objectMapper.createObjectNode()).payload();
             var fields=new LinkedHashMap<String,FieldDefinition>();collectSchemaFields(pack.path("schema"),fields);
             var contract=pack.path("contract");
@@ -396,11 +414,12 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
             var parsed=parser.parse(new java.io.ByteArrayInputStream(bytes),"experiment.xlsx");
             for(var sheet:parsed.sheets())for(var cell:sheet.layoutIr().path("cells")) {
                 if(cell.path("row").asInt()!=totalRow+1||cell.path("column").asInt()<3)continue;
+                if(!com.jsd.aird.shared.lab.LabWorkbook.sheet(prepared).path("cellData").path(""+totalRow).path(""+(cell.path("column").asInt()-1)).hasNonNull("f"))continue;
                 ((ObjectNode)cell).put("valueSource","FORMULA").put("calculationSource","UNIFIED_LAB_RECALCULATED")
                         .put("calculationStatus","VALID").put("formulaTrustStatus","TRUSTED_RECALCULATED");
             }
             parsed=instanceParsedSheets(parsed,prepared);
-            return new ImportExecution(definition,bindings(contractBindings(contract),contract),parsed);
+            return new ImportExecution(definition,bindings(contractBindings(contract),contract),parsed,labModel.path("templateInstance").path("issues"));
         }catch(ApiException ex){throw ex;}catch(Exception ex){throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"实验文件解析失败："+ex.getMessage());}
     }
 
@@ -418,9 +437,11 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
         var workspace=repository.findWorkspace(organizationId,versionId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"模板版本不存在"));
         var snapshot=(ObjectNode)source.deepCopy();
         var instance=com.jsd.aird.shared.excel.WorkbookStructure.validate(objectMapper,snapshot,provided);
+        JsonNode labIssues=instance.path("issues");
         if(com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot)) {
             snapshot=com.jsd.aird.shared.lab.LabWorkbook.prepare(objectMapper,snapshot,readSnapshot(organizationId,workspace),versionId.toString());
-            com.jsd.aird.shared.lab.LabWorkbook.extract(objectMapper,snapshot,objectMapper.createObjectNode(),versionId.toString());
+            var labModel=com.jsd.aird.shared.lab.LabWorkbook.extract(objectMapper,snapshot,objectMapper.createObjectNode(),versionId.toString());
+            labIssues=labModel.path("templateInstance").path("issues");
         }
         var schema=(ObjectNode)workspace.schema().deepCopy();schema.set("x-jsd-field-model",instance.path("model").deepCopy());schema.set("x-jsd-workbook-instance",instance.deepCopy());
         if(instance.path("execution").isObject())schema.set("x-jsd-experiment-import",instance.path("execution").deepCopy());
@@ -430,7 +451,9 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
             if(!"VALID".equals(binding.path("bindingStatus").asText())||com.jsd.aird.shared.excel.WorkbookStructure.first(locator,"valueRange","address","dataRange","range").isBlank())continue;
             boolean pending=false;
             for(var field:instance.path("model").path("fields"))if(field.path("bindingId").equals(binding.path("bindingId"))&&(java.util.Set.of("NEEDS_CONFIRMATION","ISSUE").contains(field.path("reviewStatus").asText())||(instance.path("execution").path("templateUsage").asText().equals("EXPERIMENT_DATA")&&field.path("experimentSemanticStatus").asText().equals("NEEDS_REVIEW")))){pending=true;break;}
-            if(pending)continue;
+            // Instance-local experimental observations remain visible and
+            // reviewable even before their semantic meaning is confirmed.
+            if(pending&&!com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot))continue;
             var copy=(ObjectNode)binding.deepCopy();
             for(var field:instance.path("model").path("fields"))if(field.path("bindingId").asText().equals(binding.path("bindingId").asText())) {
                 copy.put("unit",field.path("unit").asText()).put("valueType",field.path("valueType").asText("string")).put("required",field.path("required").asBoolean());
@@ -465,9 +488,9 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
             var bytes=workbookExporter.export(tabular,objectMapper.createArrayNode(),objectMapper.createObjectNode(),null).content();
             var parsed=parser.parse(new java.io.ByteArrayInputStream(bytes),"workbook.xlsx");
             for(var sheet:parsed.sheets())for(var cell:sheet.layoutIr().path("cells"))if(totalRow>=0&&cell.path("row").asInt()==totalRow+1&&cell.path("column").asInt()>=3&&cell instanceof ObjectNode object)
-                object.put("valueSource","FORMULA").put("calculationSource","UNIFIED_LAB_RECALCULATED").put("calculationStatus","VALID").put("formulaTrustStatus","TRUSTED_RECALCULATED");
+                if(com.jsd.aird.shared.lab.LabWorkbook.sheet(snapshot).path("cellData").path(""+totalRow).path(""+(cell.path("column").asInt()-1)).hasNonNull("f"))object.put("valueSource","FORMULA").put("calculationSource","UNIFIED_LAB_RECALCULATED").put("calculationStatus","VALID").put("formulaTrustStatus","TRUSTED_RECALCULATED");
             parsed=instanceParsedSheets(parsed,snapshot);
-            return new ImportExecution(definition,bindings(contractBindings(compiled.contract()),compiled.contract()),parsed);
+            return new ImportExecution(definition,bindings(contractBindings(compiled.contract()),compiled.contract()),parsed,labIssues);
         }catch(Exception ex){if(ex instanceof ApiException api)throw api;throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"工作簿草稿解析失败："+ex.getMessage());}
     }
 

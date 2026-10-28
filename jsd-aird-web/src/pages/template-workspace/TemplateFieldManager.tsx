@@ -1001,7 +1001,7 @@ function BusinessPropertyFields({
             onChange={(event) => onUpdateField(field.id, { unit: event.target.value })}
           />
         </label>
-        <label className="field-property">
+        <label className="field-property required-property">
           <span>是否必填</span>
           <Switch
             checked={field.required}

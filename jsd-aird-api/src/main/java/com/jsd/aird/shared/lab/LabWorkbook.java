@@ -88,6 +88,7 @@ public final class LabWorkbook {
                 var previousField=fields.path(previousLabel.path("fieldCode").asText());
                 if(label.equals(normalized(previousField.path("label").asText())))continue;
                 if(label.isBlank()) {
+                    if(previousField.path("supplemental").asBoolean())continue;
                     for(var c:target.path("cellData").path(""+r))if(c instanceof ObjectNode obj&&obj.path("custom").isObject())((ObjectNode)obj.path("custom")).remove("lab");
                     continue;
                 }
@@ -107,9 +108,40 @@ public final class LabWorkbook {
             var group=sectionByRow.get(r);
             if(!matched&&Set.of("resin","coating","film","appearance","results").contains(group)&&!value(target,r,1).isBlank()) {
                 var code="LOCAL_"+id(seed,"field:"+group+":"+label).replace("-","");
-                fields.putObject(code).put("fieldCode",code).put("label",value(target,r,1)).put("groupId",group).put("scope","SAMPLE").put("domain","TEST").put("semantic","VALUE").put("resultKind","TEXT").put("unit","").put("local",true).put("confirmed",false).put("trainingEligible",false);
+                var local=fields.putObject(code).put("fieldCode",code).put("label",value(target,r,1)).put("groupId",group).put("scope","SAMPLE").put("domain","TEST").put("semantic","VALUE").put("resultKind","TEXT").put("unit","").put("local",true).put("confirmed",false).put("trainingEligible",false);
+                describeLocalLabel(local,value(target,r,1),fields);
                 mark(cell(target,r,1)).put("role","LABEL").put("fieldCode",code);
             }
+        }
+        // Distinct physical rows must never share a binding, even when their
+        // visible labels are identical. Preserve the standard code separately.
+        var seenLabels=new HashSet<String>();
+        for(int r=0;r<maxRow;r++) {
+            var meta=target.path("cellData").path(""+r).path("1").path("custom").path("lab");
+            if(!meta.path("role").asText().equals("LABEL"))continue;
+            var code=meta.path("fieldCode").asText();var original=fields.path(code);
+            if(!seenLabels.add(code)&&original.isObject()) {
+                ((ObjectNode)original).put("trainingEligible",false);
+                var localCode="LOCAL_"+id(seed,"duplicate:"+code+":"+r).replace("-","");
+                var duplicate=(ObjectNode)original.deepCopy();
+                duplicate.put("fieldCode",localCode).put("local",true).put("confirmed",false).put("trainingEligible",false).put("duplicateOf",code);
+                fields.set(localCode,duplicate);
+                mark(cell(target,r,1)).put("role","LABEL").put("fieldCode",localCode);
+            }
+        }
+        for(var field:fields)if(field.hasNonNull("duplicateOf")&&fields.path(field.path("duplicateOf").asText()) instanceof ObjectNode original)original.put("trainingEligible",false);
+        // Unlabelled sample-column text is retained as a per-column note.
+        // The blank title cell remains untouched in the user's workbook.
+        int noteFirst=def.path("firstSampleColumn").asInt(2);
+        for(int r=6;r<maxRow;r++) {
+            if(!Set.of("resin","coating","film","appearance","results").contains(sectionByRow.get(r)))continue;
+            if(!value(target,r,1).isBlank()||target.path("cellData").path(""+r).path("1").path("custom").path("lab").has("role"))continue;
+            boolean recorded=false;
+            for(var col:iterable(target.path("cellData").path(""+r).fields()))if(Integer.parseInt(col.getKey())>=noteFirst&&!col.getValue().hasNonNull("f")&&LabValues.recorded(LabValues.text(col.getValue().path("v"))))recorded=true;
+            if(!recorded)continue;
+            var code="LOCAL_"+id(seed,"note:"+sectionByRow.get(r)+":"+r).replace("-","");
+            fields.putObject(code).put("fieldCode",code).put("label","补充说明").put("groupId",sectionByRow.get(r)).put("scope","SAMPLE").put("domain","OTHER").put("semantic","DYNAMIC_VALUE").put("resultKind","TEXT").put("unit","").put("local",true).put("confirmed",true).put("trainingEligible",false).put("supplemental",true);
+            mark(cell(target,r,1)).put("role","LABEL").put("fieldCode",code);
         }
         // Global anchors also survive inserted columns via native cell custom metadata.
         for(var entry:iterable(fields.fields())) {
@@ -117,6 +149,13 @@ public final class LabWorkbook {
             if(findField(target,entry.getKey())!=null)continue;
             int r=f.path("row").asInt(), c=f.path("column").asInt();
             if(normalized(value(target,r,Math.max(0,c-1))).equals(normalized(f.path("label").asText())))mark(cell(target,r,c)).put("role","VALUE").put("fieldCode",entry.getKey());
+            if(findField(target,entry.getKey())==null) {
+                int found=-1;
+                for(int row=0;row<maxRow;row++)if(normalized(value(target,row,0)).equals(normalized(f.path("label").asText()))) {
+                    if(found>=0){found=-2;break;}found=row;
+                }
+                if(found>=0)mark(cell(target,found,1)).put("role","VALUE").put("fieldCode",entry.getKey());
+            }
         }
         int first=def.path("firstSampleColumn").asInt(2),end=first;
         for(var row:iterable(target.path("cellData").fields()))for(var c:iterable(row.getValue().fields())) {
@@ -154,15 +193,41 @@ public final class LabWorkbook {
         def.put("lastSampleColumn",end).put("formulaStartRow",identity[0]+1).put("formulaEndRow",total[0]-1).put("formulaTotalRow",total[0]);
         var last=0;for(var row:iterable(target.path("cellData").fields()))last=Math.max(last,Integer.parseInt(row.getKey()));
         def.put("lastRow",last);
+        for(var entry:iterable(fields.fields()))if(entry.getValue() instanceof ObjectNode field) {
+            var at=findField(target,entry.getKey());
+            if(at!=null)field.put("row",at[0]).put("column",field.path("scope").asText().equals("SAMPLE")?first:at[1]);
+        }
         configuration(target,def);
         var print=target.withObject("/custom/print");print.put("lastRow",last).put("lastColumn",end);
-        for(int c=first;c<=end;c++)cell(target,total[0],c).put("f",massFormula(c,identity[0]+1,total[0]-1));
+        for(int c=first;c<=end;c++) {
+            var result=cell(target,total[0],c);
+            if(!result.hasNonNull("f")&&value(target,total[0],c).isBlank())result.put("f",massFormula(c,identity[0]+1,total[0]-1));
+        }
         LabStructureAdapter.apply(json,copy);
         return copy;
     }
     public static int[] findField(JsonNode sheet,String code) {
         for(var row:iterable(sheet.path("cellData").fields()))for(var c:iterable(row.getValue().fields()))if(c.getValue().path("custom").path("lab").path("fieldCode").asText().equals(code))return new int[]{Integer.parseInt(row.getKey()),Integer.parseInt(c.getKey())};
         return null;
+    }
+    private static void describeLocalLabel(ObjectNode local,String title,JsonNode fields) {
+        var matcher=Pattern.compile("^(.*?)\\s*[（(]([^（）()]*)[）)]\\s*$").matcher(title.strip());
+        String stem=title.strip(),condition="",unit="";
+        if(matcher.matches()) {
+            stem=matcher.group(1).strip();var suffix=matcher.group(2).strip();
+            if(Set.of("°","℃","%","g","s","min","h","nm","μm","mN/m","cP","GU").contains(suffix))unit=suffix;
+            else condition=suffix;
+        }
+        String base=stem;
+        for(var field:fields) {
+            if(field==local||field.path("local").asBoolean()||!field.path("groupId").equals(local.path("groupId")))continue;
+            var standard=field.path("label").asText().replaceAll("\\s*[（(][^（）()]*[）)]\\s*$","").strip();
+            if(!standard.isBlank()&&stem.endsWith(standard)&&standard.length()<stem.length()) {
+                base=standard;var prefix=stem.substring(0,stem.length()-standard.length()).strip();
+                condition=condition.isBlank()?prefix:prefix+"；"+condition;break;
+            }
+        }
+        local.put("baseMetric",base).put("testCondition",condition).put("unit",unit);
     }
     private static <T> Iterable<T> iterable(Iterator<T> iterator){return ()->iterator;}
     private static String pattern(JsonNode snapshot,JsonNode cell) {return cell.path("s").isTextual()?snapshot.path("styles").path(cell.path("s").asText()).path("n").path("pattern").asText(""):cell.path("s").path("n").path("pattern").asText("");}
@@ -178,6 +243,7 @@ public final class LabWorkbook {
             var meta=row.getValue().path("1").path("custom").path("lab");var code=meta.path("fieldCode").asText();var field=fields.path(code);int r=Integer.parseInt(row.getKey());
             if(!meta.path("role").asText().equals("LABEL"))continue;
             if(uniqueFields.putIfAbsent(code,r)!=null)issues.addObject().put("code","DUPLICATE_FIELD").put("address",address(r,1)).put("message","同一指标出现多行，请确认不同的测试条件或删除重复行");
+            if(field.hasNonNull("duplicateOf"))issues.addObject().put("code","DUPLICATE_FIELD").put("address",address(r,1)).put("message","同名测试项目已分别保留，请核对测试条件");
             if(field.path("local").asBoolean()&&!field.path("confirmed").asBoolean())issues.addObject().put("code","FIELD_UNCONFIRMED").put("address",address(r,1)).put("message","新增测试项目待确认类型和单位");
             var label=value(sheet,r,1);if(!label.isBlank()&&!normalized(label).equals(normalized(field.path("label").asText())))issues.addObject().put("code","FIELD_LABEL_CHANGED").put("address",address(r,1)).put("message","项目名称已变化，请按新项目确认字段含义");
         }
@@ -227,6 +293,7 @@ public final class LabWorkbook {
                 var key=sheet.path("columnData").path(""+c).path("custom").path("lab").path("sampleKey").asText();
                 boolean duplicate=uniqueFields.getOrDefault(code,r)!=r;
                 parsed.put("itemId",id(seed,code+":"+key+(duplicate?":duplicate:"+r:""))).put("sampleKey",key).put("sourceGroupKey",key).put("logicalSampleKey",key).put("sourceContextKey",seed).put("fieldCode",code).put("testItem",field.path("label").asText()).put("operation",field.path("label").asText()).put("testMethod",field.path("method").asText("")).put("testStage",field.path("groupId").asText()).put("trainingEligible",!field.path("local").asBoolean()&&!duplicate&&field.path("trainingEligible").asBoolean(true));
+                for(var property:List.of("baseMetric","testCondition","duplicateOf","supplemental"))if(field.has(property))parsed.set(property,field.path(property).deepCopy());
                 parsed.set("sourceRefs",json.createArrayNode().add(json.createObjectNode().put("sheetId",sid).put("cellRange",address(r,c)).put("sampleKey",key)));
                 if(field.path("domain").asText().equals("TEST"))tests.add(parsed);else processes.add(parsed);
             }
@@ -248,12 +315,12 @@ public final class LabWorkbook {
                 if(!valid){
                     complete.put(c,false);
                     // A bound blank cell is an unfinished observation, not a parsing error.
-                    if(!entry.path("valueStatus").asText().equals("UNFILLED"))
+                    if(!code.isBlank()&&entry.path("valueStatus").asText().equals("RECORDED"))
                         issues.addObject().put("code","FORMULA_INCOMPLETE").put("address",address(r,c)).put("message","物料编码或g用量待确认");
                 }
                 else totals.put(c,totals.get(c).add(entry.path("value").decimalValue()));
                 entry.set("actualQty",entry.path("value").deepCopy());
-                entry.put("itemId",id(seed,lineId+":"+key)).put("lineId",lineId).put("feedSequence",r-start+1).put("materialCode",code).put("materialName",code).put("sampleKey",key).put("sourceGroupKey",key).put("logicalSampleKey",key).put("sourceContextKey",seed).put("compositionBasis","MASS_AMOUNT").put("rawUnit","g");
+                entry.put("itemId",id(seed,lineId+":"+key)).put("lineId",lineId).put("feedSequence",r-start+1).put("materialCode",code).put("materialName",code).put("sampleKey",key).put("sourceGroupKey",key).put("logicalSampleKey",key).put("sourceContextKey",seed).put("compositionBasis","MASS_AMOUNT");
                 entry.set("sourceRefs",json.createArrayNode().add(json.createObjectNode().put("sheetId",sid).put("cellRange",address(r,c)).put("sampleKey",key)));
                 formula.add(entry);
             }
@@ -266,10 +333,19 @@ public final class LabWorkbook {
                 if(complete.get(c)&&totals.get(c).signum()>0&&f.path("actualQty").isNumber())((ObjectNode)f).put("massPercent",f.path("actualQty").decimalValue().multiply(java.math.BigDecimal.valueOf(100)).divide(totals.get(c),12,java.math.RoundingMode.HALF_UP));
             }
         }
+        for(var group:groups) {
+            int c=group.path("column").asInt();
+            var summary=(ObjectNode)group;
+            summary.put("formulaComplete",complete.get(c));
+            summary.put("filledAmountSubtotal",totals.get(c));
+            if(complete.get(c)&&lines.size()>0)summary.put("calculatedTotal",totals.get(c));
+        }
         int totalRow=def.path("formulaTotalRow").asInt();
         for(int c=first;c<=end;c++) {
             var result=cell(sheet,totalRow,c);
-            if(active.contains(c)&&complete.get(c)&&lines.size()>0)result.put("v",totals.get(c));else result.put("v","");
+            if(result.hasNonNull("f")) {
+                if(active.contains(c)&&complete.get(c)&&lines.size()>0)result.put("v",totals.get(c));else result.put("v","");
+            }
         }
         instance.set("definition",def.deepCopy());instance.set("issues",issues);
         var generic=com.jsd.aird.shared.excel.WorkbookStructure.instance(snapshot);
@@ -441,7 +517,7 @@ public final class LabWorkbook {
             var prototype=target.path("cellData").path(""+(at-1));
             for(int c=1;c<=end;c++) {
                 var cloned=prototype.path(""+c).isObject()?(ObjectNode)prototype.path(""+c).deepCopy():json.createObjectNode();cloned.remove(List.of("v","p","f"));
-                if(c==1)cloned.put("v",f.getValue().path("label").asText());
+                if(c==1&&!f.getValue().path("supplemental").asBoolean())cloned.put("v",f.getValue().path("label").asText());
                 if(sample||c==2)mark(cloned).put("role",c==1?"LABEL":"VALUE").put("fieldCode",f.getKey());
                 else if(cloned.path("custom") instanceof ObjectNode custom)custom.remove("lab");
                 target.withObject("/cellData/"+at).set(""+c,cloned);
@@ -460,12 +536,18 @@ public final class LabWorkbook {
             var meta=column.getValue().path("custom").path("lab");if(!meta.path("role").asText().equals("VALUE"))continue;
             var code=meta.path("fieldCode").asText();var field=def.path("fields").path(code);var at=findField(target,code);if(at==null)continue;
             int sr=Integer.parseInt(row.getKey()),sc=Integer.parseInt(column.getKey());sourceRowMap.put(sr,at[0]);
-            if(field.path("valueSource").asText().equals("FORMULA"))continue;
+            if(field.path("valueSource").asText().equals("FORMULA")) {
+                // A customer-entered total is an observation, not a formula
+                // cache. Keep it verbatim even when the recipe is incomplete.
+                if(!column.getValue().hasNonNull("f")&&LabValues.recorded(value(original,sr,sc))&&sourceColumnMap.containsKey(sc))
+                    copyValue(original,sr,sc,target,at[0],sourceColumnMap.get(sc),source.path("styles"));
+                continue;
+            }
             if(field.path("scope").asText().equals("EXPERIMENT"))copyValue(original,sr,sc,target,at[0],at[1],source.path("styles"));
             else if(sourceColumnMap.containsKey(sc))copyValue(original,sr,sc,target,at[0],sourceColumnMap.get(sc),source.path("styles"));
         }
         for(var row:target.path("cellData"))for(var c:row)if(c.hasNonNull("f")&&!c.path("custom").path("lab").path("fieldCode").asText().equals("formula.total"))((ObjectNode)c).put("f",formula(c.path("f").asText(),sourceRowMap,sourceColumnMap));
-        for(int c=2;c<=end;c++)cell(target,total[0],c).put("f",massFormula(c,identity[0]+1,total[0]-1));
+        for(int c=2;c<=end;c++)if(!LabValues.recorded(value(target,total[0],c)))cell(target,total[0],c).put("f",massFormula(c,identity[0]+1,total[0]-1));
         target.put("columnCount",Math.max(50,end+10));
         return out;
     }
@@ -565,6 +647,25 @@ public final class LabWorkbook {
                 int found=-1;
                 for(int r=0;r<max;r++)if(!claimedRows.contains(r)&&(normalized(value(target,r,labelColumn)).equals(normalized(expected))||labelColumn==1&&value(target,r,1).isBlank()&&normalized(value(target,r,0)).equals(normalized(expected)))){found=r;break;}
                 if(found>=0){restoredRows.put(old,found);claimedRows.add(found);}
+            }
+            // A supplemental row deliberately has no visible title. Restore
+            // it only when its surrounding anchors moved by the same amount;
+            // using a fabricated label would lose the original observations.
+            for(var row:iterable(meta.path("cells").fields())) {
+                int old=Integer.parseInt(row.getKey());if(restoredRows.containsKey(old))continue;
+                var code=row.getValue().path("1").path("lab").path("fieldCode").asText();
+                if(!defs.path(code).path("supplemental").asBoolean())continue;
+                Integer before=null,after=null;
+                for(int anchor:restoredRows.keySet()) {
+                    if(anchor<old&&(before==null||anchor>before))before=anchor;
+                    if(anchor>old&&(after==null||anchor<after))after=anchor;
+                }
+                if(before==null||after==null)continue;
+                int leftDelta=restoredRows.get(before)-before,rightDelta=restoredRows.get(after)-after;
+                int found=old+leftDelta;
+                if(leftDelta!=rightDelta||found<0||found>=max||claimedRows.contains(found)||!value(target,found,1).isBlank())continue;
+                boolean hasValue=false;for(var cell:target.path("cellData").path(""+found))if(LabValues.recorded(LabValues.text(cell.path("v"))))hasValue=true;
+                if(hasValue){restoredRows.put(old,found);claimedRows.add(found);}
             }
             var identityCode=meta.path("groupIdentityFieldCode").asText("sample.experimentNo");
             var identity=defs.path(identityCode);int oldIdentity=identity.path("row").asInt(-1);

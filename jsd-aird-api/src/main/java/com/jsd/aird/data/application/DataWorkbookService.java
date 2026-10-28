@@ -61,6 +61,13 @@ public class DataWorkbookService {
         var draft=repository.findWorkbookDraft(actor.organizationId(),importJobId).orElse(null);
         var snapshot = draft==null?prepareLabSnapshot(actor.organizationId(),job,sourceSnapshot(file, job.sourceFormat(), sheets),definition):draft.snapshot().deepCopy();
         if(draft!=null)com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot,draft.instance());
+        else if("XLSX".equalsIgnoreCase(job.sourceFormat())) {
+            var execution=templates.prepareImport(actor.organizationId(),job.templateVersionId(),job.sourceFileId());
+            if(execution!=null&&execution.definition()!=null&&execution.definition().schema()!=null) {
+                var resolved=execution.definition().schema().path("x-jsd-workbook-instance");
+                if(resolved.path("version").asInt()==2)com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot,resolved);
+            }
+        }
         var effectiveInstance=com.jsd.aird.shared.excel.WorkbookStructure.seed(objectMapper,snapshot,definition.schema(),definition.mappings(),importJobId.toString());
         if(effectiveInstance.isObject()) {
             var execution=templates.prepareWorkbookImport(actor.organizationId(),job.templateVersionId(),snapshot,effectiveInstance);
@@ -88,6 +95,13 @@ public class DataWorkbookService {
                 : sourceSnapshot(file, job.sourceFormat(), repository.listSheets(organizationId, importJobId));
         var definition=templates.getVersion(organizationId,job.templateVersionId());
         var snapshot=prepareLabSnapshot(organizationId,job,source,definition);
+        if(draft==null&&"XLSX".equalsIgnoreCase(job.sourceFormat())) {
+            var execution=templates.prepareImport(organizationId,job.templateVersionId(),job.sourceFileId());
+            if(execution!=null&&execution.definition()!=null&&execution.definition().schema()!=null) {
+                var resolved=execution.definition().schema().path("x-jsd-workbook-instance");
+                if(resolved.path("version").asInt()==2)com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot,resolved);
+            }
+        }
         if(com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot))applyCorrections(snapshot,importFields(repository.listRows(organizationId,importJobId),repository.listMappings(organizationId,importJobId),repository.listSheets(organizationId,importJobId),componentByBinding(definition)));
         if (snapshot == null || !snapshot.isObject() || snapshot.isEmpty()) {
             throw new ApiException(ApiErrorCode.FILE_NOT_READY, "导入文件缺少可编辑工作簿快照");
@@ -273,7 +287,7 @@ public class DataWorkbookService {
                 result.add(new FieldValue(row.id().toString(), fieldCode,
                         userFieldName(fieldName, mapping == null ? null : mapping.sourceHeader(), fieldCode),
                         visibleLabelPath,
-                        bindingId, valuePath, valueSource, row.status(),
+                        bindingId, valuePath, valueSource, value.path("valueStatus").asText(row.status()),
                         mapping == null ? "TEXT" : mapping.valueType(), mapping == null ? "" : mapping.standardUnit(),
                         mapping != null && mapping.detail().path("required").asBoolean(false),
                         mapping != null && mapping.detail().path("identity").asBoolean(false),

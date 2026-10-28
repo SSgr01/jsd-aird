@@ -9,7 +9,7 @@ import {
   TableOutlined,
 } from '@ant-design/icons';
 import { Button, Empty, Segmented, Select, Skeleton, Space, Spin, Tag, Typography } from 'antd';
-import { forwardRef, lazy, Suspense, useEffect, useId, useMemo, useState, type ReactNode, type Ref } from 'react';
+import { forwardRef, lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 import { FieldPanelToggle } from '@/components/field-panel/CollapsibleFieldPanel';
 import { useAppStore } from '@/stores/app-store';
 
@@ -25,6 +25,7 @@ import type { WorkbookStructureOperation } from '@/features/template-workspace/t
 import { displayValue } from './value-display';
 import { customerFieldName, customerFieldPath, customerGroupName, customerLabelText, internalWorkbookLabel, workbenchLabelParts, workbookRecordOptions } from './workbench-labels';
 import type { WorkbookTemplateInstance } from '@/features/template-workspace/workbook-instance';
+import { fieldMatchesSheet, normalizeCellAddress, selectionAnchor } from './field-cell-selection';
 
 const SheetsEditor = lazy(async () => {
   const module = await import('@/features/template-workspace/UniverSheetsEditor');
@@ -146,9 +147,10 @@ interface FieldCardProps {
   onSelect?: () => void;
   extra?: ReactNode;
   children?: ReactNode;
+  activeRef?: Ref<HTMLElement>;
 }
 
-export function DataFieldCard({ field, active, onSelect, extra, children }: FieldCardProps) {
+export function DataFieldCard({ field, active, onSelect, extra, children, activeRef }: FieldCardProps) {
   const raw = displayValue(field.rawValue);
   const normalized = displayValue(field.normalizedValue);
   const effective = displayValue(field.effectiveValue);
@@ -163,7 +165,7 @@ export function DataFieldCard({ field, active, onSelect, extra, children }: Fiel
   const unit = /^[<>≤≥]?\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(currentValue)
     ? customerDisplayLabel(field.unit) : '';
   return (
-    <article className={`data-field-card${active ? ' is-active' : ''}`}>
+    <article ref={active ? activeRef : undefined} className={`data-field-card${active ? ' is-active' : ''}`}>
       <button
         type="button"
         className="data-field-card-summary"
@@ -237,6 +239,8 @@ export function DataFieldDataBrowser({
   const regions = useMemo(() => normalizeRegions(workbook), [workbook]);
   const records = workbook?.records || [];
   const selectedField = fields.find((field) => dataFieldKey(field) === selectedFieldKey);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const activeCardRef = useRef<HTMLElement>(null);
   const [selectedRegionId, setSelectedRegionId] = useState<string>();
   const [selectedRecordId, setSelectedRecordId] = useState<string>();
   useEffect(() => {
@@ -257,6 +261,17 @@ export function DataFieldDataBrowser({
   const grouped = groupFields(visibleFields, workbook?.fieldDefinitions);
   const summary = summarizeFields(visibleFields);
   const activeRecordIndex = regionRecords.findIndex((item) => item.recordId === activeRecordId);
+  useEffect(() => {
+    if (!selectedCell || !selectedField || !fieldMatchesSheet(selectedField, selectedCell)
+      || normalizeCellAddress(selectedField.address) !== selectionAnchor(selectedCell.address)) return;
+    const frame = window.requestAnimationFrame(() => {
+      const body = bodyRef.current, card = activeCardRef.current;
+      if (!body || !card) return;
+      const outer = body.getBoundingClientRect(), inner = card.getBoundingClientRect();
+      if (inner.top < outer.top || inner.bottom > outer.bottom) body.scrollTop += inner.top - outer.top - 12;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedCell, selectedFieldKey, selectedField, activeRecordId]);
 
   const selectRecord = (recordId: string) => {
     setSelectedRecordId(recordId);
@@ -275,7 +290,7 @@ export function DataFieldDataBrowser({
     if (first) onSelectField(first);
   };
 
-  return <div className="data-panel-body data-field-data-browser" aria-label="字段数据">
+  return <div ref={bodyRef} className="data-panel-body data-field-data-browser" aria-label="字段数据">
     <div className="data-browser-heading">
       <div className="data-browser-identity">
         <div><strong>{customerGroupName(region?.name) || '字段数据'}</strong><span>{region ? structureLabel(region.structureType, region.recordAxis) : null}</span></div>
@@ -343,8 +358,8 @@ export function DataFieldDataBrowser({
       {summary.issueCount || summary.excludedCount ? <ExclamationCircleFilled /> : <CheckCircleFilled />}
       <span>{fieldSummaryLabel(summary)}</span>
     </div> : null}
-    {selectedCell && !fields.some((field) => field.sheetId === selectedCell.sheetId
-      && field.address?.toUpperCase() === selectedCell.address.toUpperCase())
+    {selectedCell && !fields.some((field) => fieldMatchesSheet(field, selectedCell)
+      && normalizeCellAddress(field.address) === selectionAnchor(selectedCell.address))
       ? <div className="data-inline-note">该单元格没有匹配到业务字段</div> : null}
     {grouped.length ? <div className="data-field-columns" aria-hidden="true"><span>字段名称</span><span>当前值</span><span>状态</span></div> : null}
     <div className="data-structure-groups">
@@ -357,6 +372,7 @@ export function DataFieldDataBrowser({
             key={dataFieldKey(field)}
             field={field}
             active={dataFieldKey(field) === selectedFieldKey}
+            activeRef={activeCardRef}
             onSelect={() => onSelectField(field)}
             extra={renderFieldExtra?.(field)}
           >

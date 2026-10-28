@@ -11,6 +11,57 @@ import java.io.ByteArrayInputStream;
 import static org.assertj.core.api.Assertions.*;
 
 class LabStructureCompatibilityTest {
+    @Test void duplicateAndUnlabelledSampleRowsRetainIndependentValues() throws Exception {
+        var json=new ObjectMapper();var parser=new XlsxStructureParser(json);var catalog=new UnifiedLabTemplateCatalog(json);
+        var pack=catalog.compile(UnifiedLabTemplateCatalog.TEST,parser.parseInstance(getClass().getResourceAsStream("/templates/unified/test.xlsx"))).payload();
+        var source=pack.path("snapshot").deepCopy();var sheet=LabWorkbook.sheet(source);
+        int first=LabWorkbook.findField(sheet,"contact.water")[0], second=LabWorkbook.findField(sheet,"contact.hexadecane")[0];
+        LabWorkbook.cell(sheet,second,1).put("v",LabWorkbook.value(sheet,first,1));
+        int note=133;LabWorkbook.cell(sheet,note,1).put("v","");
+        LabWorkbook.cell(sheet,135,1).put("v","验收结论");
+        for(int c=2;c<10;c++){LabWorkbook.cell(sheet,6,c).put("v","S"+c);LabWorkbook.cell(sheet,first,c).put("v",c);LabWorkbook.cell(sheet,second,c).put("v",c+10);}
+        LabWorkbook.cell(sheet,note,7).put("v","方案甲说明");LabWorkbook.cell(sheet,note,8).put("v","方案乙说明");
+        var prepared=LabWorkbook.prepare(json,source,pack.path("snapshot"),"duplicates");
+        var model=LabWorkbook.extract(json,prepared,json.createObjectNode(),"duplicates");
+        assertThat(model.path("sourceGroups")).hasSize(8);
+        assertThat(java.util.stream.StreamSupport.stream(model.path("templateInstance").path("issues").spliterator(),false).map(i->i.path("code").asText())).contains("DUPLICATE_FIELD");
+        assertThat(java.util.stream.StreamSupport.stream(model.path("testResults").spliterator(),false).filter(i->i.has("duplicateOf")&&i.path("valueStatus").asText().equals("RECORDED"))).hasSize(8);
+        assertThat(java.util.stream.StreamSupport.stream(model.path("processSteps").spliterator(),false).filter(i->i.path("supplemental").asBoolean()&&i.path("valueStatus").asText().equals("RECORDED"))).hasSize(2);
+        var described=catalog.describe(UnifiedLabTemplateCatalog.TEST,prepared,json.createObjectNode()).payload();
+        assertThat(java.util.stream.StreamSupport.stream(described.path("mapping").spliterator(),false).filter(i->i.path("experimentField").path("supplemental").asBoolean()).findFirst().orElseThrow().path("locator").has("labelRange")).isFalse();
+        var exported=new SnapshotWorkbookExporter(json).export(LabWorkbook.present(json,prepared).snapshot(),json.createArrayNode(),json.createObjectNode(),null).content();
+        var restored=parser.parseInstance(new ByteArrayInputStream(exported)).snapshot();
+        var rebound=LabWorkbook.prepare(json,restored,pack.path("snapshot"),"roundtrip");
+        var roundtrip=LabWorkbook.extract(json,rebound,json.createObjectNode(),"roundtrip");
+        assertThat(java.util.stream.StreamSupport.stream(roundtrip.path("processSteps").spliterator(),false).filter(i->i.path("supplemental").asBoolean()&&i.path("valueStatus").asText().equals("RECORDED"))).hasSize(2);
+    }
+    @Test void invalidQuantityNeverClaimsTheObservedUnitWasGrams() {
+        var json=new ObjectMapper();var field=json.createObjectNode().put("semantic","ACTUAL_QTY").put("resultKind","NUMBER").put("unit","g");
+        var parsed=LabValues.parse(json,json.getNodeFactory().textNode("10000 mg"),field,"");
+        assertThat(parsed.path("rawUnit").asText()).isEqualTo("mg");
+        assertThat(parsed.path("unit").asText()).isEmpty();
+        assertThat(parsed.path("parseStatus").asText()).isEqualTo("CONFLICT");
+    }
+    @Test void preservesAnEnteredTotalWhenTheRecipeIsIncomplete() throws Exception {
+        var json=new ObjectMapper();var parser=new XlsxStructureParser(json);
+        var pack=new UnifiedLabTemplateCatalog(json).compile(UnifiedLabTemplateCatalog.TEST,parser.parseInstance(getClass().getResourceAsStream("/templates/unified/test.xlsx"))).payload();
+        var snapshot=pack.path("snapshot").deepCopy();var sheet=LabWorkbook.sheet(snapshot);
+        LabWorkbook.cell(sheet,6,2).put("v","S001");
+        LabWorkbook.cell(sheet,51,1).put("v","MAT-A");LabWorkbook.cell(sheet,51,2).put("v",10);
+        LabWorkbook.cell(sheet,52,1).put("v","MAT-B");
+        var total=LabWorkbook.cell(sheet,59,2);total.remove("f");total.put("v",10.2);
+        var prepared=LabWorkbook.prepare(json,snapshot,pack.path("snapshot"),"entered-total");
+        var model=LabWorkbook.extract(json,prepared,json.createObjectNode(),"entered-total");
+        assertThat(LabWorkbook.cell(LabWorkbook.sheet(prepared),59,2).path("v").asDouble()).isEqualTo(10.2);
+        assertThat(model.path("formulaItems").get(0).path("formulaComplete").asBoolean()).isFalse();
+        var exported=new SnapshotWorkbookExporter(json).export(LabWorkbook.present(json,prepared).snapshot(),json.createArrayNode(),json.createObjectNode(),null).content();
+        var restored=parser.parseInstance(new ByteArrayInputStream(exported)).snapshot();
+        var rebound=LabWorkbook.prepare(json,restored,pack.path("snapshot"),"entered-total-reimport");
+        LabWorkbook.extract(json,rebound,json.createObjectNode(),"entered-total-reimport");
+        var reboundSheet=LabWorkbook.sheet(rebound);var totalRow=LabWorkbook.findField(reboundSheet,"formula.total")[0];
+        assertThat(LabWorkbook.cell(reboundSheet,totalRow,2).path("v").asDouble()).isEqualTo(10.2);
+        assertThat(LabWorkbook.cell(reboundSheet,totalRow,2).hasNonNull("f")).isFalse();
+    }
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings={"string","number","integer","date","datetime","time","duration","boolean"})
     void preservesEveryLocalFieldTypeThroughResultExcelAndReimport(String type)throws Exception {

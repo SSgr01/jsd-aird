@@ -64,6 +64,7 @@ public final class LabValues {
         var match=SCALAR.matcher(normalized);
         if(!kind.equals("TEXT")&&match.matches()) {
             var unit=match.group(3).strip();var expected=field.path("unit").asText("");
+            if(material&&!unit.isEmpty())out.put("rawUnit",unit);
             var canonical=unit.isEmpty()?expected:canonicalUnit(unit);
             var allowed=unit.isEmpty()||canonicalUnit(expected).equals(canonical);
             for(var candidate:field.path("allowedUnits"))allowed|=canonicalUnit(candidate.asText()).equals(canonical);
@@ -84,7 +85,7 @@ public final class LabValues {
             out.put("parseStatus",material||unit.matches("[A-Za-zμµ℃°%²³Ω·./]+")?"CONFLICT":normalized.matches(".*[~～—].*")?"RANGE":"TEXT_ONLY");
         } else out.put("parseStatus",kind.equals("TEXT")?"TEXT":normalized.matches(".*[~～—].*")?"RANGE":"TEXT_ONLY");
         out.put("value",text);
-        if(material)out.put("parseStatus","CONFLICT");
+        if(material)out.put("parseStatus","CONFLICT").put("unit","");
         return out;
     }
     public static String canonicalUnit(String unit) {

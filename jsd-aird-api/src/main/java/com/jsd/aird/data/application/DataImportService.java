@@ -490,6 +490,7 @@ public class DataImportService {
                         .put("sheetName", parsedSheet.sheetName())
                         .put("structureFingerprint", parsedSheet.structureFingerprint() == null ? "" : parsedSheet.structureFingerprint());
                 structure.set("rows", objectMapper.valueToTree(parsedSheet.rows()));
+                if(labExecution!=null&&labExecution.issues()!=null)structure.set("labParseIssues",labExecution.issues().deepCopy());
                 if (parsedSheet.layoutIr() != null) structure.set("layoutIr", parsedSheet.layoutIr().deepCopy());
                 structure.set("componentMatches", documentSource
                         ? objectMapper.createArrayNode() : compatibility.componentMatches().deepCopy());
@@ -730,9 +731,33 @@ public class DataImportService {
         var definition = draft==null?templates.getVersion(organizationId, job.templateVersionId()):templates.prepareWorkbookImport(organizationId,job.templateVersionId(),draft.snapshot(),draft.instance()).definition();
         var mappings = repository.listMappings(organizationId, importJobId);
         var rows = repository.listRows(organizationId, importJobId);
+        var sourceSheets = repository.listSheets(organizationId, importJobId);
         var issues = new ArrayList<DataRepository.Issue>();
-        if(draft!=null)for(var pending:draft.instance().path("issues"))issues.add(new DataRepository.Issue(null,pending.path("sheetId").asText(null),null,"BLOCKER","INSTANCE_STRUCTURE_UNCONFIRMED",null,null,pending.path("address").asText(null),pending.path("message").asText("结构或字段待确认"),pending.deepCopy(),"OPEN"));
-        for (var sheet : repository.listSheets(organizationId, importJobId)) {
+        for(var sheet:sourceSheets)if(sheet.selected())for(var pending:sheet.structure().path("labParseIssues")) {
+            var code=pending.path("code").asText("INSTANCE_STRUCTURE_UNCONFIRMED");
+            // Per-value quantity validation below supplies the specific warning.
+            if(code.equals("FORMULA_INCOMPLETE"))continue;
+            if(draft!=null&&code.equals("FIELD_UNCONFIRMED")&&pending.path("address").asText().isBlank()) {
+                String label="";
+                for(var field:draft.instance().path("model").path("fields"))if(field.path("id").equals(pending.path("fieldId")))label=field.path("locator").path("labelRange").asText("");
+                boolean located=false;for(var other:sheet.structure().path("labParseIssues"))if(other.path("code").asText().equals(code)&&!label.isBlank()&&other.path("address").asText().equalsIgnoreCase(label)){located=true;break;}
+                if(located)continue;
+            }
+            issues.add(new DataRepository.Issue(null,sheet.sheetId(),null,"WARNING",code,null,null,pending.path("address").asText(null),pending.path("message").asText("数据待核对"),pending.deepCopy(),"OPEN"));
+        }
+        if(draft!=null)for(var pending:draft.instance().path("issues")) {
+            boolean included=false;
+            for(var sheet:sourceSheets)for(var parsed:sheet.structure().path("labParseIssues")) {
+                if(!parsed.path("code").equals(pending.path("code")))continue;
+                boolean sameField=!pending.path("fieldId").asText().isBlank()&&parsed.path("fieldId").equals(pending.path("fieldId"));
+                boolean sameCell=!pending.path("address").asText().isBlank()
+                        &&pending.path("address").asText().equalsIgnoreCase(parsed.path("address").asText())
+                        &&(pending.path("sheetId").asText().isBlank()||pending.path("sheetId").asText().equals(sheet.sheetId()));
+                if(sameField||sameCell){included=true;break;}
+            }
+            if(!included)issues.add(new DataRepository.Issue(null,pending.path("sheetId").asText(null),null,"WARNING","INSTANCE_STRUCTURE_UNCONFIRMED",null,null,pending.path("address").asText(null),pending.path("message").asText("结构或字段待确认"),pending.deepCopy(),"OPEN"));
+        }
+        for (var sheet : sourceSheets) {
             if (!sheet.selected()) continue;
             var mapped = mappings.stream().anyMatch(item -> sheet.sheetId().equals(item.sheetId()) && "MAP".equals(item.action())
                     && item.fieldCode()!=null && !item.fieldCode().isBlank());
@@ -804,6 +829,30 @@ public class DataImportService {
                             "displayValue", "numberFormat", "fractionRepresentation", "materialId", "materialCode", "compositionBasis", "testMethod", "testStage")) {
                         if (cell.has(key)) value.set(key, cell.path(key).deepCopy());
                     }
+                }
+                if ("FORMULA".equals(value.path("experimentField").path("domain").asText())
+                        && "ACTUAL_QTY".equals(value.path("experimentField").path("field").asText())
+                        && "LIST_PROJECTION".equals(mapping.detail().path("mappingKind").asText())) {
+                    var quantityField=objectMapper.createObjectNode().put("semantic","ACTUAL_QTY").put("resultKind","NUMBER").put("unit","g");
+                    var parsedQuantity=com.jsd.aird.shared.lab.LabValues.parse(objectMapper,objectMapper.getNodeFactory().textNode(effectiveInput),quantityField,"");
+                    value.put("rawUnit",parsedQuantity.path("rawUnit").asText(""));
+                    value.put("parseStatus",parsedQuantity.path("parseStatus").asText());
+                    if("CONFLICT".equals(parsedQuantity.path("parseStatus").asText())) {
+                        value.put("normalizedUnit","").put("valueStatus","WARNING").put("trainingEligible",false);
+                        issues.add(issue(row,mapping,"WARNING","MATERIAL_QUANTITY_INVALID","用量需要使用非负数和 g，请核对原始填写内容"));
+                    }
+                    if(value.path("itemLabel").asText().isBlank()&&!effectiveInput.isBlank())value.put("valueStatus","WARNING").put("trainingEligible",false);
+                }
+                var address=cell==null?"":cell.path("cellAddress").asText("");
+                for(var sheet:sourceSheets)if(sheet.sheetId().equals(row.sheetId()))for(var pending:sheet.structure().path("labParseIssues")) {
+                    var at=pending.path("address").asText("");var code=pending.path("code").asText("");
+                    if(code.equals("FORMULA_INCOMPLETE"))continue;
+                    boolean same=at.equalsIgnoreCase(address);
+                    if(!same&&Set.of("DUPLICATE_FIELD","MATERIAL_CODE_MISSING","FIELD_UNCONFIRMED").contains(code)) {
+                        var left=at.replaceAll("^[A-Za-z]+","");var right=address.replaceAll("^[A-Za-z]+","");
+                        same=!left.isBlank()&&left.equals(right);
+                    }
+                    if(same)value.put("valueStatus","WARNING").put("trainingEligible",false);
                 }
                 var valueSource = value.path("valueSource").asText("INPUT").toUpperCase(Locale.ROOT);
                 if (Set.of("FORMULA", "DERIVED").contains(valueSource)) value.put("trainingEligible", false);

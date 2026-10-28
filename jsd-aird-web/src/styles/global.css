@@ -3371,7 +3371,7 @@ a:active,
 
 .field-property > small { color: var(--app-danger); font-size: 11px; }
 .required-property { align-content: start; }
-.required-property .ant-switch { margin-top: 7px; }
+.required-property .ant-switch { justify-self: start; margin-top: 7px; }
 .field-property-section-title { color: var(--app-text); font-size: 13px; }
 
 .field-sheet-name { color: var(--app-text-secondary); font-size: 12px; }

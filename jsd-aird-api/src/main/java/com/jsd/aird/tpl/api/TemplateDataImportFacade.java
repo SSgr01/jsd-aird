@@ -52,7 +52,11 @@ public interface TemplateDataImportFacade {
     default ImportExecution prepareImport(UUID organizationId, UUID templateVersionId, UUID fileId) {
         return new ImportExecution(getVersion(organizationId,templateVersionId),getBindings(organizationId,templateVersionId),parse(organizationId,templateVersionId,fileId));
     }
-    record ImportExecution(DataTemplateDefinition definition,List<ImportBinding> bindings,ParsedTabularFile parsed) {}
+    record ImportExecution(DataTemplateDefinition definition,List<ImportBinding> bindings,ParsedTabularFile parsed,JsonNode issues) {
+        public ImportExecution(DataTemplateDefinition definition,List<ImportBinding> bindings,ParsedTabularFile parsed) {
+            this(definition,bindings,parsed,null);
+        }
+    }
 
     default ImportExecution prepareWorkbookImport(UUID organizationId, UUID templateVersionId, JsonNode snapshot, JsonNode instance) {
         throw new UnsupportedOperationException("Workbook instance extraction is unavailable");

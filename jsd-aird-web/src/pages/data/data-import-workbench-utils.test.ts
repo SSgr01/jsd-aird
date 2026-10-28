@@ -36,11 +36,23 @@ describe('data import workbench cell identity', () => {
     })).toEqual(field());
   });
 
+  it('matches a merged selection using its anchor cell', () => {
+    expect(importFieldForCell([field()], {
+      sheetId: 'sheet-1', sheetName: 'Sheet1', address: '$B$2:$D$2',
+    })).toEqual(field());
+  });
+
   it('keeps row fallback constrained to the same sheet', () => {
     const other = field({ sheetId: 'sheet-2', sheetName: 'Other', rowNumber: 2, address: 'C2' });
     expect(importFieldInSheetRow([other, field()], {
       sheetId: 'sheet-1', sheetName: 'Sheet1', address: 'A2',
     }, 2)).toEqual(field());
+  });
+
+  it('does not match unrelated sheets when both sheet names are empty', () => {
+    expect(importFieldForCell([field({ sheetId: 'sheet-2', sheetName: '' })], {
+      sheetId: 'sheet-1', sheetName: '', address: 'B2',
+    })).toBeUndefined();
   });
 });
 

@@ -40,7 +40,8 @@ final class StructuredDataExtractor {
                     boolean child=false;
                     for(var binding:instance.path("mapping"))if(binding.path("bindingId").equals(cell.path("bindingId"))&&binding.path("parentBindingId").equals(record.path("regionId"))){child=true;break;}
                     int index=cell.path(record.path("axis").asText().equals("ROW")?"rowNumber":"columnNumber").asInt();
-                    if(child&&index==record.path("index").asInt()){id=record.path("id").asText();break;}
+                    int first=record.path("index").asInt(),size=Math.max(1,record.path("size").asInt(1));
+                    if(child&&index>=first&&index<first+size){id=record.path("id").asText();break;}
                 }
                 if(id!=null)break;
             }
@@ -109,13 +110,14 @@ final class StructuredDataExtractor {
             var identityRule = identityRule(importContract, componentId);
             var listProjections = listProjections(importContract, componentId);
             var structuredFields = component.stream().filter(this::isStructuredField).toList();
+            var repeatRegion = component.stream().filter(binding -> "REPEAT_REGION".equalsIgnoreCase(binding.mappingKind())).findFirst().orElse(null);
             Result structured = null;
             if (!structuredFields.isEmpty()) {
                 structured = structuredFields.stream().anyMatch(this::isColumnBinding)
                         ? extractColumnTable(sheet, definitions, componentId, structuredFields, dataStart, dataEnd,
-                        v9Experiment, identityRule, listProjections, importContract)
+                        v9Experiment, identityRule, listProjections, importContract, repeatRegion)
                         : extractRowTable(sheet, definitions, componentId, structuredFields, dataStart, dataEnd,
-                        v9Experiment, identityRule, listProjections);
+                        v9Experiment, identityRule, listProjections, repeatRegion);
             }
             if (structured != null && !structured.rows().isEmpty()) {
                 var form = declaredFormContext(entry.getKey(), component, formResults);
@@ -291,17 +293,22 @@ final class StructuredDataExtractor {
             int dataEnd,
             boolean v9Experiment,
             JsonNode identityRule,
-            List<ListProjection> listProjections
+            List<ListProjection> listProjections,
+            TemplateDataImportFacade.ImportBinding repeatRegion
     ) {
         var ranges = fields.stream().map(binding -> range(binding.locator(), false))
                 .filter(Optional::isPresent).map(Optional::get).toList();
         if (ranges.isEmpty()) return new Result("ROW_TABLE", List.of(), List.of());
         var start = Math.max(dataStart, ranges.stream().mapToInt(Range::startRow).min().orElse(dataStart));
         var end = Math.min(dataEnd, ranges.stream().mapToInt(Range::endRow).max().orElse(dataEnd));
+        var regionRange=repeatRegion==null?null:parseRange(repeatRegion.locator().path("dataRange").asText()).orElseGet(()->range(repeatRegion.locator(),false).orElse(null));
+        int regionStart=regionRange==null?start:regionRange.startRow();
+        int stride=repeatRegion==null?1:Math.max(Math.max(1,repeatRegion.recordHeight()),repeatRegion.recordStride());
+        if(regionRange!=null){start=Math.max(dataStart,regionStart);end=Math.min(dataEnd,regionRange.endRow());start=regionStart+(Math.max(0,start-regionStart)+stride-1)/stride*stride;}
         var mappings = new ArrayList<>(fieldMappings(sheet.sheetId(), componentId, fields, definitions, "ROW_TABLE"));
         mappings.addAll(listProjectionMappings(sheet, componentId, listProjections));
         var rows = new ArrayList<DataRepository.Row>();
-        for (int rowNumber = start; rowNumber <= end; rowNumber++) {
+        for (int rowNumber = start; rowNumber <= end; rowNumber+=stride) {
             var raw = objectMapper.createObjectNode();
             var metadata = baseMetadata("ROW_TABLE", componentId);
             var nonBlank = false;
@@ -309,11 +316,13 @@ final class StructuredDataExtractor {
             String identity = null;
             for (var binding : fields) {
                 var fieldRange = range(binding.locator(), false).orElse(null);
-                if (fieldRange == null || rowNumber < fieldRange.startRow() || rowNumber > fieldRange.endRow()) continue;
+                if (fieldRange == null) continue;
+                int valueRow=regionRange==null?rowNumber:fieldRange.startRow()+((rowNumber-regionStart)/stride)*stride;
+                if(valueRow<fieldRange.startRow()||valueRow>fieldRange.endRow())continue;
                 var key = bindingKey(binding);
-                var value = value(sheet.rows(), rowNumber, fieldRange.startColumn());
+                var value = value(sheet.rows(), valueRow, fieldRange.startColumn());
                 raw.put(key, value);
-                putCell(metadata, key, cellMetadata(sheet, rowNumber, fieldRange.startColumn(), binding));
+                putCell(metadata, key, cellMetadata(sheet, valueRow, fieldRange.startColumn(), binding));
                 nonBlank |= !value.isBlank();
                 nonSequenceBlank |= !value.isBlank() && !isGeneratedSequenceField(binding);
                 if (isIdentityBinding(binding, v9Experiment) && !value.isBlank()) identity = value;
@@ -343,13 +352,18 @@ final class StructuredDataExtractor {
             boolean v9Experiment,
             JsonNode identityRule,
             List<ListProjection> listProjections,
-            JsonNode importContract
+            JsonNode importContract,
+            TemplateDataImportFacade.ImportBinding repeatRegion
     ) {
         var ranges = fields.stream().map(binding -> range(binding.locator(), false))
                 .filter(Optional::isPresent).map(Optional::get).toList();
         if (ranges.isEmpty()) return new Result("COLUMN_TABLE", List.of(), List.of());
         var start = ranges.stream().mapToInt(Range::startColumn).min().orElse(1);
         var end = ranges.stream().mapToInt(Range::endColumn).max().orElse(start);
+        var regionRange=repeatRegion==null?null:parseRange(repeatRegion.locator().path("dataRange").asText()).orElseGet(()->range(repeatRegion.locator(),false).orElse(null));
+        int regionStart=regionRange==null?start:regionRange.startColumn();
+        int stride=repeatRegion==null?1:Math.max(Math.max(1,repeatRegion.recordWidth()),repeatRegion.recordStride());
+        if(regionRange!=null){start=regionStart;end=regionRange.endColumn();}
         // A SINGLE_FILE experiment template may keep a static method/condition
         // column immediately to the left of the actual result column.  Such a
         // template has no identity binding because the whole file is one
@@ -364,19 +378,21 @@ final class StructuredDataExtractor {
         mappings.addAll(listProjectionMappings(sheet, componentId, listProjections));
         var rows = new ArrayList<DataRepository.Row>();
         int recordIndex = 0;
-        for (int column = start; column <= end; column++) {
+        for (int column = start; column <= end; column+=stride) {
             var raw = objectMapper.createObjectNode();
             var metadata = baseMetadata("COLUMN_TABLE", componentId);
             var nonBlank = false;
             String identity = null;
             for (var binding : fields) {
                 var fieldRange = range(binding.locator(), false).orElse(null);
-                if (fieldRange == null || column < fieldRange.startColumn() || column > fieldRange.endColumn()) continue;
+                if (fieldRange == null) continue;
+                int valueColumn=regionRange==null?column:fieldRange.startColumn()+((column-regionStart)/stride)*stride;
+                if(valueColumn<fieldRange.startColumn()||valueColumn>fieldRange.endColumn())continue;
                 var sourceRow = fieldRange.startRow();
                 var key = bindingKey(binding);
-                var value = value(sheet.rows(), sourceRow, column);
+                var value = value(sheet.rows(), sourceRow, valueColumn);
                 raw.put(key, value);
-                putCell(metadata, key, cellMetadata(sheet, sourceRow, column, binding));
+                putCell(metadata, key, cellMetadata(sheet, sourceRow, valueColumn, binding));
                 nonBlank |= !value.isBlank();
                 if (isIdentityBinding(binding, v9Experiment) && !value.isBlank()) identity = value;
             }
@@ -466,9 +482,11 @@ final class StructuredDataExtractor {
                 var labelRow = projection.labelRange().startRow() + ("ROW".equals(projection.itemAxis()) ? offset : 0);
                 var labelColumn = projection.labelRange().startColumn() + ("COLUMN".equals(projection.itemAxis()) ? offset : 0);
                 var label = value(sheet.rows(), labelRow, labelColumn);
-                if (label.isBlank()) continue;
+                if (label.isBlank() && !projectionItemHasValues(sheet, projection, offset)) continue;
+                var displayLabel=label.isBlank()?"未填写物料编码":label;
                 var unitCell = projectionUnitCell(projection, offset);
                 var rawUnit = unitCell == null ? "" : value(sheet.rows(), unitCell.row(), unitCell.column());
+                var standardUnit = rawUnit.isBlank() && "FORMULA".equals(projection.domain()) && "ACTUAL_QTY".equals(projection.valueSemantic()) ? "g" : rawUnit;
                 var ordinal = offset + 1;
                 var bindingId = matrixBindingId(projection.id(), ordinal);
                 var itemSourceKey = "MATRIX:" + projection.id() + ":" + ordinal;
@@ -487,7 +505,7 @@ final class StructuredDataExtractor {
                         .put("trainingEligible", false)
                         .put("trainingRole", "EXCLUDE")
                         .put("ragEligible", true)
-                        .put("labelPath", label)
+                        .put("labelPath", displayLabel)
                         .put("valueSource", "INPUT")
                         .put("listProjectionId", projection.id())
                         .put("itemSourceKey", itemSourceKey)
@@ -502,8 +520,8 @@ final class StructuredDataExtractor {
                     detail.set("unitSource", cellMetadata(sheet, unitCell.row(), unitCell.column()));
                 }
                 result.add(new DataRepository.Mapping(null, sheet.sheetId(), matrixKey(projection.id(), ordinal),
-                        label, projection.domain() + "." + projection.valueSemantic(), label, "MAP", "TEXT",
-                        rawUnit.isBlank() ? null : rawUnit, rawUnit.isBlank() ? null : rawUnit,
+                        displayLabel, projection.domain() + "." + projection.valueSemantic(), displayLabel, "MAP", "TEXT",
+                        rawUnit.isBlank() ? null : rawUnit, standardUnit.isBlank() ? null : standardUnit,
                         detail, "MATCHED"));
             }
         }
@@ -535,7 +553,7 @@ final class StructuredDataExtractor {
                 var labelRow = projection.labelRange().startRow() + ("ROW".equals(projection.itemAxis()) ? offset : 0);
                 var labelColumn = projection.labelRange().startColumn() + ("COLUMN".equals(projection.itemAxis()) ? offset : 0);
                 var label = value(sheet.rows(), labelRow, labelColumn);
-                if (label.isBlank()) continue;
+                if (label.isBlank() && !projectionItemHasValues(sheet, projection, offset)) continue;
                 var unitCell = projectionUnitCell(projection, offset);
                 var rawUnit = unitCell == null ? "" : value(sheet.rows(), unitCell.row(), unitCell.column());
                 var valueRow = "ROW".equals(projection.itemAxis())
@@ -587,6 +605,22 @@ final class StructuredDataExtractor {
         return "ROW".equals(projection.itemAxis())
                 ? new Cell(range.startRow() + itemOffset, range.startColumn())
                 : new Cell(range.startRow(), range.startColumn() + itemOffset);
+    }
+
+    private boolean projectionItemHasValues(TemplateDataImportFacade.ParsedSheet sheet, ListProjection projection, int offset) {
+        if (!"FORMULA".equals(projection.domain()) || !"ACTUAL_QTY".equals(projection.valueSemantic())
+                || !"MATERIAL_CODE".equals(projection.labelSemantic())) return false;
+        var range = projection.valueRange();
+        if ("ROW".equals(projection.itemAxis())) {
+            int row = range.startRow() + offset;
+            for (int col = range.startColumn(); col <= range.endColumn(); col++)
+                if (!value(sheet.rows(), row, col).isBlank()) return true;
+        } else {
+            int col = range.startColumn() + offset;
+            for (int row = range.startRow(); row <= range.endRow(); row++)
+                if (!value(sheet.rows(), row, col).isBlank()) return true;
+        }
+        return false;
     }
 
     private void putRecordIdentity(ObjectNode metadata, String sheetId, String componentId, String shape,
@@ -737,6 +771,7 @@ final class StructuredDataExtractor {
             metadata.set("experimentField", binding.experimentField().deepCopy());
             metadata.put("targetPath", binding.targetPath() == null ? "" : binding.targetPath());
         }
+        copyCellEvidence(sheet, metadata, columnName(column) + row);
         return metadata;
     }
 
@@ -750,6 +785,9 @@ final class StructuredDataExtractor {
                 if (cell.has(key)) metadata.set(key, cell.path(key).deepCopy());
             }
             if ("FORMULA".equals(cell.path("valueSource").asText())) metadata.put("valueSource", "FORMULA");
+            else if ("FORMULA".equals(metadata.path("valueSource").asText())
+                    && "INPUT".equals(cell.path("valueSource").asText())
+                    && cell.hasNonNull("rawNumericValue")) metadata.put("valueSource", "INPUT");
             break;
         }
     }

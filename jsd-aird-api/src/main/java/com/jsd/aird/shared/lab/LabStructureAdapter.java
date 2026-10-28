@@ -26,7 +26,15 @@ final class LabStructureAdapter {
         int first=definition.path("firstSampleColumn").asInt(2),last=definition.path("lastSampleColumn").asInt(7);
         for(var column:iterable(sheet.path("columnData").fields()))if(column.getValue().path("custom").path("lab").has("sampleKey"))last=Math.max(last,Integer.parseInt(column.getKey()));
         for(var entry:iterable(definition.path("fields").fields())) {
-            var code=entry.getKey();var def=entry.getValue();var at=LabWorkbook.findField(sheet,code);if(at==null)continue;
+            var code=entry.getKey();var def=entry.getValue();var at=LabWorkbook.findField(sheet,code);
+            if(at==null) {
+                if(fresh) {
+                    var missing=byBinding.get(code);var field=byCode.get(code);
+                    if(missing!=null) {missing.put("bindingStatus","ABSENT_IN_SOURCE");missing.putObject("locator");}
+                    if(field!=null) {field.put("absentInSource",true);field.putObject("locator");}
+                }
+                continue;
+            }
             boolean sample=def.path("scope").asText().equals("SAMPLE");
             var field=byCode.get(code);boolean added=field==null;
             if(added) {
@@ -42,6 +50,7 @@ final class LabStructureAdapter {
                 binding=mappings.addObject().put("bindingId",field.path("bindingId").asText(code)).put("fieldCode",code).put("dataPath",field.path("dataPath").asText("/fields/"+code))
                     .put("role","FIELD").put("locatorType","CELL_RANGE").put("syncDirection","TWO_WAY").put("bindingStatus","VALID").put("primaryBinding",true);
             }
+            binding.put("bindingStatus","VALID");field.remove("absentInSource");
             binding.put("mappingKind",sample?"REPEAT_FIELD":"SCALAR");
             if(sample)binding.put("parentBindingId","comparison").put("componentId","comparison").put("repeatAxis","COLUMN");
             if(fresh||legacy||added) {
@@ -49,6 +58,7 @@ final class LabStructureAdapter {
                 var valueRange=LabWorkbook.address(at[0],sample?first:at[1])+(sample?":"+LabWorkbook.address(at[0],last):"");
                 var locator=binding.putObject("locator").put("sheetId",sheet.path("id").asText()).put("sheetName",sheet.path("name").asText())
                     .put("address",valueRange).put("valueRange",valueRange).put("labelRange",LabWorkbook.address(at[0],labelColumn)).put("valueMode",sample?"ARRAY_ROW":"SCALAR");
+                if(def.path("supplemental").asBoolean())locator.remove("labelRange");
                 field.set("locator",locator.deepCopy());
                 binding.put("labelPath",groups.getOrDefault(field.path("groupId").asText(),field.path("groupId").asText())+" > "+field.path("name").asText());
                 if(legacy)field.put("required",def.path("required").asBoolean());
@@ -90,6 +100,7 @@ final class LabStructureAdapter {
         var present=new HashSet<String>();
         for(var binding:instance.path("mapping")) {
             if(binding.path("mappingKind").asText().equals("REPEAT_REGION"))continue;
+            if(!binding.path("bindingStatus").asText("VALID").equals("VALID"))continue;
             var f=definitions.get(binding.path("bindingId").asText());if(f==null)continue;
             var locator=binding.path("locator");if(!locator.path("sheetId").asText().equals(sheet.path("id").asText()))continue;
             var r=WorkbookStructure.range(WorkbookStructure.first(locator,"valueRange","address"));

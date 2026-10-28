@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 
 import type { DataFieldValueView, DataWorkbookSnapshot } from '@/services/data/data-api';
 import { useAppStore } from '@/stores/app-store';
@@ -38,6 +38,24 @@ const field: DataFieldValueView = {
 
 describe('DataWorkbench', () => {
   beforeEach(() => useAppStore.setState({ fieldPanelCollapsed: false }));
+  it('scrolls only the field panel when a workbook cell selects an offscreen field', () => {
+    let callback: FrameRequestCallback | undefined;
+    const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => { callback = cb; return 1; });
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { top: this.classList.contains('data-panel-body') ? 100 : 600, bottom: this.classList.contains('data-panel-body') ? 400 : 650 } as DOMRect;
+    });
+    const workbook: DataWorkbookSnapshot = { fileName: 'test.xlsx', format: 'XLSX', snapshot: {}, sheets: [], editable: true,
+      regions: [{ regionId: 'detail', name: '明细', structureType: 'ROW_TABLE', fieldCount: 1, recordCount: 1, fieldGroups: [] }],
+      records: [{ recordId: 'record-1', regionId: 'detail', label: '第1条', sequence: 1, excluded: false }],
+      fields: [{ ...field, componentId: 'detail' }] };
+    const key = [field.recordId, field.bindingId, field.valuePath, field.sheetId, field.address].join('|');
+    render(<DataFieldDataBrowser workbook={workbook} selectedFieldKey={key}
+      selectedCell={{ sheetId: 'sheet-1', sheetName: '原料数据', address: '$B$3' }} onSelectField={() => undefined} />);
+    act(() => callback?.(0));
+    expect(screen.getByLabelText('字段数据').scrollTop).toBe(488);
+    expect(screen.getByRole('button', { name: /物料名称.*树脂 A/ })).toHaveAttribute('aria-expanded', 'true');
+    raf.mockRestore(); bounds.mockRestore();
+  });
   it('collapses and restores the shared panel without losing its content or selection', () => {
     render(<DataWorkbenchShell breadcrumb="实验中心 / 导入确认" title="测试.xlsx"
       canvas={<div>工作表</div>} panelTitle="本次实验数据"

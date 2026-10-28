@@ -10,6 +10,7 @@ import type { DataFieldValueView, DataWorkbookSnapshot } from '@/services/data/d
 import type { ExperimentTemplateDataReview } from '@/services/experiments/experiment-api';
 import type { EditorSelection } from '@/features/template-workspace/types';
 import type { FieldPanelView } from '@/features/template-workspace/field-definition-selection';
+import { findFieldForCell } from '@/features/data-workbench/field-cell-selection';
 
 interface Props {
   review?: ExperimentTemplateDataReview;
@@ -222,10 +223,7 @@ export function ExperimentTemplateDataPanel({
   ).length;
   useEffect(() => {
     if (!selectedCell) return;
-    const address = selectedCell.address.replaceAll('$', '').split(':')[0]?.toUpperCase();
-    const field = workbook.fields.find(
-      (item) => item.sheetId === selectedCell.sheetId && item.address?.toUpperCase() === address,
-    );
+    const field = findFieldForCell(workbook.fields, selectedCell);
     if (field) {
       setSelectedBindingId(field.bindingId);
       setSelectedFieldKey(fieldKey(field));

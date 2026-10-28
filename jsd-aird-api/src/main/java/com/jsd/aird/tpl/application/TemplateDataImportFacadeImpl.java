@@ -63,10 +63,9 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
         var items = repository.findPublishedDataTemplates(organizationId);
         var contracts = repository.findImportContracts(organizationId,
                 items.stream().map(TemplateRepository.TemplateListItem::versionId).toList());
-        boolean unified=items.stream().anyMatch(item->java.util.Set.of(UnifiedLabTemplateCatalog.TEST,UnifiedLabTemplateCatalog.SYNTHESIS).contains(item.templateCode()));
         return items.stream()
                 .map(item -> option(item, contracts.get(item.versionId())))
-                .filter(item->!unified||!"EXPERIMENT_DATA".equals(item.templateUsage())||java.util.Set.of(UnifiedLabTemplateCatalog.TEST,UnifiedLabTemplateCatalog.SYNTHESIS).contains(item.templateCode()))
+                .filter(item->!"EXPERIMENT_DATA".equals(item.templateUsage())||com.jsd.aird.shared.lab.UnifiedLabTemplateCodes.contains(item.templateCode()))
                 .toList();
     }
 
@@ -125,7 +124,7 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
         if (definition.importContractVersion() >= TemplateImportContractCompiler.EXPERIMENT_IMPORT_CONTRACT_VERSION
                 && definition.importContract() != null
                 && "EXPERIMENT_DATA".equals(definition.importContract().path("templateUsage").asText())) {
-            requireCurrentLabTemplate(organizationId, workspace.templateCode());
+            requireCurrentLabTemplate(workspace.templateCode());
         }
         return definition;
     }
@@ -135,7 +134,7 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
         if (templateCode == null || templateCode.isBlank()) {
             throw new ApiException(ApiErrorCode.EXPERIMENT_TEMPLATE_REQUIRED, "AI任务未配置实验模板编码");
         }
-        requireCurrentLabTemplate(organizationId,templateCode.strip());
+        requireCurrentLabTemplate(templateCode.strip());
         var item = repository.findPublishedDataTemplates(organizationId).stream()
                 .filter(candidate -> templateCode.strip().equals(candidate.templateCode()))
                 .findFirst()
@@ -570,9 +569,8 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
         }
     }
 
-    private void requireCurrentLabTemplate(UUID organizationId,String code) {
-        var standard=java.util.Set.of(UnifiedLabTemplateCatalog.TEST,UnifiedLabTemplateCatalog.SYNTHESIS);
-        if(!standard.contains(code)&&repository.findPublishedDataTemplates(organizationId).stream().anyMatch(item->standard.contains(item.templateCode())))
+    private void requireCurrentLabTemplate(String code) {
+        if(!com.jsd.aird.shared.lab.UnifiedLabTemplateCodes.contains(code))
             throw new ApiException(ApiErrorCode.EXPERIMENT_TEMPLATE_REQUIRED,"新实验请使用统一测试实验或合成实验模板；历史记录仍可按原版本查看");
     }
 

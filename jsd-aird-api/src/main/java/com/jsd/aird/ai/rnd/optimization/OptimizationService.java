@@ -226,7 +226,7 @@ public class OptimizationService {
     }
 
     private boolean unmappedMaterialRatio(JsonNode column) {
-        return "MATERIAL_RATIO".equals(column.path("semanticType").asText())
+        return Set.of("MATERIAL_RATIO","MATERIAL_AMOUNT").contains(column.path("semanticType").asText())
                 && !"MAPPED".equals(column.path("mappingStatus").asText());
     }
 
@@ -246,7 +246,7 @@ public class OptimizationService {
     }
 
     private boolean mappedFormulaColumn(JsonNode column,Set<String> knownMaterialIds) {
-        if(!"MATERIAL_RATIO".equals(column.path("semanticType").asText())
+        if(!Set.of("MATERIAL_RATIO","MATERIAL_AMOUNT").contains(column.path("semanticType").asText())
                 ||!"MAPPED".equals(column.path("mappingStatus").asText())
                 ||!"NUMERIC".equals(column.path("kind").asText()))return false;
         var id=column.path("materialId").asText();
@@ -339,6 +339,7 @@ public class OptimizationService {
         var columns=new LinkedHashMap<String,JsonNode>();dataset.path("columns").forEach(column->columns.put(column.path("code").asText(),column));
         var knownMaterialIds=repository.materialCatalog(actor.organizationId()).validIds();
         var ratioColumns=columns.values().stream().filter(column->"MATERIAL_RATIO".equals(column.path("semanticType").asText())).toList();
+        var materialColumns=columns.values().stream().filter(column->Set.of("MATERIAL_RATIO","MATERIAL_AMOUNT").contains(column.path("semanticType").asText())).toList();
         var formulaCodes=columns.values().stream().filter(column->mappedFormulaColumn(column,knownMaterialIds)).map(column->column.path("code").asText()).toList();
         var requestedX=body.path("xColumns").deepCopy();var targetCode=body.path("yColumn").asText();
         if(requestedX.isArray()&&java.util.stream.StreamSupport.stream(requestedX.spliterator(),false).anyMatch(x->formulaCodes.contains(x.asText()))) {
@@ -352,13 +353,13 @@ public class OptimizationService {
         if(!requestedX.isArray()||requestedX.isEmpty())throw validation("至少选择一个 X 因素");
         for(var selected:requestedX) {
             var column=columns.get(selected.asText());
-            if(column!=null&&"MATERIAL_RATIO".equals(column.path("semanticType").asText())
+            if(column!=null&&Set.of("MATERIAL_RATIO","MATERIAL_AMOUNT").contains(column.path("semanticType").asText())
                     &&!mappedFormulaColumn(column,knownMaterialIds))
                 throw validation("材料“"+column.path("name").asText(selected.asText())+"”的身份尚未确认，请补充材料编号后再优化");
         }
         boolean formulaSelected=false;
         for(var selected:requestedX)if(formulaCodes.contains(selected.asText())){formulaSelected=true;break;}
-        if(formulaSelected&&ratioColumns.stream().anyMatch(column->!mappedFormulaColumn(column,knownMaterialIds)))
+        if(formulaSelected&&materialColumns.stream().anyMatch(column->!mappedFormulaColumn(column,knownMaterialIds)))
             throw validation("配方中有材料身份尚未确认，请补充材料编号后再优化");
         if(!columns.containsKey(targetCode)||!"NUMERIC".equals(columns.get(targetCode).path("kind").asText()))throw validation("Y 指标需要是有数值记录的实验结果列");
         var featureNodes=json.createArrayNode();var featureCodes=new LinkedHashSet<String>();
@@ -382,13 +383,15 @@ public class OptimizationService {
         var selectedFormulaCodes=featureCodes.stream().filter(formulaCodes::contains).toList();
         for(var code:selectedFormulaCodes) {
             var column=columns.get(code);var unit=column.path("unit").asText();
+            if("MATERIAL_AMOUNT".equals(column.path("semanticType").asText())
+                    && "MASS_AMOUNT".equals(column.path("compositionBasis").asText()) && "g".equalsIgnoreCase(unit)) continue;
             if(!"MASS_PERCENT".equals(column.path("compositionBasis").asText())||!Set.of("","%","PERCENT").contains(unit))
                 throw validation("材料“"+column.path("name").asText()+"”的计量基准不是质量百分比，当前材料优化只支持质量百分比；请先确认原始记录的单位和计量基准");
         }
         if(!selectedFormulaCodes.isEmpty()&&!featureCodes.containsAll(formulaCodes))
             throw validation("配方还缺少材料："+formulaCodes.stream().filter(code->!featureCodes.contains(code)).map(code->columns.get(code).path("name").asText(code)).collect(java.util.stream.Collectors.joining("、")));
         var compositionGroups=json.createArrayNode();
-        if(formulaCodes.size()>=2&&featureCodes.containsAll(formulaCodes)){
+        if(!ratioColumns.isEmpty() && formulaCodes.size()>=2&&featureCodes.containsAll(formulaCodes)){
             for(var row:selectedRows){
                 // Incomplete X/Y rows are excluded below, as shown in the selection preview.
                 if(featureCodes.stream().anyMatch(code -> !row.path("values").hasNonNull(code)) || !row.path("values").path(targetCode).isNumber())continue;
@@ -413,7 +416,8 @@ public class OptimizationService {
             if(!"NUMERIC".equals(feature.path("kind").asText())) {
                 var distinct=new HashSet<String>();selectedRows.forEach(row -> { var value=row.path("values").path(code);if(!value.isMissingNode()&&!value.isNull())distinct.add(value.asText()); });
                 if(distinct.size()>1)adjustable=true;
-            } else if(!selectedFormulaCodes.contains(code) && feature.path("minimum").asDouble()<feature.path("maximum").asDouble())adjustable=true;
+            } else if((!selectedFormulaCodes.contains(code) || "MATERIAL_AMOUNT".equals(columns.get(code).path("semanticType").asText()))
+                    && feature.path("minimum").asDouble()<feature.path("maximum").asDouble())adjustable=true;
         }
         for(var group:compositionGroups) {
             double minimum=0,maximum=0;

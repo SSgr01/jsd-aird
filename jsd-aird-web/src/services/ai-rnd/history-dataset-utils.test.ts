@@ -66,6 +66,7 @@ describe('history-dataset-utils', () => {
     const legacyPrefixOnly = { code: 'formula:predictable-looking-code', name: '旧比例', kind: 'NUMERIC' as const, unit: '%', filledCount: 1 }
 
     expect(isMappedFormulaColumn(mapped)).toBe(true)
+    expect(isMappedFormulaColumn({ ...mapped, code: `${mapped.code}|g|mass_amount`, semanticType: 'MATERIAL_AMOUNT', unit: 'g' })).toBe(true)
     expect(isUnmappedFormulaColumn(mapped)).toBe(false)
     expect(isMappedFormulaColumn(unmapped)).toBe(false)
     expect(isUnmappedFormulaColumn(unmapped)).toBe(true)

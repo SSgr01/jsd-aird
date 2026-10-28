@@ -300,6 +300,7 @@ export interface EditorSelection {
 export interface EditorCellChange extends EditorSelection {
   value: unknown;
   previousValue: unknown;
+  numberFormat?: string;
 }
 
 export interface TemplateWorkspace {
@@ -495,7 +496,7 @@ export interface EditorHandle {
   focusBinding(binding: TemplateBinding): void;
   focusCell?(sheetId: string, address: string): void;
   focusRange?(sheetId: string, address: string): void;
-  writeCell?(sheetId: string, address: string, value: unknown): Promise<void>;
+  writeCell?(sheetId: string, address: string, value: unknown, options?: { raw?: boolean }): Promise<void>;
   clearRangeConstants?(sheetId: string, address: string): Promise<{
     cleared: number;
     formulasKept: number;

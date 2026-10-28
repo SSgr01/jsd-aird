@@ -10,7 +10,7 @@ import { generateUUID } from '@/utils/uuid'
 import { XYColumnPicker, SelectedDataIssues } from '@/components/ai-rnd/XYColumnPicker'
 import { createExperiment } from '@/services/experiments/experiment-api'
 import { useAuthStore } from '@/stores/auth-store'
-import { historicalCandidateDraft } from './historical-optimization-draft'
+import { historicalCandidatesDraft } from './historical-optimization-draft'
 import { useNavigate } from 'react-router-dom'
 import { invalidContinuousPrediction } from '../performance-prediction/performance-prediction-utils'
 import { HttpError } from '@/services/http/errors'
@@ -59,6 +59,7 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
     catch { return undefined }
   })
   const [creatingDraft, setCreatingDraft] = useState<string>()
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState<Key[]>([])
   const [drafts, setDrafts] = useState<Record<string, string>>(() => { try { return JSON.parse(localStorage.getItem(draftStorageKey) ?? '{}') as Record<string,string> } catch { return {} } })
   const [keyword, setKeyword] = useState('')
   const [datasets, setDatasets] = useState<HistoryDatasetOption[]>([])
@@ -259,21 +260,24 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
   const recipeMin = recipeFeatures.reduce((sum, column) => sum + (bounds[column.code]?.minimum ?? 0), 0)
   const recipeMax = recipeFeatures.reduce((sum, column) => sum + (bounds[column.code]?.maximum ?? 0), 0)
   const recipeVariable = recipeFeatures.some(adjustable)
-  const unsupportedMaterial = recipeFeatures.find(column => column.compositionBasis !== 'MASS_PERCENT' || !['', '%', 'PERCENT'].includes(column.unit ?? ''))
-  const compositionProblem = unsupportedMaterial ? `材料“${unsupportedMaterial.name}”的计量基准不是质量百分比，请先确认原始记录的单位和计量基准。`
-    : formulaSelected && !partialFormulaSelection && (recipeMin > 100 + (recipeVariable ? 1e-9 : 0.001) || recipeMax < 100 - (recipeVariable ? 1e-9 : 0.001))
+  const unsupportedMaterial = recipeFeatures.find(column => !((column.compositionBasis === 'MASS_PERCENT' && ['', '%', 'PERCENT'].includes(column.unit ?? '')) || (column.compositionBasis === 'MASS_AMOUNT' && (column.unit ?? '').toLowerCase() === 'g')))
+  const massFormula = recipeFeatures.some(column => column.compositionBasis === 'MASS_AMOUNT')
+  const mixedFormula = massFormula && recipeFeatures.some(column => column.compositionBasis === 'MASS_PERCENT')
+  const compositionProblem = unsupportedMaterial ? `材料“${unsupportedMaterial.name}”的计量基准不是质量百分比或克数，请先确认原始记录的单位和计量基准。`
+    : mixedFormula ? '同一配方的材料用量需要使用一致的计量基准。'
+    : !massFormula && formulaSelected && !partialFormulaSelection && (recipeMin > 100 + (recipeVariable ? 1e-9 : 0.001) || recipeMax < 100 - (recipeVariable ? 1e-9 : 0.001))
     ? '当前材料比例范围无法合计为 100%，请调整对应材料的上下限或固定值。' : ''
   const hasAdjustment = selectedFeatureColumns.some(column => !formulaCodes.includes(column.code) && adjustable(column))
     || recipeFeatures.some(column => {
       const range = bounds[column.code]
-      return range?.minimum != null && range.maximum != null && Math.min(range.maximum, 100 - recipeMin + range.minimum) - Math.max(range.minimum, 100 - recipeMax + range.maximum) > 1e-9
+      return range?.minimum != null && range.maximum != null && (massFormula ? range.maximum - range.minimum > 1e-9 : Math.min(range.maximum, 100 - recipeMin + range.minimum) - Math.max(range.minimum, 100 - recipeMax + range.maximum) > 1e-9)
     })
   const rangeError = (column: HistoryDatasetColumn) => {
     if (column.kind !== 'NUMERIC') return ''
     const range = bounds[column.code]
     if (range?.minimum == null || range.maximum == null || !Number.isFinite(range.minimum) || !Number.isFinite(range.maximum)) return '请填写有限的数值范围'
     if (range.minimum > range.maximum) return '最小值不能大于最大值'
-    if (formulaCodes.includes(column.code) && range.minimum < 0) return '材料比例不能为负数'
+    if (formulaCodes.includes(column.code) && range.minimum < 0) return '材料用量不能为负数'
     return ''
   }
   const hasSavedMeasurement = savedObservations.length > 0
@@ -326,7 +330,7 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
     return () => { cancelled = true; if (timer) window.clearTimeout(timer) }
   }, [pendingOperation?.key, pendingOperation?.acceptedRunId])
 
-  const submit = async () => {
+  const submit = () => {
     if (!dataset || !selectedRows.length || !yColumn || !xColumns.length) { message.warning('先选择数据表、记录和 X/Y 列'); return }
     if (completeRowCount < 4) { message.warning(`当前 X/Y 组合只有 ${completeRowCount} 条完整记录，至少需要 4 条`); return }
     if (!canSubmit) { message.warning('请检查每个数值 X 因素的最小值和最大值'); return }
@@ -356,7 +360,7 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
     finally { setSaving(false) }
   }
 
-  const startNextRound = async () => {
+  const startNextRound = () => {
     if (!runId || !hasSavedMeasurement) return
     const operation: PendingOptimizationOperation = { kind: 'NEXT_ROUND', key: generateUUID(), parentRunId: runId }
     try { localStorage.setItem(operationStorageKey, JSON.stringify(operation)) }
@@ -376,15 +380,18 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
     ]
   }, [dataset, selectedDatasetIds.length, xColumns, yColumn])
 
-  const createDraft = async (candidate: any) => {
+  const createDraft = async () => {
     if (!run || !user || creatingDraft) return
-    if (drafts[candidate.id]) { navigate(`/experiments/${drafts[candidate.id]}`); return }
-    setCreatingDraft(candidate.id)
+    const candidates = run.candidates.filter(candidate => selectedCandidateIds.includes(candidate.id))
+    if (!candidates.length) { message.warning('请先勾选方案'); return }
+    const draftKey = `${run.id}:${candidates.map(candidate => candidate.id).sort().join(',')}`
+    if (drafts[draftKey]) { navigate(`/experiments/${drafts[draftKey]}`); return }
+    setCreatingDraft(draftKey)
     try {
-      const measured = savedObservations.find(item => item.candidateId === candidate.id)
-      const input = historicalCandidateDraft(run, candidate, measured ? Number(measured.value) : undefined)
+      const measurements = Object.fromEntries(savedObservations.map(item => [item.candidateId, Number(item.value)]))
+      const input = historicalCandidatesDraft(run, candidates, measurements)
       const created = await createExperiment({ ...input, ownerName: user.displayName || user.username })
-      const next = { ...drafts, [candidate.id]: created.id }; setDrafts(next); localStorage.setItem(draftStorageKey,JSON.stringify(next))
+      const next = { ...drafts, [draftKey]: created.id }; setDrafts(next); localStorage.setItem(draftStorageKey,JSON.stringify(next))
       message.success('实验草稿已生成'); navigate(`/experiments/${created.id}`)
     } catch (error) { message.error(aiActionFeedback(error, '实验草稿生成失败')) }
     finally { setCreatingDraft(undefined) }
@@ -395,7 +402,6 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
     ...selectedFeatureColumns.map(column => ({ title: <span>{column.name}{column.unit ? <Text type="secondary">（{column.unit}）</Text> : null}</span>, width: 140, render: (_: unknown, candidate: any) => { const value = candidate.inputs?.[column.code]; return <Text>{column.kind === 'NUMERIC' ? valueText(value, undefined, 8) : value ?? '—'}</Text> } })),
     { title: <span>预测 {yMeta?.name ?? 'Y'}{yMeta?.unit ? `（${yMeta.unit}）` : ''}</span>, width: 210, render: (_: unknown, candidate: any) => { const prediction = candidatePrediction(candidate); const hasPrediction = Number.isFinite(Number(prediction.value)); const invalid = hasPrediction && invalidContinuousPrediction(Number(prediction.value), yMeta?.unit); return <Space direction="vertical" size={0}><Text strong>{invalid ? '未展示：结果不合理' : valueText(prediction.value)}</Text>{invalid ? <Text type="danger">核对单位并补充相近实验后重新优化</Text> : <Text type="secondary">范围 {valueText(prediction.lower)}～{valueText(prediction.upper)}</Text>}</Space> } },
     { title: <span>实测 {yMeta?.name ?? 'Y'}{yMeta?.unit ? `（${yMeta.unit}）` : ''}</span>, width: 180, render: (_: unknown, candidate: any) => <InputNumber aria-label={`${candidate.title}实测${yMeta?.name ?? 'Y'}`} className="history-observation-input" disabled={Boolean(pendingOperation)} value={observations[`${candidate.id}:${yColumn}`]} onChange={value => setObservations(current => ({ ...current, [`${candidate.id}:${yColumn}`]: value ?? undefined }))} placeholder="完成实验后填写" /> },
-    ...(user?.permissions.includes('experiment.create') ? [{ title: '实验记录', width: 140, render: (_: unknown, candidate: any) => <Button loading={creatingDraft === candidate.id} disabled={Boolean(creatingDraft)} onClick={() => void createDraft(candidate)}>{drafts[candidate.id] ? '查看实验草稿' : '生成实验草稿'}</Button> }] : []),
   ]
 
   const steps = <div className="history-steps-card"><Steps current={activeStep} onChange={setActiveStep} responsive={false} items={stepTitles.map(title => ({ title }))} /></div>
@@ -450,7 +456,7 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
             { title: 'X 因素', dataIndex: 'name', render: (name: string, column: HistoryDatasetColumn) => <Space direction="vertical" size={0}><Text strong>{name}</Text><Text type="secondary">{column.kind === 'NUMERIC' ? '数值因素' : '分类因素'}{column.unit ? ` · ${column.unit}` : ''}</Text>{rangeError(column) && <Text type="danger">{rangeError(column)}</Text>}</Space> },
             { title: '历史取值', render: (_: unknown, column: HistoryDatasetColumn) => column.kind === 'NUMERIC' ? fixedMaterial(selectedDatasetView, column) ? <Text>固定 {numericValues(selectedDatasetView,column.code)[0]}{column.unit ?? ''}</Text> : <Space><InputNumber aria-label={`${column.name}最小值`} disabled={configurationLocked} value={bounds[column.code]?.minimum} onChange={value => { manualBounds.current.add(column.code); setBounds(current => ({ ...current, [column.code]: { ...current[column.code], minimum: value ?? undefined } })) }} /><Text type="secondary">至</Text><InputNumber aria-label={`${column.name}最大值`} disabled={configurationLocked} value={bounds[column.code]?.maximum} onChange={value => { manualBounds.current.add(column.code); setBounds(current => ({ ...current, [column.code]: { ...current[column.code], maximum: value ?? undefined } })) }} /></Space> : <Text>{[...new Set(selectedDatasetView.rows.map(row => row.values[column.code]).filter(value => value !== undefined && value !== null && value !== ''))].join('、')}</Text> },
           ]} />
-          <Alert className="history-range-note" type="info" showIcon message={`将用 ${completeRowCount} 条完整实验记录学习 ${yMeta?.name ?? 'Y'}，再生成满足范围和配方总量的新实验组合。`} />
+          <Alert className="history-range-note" type="info" showIcon message={`将用 ${completeRowCount} 条完整实验记录学习 ${yMeta?.name ?? 'Y'}，再生成满足范围${massFormula ? '' : '和配方总量'}的新实验组合。`} />
         </Card>
         {compositionProblem ? <Text type="warning">{compositionProblem}</Text> : !hasAdjustment && <Text type="warning">当前范围与配方总量约束没有留下可调整空间，请调整因素范围。</Text>}
         <div className="history-step-footer"><Button onClick={() => setActiveStep(1)}>上一步</Button><Button type="primary" loading={submitting} disabled={!canSubmit || Boolean(runId) || Boolean(pendingOperation)} onClick={() => void submit()}>开始优化</Button></div>
@@ -461,7 +467,7 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
       {!runId ? runLoadError ? <Card className="history-card"><Alert type="warning" showIcon message={runLoadError} /><div className="history-step-footer"><Button onClick={() => setActiveStep(2)}>返回保留的设置</Button><Button type="primary" onClick={() => { setRunLoadError(''); setActiveStep(2) }}>重新开始优化</Button></div></Card> : <Card className="history-card"><Empty description="还没有优化结果"><Button type="primary" onClick={() => setActiveStep(dataset ? 1 : 0)}>选择数据并开始</Button></Empty></Card> : !run ? <Card className="history-card">{runLoadError ? <Alert type="warning" showIcon message={runLoadError} description="任务设置已保留。可稍后刷新进度，或返回设置重新优化。" /> : <Text type="secondary">已提交，正在读取优化任务状态…</Text>}<div className="history-step-footer"><Button icon={<ReloadOutlined />} onClick={() => { setRunLoadError(''); void optimizationApi.run(runId).then(current => { setRun(current); setRunLoadError('') }).catch(error => setRunLoadError(aiActionFeedback(error, '读取优化进度失败，请重试。'))) }}>重试读取</Button><Button onClick={() => setActiveStep(2)}>返回设置</Button></div></Card> : run.executionStatus === 'FAILED' ? <Card className="history-card"><Alert type="error" showIcon message="优化没有完成" description={aiActionFeedback(run.error, '检查 X/Y 是否有足够的完整且不同的历史记录，然后重新提交。')} /><div className="history-step-footer"><Button onClick={() => { detachRunForEditing(); setActiveStep(2) }}>调整条件后重试</Button></div></Card> : ['QUEUED','RUNNING'].includes(run.executionStatus) ? <Card className="history-card"><Progress percent={Math.max(run.progress, 10)} status="active" /><Text type="secondary">高斯过程正在学习 {run.frozenRequest?.rows?.length ?? 0} 条历史实验…</Text></Card> : <>
         <Card className="history-card history-result-card" title="下一轮实验建议" extra={<Space><Tag color="green">已生成 {run.candidates.length} 个方案</Tag><Button icon={<ReloadOutlined />} onClick={() => void optimizationApi.run(runId).then(setRun)}>刷新</Button></Space>}>
           <Paragraph className="history-result-explainer">高斯过程使用 {run.searchEvidence?.trainingRowCount ?? run.frozenRequest?.rows?.length ?? '历史'} 条实验记录学习 X 与 Y 的关系。完成实验后填写实测 Y，系统会把这些新记录纳入下一轮计算。</Paragraph>
-          {run.candidates.length ? <Table size="middle" rowKey="id" pagination={false} scroll={{ x: 'max-content' }} columns={candidateColumns} dataSource={run.candidates} /> : <Empty description="当前数据无法生成新的实验组合" />}
+          {run.candidates.length ? <><Table size="middle" rowKey="id" pagination={false} scroll={{ x: 'max-content' }} columns={candidateColumns} dataSource={run.candidates} rowSelection={user?.permissions.includes('experiment.create') ? { selectedRowKeys: selectedCandidateIds, onChange: setSelectedCandidateIds } : undefined} />{user?.permissions.includes('experiment.create') && <div className="history-step-footer"><Text type="secondary">已选 {run.candidates.filter(candidate => selectedCandidateIds.includes(candidate.id)).length} 个方案，将写入同一实验表的不同对照组。</Text><Button type="primary" loading={Boolean(creatingDraft)} disabled={!run.candidates.some(candidate => selectedCandidateIds.includes(candidate.id))} onClick={() => void createDraft()}>生成一组实验草稿</Button></div>}</> : <Empty description="当前数据无法生成新的实验组合" />}
           {run.candidates.length > 0 && <div className="history-measurement-footer"><Text type="secondary">预测用于安排实验；实测值保存后才能用于下一轮优化。</Text><Space><Button loading={saving} disabled={Boolean(pendingOperation)} onClick={() => void saveMeasurements()}>保存实测值</Button><Button type="primary" disabled={!hasSavedMeasurement || Boolean(pendingOperation)} loading={continuing} onClick={() => void startNextRound()}>用实测值优化下一轮</Button></Space></div>}
         </Card>
         {savedObservations.length > 0 && <Card className="history-card" title="已保存的实测值"><Text type="secondary">{savedObservations.length} 条实测结果已保存，可继续优化下一轮。</Text></Card>}

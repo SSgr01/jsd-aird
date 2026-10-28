@@ -649,7 +649,10 @@ class FormulaModelV2Service:
                                     "这组配方比例范围无法生成总量一致的新方案，请调整比例范围")
         encoded_candidates = np.asarray([encode(row) for row in candidates], dtype=float)
 
-        kernel = Matern(length_scale=0.5, nu=2.5) + WhiteKernel(noise_level=1e-5, noise_level_bounds="fixed")
+        # Real measurements (and synthetic exercises) contain noise.  A fixed,
+        # near-zero noise level can collapse the length scale and reduce all
+        # unseen predictions to the training mean.
+        kernel = Matern(length_scale=0.5, length_scale_bounds=(0.02, 20.0), nu=2.5) + WhiteKernel(noise_level=0.05, noise_level_bounds=(1e-5, 1.0))
         gp = GaussianProcessRegressor(kernel=kernel, normalize_y=True, alpha=1e-8,
                                       random_state=seed, n_restarts_optimizer=0)
         oriented_y = observed if direction == "MAXIMIZE" else -observed
@@ -716,6 +719,31 @@ class FormulaModelV2Service:
     def _formula_pool(self, baseline: FormulaV2, total: float, count: int, seed: int,
                       constraints: dict[str, Any] | None = None) -> list[FormulaV2]:
         components = list(baseline.components)
+        if baseline.basis == "ABSOLUTE_MASS":
+            bounds = {str(item.get("materialId")): (float(item["minimum"]), float(item["maximum"]))
+                      for item in (constraints or {}).get("variableMaterials", []) if item.get("materialId")}
+            rng = np.random.default_rng(int(seed) & 0xFFFFFFFF)
+            formulas: list[FormulaV2] = []
+            seen: set[tuple[float, ...]] = set()
+            for i in range(max(count * 8, 32)):
+                values = []
+                for component in components:
+                    if component.material_id in bounds:
+                        low, high = bounds[component.material_id]
+                        value = low + (high - low) * float(rng.random())
+                    else:
+                        value = float(component.ratio or 0)
+                    values.append(round(value, 8))
+                key = tuple(values)
+                if key in seen or sum(values) <= 0:
+                    continue
+                seen.add(key)
+                formulas.append(FormulaV2(basis=baseline.basis, composition_complete=True,
+                    components=[FormulaComponentV2(material_id=c.material_id, ratio=value, unit=c.unit, amount_known=True)
+                                for c, value in zip(components, values)], recorded_total=sum(values)))
+                if len(formulas) >= count:
+                    break
+            return formulas
         if len(components) == 1:
             return [baseline]
         requested_variables = (constraints or {}).get("variableMaterials") or []
@@ -805,7 +833,8 @@ class FormulaModelV2Service:
                 material_id = field.encoding.get("formulaMaterialId")
                 if material_id is None:
                     continue
-                if material_id not in known or field.code != f"formula:{material_id}" or field.value_type != "NUMBER":
+                expected_code = f"formula:{material_id}|g|mass_amount" if formula.basis == "ABSOLUTE_MASS" else f"formula:{material_id}"
+                if material_id not in known or field.code != expected_code or field.value_type != "NUMBER":
                     raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "模型的材料比例关联不一致，请检查模型输入")
                 if material_id not in ratios or ratios[material_id] is None:
                     raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, f"候选配方缺少材料比例：{field.name or field.code}")
@@ -815,7 +844,7 @@ class FormulaModelV2Service:
                 inputs[field.code] = float(ratios[material_id])
         if mappings and (not formula.composition_complete or len(ratios) != len(formula.components)
                          or any(value is None or not np.isfinite(value) or value < 0 for value in ratios.values())
-                         or abs(sum(Decimal(str(value)) for value in ratios.values()) - Decimal('100')) > Decimal('0.001')):
+                         or (formula.basis == "MASS_PERCENT" and abs(sum(Decimal(str(value)) for value in ratios.values()) - Decimal('100')) > Decimal('0.001'))):
             raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "候选配方的材料比例需完整、非负且合计为 100%")
         return inputs
 

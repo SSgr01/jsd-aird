@@ -40,6 +40,15 @@
 .inventory-heading > div {
   min-width: 0;
 }
+.inventory-heading-copy {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.inventory-heading-text {
+  min-width: 0;
+}
 .inventory-heading > .ant-space {
   max-width: 100%;
   flex-wrap: wrap;
@@ -96,8 +105,15 @@
   min-height: 36px;
   box-sizing: border-box;
 }
+/* 发样 / 出货：日期范围选择器保持双日期可读宽度。 */
+.inventory-filters > .ant-picker-range {
+  min-width: 220px;
+  max-width: 300px;
+  flex: 1 1 240px;
+}
 .inventory-filters > .ant-btn {
   flex: 0 0 auto;
+  min-width: 0;
   padding: 0 14px;
   max-width: none;
 }
@@ -170,9 +186,11 @@
 .shipment-sheet-pagination {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   margin: 10px 0;
 }
+
 .shipment-sheet-pagination {
   justify-content: flex-end;
   color: #475467;
@@ -184,7 +202,7 @@
 .shipment-sheet-mobile-title { display: none; }
 .shipment-sheet {
   width: 100%;
-  min-width: 720px;
+  min-width: 920px;
   table-layout: fixed;
   border-collapse: collapse;
   background: #fff;
@@ -208,17 +226,20 @@
 .shipment-sheet thead .shipment-sheet-date th {
   height: 32px;
 }
-.shipment-sheet .shipment-sheet-customer { width: 11%; }
-.shipment-sheet .shipment-sheet-product { width: 17%; }
-.shipment-sheet .shipment-sheet-batch { width: 11%; }
-.shipment-sheet .shipment-sheet-number { width: 10%; }
-.shipment-sheet .shipment-sheet-courier { width: 14%; }
-.shipment-sheet .shipment-sheet-note { width: 17%; }
+.shipment-sheet .shipment-sheet-check { width: 4%; }
+.shipment-sheet .shipment-sheet-customer { width: 10%; }
+.shipment-sheet .shipment-sheet-product { width: 16%; }
+.shipment-sheet .shipment-sheet-batch { width: 12%; }
+.shipment-sheet .shipment-sheet-number { width: 9%; }
+.shipment-sheet .shipment-sheet-courier { width: 12%; }
+.shipment-sheet .shipment-sheet-note { width: 14%; }
+.shipment-sheet .shipment-sheet-operation { width: 5%; }
+.shipment-sheet tbody td:first-child,
+.shipment-sheet tbody td:last-child { padding: 4px; }
 .shipment-sheet tbody tr:not(.shipment-sheet-empty):hover {
   background: #f2f5f3;
 }
-.shipment-sheet-select,
-.shipment-sheet-note-content {
+.shipment-sheet-select {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -226,10 +247,8 @@
   gap: 6px;
 }
 .shipment-sheet-select input { flex: none; }
-.shipment-sheet-select span,
-.shipment-sheet-note-content span { min-width: 0; }
+.shipment-sheet-select span { min-width: 0; }
 .shipment-sheet-select .anticon { color: #28734b; }
-.shipment-sheet-note-content .ant-btn { flex: none; color: #475467; }
 .shipment-sheet-empty td { height: 33px; }
 
 @media (max-width: 900px) {

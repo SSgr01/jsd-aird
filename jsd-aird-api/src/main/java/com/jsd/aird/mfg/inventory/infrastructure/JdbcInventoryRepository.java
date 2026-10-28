@@ -125,13 +125,16 @@ public class JdbcInventoryRepository implements InventoryRepository {
     public Optional<RecipientPreference> recipientPreference(UUID customerId){return jdbc.query("SELECT recipient_name,recipient_phone,sample_address FROM mfg.sample_recipient_preference WHERE customer_id=?",(rs,n)->new RecipientPreference(rs.getString(1),rs.getString(2),rs.getString(3)),customerId).stream().findFirst();}
     public Optional<RecipientPreference> latestSampleRecipient(UUID customerId){return jdbc.query("SELECT recipient_name,recipient_phone,sample_address FROM mfg.inventory_sample_dispatch WHERE customer_id=? AND recipient_name IS NOT NULL AND recipient_phone IS NOT NULL AND sample_address IS NOT NULL AND btrim(sample_address)<>'' ORDER BY created_at DESC,id DESC LIMIT 1",(rs,n)->new RecipientPreference(rs.getString(1),rs.getString(2),rs.getString(3)),customerId).stream().findFirst();}
     public void upsertRecipientPreference(UUID customerId,String recipientName,String recipientPhone,String sampleAddress){jdbc.update("INSERT INTO mfg.sample_recipient_preference(customer_id,recipient_name,recipient_phone,sample_address) VALUES(?,?,?,?) ON CONFLICT(customer_id) DO UPDATE SET recipient_name=excluded.recipient_name,recipient_phone=excluded.recipient_phone,sample_address=excluded.sample_address,updated_at=now()",customerId,recipientName,recipientPhone,sampleAddress);}
-    public Page<Sample> samples(UUID org,String keyword,int page,int size){
+    public Page<Sample> samples(UUID org,String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size){
         var from=" FROM mfg.inventory_sample_dispatch s JOIN mfg.inventory_product p ON p.organization_id=s.organization_id AND p.id=s.product_id JOIN iam.app_user u ON u.id=s.actor_id";
         var where=new StringBuilder(" WHERE s.organization_id=?");var args=new ArrayList<Object>();args.add(org);
         if(keyword!=null&&!keyword.isBlank()){
             where.append(" AND (lower(s.dispatch_no) LIKE ? OR lower(p.code) LIKE ? OR lower(p.name) LIKE ? OR lower(coalesce(s.customer_name,'')) LIKE ? OR lower(coalesce(s.recipient_name,'')) LIKE ? OR lower(coalesce(s.recipient_phone,'')) LIKE ? OR lower(coalesce(s.sample_address,'')) LIKE ? OR lower(coalesce(s.courier_company,'')) LIKE ? OR lower(coalesce(s.tracking_no,'')) LIKE ? OR lower(coalesce(s.sender_name,'')) LIKE ? OR lower(coalesce(s.client_contact,'')) LIKE ? OR lower(coalesce(s.client_contact_phone,'')) LIKE ? OR lower(coalesce(s.customer_requirement,'')) LIKE ? OR lower(coalesce(s.customer_feedback,'')) LIKE ?)");
             var q="%"+keyword.trim().toLowerCase()+"%";for(int i=0;i<14;i++)args.add(q);
         }
+        if(status!=null&&!status.isBlank()){where.append(" AND s.status=?");args.add(status);}
+        if(startDate!=null){where.append(" AND s.business_date>=?");args.add(startDate);}
+        if(endDate!=null){where.append(" AND s.business_date<=?");args.add(endDate);}
         long total=jdbc.queryForObject("SELECT count(*)"+from+where,Long.class,args.toArray());
         var pageArgs=new ArrayList<>(args);pageArgs.add(size);pageArgs.add((page-1)*size);
         var list=jdbc.query("SELECT s.*,p.name product_name,u.display_name operator"+from+where+" ORDER BY s.business_date DESC,s.created_at DESC LIMIT ? OFFSET ?",this::mapSample,pageArgs.toArray());
@@ -158,29 +161,38 @@ public class JdbcInventoryRepository implements InventoryRepository {
     public java.util.List<UUID> pendingShipmentIds(UUID org,String shipmentNo){return jdbc.queryForList(
             "SELECT id FROM mfg.inventory_shipment WHERE organization_id=? AND shipment_no=? AND status='PENDING' ORDER BY id",
             UUID.class,org,shipmentNo);}
-    public Page<ShipmentHeader> shipmentHeaders(UUID org,String keyword,int page,int size){
-        var where=" WHERE h.organization_id=?"+(keyword==null||keyword.isBlank()?"":" AND lower(h.shipment_no) LIKE ?");
-        Object[] countArgs=keyword==null||keyword.isBlank()?new Object[]{org}:new Object[]{org,"%"+keyword.trim().toLowerCase()+"%"};
-        long total=jdbc.queryForObject("SELECT count(*) FROM mfg.inventory_shipment_header h"+where,Long.class,countArgs);
-        var args=new ArrayList<Object>(java.util.Arrays.asList(countArgs));args.add(size);args.add((page-1)*size);
-        var items=jdbc.query("SELECT h.id,h.shipment_no,h.business_date,count(s.id) detail_count,"+
+    public Page<ShipmentHeader> shipmentHeaders(UUID org,String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size){
+        var where=new StringBuilder(" WHERE h.organization_id=?");var args=new ArrayList<Object>();args.add(org);
+        if(keyword!=null&&!keyword.isBlank()){where.append(" AND lower(h.shipment_no) LIKE ?");args.add("%"+keyword.trim().toLowerCase()+"%");}
+        if("COMPLETED".equals(status)){
+            where.append(" AND EXISTS (SELECT 1 FROM mfg.inventory_shipment sx WHERE sx.organization_id=h.organization_id AND sx.shipment_no=h.shipment_no)");
+            where.append(" AND NOT EXISTS (SELECT 1 FROM mfg.inventory_shipment sx WHERE sx.organization_id=h.organization_id AND sx.shipment_no=h.shipment_no AND sx.status<>'COMPLETED')");
+        }else if("PENDING".equals(status)){
+            where.append(" AND (NOT EXISTS (SELECT 1 FROM mfg.inventory_shipment sx WHERE sx.organization_id=h.organization_id AND sx.shipment_no=h.shipment_no)");
+            where.append(" OR EXISTS (SELECT 1 FROM mfg.inventory_shipment sx WHERE sx.organization_id=h.organization_id AND sx.shipment_no=h.shipment_no AND sx.status<>'COMPLETED'))");
+        }
+        if(startDate!=null){where.append(" AND h.business_date>=?");args.add(startDate);}
+        if(endDate!=null){where.append(" AND h.business_date<=?");args.add(endDate);}
+        long total=jdbc.queryForObject("SELECT count(*) FROM mfg.inventory_shipment_header h"+where,Long.class,args.toArray());
+        var pageArgs=new ArrayList<>(args);pageArgs.add(size);pageArgs.add((page-1)*size);
+        var items=jdbc.query("SELECT h.id,h.shipment_no,h.business_date,h.note,count(s.id) detail_count,"+
                 "count(s.id) FILTER (WHERE s.status='COMPLETED') completed_count,"+
                 "coalesce(sum(s.quantity_kg),0) total_quantity_kg FROM mfg.inventory_shipment_header h "+
                 "LEFT JOIN mfg.inventory_shipment s ON s.organization_id=h.organization_id AND s.shipment_no=h.shipment_no"+
-                where+" GROUP BY h.id,h.shipment_no,h.business_date,h.created_at ORDER BY h.created_at DESC,h.id DESC LIMIT ? OFFSET ?",
-                this::mapShipmentHeader,args.toArray());
+                where+" GROUP BY h.id,h.shipment_no,h.business_date,h.note,h.created_at ORDER BY h.created_at DESC,h.id DESC LIMIT ? OFFSET ?",
+                this::mapShipmentHeader,pageArgs.toArray());
         return new Page<>(items,page,size,total,(total+size-1)/size);
     }
     public Optional<ShipmentHeader> shipmentHeader(UUID org,String shipmentNo){return jdbc.query(
-            "SELECT h.id,h.shipment_no,h.business_date,count(s.id) detail_count,"+
+            "SELECT h.id,h.shipment_no,h.business_date,h.note,count(s.id) detail_count,"+
             "count(s.id) FILTER (WHERE s.status='COMPLETED') completed_count,"+
             "coalesce(sum(s.quantity_kg),0) total_quantity_kg FROM mfg.inventory_shipment_header h "+
             "LEFT JOIN mfg.inventory_shipment s ON s.organization_id=h.organization_id AND s.shipment_no=h.shipment_no "+
-            "WHERE h.organization_id=? AND h.shipment_no=? GROUP BY h.id,h.shipment_no,h.business_date",
+            "WHERE h.organization_id=? AND h.shipment_no=? GROUP BY h.id,h.shipment_no,h.business_date,h.note",
             this::mapShipmentHeader,org,shipmentNo).stream().findFirst();}
-    public ShipmentHeader insertShipmentHeader(UUID org,String shipmentNo,LocalDate businessDate,UUID actor){
-        jdbc.update("INSERT INTO mfg.inventory_shipment_header(id,organization_id,shipment_no,business_date,actor_id) VALUES(?,?,?,?,?)",
-                UUID.randomUUID(),org,shipmentNo,businessDate,actor);
+    public ShipmentHeader insertShipmentHeader(UUID org,String shipmentNo,LocalDate businessDate,String note,UUID actor){
+        jdbc.update("INSERT INTO mfg.inventory_shipment_header(id,organization_id,shipment_no,business_date,note,actor_id) VALUES(?,?,?,?,?,?)",
+                UUID.randomUUID(),org,shipmentNo,businessDate,note,actor);
         return shipmentHeader(org,shipmentNo).orElseThrow();
     }
     public int updateShipmentHeaderDate(UUID org,String shipmentNo,LocalDate businessDate){
@@ -188,9 +200,23 @@ public class JdbcInventoryRepository implements InventoryRepository {
                 businessDate,org,shipmentNo);
         return count;
     }
+    public int updateShipmentHeader(UUID org,String shipmentNo,LocalDate businessDate,String note){
+        return jdbc.update("UPDATE mfg.inventory_shipment_header SET business_date=?,note=? WHERE organization_id=? AND shipment_no=?",
+                businessDate,note,org,shipmentNo);
+    }
+    public int deletePendingShipmentDetailsByHeader(UUID org,String shipmentNo){
+        return jdbc.update("DELETE FROM mfg.inventory_shipment WHERE organization_id=? AND shipment_no=? AND status='PENDING' AND inventory_transaction_id IS NULL",
+                org,shipmentNo);
+    }
+    public int deleteShipmentHeader(UUID org,String shipmentNo){
+        return jdbc.update("DELETE FROM mfg.inventory_shipment_header WHERE organization_id=? AND shipment_no=?",org,shipmentNo);
+    }
+    public int deletePendingSample(UUID org,UUID id){
+        return jdbc.update("DELETE FROM mfg.inventory_sample_dispatch WHERE organization_id=? AND id=? AND status='PENDING' AND inventory_transaction_id IS NULL",org,id);
+    }
     private ShipmentHeader mapShipmentHeader(java.sql.ResultSet rs,int n)throws java.sql.SQLException{return new ShipmentHeader(
             rs.getObject("id",UUID.class),rs.getString("shipment_no"),rs.getObject("business_date",LocalDate.class),
-            rs.getLong("detail_count"),rs.getLong("completed_count"),rs.getBigDecimal("total_quantity_kg"));}
+            rs.getString("note"),rs.getLong("detail_count"),rs.getLong("completed_count"),rs.getBigDecimal("total_quantity_kg"));}
     public Optional<Sample> sampleByTransaction(UUID org,UUID tx){return jdbc.query("SELECT s.*,p.name product_name,u.display_name operator FROM mfg.inventory_sample_dispatch s JOIN mfg.inventory_product p ON p.organization_id=s.organization_id AND p.id=s.product_id JOIN iam.app_user u ON u.id=s.actor_id WHERE s.organization_id=? AND s.inventory_transaction_id=?",this::mapSample,org,tx).stream().findFirst();}
     public Optional<Shipment> shipmentByTransaction(UUID org,UUID tx){return jdbc.query("SELECT s.*,h.business_date header_business_date,p.name product_name,u.display_name operator FROM mfg.inventory_shipment s JOIN mfg.inventory_shipment_header h ON h.organization_id=s.organization_id AND h.shipment_no=s.shipment_no JOIN mfg.inventory_product p ON p.organization_id=s.organization_id AND p.id=s.product_id JOIN iam.app_user u ON u.id=s.actor_id WHERE s.organization_id=? AND s.inventory_transaction_id=?",this::mapShipment,org,tx).stream().findFirst();}
     public Optional<Sample> findSample(UUID org,UUID id){return jdbc.query("SELECT s.*,p.name product_name,u.display_name operator FROM mfg.inventory_sample_dispatch s JOIN mfg.inventory_product p ON p.organization_id=s.organization_id AND p.id=s.product_id JOIN iam.app_user u ON u.id=s.actor_id WHERE s.organization_id=? AND s.id=?",this::mapSample,org,id).stream().findFirst();}
@@ -201,6 +227,7 @@ public class JdbcInventoryRepository implements InventoryRepository {
     public Optional<Shipment> lockShipment(UUID org,UUID id){return jdbc.query("SELECT s.*,h.business_date header_business_date,p.name product_name,u.display_name operator FROM mfg.inventory_shipment s JOIN mfg.inventory_shipment_header h ON h.organization_id=s.organization_id AND h.shipment_no=s.shipment_no JOIN mfg.inventory_product p ON p.organization_id=s.organization_id AND p.id=s.product_id JOIN iam.app_user u ON u.id=s.actor_id WHERE s.organization_id=? AND s.id=? FOR UPDATE OF s",this::mapShipment,org,id).stream().findFirst();}
     public Optional<Shipment> findShipmentByNo(UUID org,String shipmentNo){return jdbc.query("SELECT s.*,h.business_date header_business_date,p.name product_name,u.display_name operator FROM mfg.inventory_shipment s JOIN mfg.inventory_shipment_header h ON h.organization_id=s.organization_id AND h.shipment_no=s.shipment_no JOIN mfg.inventory_product p ON p.organization_id=s.organization_id AND p.id=s.product_id JOIN iam.app_user u ON u.id=s.actor_id WHERE s.organization_id=? AND s.shipment_no=? ORDER BY s.created_at LIMIT 1",this::mapShipment,org,shipmentNo).stream().findFirst();}
     public int completeShipment(UUID org,UUID id,UUID transactionId){return jdbc.update("UPDATE mfg.inventory_shipment SET status='COMPLETED',inventory_transaction_id=? WHERE organization_id=? AND id=? AND status='PENDING' AND inventory_transaction_id IS NULL",transactionId,org,id);}
+    public int deletePendingShipment(UUID org,UUID id){return jdbc.update("DELETE FROM mfg.inventory_shipment WHERE organization_id=? AND id=? AND status='PENDING' AND inventory_transaction_id IS NULL",org,id);}
     public int updateSample(UUID org,UUID id,LocalDate businessDate,String dispatchNo,String specification,java.math.BigDecimal packageQuantity,UUID customerId,String customerName,String recipientName,String recipientPhone,String sampleAddress,String courierCompany,String trackingNo,String clientContact,String clientContactPhone,String senderName,String customerRequirement,String customerFeedback,String status,java.math.BigDecimal quantityKg){return jdbc.update("UPDATE mfg.inventory_sample_dispatch SET business_date=?,dispatch_no=?,specification=?,package_quantity=?,quantity_kg=?,customer_id=?,customer_name=?,recipient_name=?,recipient_phone=?,sample_address=?,courier_company=?,tracking_no=?,client_contact=?,client_contact_phone=?,sender_name=?,customer_requirement=?,customer_feedback=?,status=? WHERE organization_id=? AND id=?",businessDate,dispatchNo,specification,packageQuantity,quantityKg,customerId,customerName,recipientName,recipientPhone,sampleAddress,courierCompany,trackingNo,clientContact,clientContactPhone,senderName,customerRequirement,customerFeedback,status,org,id);}
     public int updateShipment(UUID org,UUID id,Shipment x){return jdbc.update("UPDATE mfg.inventory_shipment SET customer_id=?,customer_name=?,sender_name=?,batch_no=?,recipient_name=?,recipient_phone=?,shipping_address=?,courier_company=?,tracking_no=?,note=?,coa_no=? WHERE organization_id=? AND id=?",x.customerId(),x.customerName(),x.senderName(),x.batchNo(),x.recipientName(),x.recipientPhone(),x.shippingAddress(),x.courierCompany(),x.trackingNo(),x.note(),x.coaNo(),org,id);}
 

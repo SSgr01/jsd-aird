@@ -94,7 +94,9 @@ public class InventoryService {
         if(prior.isPresent())return repository.shipmentByTransaction(a.organizationId(),prior.get().id())
                 .orElseThrow(()->new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"幂等请求尚未完成"));
         var header=repository.shipmentHeader(a.organizationId(),shipmentNo)
-                .orElseGet(()->repository.insertShipmentHeader(a.organizationId(),shipmentNo,c.businessDate(),a.userId()));
+                .orElseGet(()->repository.insertShipmentHeader(a.organizationId(),shipmentNo,c.businessDate(),null,a.userId()));
+        if(header.detailCount()>0&&header.completedCount()==header.detailCount())
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"已完成的出货单不可新增明细");
         if(!header.businessDate().equals(c.businessDate()))
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"同一出货单号的日期必须一致");
         var totalKg=shipmentTotal(c.specification(),c.packageQuantity());
@@ -220,6 +222,70 @@ public class InventoryService {
                 sorted.get(0),mapper.valueToTree(java.util.Map.of("ids",sorted,"status","COMPLETED")));
         return changed;
     }
+    @Transactional public int deleteShipmentDetails(String shipmentNo,java.util.List<UUID> ids){
+        var a=actor();var number=required(shipmentNo,"出货单号");
+        if(ids==null||ids.isEmpty()||ids.size()>100||ids.stream().anyMatch(java.util.Objects::isNull)||
+                ids.stream().distinct().count()!=ids.size())
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"请选择 1 至 100 条不重复的出货明细");
+        var sorted=ids.stream().sorted().toList();
+        for(var id:sorted){
+            var shipment=repository.lockShipment(a.organizationId(),id)
+                    .orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"出货明细不存在"));
+            if(!number.equals(shipment.shipmentNo()))
+                throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"选中的明细不属于当前出货单");
+            if(!"PENDING".equals(shipment.status())||shipment.transactionId()!=null)
+                throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"仅未完成且未扣库存的出货明细可以删除");
+        }
+        for(var id:sorted)
+            if(repository.deletePendingShipment(a.organizationId(),id)!=1)
+                throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"出货明细状态已变化，请刷新后重试");
+        audit.append(a.organizationId(),a.userId(),"INVENTORY_SHIPMENT_DETAILS_DELETED","INVENTORY_SHIPMENT",
+                sorted.get(0),mapper.valueToTree(java.util.Map.of("shipmentNo",number,"ids",sorted)));
+        return sorted.size();
+    }
+    @Transactional public int deleteShipmentHeader(String shipmentNo){
+        var a=actor();var number=required(shipmentNo,"出货单号");
+        var header=shipmentHeader(number);
+        if(header.completedCount()>0)
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"出货单存在已完成明细，不可删除");
+        var deleted=repository.deletePendingShipmentDetailsByHeader(a.organizationId(),number);
+        if(deleted!=header.detailCount())
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"出货单明细状态已变化，请刷新后重试");
+        if(repository.deleteShipmentHeader(a.organizationId(),number)!=1)
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"出货单已变化，请刷新后重试");
+        audit.append(a.organizationId(),a.userId(),"INVENTORY_SHIPMENT_HEADER_DELETED","INVENTORY_SHIPMENT_HEADER",
+                header.id(),mapper.valueToTree(java.util.Map.of("shipmentNo",number,"detailCount",deleted)));
+        return deleted;
+    }
+    @Transactional public int deleteShipmentHeaders(java.util.List<String> shipmentNos){
+        if(shipmentNos==null||shipmentNos.isEmpty()||shipmentNos.size()>100||
+                shipmentNos.stream().anyMatch(number->number==null||number.isBlank()))
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"请选择 1 至 100 张出货单");
+        var numbers=shipmentNos.stream().map(String::trim).sorted().toList();
+        if(numbers.stream().distinct().count()!=numbers.size())
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"出货单号不能重复");
+        for(var number:numbers) deleteShipmentHeader(number);
+        return numbers.size();
+    }
+    @Transactional public int deleteSamples(java.util.List<UUID> ids){
+        var a=actor();
+        if(ids==null||ids.isEmpty()||ids.size()>100||ids.stream().anyMatch(java.util.Objects::isNull)||
+                ids.stream().distinct().count()!=ids.size())
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"请选择 1 至 100 条不重复的发样记录");
+        var sorted=ids.stream().sorted().toList();
+        for(var id:sorted){
+            var sample=repository.lockSample(a.organizationId(),id)
+                    .orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"发样记录不存在"));
+            if(!"PENDING".equals(sample.status())||sample.transactionId()!=null)
+                throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"仅未完成且未扣库存的发样记录可以删除");
+        }
+        for(var id:sorted)
+            if(repository.deletePendingSample(a.organizationId(),id)!=1)
+                throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"发样记录状态已变化，请刷新后重试");
+        audit.append(a.organizationId(),a.userId(),"INVENTORY_SAMPLES_DELETED","INVENTORY_SAMPLE",
+                sorted.get(0),mapper.valueToTree(java.util.Map.of("ids",sorted)));
+        return sorted.size();
+    }
     @Transactional public int completeShipmentHeader(String shipmentNo){
         shipmentHeader(shipmentNo);
         var ids=repository.pendingShipmentIds(actor().organizationId(),shipmentNo);
@@ -249,6 +315,8 @@ public class InventoryService {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"业务日期不能为空");
         var existing=repository.lockShipment(a.organizationId(),id)
                 .orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"出货记录不存在"));
+        if("COMPLETED".equals(existing.status()))
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"已完成的出货记录不可修改");
         com.jsd.aird.shared.json.RevisionToken.require(input.revision(),existing.getRevision());
         var shipmentNo=required(input.shipmentNo(),"出货单号");
         if(!shipmentNo.equals(existing.shipmentNo()))
@@ -284,29 +352,31 @@ public class InventoryService {
         audit.append(a.organizationId(),a.userId(),"INVENTORY_SHIPMENT_UPDATED","INVENTORY_SHIPMENT",id,mapper.valueToTree(input));
         return repository.findShipment(a.organizationId(),id).orElseThrow();
     }
-    public Page<Sample> samples(String keyword,int page,int size){return repository.samples(actor().organizationId(),keyword,Math.max(page,1),Math.min(Math.max(size,1),100));} public Page<Shipment> shipments(String keyword,int page,int size){return repository.shipments(actor().organizationId(),keyword,Math.max(page,1),Math.min(Math.max(size,1),100));}
-    public Page<ShipmentHeader> shipmentHeaders(String keyword,int page,int size){return repository.shipmentHeaders(actor().organizationId(),keyword,Math.max(page,1),Math.min(Math.max(size,1),100));}
+    public Page<Sample> samples(String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size){return repository.samples(actor().organizationId(),keyword,optionalStatus(status),startDate,endDate,Math.max(page,1),Math.min(Math.max(size,1),100));} public Page<Shipment> shipments(String keyword,int page,int size){return repository.shipments(actor().organizationId(),keyword,Math.max(page,1),Math.min(Math.max(size,1),100));}
+    public Page<ShipmentHeader> shipmentHeaders(String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size){return repository.shipmentHeaders(actor().organizationId(),keyword,optionalStatus(status),startDate,endDate,Math.max(page,1),Math.min(Math.max(size,1),100));}
     public Page<Shipment> shipmentDetails(String shipmentNo,int page,int size){shipmentHeader(shipmentNo);return repository.shipmentDetails(actor().organizationId(),shipmentNo,Math.max(page,1),Math.min(Math.max(size,1),100));}
     public ShipmentHeader shipmentHeader(String shipmentNo){return repository.shipmentHeader(actor().organizationId(),shipmentNo).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"出货单不存在"));}
-    @Transactional public ShipmentHeader createShipmentHeader(String shipmentNo,LocalDate businessDate){
+    @Transactional public ShipmentHeader createShipmentHeader(String shipmentNo,LocalDate businessDate,String note){
         var a=actor();var number=required(shipmentNo,"出货单号");
         if(businessDate==null)throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"业务日期不能为空");
         if(repository.shipmentHeader(a.organizationId(),number).isPresent())throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"出货单号已存在");
-        return repository.insertShipmentHeader(a.organizationId(),number,businessDate,a.userId());
+        return repository.insertShipmentHeader(a.organizationId(),number,businessDate,optionalNote(note),a.userId());
     }
-    @Transactional public ShipmentHeader updateShipmentHeaderDate(String shipmentNo,LocalDate businessDate){
+    @Transactional public ShipmentHeader updateShipmentHeader(String shipmentNo,LocalDate businessDate,String note){
         if(businessDate==null)throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"业务日期不能为空");
         var header=shipmentHeader(shipmentNo);
         if(header.completedCount()>0&&!header.businessDate().equals(businessDate))
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"已有完成明细的出货单不可修改日期");
-        repository.updateShipmentHeaderDate(actor().organizationId(),shipmentNo,businessDate);
+        repository.updateShipmentHeader(actor().organizationId(),shipmentNo,businessDate,optionalNote(note));
         return shipmentHeader(shipmentNo);
     }
+    private static String optionalNote(String note){return note==null||note.isBlank()?null:note.trim();}
     private static String shipmentDocumentNo(UUID detailId){return "CH-"+detailId;}
     private static String shipmentNote(String shipmentNo,String note){return "出货单号="+shipmentNo+(note==null||note.isBlank()?"":"；"+note);}
     private void validate(Movement c){if(c==null||c.productId()==null||c.scope()==null||c.direction()==null)throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"产品、库存域和方向不能为空");if(c.quantityKg()==null||c.quantityKg().signum()<=0)throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"数量必须大于 0");if(!repository.productExists(actor().organizationId(),c.productId(),c.scope()))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"该库存域中产品不存在或已停用");required(c.reason(),"业务原因");required(c.documentNo(),"业务单号");}
     private static String required(String x,String label){if(x==null||x.isBlank())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,label+"不能为空");return x.trim();}
     private static String shipmentStatus(String status){if(status==null)return "PENDING";if(!status.equals("PENDING")&&!status.equals("COMPLETED"))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"出货状态无效");return status;}
+    private static String optionalStatus(String status){if(status==null||status.isBlank())return null;if(!status.equals("PENDING")&&!status.equals("COMPLETED"))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"状态无效");return status;}
     static BigDecimal shipmentTotal(String specification,BigDecimal packageQuantity){
         BigDecimal spec;
         try{spec=new BigDecimal(required(specification,"规格"));}catch(NumberFormatException e){throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"规格必须是有效数字");}

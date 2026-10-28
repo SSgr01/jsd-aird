@@ -150,6 +150,7 @@ class PermissionRouteFilterTest {
         assertThat(code("GET", "/api/v1/inventory/balances")).isEqualTo("inventory.view");
         assertThat(code("POST", "/api/v1/inventory/products")).isEqualTo("inventory.create");
         assertThat(code("PUT", "/api/v1/inventory/balances/" + id + "/policy")).isEqualTo("inventory.update");
+        assertThat(code("DELETE", "/api/v1/inventory/shipment-headers/CH-1/details")).isEqualTo("inventory.update");
         assertThat(code("POST", "/api/v1/inventory/transactions/" + id + "/reverse")).isEqualTo("inventory.reverse");
         assertThat(code("POST", "/api/v1/inventory/transactions")).isEqualTo("inventory.create");
     }

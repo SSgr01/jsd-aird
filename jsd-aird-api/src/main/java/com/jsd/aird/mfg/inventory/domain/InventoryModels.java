@@ -51,6 +51,6 @@ public final class InventoryModels {
         }
         public String getRevision(){return com.jsd.aird.shared.json.RevisionToken.ofRecord(this);}
     }
-    public record ShipmentHeader(UUID id, String shipmentNo, LocalDate businessDate,
+    public record ShipmentHeader(UUID id, String shipmentNo, LocalDate businessDate, String note,
                                  long detailCount, long completedCount, BigDecimal totalQuantityKg) {}
 }

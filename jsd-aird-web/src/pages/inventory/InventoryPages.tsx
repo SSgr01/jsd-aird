@@ -1,9 +1,10 @@
-import { CheckOutlined, DownloadOutlined, EditOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, CheckOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
 import {
   Alert,
   AutoComplete,
   Button,
   Card,
+  Checkbox,
   Col,
   DatePicker,
   Descriptions,
@@ -26,6 +27,7 @@ import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import {
@@ -761,14 +763,36 @@ function ShipmentHeaders() {
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(20);
   const [keyword, setKeyword] = useState('');
+  const [status, setStatus] = useState<'PENDING' | 'COMPLETED'>();
+  const [dateRange, setDateRange] = useState<[string, string]>();
+  const [query, setQuery] = useState<{
+    keyword: string; status?: 'PENDING' | 'COMPLETED'; startDate?: string; endDate?: string;
+  }>({ keyword: '' });
   const [open, setOpen] = useState(false);
   const [editingHeader, setEditingHeader] = useState<ShipmentHeader>();
   const [saving, setSaving] = useState(false);
-  const [completingNo, setCompletingNo] = useState<string>();
   const [selectedHeaderNos, setSelectedHeaderNos] = useState<string[]>([]);
   const [bulkSaving, setBulkSaving] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [deletingNo, setDeletingNo] = useState<string>();
   const [form] = Form.useForm();
-  const load = useCallback(async () => setData(await inventoryApi.shipmentHeaders({ page, size, keyword })), [page, size, keyword]);
+  const load = useCallback(async () => setData(await inventoryApi.shipmentHeaders({
+    page, size, ...query,
+  })), [page, size, query]);
+  const applyQuery = () => {
+    setPage(1);
+    setQuery({
+      keyword: keyword.trim(), status,
+      startDate: dateRange?.[0], endDate: dateRange?.[1],
+    });
+  };
+  const resetQuery = () => {
+    setKeyword('');
+    setStatus(undefined);
+    setDateRange(undefined);
+    setPage(1);
+    setQuery({ keyword: '' });
+  };
   useEffect(() => { void load().catch((error: unknown) => message.error(errorMessage(error, '出货单加载失败'))); }, [load]);
   useEffect(() => {
     void Promise.all([inventoryApi.productOptions('RND'), inventoryApi.productOptions('PRODUCTION'),
@@ -778,25 +802,17 @@ function ShipmentHeaders() {
   }, []);
   const saveHeader = async () => {
     try {
-      const values = await form.validateFields() as { shipmentNo: string; businessDate: Dayjs };
+      const values = await form.validateFields() as { shipmentNo: string; businessDate: Dayjs; note?: string };
       setSaving(true);
-      if (editingHeader) await inventoryApi.updateShipmentHeaderDate(editingHeader.shipmentNo, values.businessDate.format('YYYY-MM-DD'));
-      else await inventoryApi.createShipmentHeader({ shipmentNo: values.shipmentNo.trim(), businessDate: values.businessDate.format('YYYY-MM-DD') });
+      const businessDate = values.businessDate.format('YYYY-MM-DD');
+      const note = values.note?.trim() ?? '';
+      if (editingHeader) await inventoryApi.updateShipmentHeader(editingHeader.shipmentNo, { businessDate, note });
+      else await inventoryApi.createShipmentHeader({ shipmentNo: values.shipmentNo.trim(), businessDate, note });
       setOpen(false); form.resetFields(); await load();
       if (!editingHeader) navigate(`/inventory/shipment-details?shipmentNo=${encodeURIComponent(values.shipmentNo.trim())}`);
       setEditingHeader(undefined);
     } catch (error) { message.error(errorMessage(error, '保存出货单失败')); }
     finally { setSaving(false); }
-  };
-  const completeHeader = async (number: string) => {
-    setCompletingNo(number);
-    try {
-      const changed = await inventoryApi.completeShipmentHeader(number);
-      message.success(`已完成 ${changed} 条出货明细`);
-      setSelectedHeaderNos((current) => current.filter((item) => item !== number));
-      await load();
-    } catch (error) { message.error(errorMessage(error, '出货单完成失败')); }
-    finally { setCompletingNo(undefined); }
   };
   const completeSelectedHeaders = async () => {
     setBulkSaving(true);
@@ -808,19 +824,73 @@ function ShipmentHeaders() {
     } catch (error) { message.error(errorMessage(error, '批量完成出货单失败')); }
     finally { setBulkSaving(false); }
   };
+  const deleteHeader = async (row: ShipmentHeader) => {
+    setDeletingNo(row.shipmentNo);
+    try {
+      await inventoryApi.deleteShipmentHeader(row.shipmentNo);
+      message.success(`已删除出货单 ${row.shipmentNo}`);
+      setSelectedHeaderNos((current) => current.filter((item) => item !== row.shipmentNo));
+      if (data?.items.length === 1 && page > 1) setPage(page - 1);
+      else await load();
+    } catch (error) { message.error(errorMessage(error, '删除出货单失败')); }
+    finally { setDeletingNo(undefined); }
+  };
+  const deleteSelectedHeaders = async () => {
+    if (!selectedHeaderNos.length) return;
+    const completed = (data?.items ?? []).filter((row) =>
+      selectedHeaderNos.includes(row.shipmentNo) && row.completedCount > 0);
+    if (completed.length) {
+      message.warning(`选中的出货单中有 ${completed.length} 张存在已完成明细，不可删除`);
+      return;
+    }
+    setBulkDeleting(true);
+    try {
+      const deleted = await inventoryApi.deleteShipmentHeaders(selectedHeaderNos);
+      message.success(`已删除 ${deleted} 张出货单`);
+      const currentCount = data?.items.length ?? 0;
+      setSelectedHeaderNos([]);
+      if (deleted >= currentCount && page > 1) setPage(page - 1);
+      else await load();
+    } catch (error) { message.error(errorMessage(error, '批量删除出货单失败')); }
+    finally { setBulkDeleting(false); }
+  };
+  const hasUndeletableHeader = selectedHeaderNos.some((number) =>
+    (data?.items ?? []).some((row) => row.shipmentNo === number && row.completedCount > 0));
   return <InventoryShell title="出货记录表" description="按出货单号查看出货明细。"
     extra={<Space wrap><BusinessImportExport type="shipment" hideExport productsByScope={productsByScope} customers={customers} onDone={load} disabled={inventoryIsReadOnly()} />
       <Button type="primary" icon={<PlusOutlined />} disabled={inventoryIsReadOnly()} onClick={() => {
       setEditingHeader(undefined);
+      form.resetFields();
       form.setFieldsValue({ shipmentNo: `CH-${dayjs().format('YYYYMMDD-HHmmss')}`, businessDate: dayjs() });
       setOpen(true);
     }}>新增出货单</Button></Space>}>
     <div className="inventory-filters inventory-record-filters">
-      <Input.Search allowClear placeholder="搜索出货单号" onSearch={(value) => { setPage(1); setKeyword(value); }} />
+      <Input.Search allowClear placeholder="搜索出货单号" value={keyword}
+        onChange={(event) => setKeyword(event.target.value)}
+        onSearch={() => { applyQuery(); }} />
+      <Select allowClear placeholder="全部状态" value={status}
+        onChange={(value) => setStatus(value)}
+        options={[{ value: 'PENDING', label: '未完成' }, { value: 'COMPLETED', label: '已完成' }]} />
+      <DatePicker.RangePicker
+        placeholder={['开始日期', '结束日期']}
+        value={dateRange ? [dayjs(dateRange[0]), dayjs(dateRange[1])] : null}
+        onChange={(values) => {
+          setDateRange(values?.[0] && values?.[1]
+            ? [values[0].format('YYYY-MM-DD'), values[1].format('YYYY-MM-DD')] : undefined);
+        }}
+      />
+      <Button type="primary" icon={<SearchOutlined />} onClick={applyQuery}>查询</Button>
+      <Button icon={<ReloadOutlined />} onClick={resetQuery}>重置</Button>
+      <Popconfirm title="确认删除出货单"
+        description={`将删除选中的 ${selectedHeaderNos.length} 张未完成出货单及其明细，此操作不可撤销。`}
+        onConfirm={() => { void deleteSelectedHeaders(); }} okButtonProps={{ loading: bulkDeleting }}>
+        <Button danger icon={<DeleteOutlined />}
+          disabled={inventoryIsReadOnly() || selectedHeaderNos.length === 0 || bulkDeleting || hasUndeletableHeader}>删除</Button>
+      </Popconfirm>
       <Popconfirm title="确认批量完成出货" description={`将选中的 ${selectedHeaderNos.length} 张出货单设为已完成并扣减库存？`}
         onConfirm={() => { void completeSelectedHeaders(); }} okButtonProps={{ loading: bulkSaving }}>
         <Button icon={<CheckOutlined />} disabled={inventoryIsReadOnly() || selectedHeaderNos.length === 0 || bulkSaving}>
-          批量设为已完成{selectedHeaderNos.length > 0 ? ` (${selectedHeaderNos.length})` : ''}
+          设为已完成{selectedHeaderNos.length > 0 ? ` (${selectedHeaderNos.length})` : ''}
         </Button>
       </Popconfirm>
     </div>
@@ -832,29 +902,39 @@ function ShipmentHeaders() {
         if (keys.length > 100) { message.warning('最多选择 100 张出货单'); return; }
         setSelectedHeaderNos(keys.map(String));
       },
-    }} columns={[
-      { title: '出货单号', dataIndex: 'shipmentNo', render: (value: string) =>
-        <Button type="link" onClick={() => navigate(`/inventory/shipment-details?shipmentNo=${encodeURIComponent(value)}`)}>{value}</Button> },
-      { title: '日期', dataIndex: 'businessDate' },
-      { title: '明细条数', dataIndex: 'detailCount' },
-      { title: '总数量 KG', dataIndex: 'totalQuantityKg' },
-      { title: '完成进度', render: (_: unknown, row: ShipmentHeader) => `${row.completedCount}/${row.detailCount}` },
-      { title: '操作', render: (_: unknown, row: ShipmentHeader) => <Space>
-        <Popconfirm title="确认出货完成" description={`将该单 ${row.detailCount - row.completedCount} 条未完成明细设为已完成并扣减库存？`}
-          onConfirm={() => { void completeHeader(row.shipmentNo); }}
-          okButtonProps={{ loading: completingNo === row.shipmentNo }}>
-          <Button type="link" disabled={inventoryIsReadOnly() || row.detailCount === 0 || row.completedCount === row.detailCount}>设为已完成</Button>
+    }} scroll={{ x: 1120 }} columns={[
+      { title: '日期', dataIndex: 'businessDate', width: 105 },
+      { title: '出货单号', dataIndex: 'shipmentNo', width: 260, render: (value: string) =>
+        <Button type="link" style={{ padding: 0 }} onClick={() => navigate(`/inventory/shipment-details?shipmentNo=${encodeURIComponent(value)}`)}>{value}</Button> },
+      { title: '状态', key: 'status', width: 90, render: (_: unknown, row: ShipmentHeader) =>
+        <Tag color={row.detailCount > 0 && row.completedCount === row.detailCount ? 'success' : 'processing'}>
+          {row.detailCount > 0 && row.completedCount === row.detailCount ? '已完成' : '未完成'}
+        </Tag> },
+      { title: '明细条数', dataIndex: 'detailCount', width: 85 },
+      { title: '总数量 KG', dataIndex: 'totalQuantityKg', width: 120 },
+      { title: '备注', dataIndex: 'note', width: 200, ellipsis: true },
+      { title: '操作', width: 200, render: (_: unknown, row: ShipmentHeader) => <Space>
+        <Button type="link"
+          onClick={() => navigate(`/inventory/shipment-details?shipmentNo=${encodeURIComponent(row.shipmentNo)}`)}>明细</Button>
+        <Button type="link" disabled={inventoryIsReadOnly()}
+          onClick={() => { setEditingHeader(row); form.setFieldsValue({ shipmentNo: row.shipmentNo, businessDate: dayjs(row.businessDate), note: row.note ?? '' }); setOpen(true); }}>编辑</Button>
+        <Popconfirm title="确认删除出货单"
+          description={`将删除出货单 ${row.shipmentNo} 及其全部未完成明细，此操作不可撤销。`}
+          onConfirm={() => { void deleteHeader(row); }}
+          okButtonProps={{ loading: deletingNo === row.shipmentNo }}>
+          <Button type="link" danger disabled={inventoryIsReadOnly() || row.completedCount > 0}>删除</Button>
         </Popconfirm>
-        <Button type="link" disabled={inventoryIsReadOnly() || row.completedCount > 0}
-          onClick={() => { setEditingHeader(row); form.setFieldsValue({ shipmentNo: row.shipmentNo, businessDate: dayjs(row.businessDate) }); setOpen(true); }}>编辑日期</Button>
       </Space> },
     ]} pagination={{ current: page, pageSize: size, total: data?.total, showSizeChanger: true,
       onChange: (nextPage, nextSize) => { setPage(nextPage); setSize(nextSize); } }} />
-    <Modal title={editingHeader ? '编辑出货日期' : '新增出货单'} open={open} confirmLoading={saving} onCancel={() => { setOpen(false); setEditingHeader(undefined); form.resetFields(); }}
+    <Modal title={editingHeader ? '编辑出货单' : '新增出货单'} open={open} confirmLoading={saving} onCancel={() => { setOpen(false); setEditingHeader(undefined); form.resetFields(); }}
       onOk={() => { void saveHeader(); }}>
       <Form form={form} layout="vertical">
         <Form.Item name="shipmentNo" label="出货单号" rules={[{ required: true, whitespace: true }]}><Input disabled={!!editingHeader} /></Form.Item>
-        <Form.Item name="businessDate" label="日期" rules={[{ required: true }]}><DatePicker className="inventory-full" /></Form.Item>
+        <Form.Item name="businessDate" label="日期" rules={[{ required: true }]}>
+          <DatePicker className="inventory-full" disabled={!!editingHeader && editingHeader.completedCount > 0} />
+        </Form.Item>
+        <Form.Item name="note" label="备注"><Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} maxLength={500} showCount /></Form.Item>
       </Form>
     </Modal>
   </InventoryShell>;
@@ -888,7 +968,8 @@ type BusinessFormValues = {
   note?: string;
 };
 
-function ShipmentSheet({ date, rows, total, page, pages, readOnly, addDisabled, onEdit, onAdd, onPage }: {
+function ShipmentSheet({ date, rows, total, page, pages, readOnly, addDisabled, selectedIds, deleting, statusSaving,
+  statusDisabled, extraActions, onBack, onEdit, onAdd, onPage, onSelect, onDelete, onSetStatus }: {
   date?: string;
   rows: Shipment[];
   total: number;
@@ -896,45 +977,88 @@ function ShipmentSheet({ date, rows, total, page, pages, readOnly, addDisabled, 
   pages: number;
   readOnly: boolean;
   addDisabled: boolean;
+  selectedIds: string[];
+  deleting: boolean;
+  statusSaving: boolean;
+  statusDisabled: boolean;
+  extraActions?: ReactNode;
+  onBack?: () => void;
   onEdit: (row: Shipment) => void;
   onAdd: () => void;
   onPage: (page: number) => void;
+  onSelect: (ids: string[]) => void;
+  onDelete: (ids: string[]) => void;
+  onSetStatus: () => void;
 }) {
+  const pendingIds = rows.filter((row) => row.status === 'PENDING' && !row.transactionId).map((row) => row.id);
+  const selectedOnPage = pendingIds.filter((id) => selectedIds.includes(id));
   return <div className="shipment-sheet-layout">
     <div className="shipment-sheet-actions">
-      <Button type="primary" icon={<PlusOutlined />} disabled={addDisabled} onClick={onAdd}>添加明细</Button>
+      {onBack && <Button icon={<ArrowLeftOutlined />} onClick={onBack}>返回</Button>}
+      <Button type="primary" icon={<PlusOutlined />} disabled={addDisabled} onClick={onAdd}>添加客户</Button>
+      <Popconfirm title="确认批量删除明细" description={`将删除选中的 ${selectedIds.length} 条未完成明细，此操作不可撤销。`}
+        onConfirm={() => onDelete(selectedIds)} okButtonProps={{ loading: deleting }}>
+        <Button danger icon={<DeleteOutlined />} disabled={readOnly || deleting || selectedIds.length === 0}>
+          删除{selectedIds.length ? ` (${selectedIds.length})` : ''}
+        </Button>
+      </Popconfirm>
+      {extraActions}
+      <Popconfirm title="确认设置状态" description="将该出货单状态设置为已完成并扣减库存？"
+        onConfirm={onSetStatus} okButtonProps={{ loading: statusSaving }}>
+        <Button icon={<CheckOutlined />} disabled={readOnly || statusSaving || statusDisabled}>
+          设置状态
+        </Button>
+      </Popconfirm>
     </div>
     <div className="shipment-sheet-scroll">
       <div className="shipment-sheet-mobile-title">出货记录表</div>
       <table className="shipment-sheet" aria-label="出货记录表">
-        <colgroup><col className="shipment-sheet-customer" /><col className="shipment-sheet-product" />
+        <colgroup><col className="shipment-sheet-check" /><col className="shipment-sheet-customer" />
+          <col className="shipment-sheet-product" />
           <col className="shipment-sheet-batch" /><col className="shipment-sheet-number" />
           <col className="shipment-sheet-number" /><col className="shipment-sheet-number" />
-          <col className="shipment-sheet-courier" /><col className="shipment-sheet-note" /></colgroup>
+          <col className="shipment-sheet-courier" /><col className="shipment-sheet-note" />
+          <col className="shipment-sheet-operation" /></colgroup>
         <thead>
-          <tr className="shipment-sheet-title"><th colSpan={8}>出货记录表</th></tr>
-          <tr className="shipment-sheet-date"><th>日期</th><th>{date ?? '—'}</th><th colSpan={6} /></tr>
-          <tr><th>客户名</th><th>品名</th><th>批次号</th><th>规格</th><th>数量</th><th>总数量</th><th>快递公司</th><th>备注</th></tr>
+          <tr className="shipment-sheet-title"><th colSpan={10}>出货记录表</th></tr>
+          <tr className="shipment-sheet-date"><th /><th>日期</th><th>{date ?? ''}</th><th colSpan={7} /></tr>
+          <tr><th>
+            <Checkbox aria-label="选择本页未完成明细" disabled={readOnly || pendingIds.length === 0}
+              checked={pendingIds.length > 0 && selectedOnPage.length === pendingIds.length}
+              indeterminate={selectedOnPage.length > 0 && selectedOnPage.length < pendingIds.length}
+              onChange={(event) => onSelect(event.target.checked
+                ? [...new Set([...selectedIds, ...pendingIds])]
+                : selectedIds.filter((id) => !pendingIds.includes(id)))} />
+          </th><th>客户名</th><th>品名</th><th>批次号</th><th>规格</th><th>数量</th>
+            <th>总数量</th><th>快递公司</th><th>备注</th><th>操作</th></tr>
         </thead>
         <tbody>
           {rows.map((row) => (
             <tr key={row.id}>
-              <td><span className="shipment-sheet-select"><span>{row.customerName || '—'}</span>
+              <td>
+                {row.status === 'PENDING' && !row.transactionId && <Checkbox
+                  aria-label={`选择 ${row.productName} 明细`} disabled={readOnly || deleting}
+                  checked={selectedIds.includes(row.id)}
+                  onChange={(event) => onSelect(event.target.checked
+                    ? [...selectedIds, row.id] : selectedIds.filter((id) => id !== row.id))} />}
+              </td>
+              <td><span className="shipment-sheet-select"><span>{row.customerName || ''}</span>
                 {row.status === 'COMPLETED' && <CheckOutlined title="已完成" />}</span></td>
               <td title={row.productName}>{row.productName}</td>
-              <td>{row.batchNo || '—'}</td>
-              <td>{row.specification || '—'}</td>
-              <td>{row.packageQuantity ?? '—'}</td>
+              <td>{row.batchNo || ''}</td>
+              <td>{row.specification || ''}</td>
+              <td>{row.packageQuantity ?? ''}</td>
               <td>{row.totalQuantityKg ?? row.quantityKg}</td>
-              <td>{row.courierCompany || '—'}</td>
-              <td><div className="shipment-sheet-note-content"><span>{row.note || '—'}</span>
-                <Tooltip title="编辑明细"><Button type="text" size="small" icon={<EditOutlined />}
-                  aria-label={`编辑 ${row.productName}`} disabled={readOnly} onClick={() => onEdit(row)} /></Tooltip>
-              </div></td>
+              <td>{row.courierCompany || ''}</td>
+              <td>{row.note || ''}</td>
+              <td><Tooltip title="编辑明细"><Button type="text" size="small" icon={<EditOutlined />}
+                aria-label={`编辑 ${row.productName}`}
+                disabled={readOnly || row.status !== 'PENDING' || !!row.transactionId}
+                onClick={() => onEdit(row)} /></Tooltip></td>
             </tr>
           ))}
           {Array.from({ length: Math.max(0, 12 - rows.length) }, (_, index) => (
-            <tr key={`empty-${index}`} className="shipment-sheet-empty"><td /><td /><td /><td /><td /><td /><td /><td /></tr>
+            <tr key={`empty-${index}`} className="shipment-sheet-empty"><td /><td /><td /><td /><td /><td /><td /><td /><td /><td /></tr>
           ))}
         </tbody>
       </table>
@@ -971,6 +1095,9 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<SampleDispatch | Shipment>();
   const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([]);
+  const [deletingDetails, setDeletingDetails] = useState(false);
+  const [deletingSamples, setDeletingSamples] = useState(false);
+  const [sheetStatusSaving, setSheetStatusSaving] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [statusSaving, setStatusSaving] = useState(false);
   const [coaOptions, setCoaOptions] = useState<QualityRecord[]>([]);
@@ -983,7 +1110,30 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
   const coaRequest = useRef(0);
   const [readOnly] = useState(() => inventoryIsReadOnly());
   const [searchKeyword, setSearchKeyword] = useState('');
-  const [filters, setFilters] = useState({ keyword: '', page: 1, size: 10 });
+  const [filters, setFilters] = useState<{
+    keyword: string; page: number; size: number;
+    status?: 'PENDING' | 'COMPLETED'; startDate?: string; endDate?: string;
+  }>({ keyword: '', page: 1, size: 10 });
+  const [filterStatus, setFilterStatus] = useState<'PENDING' | 'COMPLETED'>();
+  const [filterDateRange, setFilterDateRange] = useState<[string, string]>();
+  const applyFilters = () => {
+    setFilters((current) => ({
+      ...current,
+      keyword: searchKeyword.trim(),
+      status: filterStatus,
+      startDate: filterDateRange?.[0],
+      endDate: filterDateRange?.[1],
+      page: 1,
+    }));
+  };
+  const resetFilters = () => {
+    setSearchKeyword('');
+    setFilterStatus(undefined);
+    setFilterDateRange(undefined);
+    setFilters((current) => ({
+      ...current, keyword: '', status: undefined, startDate: undefined, endDate: undefined, page: 1,
+    }));
+  };
   const currentUserName = useAuthStore((state) => state.user?.displayName ?? '');
   const canCreateCustomer = useAuthStore((state) => state.can('customer.create'));
   const recognizeRecipient = (text: string) => {
@@ -1051,6 +1201,57 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
         ? await inventoryApi.shipmentDetails(shipmentNo, filters) : await inventoryApi.shipments(filters)),
     [filters, sample, shipmentNo],
   );
+  const deleteDetails = async (ids: string[]) => {
+    if (!shipmentNo || !ids.length) return;
+    setDeletingDetails(true);
+    try {
+      const deleted = await inventoryApi.deleteShipmentDetails(shipmentNo, ids);
+      setSelectedRecordIds((current) => current.filter((id) => !ids.includes(id)));
+      const refreshed = await inventoryApi.shipmentDetails(shipmentNo, filters);
+      if (refreshed.items.length === 0 && filters.page > 1)
+        setFilters((current) => ({ ...current, page: current.page - 1 }));
+      else setData(refreshed);
+      message.success(`已删除 ${deleted} 条出货明细`);
+    } catch (error) {
+      message.error(errorMessage(error, '删除出货明细失败'));
+    } finally {
+      setDeletingDetails(false);
+    }
+  };
+  const completeShipmentRecord = async () => {
+    if (!shipmentNo) return;
+    setSheetStatusSaving(true);
+    try {
+      await inventoryApi.completeShipmentHeader(shipmentNo);
+      message.success('出货单状态已设置为已完成');
+      setSelectedRecordIds([]);
+      await load();
+      setHeader(await inventoryApi.shipmentHeader(shipmentNo));
+    } catch (error) {
+      message.error(errorMessage(error, '设置出货单状态失败'));
+    } finally {
+      setSheetStatusSaving(false);
+    }
+  };
+  const removeSamples = async (ids: string[]) => {
+    if (!ids.length) return;
+    setDeletingSamples(true);
+    try {
+      const deleted = await inventoryApi.deleteSamples(ids);
+      setSelectedRecordIds([]);
+      const refreshed = await inventoryApi.samples(filters);
+      if (refreshed.items.length === 0 && filters.page > 1)
+        setFilters((current) => ({ ...current, page: current.page - 1 }));
+      else setData(refreshed);
+      message.success(`已删除 ${deleted} 条发样记录`);
+    } catch (error) {
+      message.error(errorMessage(error, '删除发样记录失败'));
+    } finally {
+      setDeletingSamples(false);
+    }
+  };
+  const hasUndeletableSample = (data?.items ?? []).some((row) =>
+    selectedRecordIds.includes(row.id) && (row.status !== 'PENDING' || !!row.transactionId));
   const productScope: InventoryScope = formScope;
   const loadProducts = useCallback(async () => {
     const scopes: InventoryScope[] = ['RND', 'PRODUCTION'];
@@ -1078,6 +1279,10 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
       .catch((error: unknown) => message.error(errorMessage(error, '出货单加载失败')));
   }, [shipmentNo]);
   const openEdit = (record: SampleDispatch | Shipment) => {
+    if (!sample && (record.status === 'COMPLETED' || record.transactionId)) {
+      message.warning('已完成的出货明细不可修改');
+      return;
+    }
     coaRequest.current += 1;
     setCoaOptions([]);
     setCoaSearch('');
@@ -1283,14 +1488,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
             ) },
             { title: '状态', dataIndex: 'status', render: (status: string) =>
               <Tag color={status === 'COMPLETED' ? 'success' : 'processing'}>{status === 'COMPLETED' ? '已完成' : '未完成'}</Tag> },
-            {
-              title: '库存类型',
-              dataIndex: 'scope',
-              render: (value: InventoryScope | undefined) => scopeLabels[value ?? 'RND'],
-            },
             { title: '产品名称', dataIndex: 'productName' },
-            { title: '规格 KG', dataIndex: 'specification', render: (value: string | undefined) => value || '—' },
-            { title: '数量', dataIndex: 'packageQuantity', align: 'right', render: (value: number | undefined) => value ?? '—' },
             { title: '总数量 KG', dataIndex: 'quantityKg', align: 'right', render: kg },
             {
               title: '本公司发样人',
@@ -1299,43 +1497,22 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
                 value || record.operator,
             },
             { title: '客户名称', dataIndex: 'customerName' },
-            { title: '收件人', dataIndex: 'recipientName' },
-            { title: '收件人电话', dataIndex: 'recipientPhone', render: (v: string | undefined) => v || '—' },
-            { title: '发样地址', dataIndex: 'sampleAddress', render: (v: string | undefined) => v || '—' },
-            { title: '快递公司', dataIndex: 'courierCompany', render: (v: string | undefined) => v || '—' },
-            { title: '快递单号', dataIndex: 'trackingNo', render: (v: string | undefined) => v || '—' },
-            {
-              title: '客户联系人',
-              dataIndex: 'clientContact',
-              render: (v: string | undefined) => v || '—',
-            },
-            {
-              title: '客户联系人电话',
-              dataIndex: 'clientContactPhone',
-              render: (v: string | undefined) => v || '—',
-            },
-            {
-              title: '客户要求',
-              dataIndex: 'customerRequirement',
-              width: 220,
-              render: (value: string | undefined) =>
-                value ? <span className="inventory-cell-wrap">{value}</span> : '—',
-            },
-            {
-              title: '客户测试反馈',
-              dataIndex: 'customerFeedback',
-              width: 220,
-              render: (value: string | undefined) =>
-                value ? <span className="inventory-cell-wrap">{value}</span> : '—',
-            },
             {
               title: '操作',
-              width: 100,
+              width: 140,
               render: (_: unknown, record: SampleDispatch | Shipment) => (
                 <Space className="management-table-actions">
                   <Button type="link" disabled={readOnly} onClick={() => openEdit(record)}>
                     编辑
                   </Button>
+                  <Popconfirm title="确认删除发样记录" description="该操作不可撤销。"
+                    onConfirm={() => { void removeSamples([record.id]); }}
+                    okButtonProps={{ loading: deletingSamples }}>
+                    <Button type="link" danger
+                      disabled={readOnly || record.status !== 'PENDING' || !!record.transactionId}>
+                      删除
+                    </Button>
+                  </Popconfirm>
                 </Space>
               ),
             },
@@ -1397,6 +1574,10 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
     [openEdit, sample],
   );
   const openCreate = () => {
+    if (!sample && header && header.detailCount > 0 && header.completedCount === header.detailCount) {
+      message.warning('已完成的出货单不可新增明细');
+      return;
+    }
     form.resetFields();
     setEditing(undefined);
     setRecipientText('');
@@ -1425,28 +1606,26 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
           ? '发样完成后按所选库存类型扣减研发或生产库存并生成对应库存流水。'
           : '出货记录完成后按所选库存类型扣减库存并生成对应库存流水。'
       }
-      extra={
+      extra={sample ? (
         <div className="inventory-record-actions">
-          {!sample && <Button onClick={() => navigate('/inventory/shipments')}>返回主表</Button>}
           <BusinessImportExport
             type={type}
             shipmentNo={shipmentNo}
-            hideImport={!sample}
             productsByScope={productsByScope}
             customers={customers}
             onDone={load}
             disabled={readOnly}
           />
-          {sample && <Button
+          <Button
             type="primary"
             icon={<PlusOutlined />}
             disabled={readOnly}
             onClick={openCreate}
           >
             新增发样
-          </Button>}
+          </Button>
         </div>
-      }
+      ) : undefined}
     >
       {sample ? <Card className="inventory-table-card">
         <div className="inventory-filters inventory-record-filters">
@@ -1458,22 +1637,27 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
                 ? '搜索发样单号、产品、客户、收件人、电话、快递单号'
                 : '搜索出货单号、产品、客户、批次号、收件人、快递公司'
             }
-            onChange={(event) => {
-              const value = event.target.value;
-              setSearchKeyword(value);
-              if (!value) setFilters((current) => ({ ...current, keyword: '', page: 1 }));
-            }}
-            onSearch={(value) => setFilters((current) => ({ ...current, keyword: value, page: 1 }))}
+            onChange={(event) => setSearchKeyword(event.target.value)}
+            onSearch={() => { applyFilters(); }}
           />
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => {
-              setSearchKeyword('');
-              setFilters((current) => ({ ...current, keyword: '', page: 1 }));
-            }}
-          >
-            重置
-          </Button>
+          <Select allowClear placeholder="全部状态" value={filterStatus}
+            onChange={(value) => setFilterStatus(value)}
+            options={[{ value: 'PENDING', label: '未完成' }, { value: 'COMPLETED', label: '已完成' }]} />
+          <DatePicker.RangePicker
+            placeholder={['开始日期', '结束日期']}
+            value={filterDateRange ? [dayjs(filterDateRange[0]), dayjs(filterDateRange[1])] : null}
+            onChange={(values) => setFilterDateRange(values?.[0] && values?.[1]
+              ? [values[0].format('YYYY-MM-DD'), values[1].format('YYYY-MM-DD')] : undefined)}
+          />
+          <Button type="primary" icon={<SearchOutlined />} onClick={applyFilters}>查询</Button>
+          <Button icon={<ReloadOutlined />} onClick={resetFilters}>重置</Button>
+          <Popconfirm title="确认删除发样记录"
+            description={`将删除选中的 ${selectedRecordIds.length} 条未完成发样记录，此操作不可撤销。`}
+            onConfirm={() => { void removeSamples(selectedRecordIds); }}
+            okButtonProps={{ loading: deletingSamples }}>
+            <Button danger icon={<DeleteOutlined />}
+              disabled={readOnly || deletingSamples || selectedRecordIds.length === 0 || hasUndeletableSample}>删除</Button>
+          </Popconfirm>
           <Button icon={<CheckOutlined />} disabled={readOnly || selectedRecordIds.length === 0}
             onClick={() => setStatusOpen(true)}>
             设为已完成{selectedRecordIds.length > 0 ? ` (${selectedRecordIds.length})` : ''}
@@ -1484,6 +1668,9 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
           rowSelection={{
             selectedRowKeys: selectedRecordIds,
             preserveSelectedRowKeys: true,
+            getCheckboxProps: (record: SampleDispatch | Shipment) => ({
+              disabled: readOnly || record.status !== 'PENDING' || !!record.transactionId,
+            }),
             onChange: (keys) => {
               if (keys.length > 100) { message.warning(`最多选择 100 条${sample ? '发样' : '出货'}记录`); return; }
               setSelectedRecordIds(keys.map(String));
@@ -1504,8 +1691,23 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
       </Card> : <ShipmentSheet date={header?.businessDate}
         rows={data?.items.filter((row): row is Shipment => 'shipmentNo' in row) ?? []}
         total={data?.total ?? 0} page={data?.page ?? 1} pages={data?.totalPages ?? 0}
-        readOnly={readOnly} addDisabled={readOnly || !header}
+        readOnly={readOnly}
+        addDisabled={readOnly || !header || (header.detailCount > 0 && header.completedCount === header.detailCount)}
+        selectedIds={selectedRecordIds} deleting={deletingDetails} statusSaving={sheetStatusSaving}
+        statusDisabled={!header || header.detailCount === 0 || header.completedCount === header.detailCount}
+        extraActions={<BusinessImportExport
+          type={type}
+          shipmentNo={shipmentNo}
+          hideImport
+          productsByScope={productsByScope}
+          customers={customers}
+          onDone={load}
+          disabled={readOnly}
+        />}
+        onBack={() => navigate('/inventory/shipments')}
         onEdit={openEdit} onAdd={openCreate}
+        onSelect={setSelectedRecordIds} onDelete={(ids) => { void deleteDetails(ids); }}
+        onSetStatus={() => { void completeShipmentRecord(); }}
         onPage={(page) => setFilters((current) => ({ ...current, page }))} />}
       {sample && <Modal title="确认发样完成" open={statusOpen} okText="设为已完成" cancelText="取消"
         confirmLoading={statusSaving} okButtonProps={{ disabled: !selectedRecordIds.length }}
@@ -2459,20 +2661,25 @@ function LedgerImportExport({
 function InventoryShell({
   title,
   description = '库存流水为唯一事实，所有修正均通过冲销或补偿记录完成。',
+  leading,
   extra,
   children,
 }: {
   title: string;
   description?: string;
+  leading?: React.ReactNode;
   extra?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="inventory-page pm-unified-list-page">
       <div className="page-heading inventory-heading">
-        <div>
-          <h1>{title}</h1>
-          <p>{description}</p>
+        <div className="inventory-heading-copy">
+          {leading}
+          <div className="inventory-heading-text">
+            <h1>{title}</h1>
+            <p>{description}</p>
+          </div>
         </div>
         <div className="pm-page-actions">{extra}</div>
       </div>

@@ -364,6 +364,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         if (path.startsWith("/api/v1/inventory")) {
             if (read) return permission("inventory.view", "INVENTORY", "READ");
             if (path.endsWith("/reverse")) return permission("inventory.reverse", "INVENTORY", "WRITE");
+            if (method.equals("DELETE")) return permission("inventory.update", "INVENTORY", "WRITE");
             if (method.equals("PUT") || method.equals("PATCH")) return permission("inventory.update", "INVENTORY", "WRITE");
             if (method.equals("POST")) return permission("inventory.create", "INVENTORY", "WRITE");
             return null;

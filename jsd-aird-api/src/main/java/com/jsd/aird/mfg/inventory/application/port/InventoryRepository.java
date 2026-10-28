@@ -34,14 +34,18 @@ public interface InventoryRepository {
     Optional<RecipientPreference> recipientPreference(UUID customerId);
     Optional<RecipientPreference> latestSampleRecipient(UUID customerId);
     void upsertRecipientPreference(UUID customerId,String recipientName,String recipientPhone,String sampleAddress);
-    Page<Sample> samples(UUID org,String keyword,int page,int size);
+    Page<Sample> samples(UUID org,String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size);
     Page<Shipment> shipments(UUID org,String keyword,int page,int size);
     Page<Shipment> shipmentDetails(UUID org,String shipmentNo,int page,int size);
     java.util.List<UUID> pendingShipmentIds(UUID org,String shipmentNo);
-    Page<ShipmentHeader> shipmentHeaders(UUID org,String keyword,int page,int size);
+    Page<ShipmentHeader> shipmentHeaders(UUID org,String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size);
     Optional<ShipmentHeader> shipmentHeader(UUID org,String shipmentNo);
-    ShipmentHeader insertShipmentHeader(UUID org,String shipmentNo,LocalDate businessDate,UUID actor);
+    ShipmentHeader insertShipmentHeader(UUID org,String shipmentNo,LocalDate businessDate,String note,UUID actor);
     int updateShipmentHeaderDate(UUID org,String shipmentNo,LocalDate businessDate);
+    int updateShipmentHeader(UUID org,String shipmentNo,LocalDate businessDate,String note);
+    int deletePendingShipmentDetailsByHeader(UUID org,String shipmentNo);
+    int deleteShipmentHeader(UUID org,String shipmentNo);
+    int deletePendingSample(UUID org,UUID id);
     Optional<Sample> sampleByTransaction(UUID org,UUID tx);
     Optional<Shipment> shipmentByTransaction(UUID org,UUID tx);
     Optional<Sample> findSample(UUID org,UUID id);
@@ -52,6 +56,7 @@ public interface InventoryRepository {
     Optional<Shipment> lockShipment(UUID org,UUID id);
     Optional<Shipment> findShipmentByNo(UUID org,String shipmentNo);
     int completeShipment(UUID org,UUID id,UUID transactionId);
+    int deletePendingShipment(UUID org,UUID id);
     int updateSample(UUID org,UUID id,LocalDate businessDate,String dispatchNo,String specification,java.math.BigDecimal packageQuantity,UUID customerId,String customerName,
                      String recipientName,String recipientPhone,String sampleAddress,String courierCompany,String trackingNo,
                      String clientContact,String clientContactPhone,String senderName,

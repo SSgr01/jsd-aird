@@ -117,6 +117,7 @@ export interface ShipmentHeader {
   id: string;
   shipmentNo: string;
   businessDate: string;
+  note?: string;
   detailCount: number;
   completedCount: number;
   totalQuantityKg: number;
@@ -324,6 +325,9 @@ export const inventoryApi = {
       )
     ).data.data;
   },
+  async deleteSamples(ids: string[]) {
+    return (await httpClient.delete<ApiResponse<number>>('/api/v1/inventory/samples', { data: ids })).data.data;
+  },
   async shipments(params: Record<string, unknown> = {}) {
     return (
       await httpClient.get<ApiResponse<Page<Shipment>>>('/api/v1/inventory/shipments', { params })
@@ -338,6 +342,21 @@ export const inventoryApi = {
   async shipmentDetails(shipmentNo: string, params: Record<string, unknown> = {}) {
     return (await httpClient.get<ApiResponse<Page<Shipment>>>(`/api/v1/inventory/shipment-headers/${encodeURIComponent(shipmentNo)}/details`, { params })).data.data;
   },
+  async deleteShipmentDetails(shipmentNo: string, ids: string[]) {
+    return (await httpClient.delete<ApiResponse<number>>(
+      `/api/v1/inventory/shipment-headers/${encodeURIComponent(shipmentNo)}/details`, { data: ids },
+    )).data.data;
+  },
+  async deleteShipmentHeader(shipmentNo: string) {
+    return (await httpClient.delete<ApiResponse<number>>(
+      `/api/v1/inventory/shipment-headers/${encodeURIComponent(shipmentNo)}`,
+    )).data.data;
+  },
+  async deleteShipmentHeaders(shipmentNos: string[]) {
+    return (await httpClient.delete<ApiResponse<number>>(
+      '/api/v1/inventory/shipment-headers', { data: shipmentNos },
+    )).data.data;
+  },
   async completeShipmentHeader(shipmentNo: string) {
     return (await httpClient.put<ApiResponse<number>>(
       `/api/v1/inventory/shipment-headers/${encodeURIComponent(shipmentNo)}/status`,
@@ -348,12 +367,12 @@ export const inventoryApi = {
       '/api/v1/inventory/shipment-headers/status', { shipmentNos },
     )).data.data;
   },
-  async createShipmentHeader(input: { shipmentNo: string; businessDate: string }) {
+  async createShipmentHeader(input: { shipmentNo: string; businessDate: string; note?: string }) {
     return (await httpClient.post<ApiResponse<ShipmentHeader>>('/api/v1/inventory/shipment-headers', input)).data.data;
   },
-  async updateShipmentHeaderDate(shipmentNo: string, businessDate: string) {
+  async updateShipmentHeader(shipmentNo: string, input: { businessDate: string; note?: string }) {
     return (await httpClient.put<ApiResponse<ShipmentHeader>>(
-      `/api/v1/inventory/shipment-headers/${encodeURIComponent(shipmentNo)}`, { shipmentNo, businessDate },
+      `/api/v1/inventory/shipment-headers/${encodeURIComponent(shipmentNo)}`, { shipmentNo, ...input },
     )).data.data;
   },
   async createShipmentBatch(shipmentNo: string, details: Record<string, unknown>[]) {

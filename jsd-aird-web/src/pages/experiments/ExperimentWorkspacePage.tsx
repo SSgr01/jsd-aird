@@ -95,7 +95,12 @@ import { labDefinition, labBindings } from '@/features/experiment-workspace/lab-
 import { InstanceFieldEditor } from '@/features/template-workspace/InstanceFieldEditor';
 import type { FieldPanelView } from '@/features/template-workspace/field-definition-selection';
 import { labWorkbookInstance } from '@/features/experiment-workspace/lab-structure-adapter';
-import { readWorkbookInstance, writeWorkbookInstance, validateWorkbookInstance } from '@/features/template-workspace/workbook-instance';
+import {
+  readWorkbookInstance,
+  updateWorkbookField,
+  writeWorkbookInstance,
+  type InstanceIssue,
+} from '@/features/template-workspace/workbook-instance';
 import { resolveInstanceDefinition } from '@/features/template-workspace/instance-definition';
 import { resultBinding } from '@/features/template-workspace/result-location';
 import { projectionFieldViews } from '@/features/template-workspace/list-projection';
@@ -103,6 +108,11 @@ import { DataWorkbenchShell } from '@/features/data-workbench/DataWorkbench';
 import { experimentTemplateWorkbook } from '@/features/experiment-workspace/template-workbench';
 import type { DataFieldValueView } from '@/services/data/data-api';
 import { getExperimentPresentation } from '@/services/experiments/experiment-api';
+import {
+  definitionReviewItems,
+  issueRepresentedByDefinition,
+  type FieldDefinitionReviewItem,
+} from '@/features/data-workbench/field-definition-review';
 
 type WorkspaceView = 'preview' | 'edit' | 'versions';
 type PublishAction = 'submit-review' | 'approve';
@@ -625,7 +635,7 @@ export function ExperimentWorkspacePage({
         return;
       await confirmExperimentTemplateData(id, saved.summary.revision);
       if (!isCurrent()) return;
-      void message.success('本次实验数据已确认');
+      void message.success('本次实验数据已完成核对');
       await load();
     } catch (error) {
       if (isCurrent()) void message.error(error instanceof Error ? error.message : '数据确认失败');
@@ -1186,12 +1196,12 @@ export function ExperimentWorkspacePage({
       ) : null}
       {templateReview && !importedData ? (
         <Tag color={templateDataConfirmed ? 'success' : 'warning'}>
-          数据：{templateDataConfirmed ? '已确认' : '待确认'}
+          数据：{templateDataConfirmed ? '已核对' : '待核对'}
         </Tag>
       ) : null}
       {importedData ? (
         <Tag color={importDataConfirmed ? 'success' : 'warning'}>
-          数据：{importDataConfirmed ? '已确认' : '待确认'}
+          数据：{importDataConfirmed ? '已核对' : '待核对'}
         </Tag>
       ) : null}
     </>
@@ -1463,6 +1473,56 @@ export function ExperimentWorkspacePage({
     const displayed = view === 'preview' && presentationSnapshot ? resultBinding(binding, presentationSnapshot, presentationLocations) : binding;
     if (displayed) editorRef.current?.focusBinding(displayed);
   };
+  const editInstanceFieldDefinition = (item: FieldDefinitionReviewItem) => {
+    const binding = currentInstance?.mapping.find(candidate => candidate.bindingId === item.bindingId);
+    if (binding) focusInstanceBinding(binding);
+  };
+  const confirmInstanceFieldDefinition = async (item: FieldDefinitionReviewItem) => {
+    if (!currentInstance || !editable) return;
+    window.clearTimeout(autosaveTimerRef.current);
+    try {
+      await savePromiseRef.current;
+      const field = currentInstance.model.fields.find(candidate => candidate.id === item.fieldId);
+      if (!field) throw new Error('未找到需要确认的字段');
+      const next = updateWorkbookField(currentInstance, item.fieldId, {
+        ...(field.experimentSemanticStatus === 'NEEDS_REVIEW'
+          ? { experimentSemanticStatus: 'CONFIRMED' as const }
+          : {}),
+      });
+      const editor = editorRef.current;
+      if (editor?.setTemplateInstance) await editor.setTemplateInstance(next);
+      else markDirty();
+      const base = currentDraftModel();
+      let nextSnapshot = editor?.getSnapshot() ?? base.documentSnapshot;
+      if (nextSnapshot) {
+        nextSnapshot = structuredClone(nextSnapshot);
+        writeWorkbookInstance(nextSnapshot, next);
+      }
+      const nextModel: ExperimentModel = {
+        ...base,
+        ...(nextSnapshot ? { documentSnapshot: nextSnapshot } : {}),
+        templateInstance: next,
+      };
+      setEditModel(nextModel);
+      const generation = editGenerationRef.current;
+      const revision = editor?.getContentRevision?.();
+      setSaveState('SAVING');
+      const saved = await persistDraft(nextModel, undefined, true);
+      if (!saved) throw new Error('字段确认尚未保存，请重试');
+      setSaveState(
+        generation === editGenerationRef.current
+          && editorUnchanged(editorRef.current, editor, revision)
+          ? 'SAVED'
+          : 'DIRTY',
+      );
+      void message.success(`字段“${field.name}”已确认并保存`);
+    } catch (error) {
+      automaticSaveBlockedRef.current = true;
+      setSaveState('DIRTY');
+      void message.error(error instanceof Error ? error.message : '字段确认失败');
+      throw error;
+    }
+  };
   const instanceStructureEditor = currentInstance ? (panelView: FieldPanelView, onPanelViewChange: (view: 'structure' | 'properties') => void) => <InstanceFieldEditor view={panelView} onViewChange={onPanelViewChange} getSelection={() => editorRef.current?.getSelection?.()} getSnapshot={() => editorRef.current?.getSnapshot()} instance={currentInstance} ownerId={id} editable={editable && !busy} selection={workbenchSelection}
     hiddenFieldIds={hiddenFieldIds} displayBindings={displayBindings}
     onFocusBinding={focusInstanceBinding}
@@ -1613,7 +1673,7 @@ export function ExperimentWorkspacePage({
                       aria-selected={importPanelTab === 'data'}
                       onClick={() => setImportPanelTab('data')}
                     >
-                      数据确认
+                      数据核对
                     </button>
                     <button
                       type="button"
@@ -1756,13 +1816,22 @@ export function ExperimentWorkspacePage({
       view === 'preview'
         ? (presentationSnapshot ?? snapshot)
         : (editModel.documentSnapshot ?? snapshot);
-    const structureInstance = labWorkbookInstance(visibleSnapshot);
-    const issues =
-      (
-        editModel.templateInstance as
-          { issues?: Array<{ code: string; address: string; message: string }> } | undefined
-      )?.issues ?? [];
-    const workbook = experimentTemplateWorkbook(visibleSnapshot, editable, issues);
+    const structureInstance = currentInstance ?? labWorkbookInstance(visibleSnapshot);
+    const savedIssues =
+      (editModel.templateInstance as { issues?: InstanceIssue[] } | undefined)?.issues ?? [];
+    const issues = [...new Map(
+      savedIssues.map(issue => [
+        [issue.code, issue.fieldId, issue.sheetId, issue.address, issue.message].join('|'),
+        issue,
+      ]),
+    ).values()];
+    const definitionReviews = definitionReviewItems(structureInstance, issues);
+    const remainingIssues = issues.filter(issue => !issueRepresentedByDefinition(issue, definitionReviews));
+    const workbook = experimentTemplateWorkbook(
+      visibleSnapshot,
+      editable,
+      remainingIssues.map(issue => ({ ...issue, address: issue.address ?? '' })),
+    );
     const selectField = (field: DataFieldValueView) => {
       if (field.sheetId && field.address)
         editorRef.current?.focusCell?.(field.sheetId, field.address);
@@ -1811,7 +1880,7 @@ export function ExperimentWorkspacePage({
         canvas={workspaceCanvas}
         panelClassName="experiment-template-data-panel"
         panelTitle="本次实验数据"
-        panelExtra={<Tag color={(importedData ? importDataConfirmed : templateDataConfirmed) ? 'success' : 'warning'}>{(importedData ? importDataConfirmed : templateDataConfirmed) ? '已确认' : '待确认'}</Tag>}
+        panelExtra={<Tag color={(importedData ? importDataConfirmed : templateDataConfirmed) ? 'success' : 'warning'}>{(importedData ? importDataConfirmed : templateDataConfirmed) ? '已核对' : '待核对'}</Tag>}
         panel={
           <ExperimentTemplateDataPanel
                     structureEditor={instanceStructureEditor}
@@ -1822,29 +1891,32 @@ export function ExperimentWorkspacePage({
             editable={editable}
             confirmed={importedData ? importDataConfirmed : templateDataConfirmed}
             busy={busy}
-            confirmationBlocked={issues.length > 0 || Boolean(structureInstance && validateWorkbookInstance(structureInstance).length)}
+            confirmationBlocked={definitionReviews.length > 0 || remainingIssues.length > 0}
+            definitionReviews={definitionReviews}
             selectedCell={workbenchSelection}
             onChange={changeTemplateValue}
             onFocus={() => undefined}
             onSelectField={selectField}
             onWriteValue={writeField}
+            onEditDefinition={editInstanceFieldDefinition}
+            onConfirmDefinition={confirmInstanceFieldDefinition}
             onConfirm={() => void confirmTemplateData()}
-            notice={
-              <>
-                {issues.length > 0 && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    message={`${issues.length} 项数据待确认`}
-                    description={issues
-                      .slice(0, 5)
-                      .map((issue) => `${issue.address ? `${issue.address}：` : ''}${issue.message}`)
-                      .join('；')}
-                  />
-                )}
-
-              </>
-            }
+            notice={remainingIssues.length ? (
+              <Alert
+                type="warning"
+                showIcon
+                message={`${remainingIssues.length} 项数据需要处理`}
+                description={
+                  <ul className="experiment-data-issue-list">
+                    {remainingIssues.slice(0, 5).map(issue => (
+                      <li key={[issue.code, issue.fieldId, issue.address, issue.message].join('|')}>
+                        {issue.address ? `${issue.address}：` : ''}{issue.message}
+                      </li>
+                    ))}
+                  </ul>
+                }
+              />
+            ) : undefined}
           />
         }
       >

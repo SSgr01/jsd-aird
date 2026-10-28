@@ -737,24 +737,10 @@ public class DataImportService {
             var code=pending.path("code").asText("INSTANCE_STRUCTURE_UNCONFIRMED");
             // Per-value quantity validation below supplies the specific warning.
             if(code.equals("FORMULA_INCOMPLETE"))continue;
-            if(draft!=null&&code.equals("FIELD_UNCONFIRMED")&&pending.path("address").asText().isBlank()) {
-                String label="";
-                for(var field:draft.instance().path("model").path("fields"))if(field.path("id").equals(pending.path("fieldId")))label=field.path("locator").path("labelRange").asText("");
-                boolean located=false;for(var other:sheet.structure().path("labParseIssues"))if(other.path("code").asText().equals(code)&&!label.isBlank()&&other.path("address").asText().equalsIgnoreCase(label)){located=true;break;}
-                if(located)continue;
-            }
             issues.add(new DataRepository.Issue(null,sheet.sheetId(),null,"WARNING",code,null,null,pending.path("address").asText(null),pending.path("message").asText("数据待核对"),pending.deepCopy(),"OPEN"));
         }
         if(draft!=null)for(var pending:draft.instance().path("issues")) {
-            boolean included=false;
-            for(var sheet:sourceSheets)for(var parsed:sheet.structure().path("labParseIssues")) {
-                if(!parsed.path("code").equals(pending.path("code")))continue;
-                boolean sameField=!pending.path("fieldId").asText().isBlank()&&parsed.path("fieldId").equals(pending.path("fieldId"));
-                boolean sameCell=!pending.path("address").asText().isBlank()
-                        &&pending.path("address").asText().equalsIgnoreCase(parsed.path("address").asText())
-                        &&(pending.path("sheetId").asText().isBlank()||pending.path("sheetId").asText().equals(sheet.sheetId()));
-                if(sameField||sameCell){included=true;break;}
-            }
+            boolean included=duplicatesParsedWorkbookIssue(draft.instance(),pending,sourceSheets);
             if(!included)issues.add(new DataRepository.Issue(null,pending.path("sheetId").asText(null),null,"WARNING","INSTANCE_STRUCTURE_UNCONFIRMED",null,null,pending.path("address").asText(null),pending.path("message").asText("结构或字段待确认"),pending.deepCopy(),"OPEN"));
         }
         for (var sheet : sourceSheets) {
@@ -911,6 +897,38 @@ public class DataImportService {
         var blocker = issues.stream().anyMatch(item -> "BLOCKER".equals(item.severity()));
         repository.replaceValidation(organizationId, importJobId, normalizedRows, issues,
                 blocker ? "WAITING_MAPPING" : "WAITING_CONFIRM");
+    }
+
+    private boolean duplicatesParsedWorkbookIssue(JsonNode instance, JsonNode pending,
+                                                    List<DataRepository.Sheet> sourceSheets) {
+        var code=pending.path("code").asText();
+        var fieldId=pending.path("fieldId").asText();
+        var address=pending.path("address").asText();
+        var sheetId=pending.path("sheetId").asText();
+        if(!fieldId.isBlank())for(var field:instance.path("model").path("fields")) {
+            if(!field.path("id").asText().equals(fieldId))continue;
+            var locator=field.path("locator");
+            if(address.isBlank())address=locator.path("labelRange").asText(field.path("labelRange").asText());
+            if(sheetId.isBlank())sheetId=locator.path("sheetId").asText();
+            var bindingId=field.path("bindingId").asText();
+            for(var binding:instance.path("mapping"))if(binding.path("bindingId").asText().equals(bindingId)) {
+                var bindingLocator=binding.path("locator");
+                if(address.isBlank())address=bindingLocator.path("labelRange").asText();
+                if(sheetId.isBlank())sheetId=bindingLocator.path("sheetId").asText();
+                break;
+            }
+            break;
+        }
+        for(var sheet:sourceSheets) {
+            if(!sheet.selected()||!sheetId.isBlank()&&!sheetId.equals(sheet.sheetId()))continue;
+            for(var parsed:sheet.structure().path("labParseIssues")) {
+                if(!parsed.path("code").asText().equals(code))continue;
+                boolean sameField=!fieldId.isBlank()&&parsed.path("fieldId").asText().equals(fieldId);
+                boolean sameCell=!address.isBlank()&&parsed.path("address").asText().equalsIgnoreCase(address);
+                if(sameField||sameCell)return true;
+            }
+        }
+        return false;
     }
 
     private String mappingKey(String sheetId, String componentId, String sourceColumn) {

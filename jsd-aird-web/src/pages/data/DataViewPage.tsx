@@ -23,13 +23,13 @@ import { projectResourceApi, type ProjectRelationTarget } from '@/services/proje
 const statusLabels: Record<string, [string, string]> = {
   CREATED: ['待处理', 'default'], QUEUED: ['上传中', 'processing'], PARSING: ['解析中', 'blue'],
   WAITING_SHEET: ['待确认工作表', 'gold'], WAITING_MAPPING: ['待确认字段', 'gold'],
-  VALIDATING: ['校验中', 'processing'], WAITING_CONFIRM: ['待确认提交', 'orange'],
+  VALIDATING: ['校验中', 'processing'], WAITING_CONFIRM: ['待核对数据', 'orange'],
   COMMITTING: ['处理中', 'processing'], COMPLETED: ['处理完成', 'success'],
   FAILED: ['处理失败', 'error'], CANCELLED: ['已取消', 'default'],
 };
 const formalStatusLabels: Record<string, [string, string]> = {
   DRAFT: ['导入草稿', 'default'], PENDING_REVIEW: ['待审核', 'processing'], RETURNED: ['已驳回', 'error'], APPROVED: ['审核通过，待发布', 'processing'], PUBLISHED: ['已发布', 'success'], DISABLED: ['已停用', 'default'],
-  CONFIRMED: ['已确认', 'success'], SUPERSEDED: ['已被新版本替代', 'gold'],
+  CONFIRMED: ['已核对', 'success'], SUPERSEDED: ['已被新版本替代', 'gold'],
   INVALIDATED: ['已失效', 'error'], NOT_CONFIRMED: ['未确认', 'default'],
 };
 const UNCATEGORIZED_CATEGORY_ID = 'UNCATEGORIZED';
@@ -133,13 +133,13 @@ export function DataViewPage() {
       onCreate={canUpdate ? () => setEditor({ mode: 'NEW' }) : undefined}
       onRename={canUpdate ? (item) => setEditor({ mode: 'EDIT', item: categories.find((candidate) => candidate.id === item.id) }) : undefined}
       onDelete={canUpdate ? (item) => { const category = categories.find((candidate) => candidate.id === item.id); if (category?.allowedActions?.includes('DELETE')) setDeleteItem(category); } : undefined} />
-    <div className="catalog-sync-note"><ReloadOutlined /> 处理完成后需确认数据、提交审核，通过后发布。可在“审核与版本记录”查看版本和审核意见。</div>
+    <div className="catalog-sync-note"><ReloadOutlined /> 处理完成后需核对数据、提交审核，通过后发布。可在“审核与版本记录”查看版本和审核意见。</div>
     <CatalogListPanel title={cards.find((item) => item.id === categoryId)?.name || '来源文件'} count={page.total}
       filters={<Space wrap><Input allowClear prefix={<SearchOutlined />} placeholder="搜索来源文件名" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} /><Select allowClear showSearch optionFilterProp="label" popupMatchSelectWidth={false} classNames={{ popup: { root: 'project-relation-picker-dropdown' } }} placeholder="全部项目" value={projectId} onChange={(value) => { setProjectId(value); setPage((current) => ({ ...current, current: 1 })); }} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={[{ label: '审核发布状态', options: ['DRAFT', 'CONFIRMED', 'PENDING_REVIEW', 'RETURNED', 'APPROVED', 'PUBLISHED', 'DISABLED'].map((value) => ({ value: `PUB_${value}`, label: formalStatusLabels[value]?.[0] || value })) }, { label: '文件处理状态', options: Object.entries(statusLabels).map(([value, item]) => ({ value, label: item[0] })) }]} /><Button icon={<RedoOutlined />} onClick={resetFilters}>重置</Button></Space>}
       loading={loading}>
       <Table className="catalog-data-table" scroll={{ x: 1660 }} rowKey="importJobId" dataSource={items} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <Empty description="暂无来源文件" /> }} onRow={(record) => ({ onDoubleClick: () => navigate(sourceRoute(record)) })} columns={[
         { title: '来源文件', dataIndex: 'originalName', width: 280, ellipsis: true, render: (value: string, record: DataSourceFile) => <Space><DatabaseOutlined /><Typography.Text strong ellipsis={{ tooltip: value }}>{value}</Typography.Text><Typography.Text type="secondary">{record.sourceFormat}</Typography.Text></Space> },
-        { title: '数据确认', dataIndex: 'formalStatus', width: 150, render: (value: string) => <Tag color={formalStatusLabels[value]?.[1]}>{formalStatusLabels[value]?.[0] || value}</Tag> },
+        { title: '数据核对', dataIndex: 'formalStatus', width: 150, render: (value: string) => <Tag color={formalStatusLabels[value]?.[1]}>{formalStatusLabels[value]?.[0] || value}</Tag> },
         { title: '归档分类', dataIndex: 'categoryName', width: 150, ellipsis: true, render: (value?: string) => value || '未分类' },
         { title: '关联项目', width: 260, render: (_: unknown, record: DataSourceFile) => <Space size={[0, 4]} wrap>{record.relatedProjects?.length ? record.relatedProjects.map((relation) => <Tag color="blue" key={`${relation.projectId}-${relation.stageId || ''}-${relation.taskId || ''}`} onClick={() => navigate(`/projects/${relation.projectId}`)} style={{ cursor: 'pointer' }}>{relation.projectName}{relation.stageName ? ` / ${relation.stageName}` : ''}{relation.taskName ? ` / ${relation.taskName}` : ''}</Tag>) : '—'}</Space> },
         { title: '识别方式', dataIndex: 'templateVersionId', width: 320, ellipsis: true, render: (value: string | undefined, record: DataSourceFile) => { if (record.recognitionMode === 'FREEFORM') return '历史自由识别（只读）'; const item = templates.find((candidate) => candidate.versionId === value); return item ? `${item.name} · ${item.templateCode} · V${item.versionNo}` : value ? `版本 ${value.slice(0, 8)}` : '—'; } },

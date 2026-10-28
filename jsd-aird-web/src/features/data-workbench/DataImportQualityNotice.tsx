@@ -13,7 +13,7 @@ export function DataImportQualityNotice({ issues, sheets, onLocate }: { issues: 
   const message = blockers
     ? `${blockers} 项问题会阻止提交，另有 ${openIssues.length - blockers} 项提示`
     : warnings
-      ? `${warnings} 项需要核对`
+      ? `${warnings} 项数据需要核对`
       : `${openIssues.length} 项导入提示`;
 
   return (
@@ -24,7 +24,7 @@ export function DataImportQualityNotice({ issues, sheets, onLocate }: { issues: 
       message={message}
       description={(
         <div className="data-import-quality-notice">
-          <details open={blockers > 0}>
+          <details open>
             <summary>查看问题和来源位置</summary>
             <ul>
               {openIssues.map((issue, index) => {
@@ -42,7 +42,7 @@ export function DataImportQualityNotice({ issues, sheets, onLocate }: { issues: 
               })}
             </ul>
           </details>
-          <Typography.Text type="secondary">提示不会改写原文件；如需修正，系统会单独保存修正值。</Typography.Text>
+          <Typography.Text type="secondary">修改会自动保存到本次记录，原文件保持不变。</Typography.Text>
         </div>
       )}
     />

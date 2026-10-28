@@ -1,4 +1,4 @@
-import { Alert, App, Empty } from 'antd';
+import { Alert, App, Button, Empty } from 'antd';
 import { FieldProperties, FieldStructure } from '@/pages/template-workspace/TemplateFieldManager';
 import { projectionLocator, projectionFieldViews, updateProjectionField } from './list-projection';
 import { useFieldDefinitionSelection, type FieldPanelView } from './field-definition-selection';
@@ -134,6 +134,15 @@ export function InstanceFieldEditor({
     return (
       <div>
         {hiddenFieldIds?.has(selected.id) && <Alert type="info" message="本次结果未展示" description="切回填写页可查看完整表格。" />}
+        {(selected.reviewStatus !== 'CONFIRMED' || selected.experimentSemanticStatus === 'NEEDS_REVIEW') && <Alert
+          showIcon
+          type="warning"
+          message="该字段定义需要确认"
+          description="核对下方字段名称、值类型、单位和 Excel 位置；当前内容正确时可直接确认。"
+          action={<Button size="small" type="primary" disabled={!editable} onClick={() => update(selected.id, {
+            ...(selected.experimentSemanticStatus === 'NEEDS_REVIEW' ? { experimentSemanticStatus: 'CONFIRMED' } : {}),
+          })}>确认字段定义</Button>}
+        />}
         <FieldProperties
           key={selected.id}
           editable={editable}

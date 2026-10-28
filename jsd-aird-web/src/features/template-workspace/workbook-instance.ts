@@ -851,6 +851,25 @@ export function updateWorkbookField(source: WorkbookTemplateInstance, id: string
   const next = structuredClone(source);
   const updated = updateFieldDefinition(next.model, next.mapping, id, { ...changes, reviewStatus: 'CONFIRMED' });
   next.model = updated.model; next.mapping = updated.mapping;
+  const field = next.model.fields.find(item => item.id === id);
+  const binding = next.mapping.find(item => item.bindingId === field?.bindingId);
+  const sheetId = String(binding?.locator.sheetId || field?.locator?.sheetId || '');
+  const addresses = [
+    locatorLabelRange(binding?.locator),
+    field?.labelRange,
+    locatorLabelRange(field?.locator),
+  ].map(value => String(value || '').replaceAll('$', '').split(':')[0]!.toUpperCase()).filter(Boolean);
+  const uniqueFieldName = field && next.model.fields.filter(item => item.name === field.name).length === 1;
+  // Recognition can report the same field once by id/name and once by label cell.
+  // Confirming the field resolves both records so a saved workbook does not reopen as pending.
+  next.issues = next.issues.filter(issue => {
+    if (issue.code !== 'FIELD_UNCONFIRMED') return true;
+    if (issue.fieldId === id) return false;
+    const issueAddress = String(issue.address || '').replaceAll('$', '').split(':')[0]!.toUpperCase();
+    if (issueAddress && addresses.includes(issueAddress)
+      && (!issue.sheetId || !sheetId || String(issue.sheetId) === sheetId)) return false;
+    return !(uniqueFieldName && issue.message.includes(`字段“${field.name}”`));
+  });
   return next;
 }
 

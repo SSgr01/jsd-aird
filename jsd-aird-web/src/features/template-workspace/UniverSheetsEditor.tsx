@@ -42,6 +42,7 @@ import { writesReadOnlyValue } from './read-only-values';
 import { sectionMergeExtensions, migratedWorkbookMerges } from './section-merges';
 import { templatePasteStyleHook } from './paste-styles';
 import { fieldNumberFormatEdits, fieldNumberFormat } from './field-number-format';
+import { workbookCellInput } from '@/features/data-workbench/cell-format';
 import { instanceSheets, workbookWithExplicitRowHeights } from './workbook-instance';
 import type {
   EditorHandle,
@@ -861,22 +862,23 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       ? (valueRange ?? tableDataRange ?? labelRange)
       : (regionRange ?? tableDataRange ?? valueRange ?? labelRange);
     if (workbook && sheet && activeRange) {
-      highlightTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-      highlightTimersRef.current = [];
-      highlightRef.current.forEach((highlight) => highlight.dispose());
-      highlightRef.current = [];
-      if (workbook.getActiveSheet()?.getSheetId() !== sheet.getSheetId()) workbook.setActiveSheet(sheet);
-      highlightedCellRef.current = `${sheet.getSheetId()}|${activeRange.getA1Notation().split(':')[0]}`;
-      const injector = univerRef.current?.__getInjector();
-      const commands = injector?.get(ICommandService);
-      const viewport = injector?.get(IRenderManagerService).getRenderUnitById(workbook.getId())
-        ?.scene.getViewport(SHEET_VIEWPORT_KEY.VIEW_MAIN);
-      // Selecting a wide field makes the SDK reveal its far edge. Capture the
-      // user's viewport first, then reveal the first value with its label context.
-      const scrollBefore = sheet.getScrollState();
-      const boundsBefore = viewport ? { ...viewport.calcViewportInfo().viewBound } : undefined;
-      sheet.setActiveRange(activeRange);
-      if (viewport?.isActive) {
+      try {
+        highlightTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+        highlightTimersRef.current = [];
+        highlightRef.current.forEach((highlight) => highlight.dispose());
+        highlightRef.current = [];
+        if (workbook.getActiveSheet()?.getSheetId() !== sheet.getSheetId()) workbook.setActiveSheet(sheet);
+        highlightedCellRef.current = `${sheet.getSheetId()}|${activeRange.getA1Notation().split(':')[0]}`;
+        const injector = univerRef.current?.__getInjector();
+        const commands = injector?.get(ICommandService);
+        const viewport = injector?.get(IRenderManagerService).getRenderUnitById(workbook.getId())
+          ?.scene.getViewport(SHEET_VIEWPORT_KEY.VIEW_MAIN);
+        // Selecting a wide field makes the SDK reveal its far edge. Capture the
+        // user's viewport first, then reveal the first value with its label context.
+        const scrollBefore = sheet.getScrollState();
+        const boundsBefore = viewport ? { ...viewport.calcViewportInfo().viewBound } : undefined;
+        sheet.setActiveRange(activeRange);
+        if (viewport?.isActive) {
         // Use actual sheet-coordinate bounds, including zoom and frozen panes.
         // The SDK's row-index reveal can leave a bottom cell partially clipped.
         // Focus the first cell (including its merge), not the end of a tall field.
@@ -907,58 +909,76 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
             duration: 0,
           });
         }
-      } else {
-        commands?.syncExecuteCommand(ScrollToRangeOperation.id, {
-          range: { startRow: activeRange.getRow(), endRow: activeRange.getRow(),
-            startColumn: activeRange.getColumn(), endColumn: activeRange.getColumn() },
-        });
-      }
-      const drawHighlight = (strong: boolean) => {
-        highlightRef.current.forEach((highlight) => highlight.dispose());
-        highlightRef.current = [];
-        if (labelRange)
-          highlightRef.current.push(
-            labelRange.highlight({
-              fill: strong ? 'rgba(245, 158, 11, 0.24)' : 'rgba(245, 158, 11, 0.10)',
-              stroke: '#d97706',
-              strokeWidth: strong ? 3 : 2,
-            }),
-          );
-        if (rowHeaderRange)
-          highlightRef.current.push(
-            rowHeaderRange.highlight({
-              fill: strong ? 'rgba(245, 158, 11, 0.18)' : 'rgba(245, 158, 11, 0.08)',
-              stroke: '#d97706',
-              strokeWidth: strong ? 3 : 2,
-            }),
-          );
-        if (columnHeaderRange)
-          highlightRef.current.push(
-            columnHeaderRange.highlight({
-              fill: strong ? 'rgba(124, 58, 237, 0.16)' : 'rgba(124, 58, 237, 0.07)',
-              stroke: '#7c3aed',
-              strokeWidth: strong ? 3 : 2,
-            }),
-          );
-        const fillRange = isStructuredLeaf(binding)
-          ? (valueRange ?? tableDataRange)
-          : (regionRange ?? tableDataRange ?? valueRange);
-        if (fillRange)
-          highlightRef.current.push(
-            fillRange.highlight({
-              fill: strong ? 'rgba(37, 99, 235, 0.22)' : 'rgba(37, 99, 235, 0.09)',
-              stroke: '#2563eb',
-              strokeWidth: strong ? 3 : 2,
-            }),
-          );
-      };
-      drawHighlight(true);
-      if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        [false, true, false, true].forEach((strong, index) => {
-          highlightTimersRef.current.push(
-            window.setTimeout(() => drawHighlight(strong), 150 * (index + 1)),
-          );
-        });
+        } else {
+          commands?.syncExecuteCommand(ScrollToRangeOperation.id, {
+            range: { startRow: activeRange.getRow(), endRow: activeRange.getRow(),
+              startColumn: activeRange.getColumn(), endColumn: activeRange.getColumn() },
+          });
+        }
+        const drawHighlight = (strong: boolean) => {
+          try {
+            highlightRef.current.forEach((highlight) => highlight.dispose());
+            highlightRef.current = [];
+            if (labelRange)
+              highlightRef.current.push(
+                labelRange.highlight({
+                  fill: strong ? 'rgba(245, 158, 11, 0.24)' : 'rgba(245, 158, 11, 0.10)',
+                  stroke: '#d97706',
+                  strokeWidth: strong ? 3 : 2,
+                }),
+              );
+            if (rowHeaderRange)
+              highlightRef.current.push(
+                rowHeaderRange.highlight({
+                  fill: strong ? 'rgba(245, 158, 11, 0.18)' : 'rgba(245, 158, 11, 0.08)',
+                  stroke: '#d97706',
+                  strokeWidth: strong ? 3 : 2,
+                }),
+              );
+            if (columnHeaderRange)
+              highlightRef.current.push(
+                columnHeaderRange.highlight({
+                  fill: strong ? 'rgba(124, 58, 237, 0.16)' : 'rgba(124, 58, 237, 0.07)',
+                  stroke: '#7c3aed',
+                  strokeWidth: strong ? 3 : 2,
+                }),
+              );
+            const fillRange = isStructuredLeaf(binding)
+              ? (valueRange ?? tableDataRange)
+              : (regionRange ?? tableDataRange ?? valueRange);
+            if (fillRange)
+              highlightRef.current.push(
+                fillRange.highlight({
+                  fill: strong ? 'rgba(37, 99, 235, 0.22)' : 'rgba(37, 99, 235, 0.09)',
+                  stroke: '#2563eb',
+                  strokeWidth: strong ? 3 : 2,
+                }),
+              );
+          } catch (error) {
+            if (!isTransientRenderDependencyError(error)) throw error;
+            // The renderer can be replaced while the workbench reloads a saved
+            // snapshot. A field click should remain harmless during that short gap.
+            highlightRef.current = [];
+          }
+        };
+        drawHighlight(true);
+        if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          [false, true, false, true].forEach((strong, index) => {
+            highlightTimersRef.current.push(
+              window.setTimeout(() => drawHighlight(strong), 150 * (index + 1)),
+            );
+          });
+        }
+      } catch (error) {
+        if (!isTransientRenderDependencyError(error)) throw error;
+        // Selection services are ready before the optional scroll/highlight
+        // services. Keep the user's selection when a snapshot is reloading.
+        try {
+          if (workbook.getActiveSheet()?.getSheetId() !== sheet.getSheetId()) workbook.setActiveSheet(sheet);
+          sheet.setActiveRange(activeRange);
+        } catch {
+          // The editor is being disposed; the next user action will focus it.
+        }
       }
     }
   };
@@ -1035,9 +1055,10 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         const range = sheet && validCell(address) ? sheet.getRange(address) : null;
         if (!range) return Promise.reject(new Error(`无法定位单元格 ${address}`));
         suppressUnboundRef.current = true;
-        const safeValue = value == null ? '' : value;
-        range.setValue(safeValue);
-        return verifyWrite(() => range.getValue(), safeValue).finally(() => {
+        const pattern = range.getNumberFormats()[0]?.[0] ?? '';
+        const safeValue = workbookCellInput(value == null ? '' : value, pattern);
+        range.setValue(safeValue as never);
+        return verifyWrite(() => range.getRawValue(), safeValue).finally(() => {
           suppressUnboundRef.current = false;
         });
       },
@@ -1231,6 +1252,11 @@ function validCell(value: string) {
 
 function validRange(value: string) {
   return /^[A-Z]{1,4}[1-9][0-9]*(?::[A-Z]{1,4}[1-9][0-9]*)?$/i.test(value);
+}
+
+function isTransientRenderDependencyError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('Cannot find') && message.includes('registered by any injector');
 }
 
 function stringLocator(value: unknown) {

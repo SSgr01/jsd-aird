@@ -1,5 +1,5 @@
-import { Alert, Button, Input, Space, Tabs, Tag, Typography } from 'antd';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Alert, Input, Tabs, Tag, Typography } from 'antd';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   DataFieldDataBrowser,
   DataFieldStructureBrowser,
@@ -11,6 +11,12 @@ import type { ExperimentTemplateDataReview } from '@/services/experiments/experi
 import type { EditorSelection } from '@/features/template-workspace/types';
 import type { FieldPanelView } from '@/features/template-workspace/field-definition-selection';
 import { findFieldForCell } from '@/features/data-workbench/field-cell-selection';
+import { AutoSaveFieldInput } from '@/features/data-workbench/AutoSaveFieldInput';
+import { DataReviewFooter } from '@/features/data-workbench/DataReviewFooter';
+import { FieldDefinitionReview } from '@/features/data-workbench/FieldDefinitionReview';
+import type { FieldDefinitionReviewItem } from '@/features/data-workbench/field-definition-review';
+
+export type { FieldDefinitionReviewItem } from '@/features/data-workbench/field-definition-review';
 
 interface Props {
   review?: ExperimentTemplateDataReview;
@@ -29,6 +35,9 @@ interface Props {
   onWriteValue?: (field: DataFieldValueView, value: string) => Promise<void>;
   notice?: ReactNode;
   confirmationBlocked?: boolean;
+  definitionReviews?: FieldDefinitionReviewItem[];
+  onEditDefinition?: (item: FieldDefinitionReviewItem) => void;
+  onConfirmDefinition?: (item: FieldDefinitionReviewItem) => Promise<void>;
   structureEditor?: (view: FieldPanelView, onViewChange: (view: 'structure' | 'properties') => void) => ReactNode;
 }
 
@@ -122,6 +131,9 @@ export function ExperimentTemplateDataPanel({
   onWriteValue,
   notice,
   confirmationBlocked,
+  definitionReviews = [],
+  onEditDefinition,
+  onConfirmDefinition,
   structureEditor,
 }: Props) {
   const [activeTab, setActiveTab] = useState<FieldPanelView | 'mapping'>('data');
@@ -129,6 +141,7 @@ export function ExperimentTemplateDataPanel({
   const [selectedFieldKey, setSelectedFieldKey] = useState<string>();
   const [corrections, setCorrections] = useState<Record<string, string>>({});
   const [savingField, setSavingField] = useState<string>();
+  const correctionWrites = useRef(new Set<string>());
   const workbook = useMemo<DataWorkbookSnapshot>(() => {
     if (instanceWorkbook) return instanceWorkbook;
     const candidateFields = review.fields.flatMap((field): DataFieldValueView[] => {
@@ -235,9 +248,39 @@ export function ExperimentTemplateDataPanel({
     if (onSelectField) onSelectField(field);
     else onFocus(field.bindingId);
   };
+  const saveCorrection = (field: DataFieldValueView, value: string) => {
+    const key = fieldKey(field);
+    if (!onWriteValue || correctionWrites.current.has(key)) return;
+    correctionWrites.current.add(key);
+    setSavingField(key);
+    void onWriteValue(field, value)
+      .then(() => {
+        setCorrections((current) => {
+          if (current[key] !== value) return current;
+          const next = { ...current };
+          delete next[key];
+          return next;
+        });
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        correctionWrites.current.delete(key);
+        setSavingField((current) => current === key ? undefined : current);
+      });
+  };
+  const changeCorrection = (field: DataFieldValueView, value: string) => {
+    const key = fieldKey(field);
+    const original = asText(field.effectiveValue);
+    setCorrections((current) => {
+      const next = { ...current };
+      if (value === original) delete next[key];
+      else next[key] = value;
+      return next;
+    });
+  };
   const content = (
     <>
-      {missingCount || notice ? <div className="data-workbench-panel-notice">
+      {missingCount || notice || definitionReviews.length ? <div className="data-workbench-panel-notice">
         {missingCount ? (
           <Alert
             type="warning"
@@ -249,6 +292,16 @@ export function ExperimentTemplateDataPanel({
             }
           />
         ) : null}
+        <FieldDefinitionReview
+          items={definitionReviews}
+          busy={busy}
+          onEdit={(item) => {
+            setActiveTab('properties');
+            setSelectedBindingId(item.bindingId);
+            onEditDefinition?.(item);
+          }}
+          onConfirm={onConfirmDefinition}
+        />
         {notice}
       </div> : null}
       <Tabs
@@ -265,44 +318,21 @@ export function ExperimentTemplateDataPanel({
       {activeTab === 'data' ? (
         <DataFieldDataBrowser
           workbook={workbook}
+          definitionIssueCount={definitionReviews.length}
           selectedFieldKey={selectedFieldKey}
           selectedCell={selectedCell}
           onSelectField={select}
           renderFieldExtra={(field) =>
             onWriteValue && editable && field.editable ? (
-              <Space.Compact>
-                <Input
-                  aria-label={`修正${field.fieldName}`}
-                  disabled={busy || Boolean(savingField)}
-                  value={corrections[fieldKey(field)] ?? asText(field.effectiveValue)}
-                  onChange={(event) =>
-                    setCorrections((current) => ({
-                      ...current,
-                      [fieldKey(field)]: event.target.value,
-                    }))
-                  }
-                />
-                <Button
-                  loading={savingField === fieldKey(field)}
-                  disabled={busy || Boolean(savingField)}
-                  onClick={() => {
-                    const key = fieldKey(field);
-                    setSavingField(key);
-                    void onWriteValue(field, corrections[key] ?? asText(field.effectiveValue))
-                      .then(() => {
-                        setCorrections((current) => {
-                          const next = { ...current };
-                          delete next[key];
-                          return next;
-                        });
-                      })
-                      .catch(() => undefined)
-                      .finally(() => setSavingField(undefined));
-                  }}
-                >
-                  保存修正
-                </Button>
-              </Space.Compact>
+              <AutoSaveFieldInput
+                label={field.fieldName}
+                disabled={busy}
+                saving={savingField === fieldKey(field)}
+                value={corrections[fieldKey(field)] ?? asText(field.effectiveValue)}
+                savedValue={asText(field.effectiveValue)}
+                onChange={(value) => changeCorrection(field, value)}
+                onSave={(value) => saveCorrection(field, value)}
+              />
             ) : field.bindingId === selectedBindingId &&
               editable &&
               !importedSnapshot &&
@@ -361,30 +391,21 @@ export function ExperimentTemplateDataPanel({
           ))}
         </div>
       ) : null}
-      <div className="data-workbench-footer">
-        <Button
-          type="primary"
-          disabled={
-            !editable ||
-            missingCount > 0 ||
-            confirmationBlocked ||
-            confirmed ||
-            Boolean(savingField) ||
-            Object.keys(corrections).length > 0
-          }
-          loading={busy}
-          onClick={onConfirm}
-        >
-          确认并提交本次数据
-        </Button>
-      </div>
+      <DataReviewFooter
+        editable={editable}
+        confirmed={confirmed}
+        busy={busy}
+        blocked={missingCount > 0 || confirmationBlocked}
+        saving={Boolean(savingField) || Object.keys(corrections).length > 0}
+        onConfirm={onConfirm}
+      />
     </>
   );
   return embedded ? (
     content
   ) : (
     <DataWorkbenchPanel title="本次实验数据" className="experiment-template-data-panel"
-      extra={<Tag color={confirmed ? 'success' : 'warning'}>{confirmed ? '已确认' : '待确认'}</Tag>}>
+      extra={<Tag color={confirmed ? 'success' : 'warning'}>{confirmed ? '已核对' : '待核对'}</Tag>}>
       {content}
     </DataWorkbenchPanel>
   );

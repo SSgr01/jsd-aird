@@ -84,7 +84,7 @@ describe('existing data workbench contract for experiment templates', () => {
         onFocus={vi.fn()}
       />,
     );
-    expect(screen.getByRole('button', { name: '确认并提交本次数据' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '完成数据核对' })).toBeDisabled();
   });
   it('exposes eight records, one indicator definition, original g input and valid zero grades', () => {
     const workbook = experimentTemplateWorkbook(snapshot(), true);
@@ -159,10 +159,11 @@ describe('existing data workbench contract for experiment templates', () => {
     expect(container.querySelector('.data-field-data-browser')).toBeInTheDocument();
     const field = await screen.findByRole('button', { name: /附着力.*5B/ });
     fireEvent.click(field);
-    fireEvent.change(screen.getByRole('textbox', { name: '修正附着力' }), {
+    const input = screen.getByRole('textbox', { name: '修正附着力' });
+    fireEvent.change(input, {
       target: { value: '4B' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '保存修正' }));
+    fireEvent.blur(input);
     await waitFor(() =>
       expect(write).toHaveBeenCalledWith(
         expect.objectContaining({ address: 'D4', recordId: 'group-1' }),

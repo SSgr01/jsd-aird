@@ -244,7 +244,7 @@ public final class LabWorkbook {
             if(!meta.path("role").asText().equals("LABEL"))continue;
             if(uniqueFields.putIfAbsent(code,r)!=null)issues.addObject().put("code","DUPLICATE_FIELD").put("address",address(r,1)).put("message","同一指标出现多行，请确认不同的测试条件或删除重复行");
             if(field.hasNonNull("duplicateOf"))issues.addObject().put("code","DUPLICATE_FIELD").put("address",address(r,1)).put("message","同名测试项目已分别保留，请核对测试条件");
-            if(field.path("local").asBoolean()&&!field.path("confirmed").asBoolean())issues.addObject().put("code","FIELD_UNCONFIRMED").put("address",address(r,1)).put("message","新增测试项目待确认类型和单位");
+            if(field.path("local").asBoolean()&&!field.path("confirmed").asBoolean())issues.addObject().put("code","FIELD_UNCONFIRMED").put("address",address(r,1)).put("message","新增测试项目“"+field.path("label").asText()+"”待确认类型和单位");
             var label=value(sheet,r,1);if(!label.isBlank()&&!normalized(label).equals(normalized(field.path("label").asText())))issues.addObject().put("code","FIELD_LABEL_CHANGED").put("address",address(r,1)).put("message","项目名称已变化，请按新项目确认字段含义");
         }
         var order=instance.putArray("sampleOrder");var lines=instance.putArray("materialLines");var bindings=instance.putArray("bindings");

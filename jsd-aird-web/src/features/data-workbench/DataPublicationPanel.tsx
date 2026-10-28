@@ -79,7 +79,7 @@ export function DataPublicationPanel({ jobId, refreshKey, canConfirm = false, di
       type="primary" disabled={busy || disabled || (state.status !== 'CONFIRMED' && (!canUpdate || !canConfirm))}
       onClick={() => { setOpen(false); setSubmitOpen(true); }}>{state.status === 'RETURNED' ? '重新提交审核' : '提交审核'}</Button>}
     {!readOnly && canUpdate && !canSubmit && canConfirm && ['DRAFT', 'RETURNED'].includes(state.status) && <Button disabled={busy || disabled}
-      onClick={() => void run(() => dataApi.publicationAction(jobId, 'confirm', state.revision), '数据已确认，可由有送审权限的人员提交发布审核')}>确认数据</Button>}
+      onClick={() => void run(() => dataApi.publicationAction(jobId, 'confirm', state.revision), '数据已完成核对，可由有送审权限的人员提交发布审核')}>完成数据核对</Button>}
     {state.status === 'PENDING_REVIEW' && <>
       {activeSnapshot && <Button disabled={busy} onClick={() => void showSnapshot(activeSnapshot.id, activeSnapshot.versionNo)}>查看审核内容</Button>}
       {!readOnly && canReview && activeSnapshot && <><Button danger disabled={busy} onClick={() => { setOpen(false); setComment(''); setRejectOpen(true); }}>驳回</Button>

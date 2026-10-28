@@ -222,6 +222,7 @@ interface FieldDataBrowserProps {
   renderFieldExtra?: (field: DataFieldValueView) => ReactNode;
   renderFieldMeta?: (field: DataFieldValueView) => ReactNode;
   headerExtra?: ReactNode;
+  definitionIssueCount?: number;
   emptyDescription?: string;
 }
 
@@ -233,6 +234,7 @@ export function DataFieldDataBrowser({
   renderFieldExtra,
   renderFieldMeta,
   headerExtra,
+  definitionIssueCount = 0,
   emptyDescription = '暂无字段数据',
 }: FieldDataBrowserProps) {
   const fields = workbook?.fields || [];
@@ -354,9 +356,9 @@ export function DataFieldDataBrowser({
         />
       </div>}
     </div> : null}
-    {visibleFields.length ? <div className={`data-validation-summary${summary.issueCount || summary.excludedCount ? ' has-issues' : ''}`}>
-      {summary.issueCount || summary.excludedCount ? <ExclamationCircleFilled /> : <CheckCircleFilled />}
-      <span>{fieldSummaryLabel(summary)}</span>
+    {visibleFields.length ? <div className={`data-validation-summary${summary.issueCount || summary.excludedCount || definitionIssueCount ? ' has-issues' : ''}`}>
+      {summary.issueCount || summary.excludedCount || definitionIssueCount ? <ExclamationCircleFilled /> : <CheckCircleFilled />}
+      <span>{fieldSummaryLabel(summary, definitionIssueCount)}</span>
     </div> : null}
     {selectedCell && !fields.some((field) => fieldMatchesSheet(field, selectedCell)
       && normalizeCellAddress(field.address) === selectionAnchor(selectedCell.address))
@@ -496,9 +498,9 @@ function fieldStatusLabel(status?: string) {
   switch ((status || '').toUpperCase()) {
     case 'VALID': return '校验通过';
     case 'STAGED': return '尚未读取';
-    case 'WAITING_CONFIRM': return '待确认提交';
+    case 'WAITING_CONFIRM': return '待核对';
     case 'BLOCKED': return '需修正';
-    default: return '待确认';
+    default: return '待核对';
   }
 }
 
@@ -584,16 +586,18 @@ function summarizeFields(fields: DataFieldValueView[]) {
   }, { total: 0, validCount: 0, issueCount: 0, excludedCount: 0 });
 }
 
-function fieldSummaryLabel(summary: ReturnType<typeof summarizeFields>) {
+function fieldSummaryLabel(summary: ReturnType<typeof summarizeFields>, definitionIssueCount = 0) {
   if (!summary.issueCount && !summary.excludedCount) {
-    return `当前记录 ${summary.total} 个字段全部校验通过`;
+    return definitionIssueCount
+      ? `当前记录 ${summary.total} 个字段值均通过；另有 ${definitionIssueCount} 个新增字段需要确认`
+      : `当前记录 ${summary.total} 个字段全部校验通过`;
   }
   const parts = [
     `${summary.validCount} 个通过`,
     summary.issueCount ? `${summary.issueCount} 个待处理` : '',
     summary.excludedCount ? `${summary.excludedCount} 个已排除` : '',
   ].filter(Boolean);
-  return `当前记录：${parts.join('，')}`;
+  return `当前记录：${parts.join('，')}${definitionIssueCount ? `；另有 ${definitionIssueCount} 个新增字段需要确认` : ''}`;
 }
 
 function customerFieldGroup(field: DataFieldValueView) {

@@ -7,6 +7,51 @@ export function percentageFormat(pattern: string) {
   return numberFormatTokens(pattern).includes('%');
 }
 
+/** Convert a value typed in the workbench as displayed back to the cell's stored value. */
+export function workbookCellInput(value: unknown, pattern: string): unknown {
+  const tokens = numberFormatTokens(pattern).toLowerCase();
+  const text = typeof value === 'string' ? value.trim() : undefined;
+  const numberText = text?.replace(/[％%]\s*$/, '').trim();
+  const numeric = typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : numberText && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(numberText)
+      ? Number(numberText)
+      : undefined;
+  if (percentageFormat(pattern)) return numeric === undefined ? value : numeric / 100;
+  if (text) {
+    const duration = /\[(?:h+|m+|s+)\]/.test(tokens);
+    const clock = /h|s/.test(tokens) && !/[0#]/.test(tokens);
+    const calendar = /y|d/.test(tokens) && !/[0#]/.test(tokens);
+    const temporal = temporalCellInput(text, calendar, clock, duration);
+    if (temporal !== undefined) return temporal;
+  }
+  // Explicit numeric formats should store a number. General/text formats retain
+  // strings such as sample identifiers with leading zeroes.
+  return numeric !== undefined && /[0#?]/.test(tokens) && !tokens.includes('@') ? numeric : value;
+}
+
+function temporalCellInput(text: string, calendar: boolean, clock: boolean, duration: boolean) {
+  if (calendar) {
+    const match = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(text);
+    if (!match) return undefined;
+    const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
+    const hour = Number(match[4] ?? 0), minute = Number(match[5] ?? 0), second = Number(match[6] ?? 0);
+    const timestamp = Date.UTC(year, month - 1, day, hour, minute, second);
+    const verified = new Date(timestamp);
+    if (verified.getUTCFullYear() !== year || verified.getUTCMonth() !== month - 1
+      || verified.getUTCDate() !== day || hour > 23 || minute > 59 || second > 59) return undefined;
+    return (timestamp - Date.UTC(1899, 11, 30)) / 86400000;
+  }
+  if (clock || duration) {
+    const match = /^(\d+):(\d{2})(?::(\d{2}))?$/.exec(text);
+    if (!match) return undefined;
+    const hour = Number(match[1]), minute = Number(match[2]), second = Number(match[3] ?? 0);
+    if ((!duration && hour > 23) || minute > 59 || second > 59) return undefined;
+    return (hour * 3600 + minute * 60 + second) / 86400;
+  }
+  return undefined;
+}
+
 /** Match the sheet's temporal meaning without interpreting a duration as a calendar date. */
 export function workbookCellValue(raw: unknown, type: string, pattern: string): unknown {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return raw;

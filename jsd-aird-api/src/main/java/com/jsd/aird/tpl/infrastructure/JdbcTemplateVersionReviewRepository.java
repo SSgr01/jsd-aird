@@ -40,7 +40,7 @@ public class JdbcTemplateVersionReviewRepository implements TemplateVersionRevie
     }
 
     @Override
-    public Review transition(UUID organizationId, UUID versionId, String expectedStatus, String nextStatus,
+    public Review transition(UUID organizationId, UUID versionId, long expectedVersion, String expectedStatus, String nextStatus,
                              UUID actorId, String comment) {
         ensure(organizationId, versionId);
         var updated = jdbc.update("""
@@ -50,10 +50,11 @@ public class JdbcTemplateVersionReviewRepository implements TemplateVersionRevie
                     reviewed_by = CASE WHEN ? IN ('APPROVED', 'REJECTED') THEN ? ELSE reviewed_by END,
                     reviewed_at = CASE WHEN ? IN ('APPROVED', 'REJECTED') THEN now() ELSE reviewed_at END,
                     review_comment = ?, lock_version = lock_version + 1, updated_at = now()
-                WHERE organization_id = ? AND version_id = ? AND review_status = ?
+                WHERE organization_id = ? AND version_id = ? AND review_status = ? AND lock_version = ?
                 """, nextStatus, nextStatus, actorId, nextStatus, nextStatus, actorId, nextStatus,
-                comment, organizationId, versionId, expectedStatus);
-        if (updated != 1) throw new IllegalStateException("模板审核状态已变化，请刷新后重试");
+                comment, organizationId, versionId, expectedStatus, expectedVersion);
+        if (updated != 1) throw new com.jsd.aird.shared.error.ApiException(
+                com.jsd.aird.shared.error.ApiErrorCode.REVIEW_STATE_CONFLICT, "模板审核状态已变化，请刷新后重试");
         jdbc.update("""
                 INSERT INTO tpl.template_version_review_event
                     (id, version_id, organization_id, from_status, to_status, actor_id, comment)

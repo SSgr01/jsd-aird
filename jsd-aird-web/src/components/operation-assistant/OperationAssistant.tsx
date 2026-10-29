@@ -12,6 +12,8 @@ import {
 } from '@ant-design/icons';
 import { App, Button, Input, Tooltip, theme } from 'antd';
 import {
+  lazy,
+  Suspense,
   useEffect,
   useRef,
   useState,
@@ -22,7 +24,6 @@ import {
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { uiLayers } from '@/app/config/layers';
-import { MarkdownContent } from '@/components/markdown/MarkdownContent';
 import { useAuthStore } from '@/stores/auth-store';
 import {
   bindOperationAssistantIdentity,
@@ -38,6 +39,10 @@ import {
   operationSuggestions,
 } from '@/services/operation-assistant/operation-manual';
 import './operation-assistant.css';
+
+const MarkdownContent = lazy(async () => ({
+  default: (await import('@/components/markdown/MarkdownContent')).MarkdownContent,
+}));
 
 type DragMode = 'launcher' | 'panel';
 type ActiveDrag = {
@@ -353,10 +358,12 @@ export function OperationAssistant() {
                       (item.role === 'USER' ? (
                         <p className="operation-assistant-user-text">{item.content}</p>
                       ) : (
-                        <MarkdownContent
-                          value={operationAnswerText(item.content)}
-                          className="operation-assistant-answer"
-                        />
+                        <Suspense fallback={<p className="operation-assistant-answer">{operationAnswerText(item.content)}</p>}>
+                          <MarkdownContent
+                            value={operationAnswerText(item.content)}
+                            className="operation-assistant-answer"
+                          />
+                        </Suspense>
                       ))}
                     {item.status === 'RUNNING' && (
                       <div className="operation-assistant-progress" role="status">

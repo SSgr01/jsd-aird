@@ -26,6 +26,7 @@ export function resolveBindingSelection(
     const labelRanges = [binding.locator.labelRange, binding.locator.labelAddress]
       .map(stringValue).filter(Boolean);
     const valueRanges = [
+      binding.locator.valueRange,
       binding.locator.logicalInputRange,
       binding.locator.dataRange,
       binding.locator.address,

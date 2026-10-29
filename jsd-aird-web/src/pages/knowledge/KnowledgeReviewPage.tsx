@@ -1,9 +1,11 @@
 import { ArrowLeftOutlined, CheckCircleOutlined, ExclamationCircleOutlined, SaveOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Empty, Input, Modal, Space, Spin, Tag, Typography } from 'antd';
+import { Alert, App, Button, Checkbox, Empty, Input, Modal, Space, Spin, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import { DocumentComparisonViewer, OriginalDocumentViewer, StructuredDocumentEditor, VirtualDataTable, anchorLabel, findNodeByReviewId, sourceNodeMap } from '@/components/knowledge-document';
+import { usePermission } from '@/components/auth/usePermission';
+import { fetchFilePreviewBlob } from '@/services/files';
 import { knowledgeApi, type IssueAction, type KnowledgeReview, type StructuredDocument } from '@/services/knowledge';
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'offline' | 'conflict';
@@ -11,6 +13,7 @@ type SaveState = 'saved' | 'dirty' | 'saving' | 'offline' | 'conflict';
 export function KnowledgeReviewPage() {
   const { documentId, versionId } = useParams(); const [searchParams] = useSearchParams(); const revisionMode = searchParams.get('mode') === 'revision';
   const { message, modal } = App.useApp(); const navigate = useNavigate();
+  const canAuthorizeAi = usePermission('ai.external');
   const [review, setReview] = useState<KnowledgeReview>(); const latestReview = useRef<KnowledgeReview>();
   const [loading, setLoading] = useState(true); const [saveState, setSaveState] = useState<SaveState>('saved');
   const [selectedReviewNodeId, setSelectedReviewNodeId] = useState<string>(); const [selectedSourceNodeKey, setSelectedSourceNodeKey] = useState<string>();
@@ -66,7 +69,7 @@ export function KnowledgeReviewPage() {
   const updateDocument = (document: StructuredDocument) => edit((current) => current.reviewRevision ? { ...current, reviewRevision: { ...current.reviewRevision, confirmedDocument: document } } : current);
   const toggleExcluded = () => { if (!selectedReviewNodeId) return; edit((current) => { if (!current.reviewRevision) return current; const values = new Set(current.reviewRevision.excludedReviewNodeIds); if (values.has(selectedReviewNodeId)) values.delete(selectedReviewNodeId); else values.add(selectedReviewNodeId); return { ...current, reviewRevision: { ...current.reviewRevision, excludedReviewNodeIds: [...values] } }; }); };
   const forceSave = async () => { if (dirty.current) return persist(); return latestReview.current; };
-  const publish = () => { const current = latestReview.current; if (!current) return; modal.confirm({ title: revisionMode ? '保存并应用本次修订？' : `确认并发布“${current.title}”V${current.versionNo}？`, content: '确认后将发布当前校对内容。', okText: revisionMode ? '保存并应用' : '确认并发布', onOk: async () => { const saved = await forceSave(); if (!saved) return; await knowledgeApi.publish(saved); void message.success('已提交发布，请稍候'); navigate(`/knowledge/documents/${saved.documentId}`); } }); };
+  const publish = () => { const current = latestReview.current; if (!current) return; let authorizeAi = canAuthorizeAi; modal.confirm({ title: revisionMode ? '保存并应用本次修订？' : `确认并发布“${current.title}”V${current.versionNo}？`, content: <Space direction="vertical"><Typography.Text>确认后将发布当前校对内容。</Typography.Text>{canAuthorizeAi && <Checkbox defaultChecked onChange={(event) => { authorizeAi = event.target.checked; }}>发布后授权 AI 使用</Checkbox>}</Space>, okText: revisionMode ? '保存并应用' : '确认并发布', onOk: async () => { const saved = await forceSave(); if (!saved) return; await knowledgeApi.publish(saved, authorizeAi); void message.success(authorizeAi ? '已提交发布，完成后将自动授权 AI' : '已提交发布，请稍候'); navigate(`/knowledge/documents/${saved.documentId}`); } }); };
   const reparse = () => {
     const current = latestReview.current; if (!current) return;
     modal.confirm({ title: '重新解析原文件？', content: <Typography.Paragraph type="secondary">系统将使用当前统一解析策略创建新的解析执行和校对草稿，当前发布内容不受影响。</Typography.Paragraph>, okText: '重新解析', onOk: async () => { const saved = await forceSave(); if (!saved) return; await knowledgeApi.reparse(saved); void message.success('已提交重新解析'); await load(); } });
@@ -78,6 +81,7 @@ export function KnowledgeReviewPage() {
 
   const loadOriginal = useCallback(() => {
     const current = latestReview.current; if (!current) return Promise.reject(new Error('文档未加载'));
+    if (/\.doc$/i.test(current.originalName) && current.fileObjectId) return fetchFilePreviewBlob(current.fileObjectId);
     return knowledgeApi.contentBlob(current.documentId, current.versionId);
   }, []);
   const sourceMap = useMemo(() => sourceNodeMap(review?.sourceNodes || []), [review?.sourceNodes]); const selectedSource = sourceMap.get(selectedSourceNodeKey || '');

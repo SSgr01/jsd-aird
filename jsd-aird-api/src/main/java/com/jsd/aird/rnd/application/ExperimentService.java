@@ -124,6 +124,25 @@ public class ExperimentService {
             editModel.put("documentFormat", "excel");
             editModel.putObject("templateDataReview").put("required", true).put("confirmed", false);
         }
+        if(com.jsd.aird.shared.lab.LabWorkbook.supported(templateSnapshot)) {
+            if(ExperimentSourceType.TEMPLATE.name().equals(sourceType)) {
+                var fresh=com.jsd.aird.shared.lab.LabWorkbook.sheet(editModel.path("documentSnapshot"));
+                for(var col:fresh.path("columnData"))if(col.path("custom").path("lab") instanceof ObjectNode meta)meta.remove("sampleKey");
+                for(var row:fresh.path("cellData"))for(var cell:row)if(cell.path("custom").path("lab") instanceof ObjectNode meta)meta.remove("lineId");
+            }
+            var working=com.jsd.aird.shared.lab.LabWorkbook.prepare(json,editModel.path("documentSnapshot"),templateSnapshot,id.toString());
+            var sheet=com.jsd.aird.shared.lab.LabWorkbook.sheet(working);
+            for(var entry:java.util.Map.of("basic.title",title,"basic.owner",ownerName,"basic.date",(command.experimentDate()==null?LocalDate.now():command.experimentDate()).toString()).entrySet()) {
+                var at=com.jsd.aird.shared.lab.LabWorkbook.findField(sheet,entry.getKey());
+                if(at!=null&&com.jsd.aird.shared.lab.LabWorkbook.value(sheet,at[0],at[1]).isBlank())com.jsd.aird.shared.lab.LabWorkbook.cell(sheet,at[0],at[1]).put("v",entry.getValue());
+            }
+            if(command.templateVersionId()!=null && templates!=null) {
+                var structureDefinition=templates.getVersion(actor.organizationId(),command.templateVersionId());
+                com.jsd.aird.shared.excel.WorkbookStructure.seed(json,working,structureDefinition.schema(),structureDefinition.mappings(),id.toString());
+                working=com.jsd.aird.shared.lab.LabWorkbook.prepare(json,working,templateSnapshot,id.toString());
+            }
+            editModel=com.jsd.aird.shared.lab.LabWorkbook.extract(json,working,editModel,id.toString());
+        }
         if (ExperimentSourceType.EXCEL_IMPORT.name().equals(sourceType)) {
             editModel.putObject("importDataReview").put("confirmed", false);
         }
@@ -232,6 +251,17 @@ public class ExperimentService {
         }
 
         var model = editModels.normalize(object(command.editModel(), "editModel"), id);
+        if(com.jsd.aird.shared.lab.LabWorkbook.supported(current.templateSnapshot())) {
+            var working=com.jsd.aird.shared.lab.LabWorkbook.prepare(json,model.path("documentSnapshot"),current.templateSnapshot(),id.toString());
+            if(current.templateVersionId()!=null && templates!=null) {
+                var structureDefinition=templates.getVersion(actor.organizationId(),current.templateVersionId());
+                com.jsd.aird.shared.excel.WorkbookStructure.seed(json,working,structureDefinition.schema(),structureDefinition.mappings(),id.toString());
+                working=com.jsd.aird.shared.lab.LabWorkbook.prepare(json,working,current.templateSnapshot(),id.toString());
+            }
+            model=com.jsd.aird.shared.lab.LabWorkbook.extract(json,working,model,id.toString());
+        }
+        if(com.jsd.aird.shared.excel.WorkbookStructure.instance(model.path("documentSnapshot")).isObject())
+            model=com.jsd.aird.shared.excel.WorkbookStructure.project(json,model.path("documentSnapshot"),model);
         var templateVersionId = command.templateVersionId();
         var templateSnapshotHash = command.templateSnapshotHash();
         var templateSnapshot = object(command.templateSnapshot(), "templateSnapshot");
@@ -246,7 +276,7 @@ public class ExperimentService {
                         : json.createObjectNode().put("required", true).put("confirmed", false);
                 var unchanged = marker.path("confirmed").asBoolean(false)
                         && marker.path("dataHash").asText("")
-                        .equals(dataHash(current.templateVersionId(), model.path("dynamicValues")));
+                        .equals(dataHash(current.templateVersionId(), reviewData(model)));
                 marker.put("confirmed", unchanged);
                 if (unchanged) marker.put("confirmedRevision", revision + 1);
                 else marker.remove("confirmedRevision");
@@ -307,14 +337,16 @@ public class ExperimentService {
                 ? importDataConfirmed(detail)
                 : marker.path("confirmed").asBoolean(false)
                     && marker.path("confirmedRevision").asLong(-1) == detail.summary().revision()
-                    && marker.path("dataHash").asText("").equals(dataHash(detail.templateVersionId(), values));
+                    && marker.path("dataHash").asText("").equals(dataHash(detail.templateVersionId(), reviewData(detail.editModel())));
         return new TemplateDataReview(detail.templateVersionId(), definition.contractHash(), definition.fields(),
-                bindings, values.deepCopy(), confirmed);
+                bindings, values.deepCopy(), confirmed,
+                com.jsd.aird.shared.excel.WorkbookStructure.seed(json,detail.editModel().path("documentSnapshot").deepCopy(),definition.schema(),definition.mappings(),id.toString()));
     }
 
     public Detail confirmTemplateData(UUID id, long revision) {
         var current = detail(id);
         if (current.summary().revision() != revision) throw validation("实验版本已变化，请刷新后确认数据");
+        if(current.editModel().path("templateInstance").path("issues").size()>0)throw validation("配方或字段仍有待确认内容，请修正后确认数据");
         if ("EXCEL_IMPORT".equals(current.summary().sourceType()) || isTemplateImport(current)) {
             var model = (ObjectNode) current.editModel().deepCopy();
             var snapshot = model.path("documentSnapshot");
@@ -356,7 +388,7 @@ public class ExperimentService {
         var model = (ObjectNode) current.editModel().deepCopy();
         model.withObject("templateDataReview").put("required", true).put("confirmed", true)
                 .put("confirmedRevision", revision + 1)
-                .put("dataHash", dataHash(review.templateVersionId(), review.values()));
+                .put("dataHash", dataHash(review.templateVersionId(), reviewData(current.editModel())));
         var summary = current.summary();
         return saveInternal(id, revision, new DraftCommand(summary.experimentNo(), summary.title(),
                 summary.categoryId(), summary.categoryName(), summary.projectId(), summary.stageId(),
@@ -438,6 +470,22 @@ public class ExperimentService {
 
     private String importDataHash(JsonNode snapshot) {
         return canonicalizer.hash(snapshot);
+    }
+
+    private JsonNode reviewData(JsonNode model) {
+        if(!model.path("templateInstance").isObject())return model.path("dynamicValues");
+        var result=json.createObjectNode();
+        for(var key:List.of("dynamicValues","templateInstance","formulaItems","processSteps","testResults"))result.set(key,model.path(key));
+        return result;
+    }
+
+    public JsonNode presentation(UUID id,long revision) {
+        var current=detail(id);
+        if(current.summary().revision()!=revision)throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"实验版本已变化，请刷新后预览");
+        var snapshot=current.editModel().path("documentSnapshot");
+        var projection=com.jsd.aird.shared.lab.LabWorkbook.present(json,snapshot);
+        var result=json.createObjectNode().put("revision",revision);
+        result.set("snapshot",projection.snapshot());result.set("locationMap",projection.locationMap());return result;
     }
 
     private boolean isTemplateImport(Detail detail) {
@@ -528,7 +576,9 @@ public class ExperimentService {
 
     public record TemplateDataReview(UUID templateVersionId, String contractHash,
             List<TemplateDataImportFacade.FieldDefinition> fields,
-            List<TemplateDataImportFacade.ImportBinding> bindings, JsonNode values, boolean confirmed) {}
+            List<TemplateDataImportFacade.ImportBinding> bindings, JsonNode values, boolean confirmed,JsonNode templateInstance) {
+        public TemplateDataReview(UUID templateVersionId,String contractHash,List<TemplateDataImportFacade.FieldDefinition> fields,List<TemplateDataImportFacade.ImportBinding> bindings,JsonNode values,boolean confirmed){this(templateVersionId,contractHash,fields,bindings,values,confirmed,null);}
+    }
 
     public void delete(UUID id, long revision) {
         var actor = ActorContext.required();
@@ -659,7 +709,8 @@ public class ExperimentService {
     }
 
     /** 删除实验分类；分类下的实验会迁移到 replacementCategoryId（为空表示移出分类）。 */
-    public void deleteCategory(UUID id, UUID replacementCategoryId) {
+    @org.springframework.transaction.annotation.Transactional
+    public void deleteCategory(UUID id,long expectedVersion, UUID replacementCategoryId) {
         var actor = ActorContext.required();
         var organizationId = actor.organizationId();
         if (id.equals(replacementCategoryId)) {
@@ -668,7 +719,7 @@ public class ExperimentService {
         var category = repository.categories(organizationId, true).stream()
                 .filter(value -> value.id().equals(id)).findFirst()
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验分类不存在"));
-        if (repository.deleteCategory(organizationId, id, replacementCategoryId) == 0) {
+        if (repository.deleteCategory(organizationId, id, expectedVersion,replacementCategoryId) == 0) {
             throw new ApiException(ApiErrorCode.NOT_FOUND, "实验分类不存在");
         }
         audit(actor, "EXPERIMENT_CATEGORY_DELETED", "EXPERIMENT_CATEGORY", id, category.name());

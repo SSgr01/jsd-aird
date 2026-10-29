@@ -41,6 +41,28 @@ def test_historical_gp_ei_uses_measured_xy_without_model_bindings() -> None:
         assert all(abs(values["temperature"] - row["temperature"]) >= 0.3 for row in same_substrate)
 
 
+def test_noisy_gram_formulas_produce_distinct_plausible_predictions() -> None:
+    rng = np.random.default_rng(89)
+    history = []
+    for _ in range(140):
+        a, b, additive = rng.uniform(110, 360), rng.uniform(35, 165), rng.uniform(3, 27)
+        center = 69 + 28 * a / (a + b + additive) + 0.08 * additive
+        history.append({"a": a, "b": b, "additive": additive, "contact": center + rng.normal(0, 1.2)})
+    result = service().recommend_from_history({
+        "features": [{"code": code, "kind": "NUMERIC", "minimum": low, "maximum": high}
+                     for code, low, high in [("a", 110, 360), ("b", 35, 165), ("additive", 3, 27)]],
+        "target": "contact", "direction": "MAXIMIZE", "rows": history, "candidateCount": 4, "seed": 7,
+    })
+    predictions = []
+    for candidate in result["candidates"]:
+        values = candidate["values"]
+        a, b, additive = values["a"], values["b"], values["additive"]
+        center = 69 + 28 * a / (a + b + additive) + 0.08 * additive
+        assert abs(candidate["predictedValue"] - center) < 2.5
+        predictions.append(candidate["predictedValue"])
+    assert np.ptp(predictions) > 0.05
+
+
 def test_historical_optimization_rejects_insufficient_data_with_actionable_message() -> None:
     try:
         service().recommend_from_history({

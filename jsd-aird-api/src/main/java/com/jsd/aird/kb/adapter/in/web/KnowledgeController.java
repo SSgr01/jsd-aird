@@ -7,10 +7,12 @@ import java.util.UUID;
 
 import com.jsd.aird.kb.application.KnowledgeService;
 import com.jsd.aird.kb.application.KnowledgeUploadTaskService;
+import com.jsd.aird.kb.domain.FileSafetyScanner;
 import com.jsd.aird.platform.web.HttpContentDisposition;
 import com.jsd.aird.kb.application.KnowledgeGovernanceService;
 import com.jsd.aird.kb.api.KnowledgeSearchFacade;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
+import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
@@ -40,13 +42,18 @@ public class KnowledgeController {
     private final KnowledgeService service;
     private final KnowledgeGovernanceService governance;
     private final KnowledgeUploadTaskService uploadTasks;
+    private final FileSafetyScanner fileSafetyScanner;
+    private final OpsAsyncFacade async;
 
     public KnowledgeController(KnowledgeService service, FileStorageFacade storage,
-                               KnowledgeGovernanceService governance, KnowledgeUploadTaskService uploadTasks) {
+                               KnowledgeGovernanceService governance, KnowledgeUploadTaskService uploadTasks,
+                               FileSafetyScanner fileSafetyScanner, OpsAsyncFacade async) {
         this.service = service;
         this.storage = storage;
         this.governance = governance;
         this.uploadTasks = uploadTasks;
+        this.fileSafetyScanner = fileSafetyScanner;
+        this.async = async;
     }
 
     @PostMapping(value = "/documents", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -80,6 +87,15 @@ public class KnowledgeController {
     ) {
         return success(service.list(keyword, status, scope, categoryId, lifecycleStatus, reviewStatus,
                 projectId, page, size));
+    }
+
+    @GetMapping("/upload-capabilities")
+    public ApiResponse<UploadCapabilities> uploadCapabilities() {
+        var actor = com.jsd.aird.shared.security.ActorContext.required();
+        var extensions = fileSafetyScanner.supportedExtensions().stream().sorted()
+                .map(extension -> "." + extension).toList();
+        return success(new UploadCapabilities(fileSafetyScanner.maxFileBytes(), extensions,
+                async.queueCapacity(actor.organizationId())));
     }
 
     @PostMapping("/upload-tasks")
@@ -124,42 +140,42 @@ public class KnowledgeController {
     @PutMapping("/categories/{categoryId}")
     public ApiResponse<com.jsd.aird.kb.application.port.KnowledgeRepository.CategoryRow> renameCategory(
             @PathVariable UUID categoryId, @Valid @RequestBody RenameCategoryRequest request) {
-        return success(service.renameCategory(categoryId, request.name(), request.description()));
+        return success(service.renameCategory(categoryId, request.name(), request.description(),request.revision()));
     }
 
     @DeleteMapping("/categories/{categoryId}")
     public ApiResponse<Void> deleteCategory(@PathVariable UUID categoryId,
-                                            @RequestParam(required = false) UUID replacementCategoryId) {
-        service.deleteCategory(categoryId, replacementCategoryId);
+                                            @RequestParam(required = false) UUID replacementCategoryId,@RequestParam String revision) {
+        service.deleteCategory(categoryId, replacementCategoryId,revision);
         return success(null);
     }
 
     @PutMapping("/documents/{id}/category")
     public ApiResponse<Void> assignCategory(@PathVariable UUID id, @Valid @RequestBody AssignCategoryRequest request) {
-        service.assignCategory(id, request.categoryId());
+        service.assignCategory(id, request.categoryId(), request.revision());
         return success(null);
     }
 
     @PutMapping("/documents/{id}")
     public ApiResponse<KnowledgeService.DocumentView> renameDocument(@PathVariable UUID id,
                                                                        @Valid @RequestBody RenameDocumentRequest request) {
-        return success(service.renameDocument(id, request.title()));
+        return success(service.renameDocument(id, request.title(), request.revision()));
     }
 
     @DeleteMapping("/documents/{id}")
-    public ApiResponse<Void> deleteDocument(@PathVariable UUID id) {
-        service.deleteDocument(id);
+    public ApiResponse<Void> deleteDocument(@PathVariable UUID id,@RequestParam String revision) {
+        service.deleteDocument(id, revision);
         return success(null);
     }
 
     @PutMapping("/documents/{id}/metadata")
     public ApiResponse<KnowledgeService.DocumentView> updateMetadata(@PathVariable UUID id,
             @Valid @RequestBody UpdateMetadataRequest request) {
-        return success(service.updateDocument(id, new KnowledgeService.UpdateDocumentCommand(request.title(),
+        return success(service.updateDocument(id, new KnowledgeService.UpdateDocumentCommand(request.revision(), request.title(),
                 request.libraryScope(), request.categoryId(), request.tags(), request.sourceInfo(), request.projectRelations())));
     }
 
-    public record UpdateMetadataRequest(@NotBlank @Size(max = 260) String title,
+    public record UpdateMetadataRequest(@NotBlank String revision, @NotBlank @Size(max = 260) String title,
             @NotBlank @jakarta.validation.constraints.Pattern(regexp = "INTERNAL|EXTERNAL") String libraryScope,
             @NotNull UUID categoryId, @Size(max = 50) List<@Size(max = 100) String> tags,
             com.fasterxml.jackson.databind.JsonNode sourceInfo,
@@ -197,9 +213,9 @@ public class KnowledgeController {
     @PostMapping("/documents/{id}/ai-grant")
     public ApiResponse<KnowledgeService.DocumentView> aiGrant(
             @PathVariable UUID id,
-            @RequestBody GrantRequest request
+            @Valid @RequestBody GrantRequest request
     ) {
-        return success(service.updateAiGrant(id, new KnowledgeService.GrantCommand(request.action(), request.reason())));
+        return success(service.updateAiGrant(id, new KnowledgeService.GrantCommand(request.revision(),request.action(), request.reason())));
     }
 
     @GetMapping("/documents/{id}/content")
@@ -270,14 +286,16 @@ public class KnowledgeController {
         return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown());
     }
 
-    public record GrantRequest(@Size(max = 20) String action, @Size(max = 500) String reason) { }
+    public record GrantRequest(@NotBlank String revision,@Size(max = 20) String action, @Size(max = 500) String reason) { }
+    public record UploadCapabilities(long maxFileBytes, List<String> supportedExtensions,
+                                     OpsAsyncFacade.QueueCapacityView queue) { }
     public record SearchRequest(@Size(min = 1, max = 1000) String query, int limit) {
         public int limit() { return limit <= 0 ? 20 : Math.min(limit, 50); }
     }
     public record CategoryRequest(@NotBlank String name, @NotBlank String scope, @Size(max = 240) String description) { }
-    public record RenameCategoryRequest(@NotBlank String name, @Size(max = 240) String description) { }
-    public record AssignCategoryRequest(@NotNull UUID categoryId) { }
-    public record RenameDocumentRequest(@NotBlank @Size(max = 260) String title) { }
+    public record RenameCategoryRequest(@NotBlank String revision,@NotBlank String name, @Size(max = 240) String description) { }
+    public record AssignCategoryRequest(@NotBlank String revision,@NotNull UUID categoryId) { }
+    public record RenameDocumentRequest(@NotBlank String revision,@NotBlank @Size(max = 260) String title) { }
     public record DocumentExportRequest(@NotNull @Size(min = 1, max = 200) List<@NotNull UUID> documentIds) { }
     public record UploadTaskCreateRequest(@NotBlank @Size(max = 500) String fileName,
                                          @jakarta.validation.constraints.PositiveOrZero long size,

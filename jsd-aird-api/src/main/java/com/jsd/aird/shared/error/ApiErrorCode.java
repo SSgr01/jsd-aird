@@ -2,6 +2,11 @@ package com.jsd.aird.shared.error;
 
 public enum ApiErrorCode {
 
+    SERVER_BUSY("SERVER_BUSY", "当前处理资源繁忙，请稍后再操作", 503),
+    DATABASE_BUSY("DATABASE_BUSY", "数据库资源繁忙，请稍后再操作", 503),
+    OPERATION_TIMEOUT("OPERATION_TIMEOUT", "操作超时，当前修改未自动重试", 504),
+    PAYLOAD_TOO_LARGE("PAYLOAD_TOO_LARGE", "请求或文件超过允许大小", 413),
+
     VALIDATION_ERROR("SYS_VALIDATION_ERROR", "请求参数校验失败", 422),
     BAD_REQUEST("SYS_BAD_REQUEST", "请求内容无法解析", 400),
     NOT_FOUND("SYS_NOT_FOUND", "资源不存在", 404),

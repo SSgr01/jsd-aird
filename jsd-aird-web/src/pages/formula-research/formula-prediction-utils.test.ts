@@ -9,8 +9,8 @@ describe('formula input and result consistency', () => {
   })
   it('distinguishes missing proportion inputs, incomplete formulas and a ratio selected as Y', () => {
     const base = formulaTargets[0]!
-    expect(formulaUnavailable({ ...base, unavailableReasons: ['MODEL_NOT_FORMULA_ENABLED'] })).toBe('训练时未选择材料比例作为 X，请加入比例列后训练')
-    expect(formulaUnavailable({ ...base, unavailableReasons: ['MODEL_FORMULA_INPUTS_INCOMPLETE'] })).toContain('材料比例不完整')
+    expect(formulaUnavailable({ ...base, unavailableReasons: ['MODEL_NOT_FORMULA_ENABLED'] })).toBe('训练时未选择材料用量作为 X，请加入用量列后训练')
+    expect(formulaUnavailable({ ...base, unavailableReasons: ['MODEL_FORMULA_INPUTS_INCOMPLETE'] })).toContain('材料用量不完整')
     expect(formulaUnavailable({ ...base, unavailableReasons: ['FORMULA_TARGET_IS_RATIO', 'MODEL_FORMULA_INPUTS_INCOMPLETE'] })).toContain('以性能为 Y')
   })
 
@@ -39,14 +39,14 @@ describe('formula input and result consistency', () => {
     expect(restored.goals['dry-gloss']?.value).toEqual({ target: 80, tolerance: 2 })
     expect(restored.materials.resin).toEqual({ mode: 'VARIABLE', minimum: 60, maximum: 80 })
   })
-  it('reports the numeric shortfall or excess instead of an unexplained constraint conflict', () => {
+  it('accepts gram ranges without a 100 percent constraint', () => {
     const context = formulaContext(['dry-gloss']), form = syncFormulaForm({ ...emptyFormulaForm(), targets: ['dry-gloss'] }, context)
-    form.materials.resin = { mode: 'FIXED', ratio: 80 }; form.materials.additive = { mode: 'FIXED', ratio: 30 }
-    expect(formulaSpaceError(form, context)).toContain('固定比例合计 110%，超出 10%')
-    form.materials.resin = { mode: 'FIXED', ratio: 70 }; form.materials.additive = { mode: 'VARIABLE', minimum: 40, maximum: 50 }
-    expect(formulaSpaceError(form, context)).toContain('比例下限合计 110%，超出 10%')
-    form.materials.additive = { mode: 'VARIABLE', minimum: 10, maximum: 20 }
-    expect(formulaSpaceError(form, context)).toContain('比例上限合计 90%，还差 10%')
+    form.materials.resin = { mode: 'FIXED', ratio: 180 }; form.materials.additive = { mode: 'VARIABLE', minimum: 40, maximum: 80 }
+    expect(formulaSpaceError(form, context)).toBe('')
+    const request = buildFormulaRequest(form, context)
+    expect(request.formulaBasis).toBe('ABSOLUTE_MASS')
+    expect(request.baselineFormula.components.map(item => item.unit)).toEqual(['g', 'g'])
+    expect(request.targetTotal).toBe(240)
   })
   it('evaluates a target class by its probability and ordinal goals by the correct cumulative probability', () => {
     const binary = { ...formulaTargets[0]!, valueType: 'BINARY' as const, classes: ['未干', '表干'] }

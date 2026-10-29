@@ -1,0 +1,22 @@
+html,body,#root{margin:0;min-height:100%;min-width:320px}
+.startup-skeleton{min-height:100dvh;background:#f7f9fc;color:#64748b;font:14px/1.6 system-ui,sans-serif;box-sizing:border-box}
+.startup-skeleton i{display:block;background:#e8edf4;border-radius:6px;height:16px;width:65%;margin:18px 0}
+.startup-sidebar{position:fixed;inset:0 auto 0 0;width:256px;padding:20px 24px;background:#fff;border-right:1px solid #e6ebf2;box-sizing:border-box}
+.startup-sidebar i:first-child{height:26px;margin-bottom:40px;width:90%}
+.startup-header{height:64px;margin-left:256px;padding:5px 32px;background:#fbfcfe;border-bottom:1px solid #e6ebf2;box-sizing:border-box}
+.startup-header i{width:240px}
+.startup-content{margin-left:256px;padding:24px 32px;box-sizing:border-box}
+.startup-content>i{height:30px;width:180px}
+.startup-panel{margin-top:24px;min-height:340px;border:1px solid #e6ebf2;border-radius:12px;padding:24px;background:#fff}
+.startup-panel i{width:100%;margin-bottom:28px}.startup-panel i:last-child{width:55%}
+.startup-login .startup-sidebar,html[data-startup="login"] #root>.startup-skeleton .startup-sidebar{display:none}
+.startup-login .startup-header,html[data-startup="login"] #root>.startup-skeleton .startup-header{display:none}
+.startup-login .startup-content,html[data-startup="login"] #root>.startup-skeleton .startup-content{width:min(420px,100%);margin:0 auto;padding:14vh 20px 24px}
+.startup-login .startup-panel,html[data-startup="login"] #root>.startup-skeleton .startup-panel{min-height:320px}
+.content-loading{min-height:240px;padding:24px}.content-loading i{display:block;background:#e8edf4;height:16px;margin-top:24px;border-radius:6px;width:80%}
+.query-feedback{padding:8px 0;font-size:13px;color:#64748b}.query-feedback[role="alert"]{color:#ad4e00}
+.query-feedback button,.content-error button,.startup-skeleton button{margin-left:12px;color:#1677ff;background:transparent;border:0;cursor:pointer;font:inherit;text-decoration:underline}
+.content-error{padding:40px 24px;min-height:240px;background:#fff;border-radius:12px}
+.univer-editor-host[aria-busy="true"]::after{content:attr(data-loading-label);position:absolute;inset:0;display:grid;place-content:center;background:#f7f9fc;z-index:4;color:#64748b;font-size:14px;opacity:0;animation:show-workspace-loading 1ms 200ms forwards}
+@keyframes show-workspace-loading{to{opacity:1}}
+@media(max-width:767px){.startup-sidebar{display:none}.startup-header,.startup-content{margin-left:0}.startup-content{padding:20px}}

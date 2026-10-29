@@ -6,6 +6,7 @@ import type { FormulaCandidate, FormulaMaterial } from '@/services/ai-rnd/formul
 
 export function FormulaCandidateTable({ completed, stale = false }: { completed: FormulaCompleted; stale?: boolean }) {
   const { run, context, form } = completed
+  const formulaUnit = run.frozenEvidence?.formulaBasis === 'MASS_PERCENT' ? '%' : 'g'
   const materials = new Map<string, FormulaMaterial>(context.materialIntersection.map(material => [material.materialId, material]))
   run.candidates.forEach(candidate => candidate.formula.components?.forEach(component => { if (!materials.has(component.materialId)) materials.set(component.materialId, component) }))
   const labels = targetLabels(context.selected, false)
@@ -15,7 +16,7 @@ export function FormulaCandidateTable({ completed, stale = false }: { completed:
   const hasNotes = !sharedNote && notes.some(Boolean)
   const columns: ColumnsType<FormulaCandidate> = [
     { title: '方案', width: 75, fixed: 'left', render: (_, candidate) => <strong>方案 {candidate.candidateNo}</strong> },
-    ...Array.from(materials.values()).map((material, index) => ({ title: `${formulaMaterialName(material, index)}（%）`, width: 120, render: (_: unknown, candidate: FormulaCandidate) => {
+    ...Array.from(materials.values()).map((material, index) => ({ title: `${formulaMaterialName(material, index)}（${formulaUnit}）`, width: 120, render: (_: unknown, candidate: FormulaCandidate) => {
       const component = candidate.formula.components?.find(item => item.materialId === material.materialId)
       return component?.ratio == null ? '未记录' : formatPredictionNumber(component.ratio)
     } })),

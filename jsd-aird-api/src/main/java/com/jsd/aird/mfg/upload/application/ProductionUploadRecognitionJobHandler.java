@@ -27,8 +27,18 @@ public class ProductionUploadRecognitionJobHandler implements AsyncJobHandler {
                 payload.path("sourceType").asText("XLSX"), templateVersionId);
     }
 
+    @Override public JsonNode handle(JsonNode payload,ExecutionContext context) {
+        return ProductionRecognitionScope.run(context,false,()->handle(payload));
+    }
+    @Override public void handleTerminalFailure(JsonNode payload,Exception error,ExecutionContext context) {
+        try { ProductionRecognitionScope.run(context,true,()->{handleTerminalFailure(payload,error);return null;}); }
+        catch(com.jsd.aird.shared.error.ApiException stale) {
+            if(stale.errorCode()!=com.jsd.aird.shared.error.ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT)throw stale;
+        }
+    }
+
     @Override public boolean isRetryable(Exception exception) {
-        return !(exception instanceof IllegalArgumentException);
+        return !(exception instanceof IllegalArgumentException) && !(exception instanceof com.jsd.aird.shared.error.ApiException api && api.errorCode()==com.jsd.aird.shared.error.ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
     }
 
     @Override public void handleTerminalFailure(JsonNode payload, Exception exception) {

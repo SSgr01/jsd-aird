@@ -1,16 +1,49 @@
-import { createUniver, LocaleType, mergeLocales, type FUniver } from '@univerjs/presets';
-import { UniverSheetsCorePreset } from '@univerjs/preset-sheets-core';
+import { markPerformance } from '@/services/performance/metrics';
+import { editorReady } from './workspace-loading';
+import {
+  createUniver,
+  ICommandService,
+  IUndoRedoService,
+  CommandType,
+  CanceledError,
+  Direction,
+  LocaleType,
+  mergeLocales,
+  type FUniver,
+} from '@univerjs/presets';
+import { UniverSheetsCorePreset, IRenderManagerService, ISheetClipboardService, SHEET_VIEWPORT_KEY, ScrollCommand, ScrollToRangeOperation, unmount } from '@univerjs/preset-sheets-core';
 import UniverPresetSheetsCoreZhCN from '@univerjs/preset-sheets-core/locales/zh-CN';
 import { UniverSheetsDrawingPreset } from '@univerjs/preset-sheets-drawing';
 import UniverPresetSheetsDrawingZhCN from '@univerjs/preset-sheets-drawing/locales/zh-CN';
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { App } from 'antd';
 
 import '@univerjs/preset-sheets-core/lib/index.css';
 import '@univerjs/preset-sheets-drawing/lib/index.css';
 
-import { isCellMutationCommand, isNewFieldLabelChange, isSingleCellAddress } from './live-field-discovery';
-import { locatorValueRange } from './locator';
+import {
+  isCellMutationCommand,
+  isNewFieldLabelChange,
+  isSingleCellAddress,
+  mutationCells,
+} from './live-field-discovery';
+import { locatorLabelRange, locatorValueRange } from './locator';
+import { focusScrollDelta, sourceFocusBinding } from './source-focus';
 import { operationFromUniverCommand } from './structure-migration';
+import { sheetsFeatureLocale, sheetsFeaturePresets } from './sheets-features';
+import { isWorkbookContentCommand } from './office-content';
+import { EditorChanges, isPersistentMutation } from './editor-changes';
+import { copyWorkbookCells, readWorkbookInstance, discoverWorkbookField, renameWorkbookFieldAt, recordUnboundCell, migrateWorkbookInstance, structureCopies, retargetAggregateFormula, workbookAddress, type WorkbookTemplateInstance, type WorkbookCell } from './workbook-instance';
+import { generateUUID } from '@/utils/uuid';
+import { templateLocalFieldCode } from './field-model';
+import { WorkbookUndoBatch } from './undo-batch';
+import { workbookOperationBlock, isGuardedWorkbookOperation, copyableSheetMetadata } from './workbook-operation-guard';
+import { writesReadOnlyValue } from './read-only-values';
+import { sectionMergeExtensions, migratedWorkbookMerges } from './section-merges';
+import { templatePasteStyleHook } from './paste-styles';
+import { fieldNumberFormatEdits, fieldNumberFormat } from './field-number-format';
+import { workbookCellInput } from '@/features/data-workbench/cell-format';
+import { instanceSheets, workbookWithExplicitRowHeights } from './workbook-instance';
 import type {
   EditorHandle,
   EditorCellChange,
@@ -33,7 +66,10 @@ interface Props {
   onUnboundCellChange?: (selection: EditorSelection, value: unknown) => void;
   onCellChange?: (change: EditorCellChange) => void;
   onStructureChange?: (operation: WorkbookStructureOperation) => void;
+  instance?: WorkbookTemplateInstance;
+  onInstanceChange?: (instance: WorkbookTemplateInstance) => void;
   onReady?: () => void;
+  fieldCreationOrigin?: 'TEMPLATE_LOCAL' | 'INSTANCE_LOCAL';
 }
 
 export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function UniverSheetsEditor(
@@ -50,13 +86,21 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     onUnboundCellChange,
     onCellChange,
     onStructureChange,
+    onInstanceChange,
     onReady,
+    instance,
+    fieldCreationOrigin = 'INSTANCE_LOCAL',
   },
   ref,
 ) {
+  const { message } = App.useApp();
+  const messageRef = useRef(message); messageRef.current = message;
   const containerRef = useRef<HTMLDivElement>(null);
+  const [initializationError, setInitializationError] = useState<Error>();
   const univerRef = useRef<ReturnType<typeof createUniver>['univer']>();
   const apiRef = useRef<FUniver>();
+  const changesRef = useRef<EditorChanges>();
+  const contentRevisionRef = useRef(0);
   const sourceSnapshotRef = useRef(snapshot);
   const bindingsRef = useRef(bindings);
   const callbacksRef = useRef({
@@ -67,12 +111,21 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     onUnboundCellChange,
     onCellChange,
     onStructureChange,
+    onInstanceChange,
     onReady,
   });
+  const instanceRef = useRef(instance);
+  const incomingInstanceSignature = useRef('');
+  instanceRef.current = instance;
   const suppressUnboundRef = useRef(false);
+  const applyingInstanceRef = useRef(false);
+  const undoBatchRef = useRef(new WorkbookUndoBatch());
+  const creationOriginRef = useRef(fieldCreationOrigin);
+  creationOriginRef.current = fieldCreationOrigin;
   const editableRef = useRef(editable);
   const highlightRef = useRef<Array<{ dispose(): void }>>([]);
   const highlightTimersRef = useRef<number[]>([]);
+  const highlightedCellRef = useRef<string>();
   bindingsRef.current = bindings;
   sourceSnapshotRef.current = snapshot;
   callbacksRef.current = {
@@ -83,37 +136,136 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     onUnboundCellChange,
     onCellChange,
     onStructureChange,
+    onInstanceChange,
     onReady,
   };
   editableRef.current = editable;
 
+  // Univer 1.2's sheet/column metadata setters bypass undo. Route them through
+  // a mutation so identities and temporary definitions share the structural undo batch.
+  const writeInstanceMetadata = (sheetId: string, value: Record<string, unknown>, column?: number) => {
+    const api = apiRef.current,
+      workbook = api?.getActiveWorkbook();
+    const injector = univerRef.current?.__getInjector();
+    if (!api || !workbook || !injector) return;
+    const commands = injector.get(ICommandService),
+      id = 'jsd-workbook.mutation.set-metadata';
+    if (!commands.hasCommand(id))
+      commands.registerCommand({
+        id,
+        type: CommandType.MUTATION,
+        handler: (_accessor, raw) => {
+          const params = raw as {
+            sheetId: string;
+            column?: number;
+            value: Record<string, unknown>;
+          };
+          const target = api.getActiveWorkbook()?.getSheetBySheetId(params.sheetId);
+          if (!target) return false;
+          if (params.column === undefined) target.setCustomMetadata(params.value);
+          else target.setColumnCustomMetadata(params.column, params.value);
+          return true;
+        },
+      });
+    const sheet = workbook.getSheetBySheetId(sheetId);
+    if (!sheet) return;
+    const before =
+      column === undefined ? sheet.getCustomMetadata() : sheet.getColumnCustomMetadata(column);
+    const redo = {
+      id,
+      params: { unitId: workbook.getId(), sheetId, column, value: structuredClone(value) },
+    };
+    const undo = {
+      id,
+      params: { unitId: workbook.getId(), sheetId, column, value: structuredClone(before ?? {}) },
+    };
+    commands.syncExecuteCommand(id, redo.params);
+    injector
+      .get(IUndoRedoService)
+      .pushUndoRedo({ unitID: workbook.getId(), undoMutations: [undo], redoMutations: [redo] });
+  };
+
+  const beginStructureBatch = () => {
+    const service = univerRef.current?.__getInjector().get(IUndoRedoService);
+    const workbook = apiRef.current?.getActiveWorkbook();
+    return undoBatchRef.current.begin(() => workbook && service ? service.beginUndoRedoGroup(workbook.getId(), generateUUID(), 'append') : undefined);
+  };
+  const applyInstance = (next: WorkbookTemplateInstance, notify: boolean, writeLabels = true) => {
+    const workbook = apiRef.current?.getActiveWorkbook();
+    const sheet = workbook?.getSheets()[0];
+    if (!sheet) return;
+    const batch = beginStructureBatch();
+    const wasApplying = applyingInstanceRef.current;
+    applyingInstanceRef.current = true;
+    try {
+      const previous = readWorkbookInstance(workbook.save() as unknown as Record<string, unknown>);
+      if (previous) for (const edit of fieldNumberFormatEdits(previous.model, next.model, next.mapping)) {
+        const range = resolveRange(apiRef.current, edit.binding);
+        if (!range) continue;
+        if (edit.initialize) range.setNumberFormat(fieldNumberFormat(edit.field, true, ''));
+        else {
+          const formats = range.getNumberFormats();
+          const updated = formats.map(row => row.map(pattern => fieldNumberFormat(edit.field, false, pattern, edit.typeChanged)));
+          if (JSON.stringify(formats) !== JSON.stringify(updated)) range.setNumberFormats(updated);
+        }
+        if (edit.field.valueType === 'datetime' && (edit.initialize || edit.typeChanged)) {
+          range.setWrap(true);
+          const targetSheet = apiRef.current?.getActiveWorkbook()?.getSheetBySheetId(String(edit.binding.locator.sheetId));
+          const bounds = parseA1Range(locatorValueRange(edit.binding.locator));
+          if (targetSheet && bounds) for (let row = bounds.startRow; row <= bounds.endRow; row++)
+            if (targetSheet.getRowHeight(row - 1) < 36) targetSheet.setRowHeight(row - 1, 36);
+          if (targetSheet && bounds) for (let column = bounds.startColumn; column <= bounds.endColumn; column++)
+            if (targetSheet.getColumnWidth(column - 1) < 170) targetSheet.setColumnWidth(column - 1, 170);
+        }
+      }
+      for (const field of next.model.fields) {
+        if (field.displayRole === 'REGION') continue;
+        const old = previous?.model.fields.find(f => f.id === field.id);
+        const binding = next.mapping.find(b => b.bindingId === field.bindingId);
+        const label = binding && resolveLabelWriteRange(apiRef.current, binding);
+        if (writeLabels && field.labelStatus !== 'UNRESOLVED' && label && ((old && old.name !== field.name) || (!label.getValue() && !['新字段','新明细字段'].includes(field.name)))) label.setValue(field.name);
+      }
+      writeInstanceMetadata(sheet.getSheetId(), { ...sheet.getCustomMetadata(), templateInstance: next });
+      bindingsRef.current = next.mapping;
+      if (notify) {
+        callbacksRef.current.onInstanceChange?.(next);
+        callbacksRef.current.onDirty();
+      }
+    } finally { applyingInstanceRef.current = wasApplying; batch?.dispose(); }
+  };
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    markPerformance('editor-init-start');
     const host = document.createElement('div');
     host.className = 'univer-editor-host';
+    host.setAttribute('aria-busy', 'true');
+    host.setAttribute('data-loading-label', '初始化内容…');
     container.replaceChildren(host);
     let cancelled = false;
     let animationFrame = 0;
     let commandSubscription: { dispose(): void } | undefined;
-    let globalCommandSubscription: { dispose(): void } | undefined;
+    let beforeCommandSubscription: { dispose(): void } | undefined;
     let selectionSubscription: { dispose(): void } | undefined;
+    let clipboardSubscription: { dispose(): void } | undefined;
     let ownedUniver: ReturnType<typeof createUniver>['univer'] | undefined;
     let ownedApi: FUniver | undefined;
     const labelValues = new Map<string, unknown>();
     const bindingValues = new Map<string, unknown>();
-    let pendingSynchronization = 0;
+    const pendingCellValues = new Map<string, { selection: EditorSelection; value: unknown }>();
     let latestSelection: EditorSelection | undefined;
     let latestSelectionValue: unknown;
+    let latestSelectionFormula = '';
     let hasLatestSelectionValue = false;
-    let recentCommandKey = '';
-    let recentCommandAt = 0;
     let recentUnboundKey = '';
     let recentUnboundAt = 0;
     let cellChangeEventsArmed = false;
-    let cellChangeArmTimer = 0;
+    let fieldEditGroup: { dispose(): void } | undefined;
+    let fieldEditCommand: object | undefined;
+    let structureOwner: object | undefined;
+    let sheetScope: { command: object; ids: Set<string>; instance?: WorkbookTemplateInstance; group?: { dispose(): void } } | undefined;
 
-    const initialize = () => {
+    const initializeRuntime = () => {
       if (cancelled) return;
       const { width, height } = container.getBoundingClientRect();
       if (width < 320 || height < 240) {
@@ -124,14 +276,16 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         locale: LocaleType.ZH_CN,
         locales: {
           [LocaleType.ZH_CN]: mergeLocales(
-            UniverPresetSheetsCoreZhCN,
+            UniverPresetSheetsCoreZhCN as Record<string, unknown>,
             UniverPresetSheetsDrawingZhCN,
+            sheetsFeatureLocale,
           ),
         },
         presets: [
           UniverSheetsCorePreset({
             container: host,
-            ribbonType: 'collapsed',
+            ribbonType: editableRef.current ? 'classic' : 'collapsed',
+            toolbar: editableRef.current,
             footer: { sheetBar: true, statisticBar: true },
             sheets: {
               // Imported OCR/legacy snapshots can legitimately contain numeric-looking
@@ -145,14 +299,60 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
           }),
           // Required for OCR workbooks: the original source image is stored
           // as a native SHEET_DRAWING_PLUGIN resource on the OCR原文 sheet.
-          UniverSheetsDrawingPreset(),
+          UniverSheetsDrawingPreset({ allowImageSize: 5 * 1024 * 1024 }),
+          ...sheetsFeaturePresets(),
         ],
       });
       ownedUniver = univer;
       ownedApi = univerAPI;
       univerRef.current = univer;
       apiRef.current = univerAPI;
-      const workbook = univerAPI.createWorkbook(snapshot);
+      const workbook = univerAPI.createWorkbook(workbookWithExplicitRowHeights(snapshot));
+      const structureOperationFor = (command: { id: string; params?: object }) => operationFromUniverCommand(command.id === 'sheet.command.set-worksheet-name'
+        ? { ...command, params: { ...command.params, subUnitId: (command.params as { subUnitId?: string })?.subUnitId ?? workbook.getActiveSheet()?.getSheetId() } } : command);
+      clipboardSubscription = univer.__getInjector().get(ISheetClipboardService).addClipboardHook(templatePasteStyleHook(
+        (sheetId, row, column) => workbook.getSheetBySheetId(sheetId)?.getSheet().getCellStyle(row, column),
+      ));
+      const startingInstance = readWorkbookInstance(snapshot) ?? instanceRef.current;
+      incomingInstanceSignature.current = instanceRef.current ? JSON.stringify([instanceRef.current.model, instanceRef.current.mapping, instanceRef.current.execution]) : '';
+      const metadataSheet = workbook.getSheets()[0];
+      if (startingInstance && metadataSheet) metadataSheet.setCustomMetadata({ ...metadataSheet.getCustomMetadata(), templateInstance: startingInstance });
+      let structureBefore: WorkbookTemplateInstance | undefined;
+      let sectionMerges: ReturnType<typeof sectionMergeExtensions> = [];
+      let expectedMerges: ReturnType<typeof migratedWorkbookMerges> = [];
+      let structureGroup: { dispose(): void } | undefined;
+      const mergeMutationId = 'jsd-workbook.mutation.restore-merges';
+      const mergeCommands = univer.__getInjector().get(ICommandService);
+      mergeCommands.registerCommand({ id: mergeMutationId, type: CommandType.MUTATION, handler: (_accessor, raw) => {
+        const params = raw as { sheetId: string; ranges: ReturnType<typeof migratedWorkbookMerges> };
+        const sheet = workbook.getSheetBySheetId(params.sheetId);
+        if (!sheet) return false;
+        const target = { unitId: workbook.getId(), subUnitId: params.sheetId };
+        const existing = structuredClone(sheet.getSheet().getMergeData());
+        if (existing.length) mergeCommands.syncExecuteCommand('sheet.mutation.remove-worksheet-merge', { ...target, ranges: existing });
+        if (params.ranges.length) mergeCommands.syncExecuteCommand('sheet.mutation.add-worksheet-merge', { ...target, ranges: structuredClone(params.ranges) });
+        return true;
+      } });
+      const mergeCheckpoint = (sheetId: string, ranges: ReturnType<typeof migratedWorkbookMerges>, phase: 'before' | 'after') => {
+        const mutation = { id: mergeMutationId, params: { unitId: workbook.getId(), sheetId, ranges: structuredClone(ranges) } };
+        univer.__getInjector().get(IUndoRedoService).pushUndoRedo({ unitID: workbook.getId(), undoMutations: phase === 'before' ? [mutation] : [], redoMutations: phase === 'after' ? [mutation] : [] });
+      };
+      const publishInstance = () => {
+        const current = readWorkbookInstance(workbook.save() as unknown as Record<string, unknown>);
+        if (current) { bindingsRef.current = current.mapping; callbacksRef.current.onInstanceChange?.(current);
+          labelValues.clear(); bindingValues.clear();
+          for (const binding of current.mapping) { labelValues.set(labelCacheKey(binding), readLabelCell(univerAPI, binding)); bindingValues.set(valueCacheKey(binding), readCell(univerAPI, binding)); }
+        }
+      };
+
+      contentRevisionRef.current = 0;
+      const changes = new EditorChanges(
+        () => callbacksRef.current.onDirty(),
+        () => {
+          contentRevisionRef.current += 1;
+        },
+      );
+      changesRef.current = changes;
       workbook.setEditable(editableRef.current);
       // In preview/history mode the surrounding page provides the read-only
       // hint. Suppress the generic Univer permission modal so a click simply
@@ -168,6 +368,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         };
         try {
           latestSelectionValue = initialRange.getValue();
+          latestSelectionFormula = initialRange.getFormula();
           hasLatestSelectionValue = true;
         } catch {
           latestSelectionValue = undefined;
@@ -181,10 +382,10 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
           if (!cancelled) {
             // createWorkbook emits value-mutation commands while restoring the snapshot. They are not user
             // edits and must never trigger field discovery or data correction callbacks.
+            editorReady();
+            host.removeAttribute('aria-busy');
             callbacksRef.current.onReady?.();
-            cellChangeArmTimer = window.setTimeout(() => {
-              if (!cancelled) cellChangeEventsArmed = true;
-            }, 650);
+            cellChangeEventsArmed = true;
           }
         });
       });
@@ -192,141 +393,332 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         labelValues.set(labelCacheKey(binding), readLabelCell(univerAPI, binding));
         bindingValues.set(valueCacheKey(binding), readCell(univerAPI, binding));
       }
-      const emitUnboundCellChange = (selection: EditorSelection, value: unknown, previousValue: unknown) => {
+      const emitUnboundCellChange = (
+        selection: EditorSelection,
+        value: unknown,
+        previousValue: unknown,
+      ) => {
         if (!cellChangeEventsArmed) return;
         if (!isSingleCellAddress(selection.address)) return;
-        // Live discovery is only for a brand-new label typed into an empty
-        // cell. Clicking a cell or editing an existing template label must
-        // never create another field.
+        if (applyingInstanceRef.current || suppressUnboundRef.current || sameValue(value, previousValue)) return;
+        const live = workbook.save() as unknown as Record<string, unknown>;
+        const current = readWorkbookInstance(live);
+        const renamed = current && renameWorkbookFieldAt(current, selection, value);
+        if (renamed?.matched) { if (renamed.instance) applyInstance(renamed.instance, true, false); return; }
         if (!isNewFieldLabelChange(previousValue, value)) return;
+        const at = parseA1Range(selection.address);
+        if (at && instanceSheets(live).find(sheet => sheet.id === selection.sheetId)?.cellData?.[String(at.startRow - 1)]?.[String(at.startColumn - 1)]?.f) return;
         const key = `${selection.sheetId}|${selection.address}|${stableValueKey(value)}`;
         const now = Date.now();
         if (key === recentUnboundKey && now - recentUnboundAt < 120) return;
         recentUnboundKey = key;
         recentUnboundAt = now;
-        callbacksRef.current.onUnboundCellChange?.(selection, value);
+        const discovered = current && discoverWorkbookField(current, selection, value, live);
+        if (discovered && creationOriginRef.current === 'TEMPLATE_LOCAL') {
+          for (const field of discovered.model.fields) if (!current?.model.fields.some(old => old.id === field.id)) {
+            field.fieldOrigin = 'TEMPLATE_LOCAL'; field.fieldCode = templateLocalFieldCode(current?.mapping[0]?.bindingId ?? 'template', field);
+            for (const binding of discovered.mapping) if (binding.bindingId === field.bindingId) binding.fieldCode = field.fieldCode;
+          }
+        }
+        if (discovered) {
+          applyInstance(discovered, true);
+        } else callbacksRef.current.onUnboundCellChange?.(selection, value);
       };
-      const emitCellChange = (selection: EditorSelection, value: unknown, previousValue: unknown) => {
+      const emitCellChange = (
+        selection: EditorSelection,
+        value: unknown,
+        previousValue: unknown,
+      ) => {
         if (!cellChangeEventsArmed) return;
         if (!isSingleCellAddress(selection.address) || sameValue(value, previousValue)) return;
-        callbacksRef.current.onCellChange?.({ ...selection, value, previousValue });
+        const live = workbook.save() as unknown as Record<string, unknown>;
+        const current=readWorkbookInstance(live);
+        const checked=current&&recordUnboundCell(current,selection,value,live);
+        if(checked){const first=workbook.getSheets()[0];if(first)writeInstanceMetadata(first.getSheetId(),{...first.getCustomMetadata(),templateInstance:checked});callbacksRef.current.onInstanceChange?.(checked);}
+        let numberFormat: string | undefined;
+        try { numberFormat = workbook.getSheetBySheetId(selection.sheetId)?.getRange(selection.address).getNumberFormats()[0]?.[0]; }
+        catch { /* Sheet may have been removed during the edit. */ }
+        callbacksRef.current.onCellChange?.({ ...selection, value, previousValue, numberFormat });
       };
-      const synchronizeAfterCommand = (command: { id: string; params?: object }) => {
-        const paramsKey = (() => {
-          try {
-            return JSON.stringify(command.params ?? {});
-          } catch {
-            return '';
-          }
-        })();
-        const commandKey = `${command.id}|${paramsKey}`;
-        const now = Date.now();
-        // The workbook and global command buses can report the same edit. Do
-        // not schedule two discovery timers for that single keystroke.
-        if (commandKey === recentCommandKey && now - recentCommandAt < 32) return;
-        recentCommandKey = commandKey;
-        recentCommandAt = now;
-        const structureOperation = operationFromUniverCommand(command);
+      const synchronizeAfterCommand = (
+        command: { id: string; type?: number; params?: object },
+        options?: {
+          fromChangeset?: boolean;
+          syncOnly?: boolean;
+          applyFormulaCalculationResult?: boolean;
+        },
+      ) => {
+        const unitId = (command.params as { unitId?: string } | undefined)?.unitId;
+        if (unitId && unitId !== workbook.getId()) return;
+        if (!editableRef.current || applyingInstanceRef.current) return;
+        if (options?.fromChangeset || options?.syncOnly || options?.applyFormulaCalculationResult)
+          return;
+        if (command.id === 'univer.command.undo' || command.id === 'univer.command.redo') {
+          publishInstance();
+          changes.synchronize('history-values', () => {
+            for (const binding of bindingsRef.current) {
+              if (binding.role !== 'FIELD' || binding.syncDirection === 'DATA_TO_EDITOR') continue;
+              const value = readCell(univerAPI, binding);
+              if (value !== undefined) callbacksRef.current.onEditorValue(binding, value);
+            }
+          });
+          changes.change(); return;
+        }
+        const structureOperation = structureOperationFor(command);
         const cellMutation = isCellMutationCommand(command.id, command.params);
-        if (!structureOperation && !cellMutation) return;
+        const contentMutation =
+          isWorkbookContentCommand(command) && isPersistentMutation(command, options);
+        if (!structureOperation && !cellMutation && !contentMutation) return;
         // Restoring the initial snapshot emits the same commands as a user
         // edit in some Univer versions.  Ignore those commands until the
         // editor is armed, otherwise a freshly opened production order is
         // incorrectly shown as “未保存”.
         if (!cellChangeEventsArmed) return;
-        callbacksRef.current.onDirty();
-        if (structureOperation) callbacksRef.current.onStructureChange?.(structureOperation);
+        if (contentMutation) changes.change();
+        let appliedStructure = false;
+        if (structureOperation && structureBefore && command === structureOwner) {
+          appliedStructure = true;
+          const before = structureBefore;
+          structureBefore = undefined;
+          const wasApplying = applyingInstanceRef.current;
+          applyingInstanceRef.current = true;
+          try {
+            const targetSheet = workbook.getSheetBySheetId(structureOperation.sheetId);
+            for (const copy of structureCopies(before, structureOperation)) {
+              if (!targetSheet) continue;
+              const source = targetSheet.getRange(copy.source), target = targetSheet.getRange(copy.target);
+              target.setValues(copyWorkbookCells(source.getCellDatas() as unknown as Array<Array<WorkbookCell | null>>, copy.rowOffset, copy.columnOffset) as Parameters<typeof target.setValues>[0]);
+              if (copy.axis === 'COLUMN') targetSheet.setColumnWidth(copy.targetIndex - 1, targetSheet.getColumnWidth(copy.sourceIndex - 1));
+              else targetSheet.setRowHeight(copy.targetIndex - 1, targetSheet.getRowHeight(copy.sourceIndex - 1));
+            }
+            for (const merge of sectionMerges) {
+              if (!targetSheet) continue;
+              if (merge.cell) targetSheet.getRange(merge.anchor).setValues([[merge.cell]] as Parameters<ReturnType<typeof targetSheet.getRange>['setValues']>[0]);
+            }
+            mergeCommands.syncExecuteCommand(mergeMutationId, { sheetId: structureOperation.sheetId, ranges: expectedMerges });
+            const next = migrateWorkbookInstance(before, structureOperation);
+            const formulaChanges: Array<{ before: string; after: string; axis: 'ROW' | 'COLUMN' }> = [];
+            for (const projection of before.execution?.listProjections ?? []) {
+              const updated = next.execution?.listProjections.find(item => item.listProjectionId === projection.listProjectionId);
+              const parent = before.mapping.find(binding => binding.bindingId === projection.parentBindingId || projection.componentId && binding.componentId === projection.componentId);
+              if (!updated || parent?.locator.sheetId !== structureOperation.sheetId) continue;
+              for (const axis of [projection.itemAxis, projection.recordAxis]) formulaChanges.push({ before: projection.valueRange, after: updated.valueRange, axis });
+              formulaChanges.push({ before: projection.labelRange, after: updated.labelRange, axis: projection.itemAxis });
+            }
+            for (const binding of before.mapping.filter(item => item.mappingKind === 'REPEAT_REGION' && item.locator.sheetId === structureOperation.sheetId)) {
+              const updated = next.mapping.find(item => item.bindingId === binding.bindingId);
+              if (updated) formulaChanges.push({ before: stringLocator(binding.locator.dataRange) || locatorValueRange(binding.locator),
+                after: stringLocator(updated.locator.dataRange) || locatorValueRange(updated.locator), axis: binding.repeatAxis === 'COLUMN' ? 'COLUMN' : 'ROW' });
+            }
+            // Older contracts omit totalRange. Update actual dependent formula tokens instead of relying on that optional hint.
+            const liveSheet = instanceSheets(workbook.save() as unknown as Record<string, unknown>).find(sheet => sheet.id === structureOperation.sheetId);
+            for (const [row, columns] of Object.entries(liveSheet?.cellData ?? {})) for (const [column, cell] of Object.entries(columns)) {
+              if (!cell.f) continue;
+              const formula = retargetAggregateFormula(cell.f, formulaChanges);
+              if (formula !== cell.f) targetSheet?.getRange(workbookAddress(Number(row), Number(column))).setValues([[{ ...cell, f: formula }]] as Parameters<ReturnType<NonNullable<typeof targetSheet>['getRange']>['setValues']>[0]);
+            }
+            const first = workbook.getSheets()[0];
+            if (first) writeInstanceMetadata(first.getSheetId(), { ...first.getCustomMetadata(), templateInstance: next });
+            bindingsRef.current = next.mapping;
+            callbacksRef.current.onInstanceChange?.(next);
+            // SDK merge undo mutations can overlap neighbouring sections after rows move.
+            // Restore exact merge geometry last on undo, and last on redo, inside this group.
+            mergeCheckpoint(structureOperation.sheetId, expectedMerges, 'after');
+          } finally { applyingInstanceRef.current = wasApplying; structureOwner = undefined; sectionMerges = []; structureGroup?.dispose(); structureGroup = undefined; }
+        }
+        if (structureOperation && !appliedStructure) return;
+        if (appliedStructure && structureOperation)
+          changes.enqueue(() => callbacksRef.current.onStructureChange?.(structureOperation));
+        if (!structureOperation && !cellMutation) return;
         // Capture the cell before Univer moves the selection after Enter or a
         // click. This is the cell that was actually edited, not the next blank
         // cell that happened to become active.
-        const editedSelection = cellMutation && latestSelection
-          && isSingleCellAddress(latestSelection.address) ? latestSelection : undefined;
-        window.cancelAnimationFrame(pendingSynchronization);
-        pendingSynchronization = window.requestAnimationFrame(() => {
-          const structuralParentIds = new Set(
-            bindingsRef.current
-              .map((item) => item.parentBindingId)
-              .filter((value): value is string => Boolean(value)),
-          );
-          for (const binding of bindingsRef.current) {
-            if (binding.syncDirection === 'DATA_TO_EDITOR') continue;
-            // A repeating parent is a layout surface. Its raw 2D values must
-            // not overwrite the business records assembled from child fields.
-            if (structuralParentIds.has(binding.bindingId)) continue;
-            const valueKey = valueCacheKey(binding);
-            const value = readCell(univerAPI, binding);
-            if (!bindingValues.has(valueKey)) {
-              bindingValues.set(valueKey, value);
-            } else if (!sameValue(bindingValues.get(valueKey), value)) {
-              bindingValues.set(valueKey, value);
-              callbacksRef.current.onEditorValue(binding, value);
-            }
-            const cacheKey = labelCacheKey(binding);
-            const labelValue = readLabelCell(univerAPI, binding);
-            if (!labelValues.has(cacheKey)) {
-              labelValues.set(cacheKey, labelValue);
-            } else if (!sameValue(labelValues.get(cacheKey), labelValue)) {
-              labelValues.set(cacheKey, labelValue);
-              callbacksRef.current.onEditorLabel?.(binding, labelValue);
-            }
-          }
-          if (!suppressUnboundRef.current) {
-            const activeWorkbook = univerAPI.getActiveWorkbook() ?? workbook;
-            const currentSheet = activeWorkbook.getActiveSheet();
-            const currentRange = currentSheet?.getActiveRange() ?? activeWorkbook.getActiveRange();
-            const editedSheet = editedSelection
-              ? activeWorkbook.getSheetBySheetId(editedSelection.sheetId) ?? currentSheet
-              : currentSheet;
-            const editedRange = editedSelection
-              ? editedSheet?.getRange(editedSelection.address)
-              : undefined;
-            const activeSheet = editedSheet ?? currentSheet;
-            const activeRange = editedRange ?? currentRange;
-            const activeAddress = editedSelection?.address
-              ?? activeRange?.getA1Notation() ?? latestSelection?.address;
-            const activeSheetId = editedSelection?.sheetId
-              ?? activeSheet?.getSheetId() ?? latestSelection?.sheetId;
-            const activeSheetName = editedSelection?.sheetName
-              ?? activeSheet?.getSheetName() ?? latestSelection?.sheetName;
-            if (
-              activeSheet
-              && activeAddress
-              && activeSheetId
-              && activeSheetName
-              && isSingleCellAddress(activeAddress)
-            ) {
-              const selection: EditorSelection = {
-                sheetId: activeSheetId,
-                sheetName: activeSheetName,
-                address: activeAddress,
-              };
-              const value = activeRange?.getValue() ?? activeSheet.getRange(activeAddress).getValue();
-              const previousValue = editedSelection
-                && latestSelection?.sheetId === editedSelection.sheetId
-                && latestSelection.address === editedSelection.address
-                && hasLatestSelectionValue
-                ? latestSelectionValue : undefined;
-              if (!editedSelection) latestSelection = selection;
-              if (editedSelection
-                && latestSelection?.sheetId === editedSelection.sheetId
-                && latestSelection.address === editedSelection.address) {
-                latestSelectionValue = value;
-                hasLatestSelectionValue = true;
-              }
-              emitUnboundCellChange(selection, value, previousValue);
-              if (editedSelection) emitCellChange(selection, value, previousValue);
-            }
-          }
+        const targets = cellMutation ? mutationCells(command.params) : [];
+        const target = targets[0];
+        const additionalCells = targets.slice(1).flatMap(cell => {
+          const captured = pendingCellValues.get(`${cell.sheetId}|${cell.address}`);
+          return captured ? [captured] : [];
         });
+        const cellKey = target ? `${target.sheetId}|${target.address}` : undefined;
+        const captured = cellKey ? pendingCellValues.get(cellKey) : undefined;
+        const editedSelection = captured?.selection;
+        const editedPreviousValue = captured?.value;
+        changes.synchronize(
+          editedSelection ? `${editedSelection.sheetId}|${editedSelection.address}` : 'bindings',
+          () => {
+            for (const cell of targets) pendingCellValues.delete(`${cell.sheetId}|${cell.address}`);
+            const structuralParentIds = new Set(
+              bindingsRef.current
+                .map((item) => item.parentBindingId)
+                .filter((value): value is string => Boolean(value)),
+            );
+            for (const binding of bindingsRef.current) {
+              if (binding.syncDirection === 'DATA_TO_EDITOR') continue;
+              // A repeating parent is a layout surface. Its raw 2D values must
+              // not overwrite the business records assembled from child fields.
+              if (structuralParentIds.has(binding.bindingId)) continue;
+              const valueKey = valueCacheKey(binding);
+              const value = readCell(univerAPI, binding);
+              if (!bindingValues.has(valueKey)) {
+                bindingValues.set(valueKey, value);
+              } else if (!sameValue(bindingValues.get(valueKey), value)) {
+                bindingValues.set(valueKey, value);
+                callbacksRef.current.onEditorValue(binding, value);
+              }
+              const cacheKey = labelCacheKey(binding);
+              const labelValue = readLabelCell(univerAPI, binding);
+              if (!labelValues.has(cacheKey)) {
+                labelValues.set(cacheKey, labelValue);
+              } else if (!sameValue(labelValues.get(cacheKey), labelValue)) {
+                labelValues.set(cacheKey, labelValue);
+                if (!readWorkbookInstance(workbook.save() as unknown as Record<string, unknown>)) callbacksRef.current.onEditorLabel?.(binding, labelValue);
+              }
+            }
+            if (editedSelection && !suppressUnboundRef.current) {
+              const activeWorkbook = univerAPI.getActiveWorkbook() ?? workbook;
+              const currentSheet = activeWorkbook.getActiveSheet();
+              const currentRange =
+                currentSheet?.getActiveRange() ?? activeWorkbook.getActiveRange();
+              const editedSheet = editedSelection
+                ? (activeWorkbook.getSheetBySheetId(editedSelection.sheetId) ?? currentSheet)
+                : currentSheet;
+              const editedRange = editedSelection
+                ? editedSheet?.getRange(editedSelection.address)
+                : undefined;
+              const activeSheet = editedSheet ?? currentSheet;
+              const activeRange = editedRange ?? currentRange;
+              const activeAddress =
+                editedSelection?.address ??
+                activeRange?.getA1Notation() ??
+                latestSelection?.address;
+              const activeSheetId =
+                editedSelection?.sheetId ?? activeSheet?.getSheetId() ?? latestSelection?.sheetId;
+              const activeSheetName =
+                editedSelection?.sheetName ??
+                activeSheet?.getSheetName() ??
+                latestSelection?.sheetName;
+              if (
+                activeSheet &&
+                activeAddress &&
+                activeSheetId &&
+                activeSheetName &&
+                isSingleCellAddress(activeAddress)
+              ) {
+                const selection: EditorSelection = {
+                  sheetId: activeSheetId,
+                  sheetName: activeSheetName,
+                  address: activeAddress,
+                };
+                const value =
+                  activeRange?.getValue() ?? activeSheet.getRange(activeAddress).getValue();
+                const previousValue = editedSelection ? editedPreviousValue : undefined;
+                if (!editedSelection) latestSelection = selection;
+                if (
+                  editedSelection &&
+                  latestSelection?.sheetId === editedSelection.sheetId &&
+                  latestSelection.address === editedSelection.address
+                ) {
+                  latestSelectionValue = value;
+                  latestSelectionFormula = activeRange?.getFormula() ?? '';
+                  hasLatestSelectionValue = true;
+                }
+                emitUnboundCellChange(selection, value, previousValue);
+                if (editedSelection) emitCellChange(selection, value, previousValue);
+              }
+            }
+            if (!suppressUnboundRef.current) for (const cell of additionalCells) {
+              const range = workbook.getSheetBySheetId(cell.selection.sheetId)?.getRange(cell.selection.address);
+              if (!range) continue;
+              const value = range.getValue();
+              emitUnboundCellChange(cell.selection, value, cell.value);
+              emitCellChange(cell.selection, value, cell.value);
+            }
+          },
+        );
       };
-      // Subscribe on both buses. Direct typing is emitted by the workbook
-      // command service in some Univer versions and only by the global facade
-      // in others.
-      commandSubscription = workbook.onCommandExecuted(synchronizeAfterCommand);
-      globalCommandSubscription = univerAPI.addEvent(
-        univerAPI.Event.CommandExecuted,
-        synchronizeAfterCommand,
-      );
+      const commands = univer.__getInjector().get(ICommandService);
+      let restoringHistory = false;
+      beforeCommandSubscription = commands.beforeCommandExecuted((command, options) => {
+        if (cellChangeEventsArmed && editableRef.current && !applyingInstanceRef.current && !restoringHistory && !structureGroup && !options?.fromChangeset && !options?.syncOnly && isGuardedWorkbookOperation(command.id)) {
+          const unitId = (command.params as { unitId?: string })?.unitId;
+          if (!unitId || unitId === workbook.getId()) {
+            const reason = workbookOperationBlock(command, { instance: readWorkbookInstance(workbook.save() as unknown as Record<string, unknown>),
+              bindings: bindingsRef.current, sheetId: workbook.getActiveSheet()?.getSheetId() ?? '', selection: latestSelection });
+            if (reason) { void messageRef.current.warning({ key: 'workbook-operation', content: reason }); throw new CanceledError(); }
+          }
+        }
+        if (cellChangeEventsArmed && editableRef.current && !applyingInstanceRef.current && !restoringHistory && !sheetScope && ['sheet.command.copy-sheet','sheet.command.remove-sheet'].includes(command.id)) {
+          sheetScope = { command, ids: new Set(workbook.getSheets().map(sheet => sheet.getSheetId())),
+            instance: readWorkbookInstance(workbook.save() as unknown as Record<string, unknown>), group: beginStructureBatch() };
+        }
+        if (command.id === 'univer.command.undo' || command.id === 'univer.command.redo') { changes.flush(); restoringHistory = true; }
+        if (cellChangeEventsArmed && editableRef.current && !applyingInstanceRef.current && !restoringHistory && !structureGroup && !fieldEditGroup
+          && !structureOperationFor(command) && isCellMutationCommand(command.id, command.params) && !options?.fromChangeset
+          && command.type === CommandType.COMMAND) { fieldEditGroup = beginStructureBatch(); fieldEditCommand = command; }
+        if (cellChangeEventsArmed && editableRef.current && !structureGroup && !restoringHistory && !options?.fromChangeset
+          && command.type === CommandType.MUTATION && isCellMutationCommand(command.id, command.params)
+          && writesReadOnlyValue(bindingsRef.current, command.params)) throw new CanceledError();
+        const operation = structureOperationFor(command);
+        if (cellChangeEventsArmed && editableRef.current && operation && !structureBefore && !options?.fromChangeset) {
+          const beforeSnapshot = workbook.save() as unknown as Record<string, unknown>;
+          structureBefore = readWorkbookInstance(beforeSnapshot);
+          structureOwner = command;
+          const direction = (command.params as { direction?: number } | undefined)?.direction;
+          const sections = (structureBefore?.execution?.listProjections ?? []).filter(projection => projection.itemAxis === (operation.type.endsWith('ROWS') ? 'ROW' : 'COLUMN')
+            && structureBefore?.mapping.find(binding => binding.bindingId === projection.parentBindingId || projection.componentId && binding.componentId === projection.componentId)?.locator.sheetId === operation.sheetId)
+            .map(projection => ({ range: projection.labelRange, name: projection.displayName ?? '' }));
+          sectionMerges = sectionMergeExtensions(instanceSheets(beforeSnapshot).find(sheet => sheet.id === operation.sheetId), operation, direction === Direction.DOWN || direction === Direction.RIGHT, sections);
+          const beforeSheet = instanceSheets(beforeSnapshot).find(sheet => sheet.id === operation.sheetId);
+          expectedMerges = migratedWorkbookMerges(beforeSheet, operation, direction === Direction.DOWN || direction === Direction.RIGHT, sections);
+          if (structureBefore) {
+            structureGroup = beginStructureBatch();
+            mergeCheckpoint(operation.sheetId, beforeSheet?.mergeData ?? [], 'before');
+          }
+        }
+        if (
+          !cellChangeEventsArmed ||
+          !editableRef.current ||
+          applyingInstanceRef.current ||
+          !isPersistentMutation(command, options) ||
+          !isCellMutationCommand(command.id, command.params)
+        )
+          return;
+        const unitId = (command.params as { unitId?: string } | undefined)?.unitId;
+        if (unitId && unitId !== workbook.getId()) return;
+        for (const target of mutationCells(command.params)) {
+        const key = `${target.sheetId}|${target.address}`;
+        if (pendingCellValues.has(key)) continue;
+        const sheet = workbook.getSheetBySheetId(target.sheetId);
+        try {
+          if (sheet)
+            pendingCellValues.set(key, {
+              selection: { ...target, sheetName: sheet.getSheetName() },
+              value: sheet.getRange(target.address).getValue(),
+            });
+        } catch {
+          /* A transient range must not prevent the actual SDK mutation. */
+        }
+        }
+      });
+      commandSubscription = commands.onCommandExecuted((command, options) => {
+        try { synchronizeAfterCommand(command, options); }
+        finally {
+          if (command === sheetScope?.command) {
+            try {
+              for (const sheet of workbook.getSheets()) if (!sheetScope.ids.has(sheet.getSheetId())) {
+                const custom = sheet.getCustomMetadata();
+                if (custom?.templateInstance || custom?.labTemplate) writeInstanceMetadata(sheet.getSheetId(), copyableSheetMetadata(custom));
+              }
+              if (sheetScope.instance && !readWorkbookInstance(workbook.save() as unknown as Record<string, unknown>)) {
+                const first = workbook.getSheets()[0];
+                if (first) writeInstanceMetadata(first.getSheetId(), { ...first.getCustomMetadata(), templateInstance: sheetScope.instance });
+              }
+            } finally { sheetScope.group?.dispose(); sheetScope = undefined; }
+          }
+          if (command === fieldEditCommand) { try { changes.flush(); } finally { fieldEditGroup?.dispose(); fieldEditGroup = undefined; fieldEditCommand = undefined; } }
+          if (command.id === 'univer.command.undo' || command.id === 'univer.command.redo') restoringHistory = false;
+        }
+      });
       selectionSubscription = workbook.onSelectionChange((selections) => {
         const selection = selections.at(-1);
         const sheet = workbook.getActiveSheet();
@@ -340,12 +732,21 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
           const previousSheet = workbook.getSheetBySheetId(latestSelection.sheetId);
           if (previousSheet) {
             try {
-              const previousValue = previousSheet.getRange(latestSelection.address).getValue();
+              const previousRange = previousSheet.getRange(latestSelection.address);
+              const previousValue = previousRange.getValue(),
+                formula = previousRange.getFormula();
               // A selection can arrive before Univer exposes the value of the
               // previous range. Without a baseline there is no evidence of an
               // edit; treating it as one makes a plain cell click call the
               // import correction API with an incomplete/stale field identity.
-              if (hasLatestSelectionValue && !sameValue(previousValue, latestSelectionValue)) {
+              if (
+                editableRef.current &&
+                cellChangeEventsArmed &&
+                hasLatestSelectionValue &&
+                (formula !== latestSelectionFormula ||
+                  (!formula && !sameValue(previousValue, latestSelectionValue)))
+              ) {
+                changes.change();
                 emitUnboundCellChange(latestSelection, previousValue, latestSelectionValue);
                 emitCellChange(latestSelection, previousValue, latestSelectionValue);
               }
@@ -361,8 +762,17 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
           sheetName: sheet.getSheetName(),
           address: range.getA1Notation(),
         };
+        const cellKey = `${latestSelection.sheetId}|${latestSelection.address.split(':')[0]}`;
+        if (highlightedCellRef.current && highlightedCellRef.current !== cellKey) {
+          highlightTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+          highlightTimersRef.current = [];
+          highlightRef.current.forEach((highlight) => highlight.dispose());
+          highlightRef.current = [];
+          highlightedCellRef.current = undefined;
+        }
         try {
           latestSelectionValue = range.getValue();
+          latestSelectionFormula = range.getFormula();
           hasLatestSelectionValue = true;
         } catch {
           latestSelectionValue = undefined;
@@ -371,21 +781,35 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         callbacksRef.current.onSelectionChange?.(latestSelection);
       });
     };
+    const initialize = () => {
+      try {
+        initializeRuntime();
+      } catch (error) {
+        setInitializationError(
+          error instanceof Error ? error : new Error('Excel 文档编辑器初始化失败'),
+        );
+      }
+    };
     animationFrame = window.requestAnimationFrame(initialize);
 
     return () => {
       cancelled = true;
       cellChangeEventsArmed = false;
       window.cancelAnimationFrame(animationFrame);
-      window.cancelAnimationFrame(pendingSynchronization);
-      window.clearTimeout(cellChangeArmTimer);
       commandSubscription?.dispose();
-      globalCommandSubscription?.dispose();
+      beforeCommandSubscription?.dispose();
+      pendingCellValues.clear();
+      fieldEditGroup?.dispose();
+      sheetScope?.group?.dispose();
+      changesRef.current?.dispose();
+      changesRef.current = undefined;
       selectionSubscription?.dispose();
+      clipboardSubscription?.dispose();
       highlightRef.current.forEach((highlight) => highlight.dispose());
       highlightRef.current = [];
       highlightTimersRef.current.forEach((timer) => window.clearTimeout(timer));
       highlightTimersRef.current = [];
+      highlightedCellRef.current = undefined;
       if (apiRef.current === ownedApi) apiRef.current = undefined;
       if (univerRef.current === ownedUniver) univerRef.current = undefined;
       // Univer publishes internal React updates while disposing. Deferring
@@ -393,7 +817,10 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       // while the host is detached immediately so two editors are never
       // visible or interactive at the same time.
       if (host.parentNode) host.parentNode.removeChild(host);
-      window.setTimeout(() => ownedUniver?.dispose(), 0);
+      window.setTimeout(() => {
+        unmount(host);
+        ownedUniver?.dispose();
+      }, 0);
     };
   }, [snapshot]);
 
@@ -406,10 +833,185 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     }
   }, [bindings, editable, permissionDialogVisible]);
 
+  useEffect(() => {
+    const workbook = apiRef.current?.getActiveWorkbook();
+    const first = workbook?.getSheets()[0];
+    if (!instance || !first || !editable) return;
+    const signature = JSON.stringify([instance.model, instance.mapping, instance.execution]);
+    if (signature === incomingInstanceSignature.current) return;
+    incomingInstanceSignature.current = signature;
+    const current = readWorkbookInstance(workbook.save() as unknown as Record<string, unknown>);
+    if (!current || JSON.stringify([current.model, current.mapping, current.execution]) === signature) return;
+    // Existing field-manager edits use the same metadata mutation as row/column edits.
+    applyInstance({ ...current, model: instance.model, mapping: instance.mapping, execution: instance.execution }, false);
+  }, [instance, editable]);
+
+  const focusBinding = (binding: TemplateBinding) => {
+    const workbook = apiRef.current?.getActiveWorkbook();
+    const sheet = resolveSheet(apiRef.current, binding);
+    const valueRange = mergedFocusRange(sheet,
+      resolveLocatorRange(apiRef.current, binding, 'logicalInputRange') ??
+      resolveRange(apiRef.current, binding));
+    const labelRange = mergedFocusRange(sheet, resolveLabelRange(apiRef.current, binding));
+    const rowHeaderRange = mergedFocusRange(sheet, resolveLocatorRange(apiRef.current, binding, 'rowHeaderRange'));
+    const columnHeaderRange = mergedFocusRange(sheet, resolveLocatorRange(apiRef.current, binding, 'columnHeaderRange'));
+    const tableDataRange = mergedFocusRange(sheet, resolveLocatorRange(apiRef.current, binding, 'dataRange'));
+    const regionRange = !isStructuredLeaf(binding)
+      ? mergedFocusRange(sheet, resolveLocatorRange(apiRef.current, binding, 'range'))
+      : null;
+    // A table-column field owns its value range. Do not let the parent
+    // repeat-region data range swallow the selected child field.
+    const activeRange = isStructuredLeaf(binding)
+      ? (valueRange ?? tableDataRange ?? labelRange)
+      : (regionRange ?? tableDataRange ?? valueRange ?? labelRange);
+    if (workbook && sheet && activeRange) {
+      try {
+        highlightTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+        highlightTimersRef.current = [];
+        highlightRef.current.forEach((highlight) => highlight.dispose());
+        highlightRef.current = [];
+        if (workbook.getActiveSheet()?.getSheetId() !== sheet.getSheetId()) workbook.setActiveSheet(sheet);
+        highlightedCellRef.current = `${sheet.getSheetId()}|${activeRange.getA1Notation().split(':')[0]}`;
+        const injector = univerRef.current?.__getInjector();
+        const commands = injector?.get(ICommandService);
+        const viewport = injector?.get(IRenderManagerService).getRenderUnitById(workbook.getId())
+          ?.scene.getViewport(SHEET_VIEWPORT_KEY.VIEW_MAIN);
+        // Selecting a wide field makes the SDK reveal its far edge. Capture the
+        // user's viewport first, then reveal the first value with its label context.
+        const scrollBefore = sheet.getScrollState();
+        const boundsBefore = viewport ? { ...viewport.calcViewportInfo().viewBound } : undefined;
+        sheet.setActiveRange(activeRange);
+        if (viewport?.isActive) {
+        // Use actual sheet-coordinate bounds, including zoom and frozen panes.
+        // The SDK's row-index reveal can leave a bottom cell partially clipped.
+        // Focus the first cell (including its merge), not the end of a tall field.
+        const cell = activeRange.getCell();
+        const target = { ...(cell.isMerged ? cell.mergeInfo : cell) };
+        if (labelRange) {
+          const labelCell = labelRange.getCell();
+          target.startX = Math.min(target.startX, (labelCell.isMerged ? labelCell.mergeInfo : labelCell).startX);
+          const group = labelRange.getColumn() > 0 ? sheet.getCellMergeData(activeRange.getRow(), labelRange.getColumn() - 1) : undefined;
+          if (group) {
+            const groupCell = sheet.getRange(group.getA1Notation()).getCell();
+            target.startX = Math.min(target.startX, (groupCell.isMerged ? groupCell.mergeInfo : groupCell).startX);
+          }
+        }
+        const freeze = sheet.getFreeze();
+        const delta = focusScrollDelta(target, boundsBefore ?? viewport.calcViewportInfo().viewBound, {
+          x: freeze.xSplit > 0 && activeRange.getColumn() < freeze.startColumn,
+          y: freeze.ySplit > 0 && activeRange.getRow() < freeze.startRow,
+        });
+        const currentScroll = sheet.getScrollState();
+        if (delta.offsetX || delta.offsetY || currentScroll.offsetX !== scrollBefore.offsetX || currentScroll.offsetY !== scrollBefore.offsetY
+          || currentScroll.sheetViewStartRow !== scrollBefore.sheetViewStartRow || currentScroll.sheetViewStartColumn !== scrollBefore.sheetViewStartColumn) {
+          commands?.syncExecuteCommand(ScrollCommand.id, {
+            sheetViewStartRow: scrollBefore.sheetViewStartRow,
+            sheetViewStartColumn: scrollBefore.sheetViewStartColumn,
+            offsetX: scrollBefore.offsetX + delta.offsetX,
+            offsetY: scrollBefore.offsetY + delta.offsetY,
+            duration: 0,
+          });
+        }
+        } else {
+          commands?.syncExecuteCommand(ScrollToRangeOperation.id, {
+            range: { startRow: activeRange.getRow(), endRow: activeRange.getRow(),
+              startColumn: activeRange.getColumn(), endColumn: activeRange.getColumn() },
+          });
+        }
+        const drawHighlight = (strong: boolean) => {
+          try {
+            highlightRef.current.forEach((highlight) => highlight.dispose());
+            highlightRef.current = [];
+            if (labelRange)
+              highlightRef.current.push(
+                labelRange.highlight({
+                  fill: strong ? 'rgba(245, 158, 11, 0.24)' : 'rgba(245, 158, 11, 0.10)',
+                  stroke: '#d97706',
+                  strokeWidth: strong ? 3 : 2,
+                }),
+              );
+            if (rowHeaderRange)
+              highlightRef.current.push(
+                rowHeaderRange.highlight({
+                  fill: strong ? 'rgba(245, 158, 11, 0.18)' : 'rgba(245, 158, 11, 0.08)',
+                  stroke: '#d97706',
+                  strokeWidth: strong ? 3 : 2,
+                }),
+              );
+            if (columnHeaderRange)
+              highlightRef.current.push(
+                columnHeaderRange.highlight({
+                  fill: strong ? 'rgba(124, 58, 237, 0.16)' : 'rgba(124, 58, 237, 0.07)',
+                  stroke: '#7c3aed',
+                  strokeWidth: strong ? 3 : 2,
+                }),
+              );
+            const fillRange = isStructuredLeaf(binding)
+              ? (valueRange ?? tableDataRange)
+              : (regionRange ?? tableDataRange ?? valueRange);
+            if (fillRange)
+              highlightRef.current.push(
+                fillRange.highlight({
+                  fill: strong ? 'rgba(37, 99, 235, 0.22)' : 'rgba(37, 99, 235, 0.09)',
+                  stroke: '#2563eb',
+                  strokeWidth: strong ? 3 : 2,
+                }),
+              );
+          } catch (error) {
+            if (!isTransientRenderDependencyError(error)) throw error;
+            // The renderer can be replaced while the workbench reloads a saved
+            // snapshot. A field click should remain harmless during that short gap.
+            highlightRef.current = [];
+          }
+        };
+        drawHighlight(true);
+        if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          [false, true, false, true].forEach((strong, index) => {
+            highlightTimersRef.current.push(
+              window.setTimeout(() => drawHighlight(strong), 150 * (index + 1)),
+            );
+          });
+        }
+      } catch (error) {
+        if (!isTransientRenderDependencyError(error)) throw error;
+        // Selection services are ready before the optional scroll/highlight
+        // services. Keep the user's selection when a snapshot is reloading.
+        try {
+          if (workbook.getActiveSheet()?.getSheetId() !== sheet.getSheetId()) workbook.setActiveSheet(sheet);
+          sheet.setActiveRange(activeRange);
+        } catch {
+          // The editor is being disposed; the next user action will focus it.
+        }
+      }
+    }
+  };
+
+  const focusSourceRange = (sheetId: string, address: string) => {
+    const workbook = apiRef.current?.getActiveWorkbook();
+    const sheet = workbook?.getSheetBySheetId(sheetId) ?? workbook?.getSheetByName(sheetId);
+    if (!sheet || !validRange(address)) return;
+    const binding = sourceFocusBinding(bindingsRef.current, {
+      sheetId: sheet.getSheetId(), sheetName: sheet.getSheetName(), address,
+    }, instanceRef.current);
+    if (binding) focusBinding(binding);
+  };
+
   useImperativeHandle(
     ref,
     () => ({
+      getSelection() {
+        const sheet = apiRef.current?.getActiveWorkbook()?.getActiveSheet();
+        const range = sheet?.getActiveRange();
+        return sheet && range ? { sheetId: sheet.getSheetId(), sheetName: sheet.getSheetName(), address: range.getA1Notation() } : undefined;
+      },
+      flushChanges() {
+        changesRef.current?.flush();
+      },
+      getContentRevision() {
+        return contentRevisionRef.current;
+      },
       getSnapshot() {
+        changesRef.current?.flush();
         return (apiRef.current?.getActiveWorkbook()?.save() ?? sourceSnapshotRef.current) as Record<
           string,
           unknown
@@ -443,98 +1045,23 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       },
       writeLabel(binding, value) {
         const range = resolveLabelWriteRange(apiRef.current, binding);
+        if (!range) return Promise.resolve();
         range?.setValue(value as never);
         return verifyWrite(() => range?.getValue(), value);
       },
-      focusBinding(binding) {
-        const workbook = apiRef.current?.getActiveWorkbook();
-        const sheet = resolveSheet(apiRef.current, binding);
-        const valueRange =
-          resolveLocatorRange(apiRef.current, binding, 'logicalInputRange') ??
-          resolveRange(apiRef.current, binding);
-        const labelRange = resolveLabelRange(apiRef.current, binding);
-        const rowHeaderRange = resolveLocatorRange(apiRef.current, binding, 'rowHeaderRange');
-        const columnHeaderRange = resolveLocatorRange(apiRef.current, binding, 'columnHeaderRange');
-        const tableDataRange = resolveLocatorRange(apiRef.current, binding, 'dataRange');
-        const regionRange = !isStructuredLeaf(binding)
-          ? resolveLocatorRange(apiRef.current, binding, 'range')
-          : null;
-        // A table-column field owns its value range. Do not let the parent
-        // repeat-region data range swallow the selected child field.
-        const activeRange = isStructuredLeaf(binding)
-          ? valueRange ?? tableDataRange ?? labelRange
-          : regionRange ?? tableDataRange ?? valueRange ?? labelRange;
-        if (workbook && sheet && activeRange) {
-          highlightTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-          highlightTimersRef.current = [];
-          highlightRef.current.forEach((highlight) => highlight.dispose());
-          highlightRef.current = [];
-          workbook.setActiveSheet(sheet);
-          sheet.setActiveRange(activeRange);
-          const drawHighlight = (strong: boolean) => {
-            highlightRef.current.forEach((highlight) => highlight.dispose());
-            highlightRef.current = [];
-            if (labelRange)
-              highlightRef.current.push(
-                labelRange.highlight({
-                  fill: strong ? 'rgba(245, 158, 11, 0.24)' : 'rgba(245, 158, 11, 0.10)',
-                  stroke: '#d97706',
-                  strokeWidth: strong ? 3 : 2,
-                }),
-              );
-            if (rowHeaderRange)
-              highlightRef.current.push(
-                rowHeaderRange.highlight({
-                  fill: strong ? 'rgba(245, 158, 11, 0.18)' : 'rgba(245, 158, 11, 0.08)',
-                  stroke: '#d97706',
-                  strokeWidth: strong ? 3 : 2,
-                }),
-              );
-            if (columnHeaderRange)
-              highlightRef.current.push(
-                columnHeaderRange.highlight({
-                  fill: strong ? 'rgba(124, 58, 237, 0.16)' : 'rgba(124, 58, 237, 0.07)',
-                  stroke: '#7c3aed',
-                  strokeWidth: strong ? 3 : 2,
-                }),
-              );
-            const fillRange = isStructuredLeaf(binding)
-              ? valueRange ?? tableDataRange
-              : regionRange ?? tableDataRange ?? valueRange;
-            if (fillRange)
-              highlightRef.current.push(
-                fillRange.highlight({
-                  fill: strong ? 'rgba(37, 99, 235, 0.22)' : 'rgba(37, 99, 235, 0.09)',
-                  stroke: '#2563eb',
-                  strokeWidth: strong ? 3 : 2,
-                }),
-              );
-          };
-          drawHighlight(true);
-          if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-            [false, true, false, true].forEach((strong, index) => {
-              highlightTimersRef.current.push(
-                window.setTimeout(() => drawHighlight(strong), 150 * (index + 1)),
-              );
-            });
-          }
-        }
-      },
-      focusCell(sheetId, address) {
-        focusWorkbookRange(apiRef.current, sheetId, address);
-      },
-      focusRange(sheetId, address) {
-        focusWorkbookRange(apiRef.current, sheetId, address);
-      },
-      writeCell(sheetId, address, value) {
+      focusBinding,
+      focusCell: focusSourceRange,
+      focusRange: focusSourceRange,
+      writeCell(sheetId, address, value, options) {
         const workbook = apiRef.current?.getActiveWorkbook();
         const sheet = workbook?.getSheetBySheetId(sheetId) ?? workbook?.getSheetByName(sheetId);
         const range = sheet && validCell(address) ? sheet.getRange(address) : null;
         if (!range) return Promise.reject(new Error(`无法定位单元格 ${address}`));
         suppressUnboundRef.current = true;
-        const safeValue = value == null ? '' : value;
-        range.setValue(safeValue);
-        return verifyWrite(() => range.getValue(), safeValue).finally(() => {
+        const pattern = range.getNumberFormats()[0]?.[0] ?? '';
+        const safeValue = workbookCellInput(value == null ? '' : value, pattern, options?.raw);
+        range.setValue(safeValue as never);
+        return verifyWrite(() => range.getRawValue(), safeValue).finally(() => {
           suppressUnboundRef.current = false;
         });
       },
@@ -551,29 +1078,36 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
           if (!parsed) return Promise.reject(new Error(`无法解析清理区域 ${address}`));
           let cleared = 0;
           let formulasKept = 0;
-          formulas.forEach((row, rowIndex) => row.forEach((formula, columnIndex) => {
-            if (formula) {
-              formulasKept += 1;
-              return;
-            }
-            const value = values[rowIndex]?.[columnIndex];
-            if (value === '' || value == null) return;
-            sheet.getRange(formatA1Range({
-              startColumn: parsed.startColumn + columnIndex,
-              endColumn: parsed.startColumn + columnIndex,
-              startRow: parsed.startRow + rowIndex,
-              endRow: parsed.startRow + rowIndex,
-            })).setValue('');
-            cleared += 1;
-          }));
+          formulas.forEach((row, rowIndex) =>
+            row.forEach((formula, columnIndex) => {
+              if (formula) {
+                formulasKept += 1;
+                return;
+              }
+              const value = values[rowIndex]?.[columnIndex];
+              if (value === '' || value == null) return;
+              sheet
+                .getRange(
+                  formatA1Range({
+                    startColumn: parsed.startColumn + columnIndex,
+                    endColumn: parsed.startColumn + columnIndex,
+                    startRow: parsed.startRow + rowIndex,
+                    endRow: parsed.startRow + rowIndex,
+                  }),
+                )
+                .setValue('');
+              cleared += 1;
+            }),
+          );
           return Promise.resolve({ cleared, formulasKept });
         } finally {
           suppressUnboundRef.current = false;
         }
       },
-      async appendRepeatRecord(binding) {
-        if (!['REPEAT_REGION', 'REPEAT_FIELD']
-          .includes(binding.mappingKind || '')) {
+      async appendRepeatRecord(binding, options) {
+        const count = options?.count ?? 1;
+        if (!Number.isInteger(count) || count < 1 || count > 100) throw new Error('每次可增加1至100条记录');
+        if (!['REPEAT_REGION', 'REPEAT_FIELD'].includes(binding.mappingKind || '')) {
           return;
         }
         const workbook = apiRef.current?.getActiveWorkbook();
@@ -598,67 +1132,34 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         const subUnitId = String(
           (sheet as unknown as { getSheetId?: () => string }).getSheetId?.() || '',
         );
+        const insertIndex = options?.index ?? (axis === 'ROW' ? parsed.endRow : parsed.endColumn) + 1;
         const commandRange =
           axis === 'ROW'
             ? {
-                startRow: parsed.endRow - 1,
-                endRow: parsed.endRow - 1 + stride - 1,
+                startRow: insertIndex - 1,
+                endRow: insertIndex - 1 + stride * count - 1,
                 startColumn: parsed.startColumn - 1,
                 endColumn: parsed.endColumn - 1,
               }
             : {
                 startRow: parsed.startRow - 1,
                 endRow: parsed.endRow - 1,
-                startColumn: parsed.endColumn - 1,
-                endColumn: parsed.endColumn - 1 + stride - 1,
+                startColumn: insertIndex - 1,
+                endColumn: insertIndex - 1 + stride * count - 1,
               };
         await api.executeCommand(
           axis === 'ROW' ? 'sheet.command.insert-row' : 'sheet.command.insert-col',
-          { unitId, subUnitId, range: commandRange, direction: axis === 'ROW' ? 2 : 1 },
+          { unitId, subUnitId, range: commandRange, direction: axis === 'ROW' ? Direction.DOWN : Direction.RIGHT },
         );
-        const sourceAddress =
-          axis === 'ROW'
-            ? formatA1Range({
-                ...parsed,
-                startRow: parsed.endRow - recordSize + 1,
-                endRow: parsed.endRow,
-              })
-            : formatA1Range({
-                ...parsed,
-                startColumn: parsed.endColumn - recordSize + 1,
-                endColumn: parsed.endColumn,
-              });
-        const targetAddress =
-          axis === 'ROW'
-            ? formatA1Range({
-                ...parsed,
-                startRow: parsed.endRow + 1,
-                endRow: parsed.endRow + recordSize,
-              })
-            : formatA1Range({
-                ...parsed,
-                startColumn: parsed.endColumn + 1,
-                endColumn: parsed.endColumn + recordSize,
-              });
-        const source = sheet.getRange(sourceAddress) as unknown as RangeAdapter;
-        const target = sheet.getRange(targetAddress) as unknown as RangeAdapter;
-        if (typeof target.copyFrom === 'function') target.copyFrom(source, 'all');
-        else if (typeof target.setValues === 'function' && typeof source.getValues === 'function') {
-          target.setValues(source.getValues());
-        }
-        // The copied record is intentionally blanked after format/formula copy;
-        // formulas remain available and user input cells become a new record.
-        if (typeof target.setValues === 'function' && typeof source.getValues === 'function') {
-          const values = target.getValues?.();
-          if (values)
-            target.setValues(
-              values.map((row) =>
-                row.map((value) =>
-                  typeof value === 'string' && value.startsWith('=') ? value : '',
-                ),
-              ),
-            );
-        }
+        // The command hook handles copying and metadata for every entry point.
+      },
+      getTemplateInstance() {
+        const saved = apiRef.current?.getActiveWorkbook()?.save();
+        return saved ? readWorkbookInstance(saved as unknown as Record<string, unknown>) : instanceRef.current;
+      },
+      async setTemplateInstance(next) {
+        await Promise.resolve();
+        applyInstance(next, true);
       },
       async applyCellPatch(patch) {
         const operations = Array.isArray(patch.operations) ? patch.operations : [];
@@ -687,9 +1188,10 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         }
       },
     }),
-    [],
+    [snapshot],
   );
 
+  if (initializationError) throw initializationError;
   return <div ref={containerRef} className="univer-editor-surface" aria-label={ariaLabel} />;
 });
 
@@ -704,17 +1206,12 @@ function resolveSheet(api: FUniver | undefined, binding: TemplateBinding) {
   return workbook.getActiveSheet();
 }
 
-function focusWorkbookRange(api: FUniver | undefined, sheetId: string, address: string) {
-  const workbook = api?.getActiveWorkbook();
-  const sheet = workbook?.getSheetBySheetId(sheetId) ?? workbook?.getSheetByName(sheetId);
-  if (!workbook || !sheet || !validRange(address)) return;
-  const range = sheet.getRange(address);
-  workbook.setActiveSheet(sheet);
-  sheet.setActiveRange(range);
-  // Selection alone does not move the viewport when the workbook is already
-  // scrolled. Keep the source-location action useful for both data-center and
-  // freeform recognition workbenches by bringing the active cell into view.
-  sheet.scrollToCell(range.getRow(), range.getColumn());
+function mergedFocusRange(sheet: ReturnType<typeof resolveSheet>, range: ReturnType<typeof resolveRange>) {
+  if (!sheet || !range || range.getHeight() !== 1 || range.getWidth() !== 1) return range;
+  const merge = sheet.getCellMergeData(range.getRow(), range.getColumn());
+  // The SDK merge object can lack unitId/sheetId on its raw range. Recreate
+  // it through this sheet so selecting a merged title retains workbook identity.
+  return merge ? sheet.getRange(merge.getA1Notation()) : range;
 }
 
 function resolveRange(api: FUniver | undefined, binding: TemplateBinding) {
@@ -726,8 +1223,7 @@ function resolveRange(api: FUniver | undefined, binding: TemplateBinding) {
           stringLocator(binding.locator.anchorAddress) ||
           locatorValueRange(binding.locator)
         : stringLocator(binding.locator.anchorAddress) ||
-          stringLocator(binding.locator.address) ||
-          stringLocator(binding.locator.range)
+          locatorValueRange(binding.locator)
       : stringLocator(binding.locator.dataRange) ||
         stringLocator(binding.locator.address) ||
         stringLocator(binding.locator.range);
@@ -736,14 +1232,13 @@ function resolveRange(api: FUniver | undefined, binding: TemplateBinding) {
 }
 
 function resolveLabelRange(api: FUniver | undefined, binding: TemplateBinding) {
-  const address =
-    stringLocator(binding.locator.labelRange) || stringLocator(binding.locator.labelAddress);
+  const address = locatorLabelRange(binding.locator);
   const sheet = resolveSheet(api, binding);
   return sheet && validRange(address) ? sheet.getRange(address) : null;
 }
 
 function resolveLabelWriteRange(api: FUniver | undefined, binding: TemplateBinding) {
-  const address = stringLocator(binding.locator.labelAddress);
+  const address = stringLocator(binding.locator.labelRange).split(':')[0] || stringLocator(binding.locator.labelAddress);
   const sheet = resolveSheet(api, binding);
   return sheet && validCell(address) ? sheet.getRange(address) : null;
 }
@@ -760,6 +1255,11 @@ function validCell(value: string) {
 
 function validRange(value: string) {
   return /^[A-Z]{1,4}[1-9][0-9]*(?::[A-Z]{1,4}[1-9][0-9]*)?$/i.test(value);
+}
+
+function isTransientRenderDependencyError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('Cannot find') && message.includes('registered by any injector');
 }
 
 function stringLocator(value: unknown) {
@@ -792,9 +1292,11 @@ function isStructuredLeaf(binding: TemplateBinding) {
 }
 
 function isInlineTextBinding(binding: TemplateBinding) {
-  return binding.locatorType === 'INLINE_TEXT'
-    || stringLocator(binding.locator.locatorType) === 'INLINE_TEXT'
-    || stringLocator(binding.locator.valueMode) === 'INLINE_TEXT';
+  return (
+    binding.locatorType === 'INLINE_TEXT' ||
+    stringLocator(binding.locator.locatorType) === 'INLINE_TEXT' ||
+    stringLocator(binding.locator.valueMode) === 'INLINE_TEXT'
+  );
 }
 
 function readInlineText(rawValue: unknown, binding: TemplateBinding) {
@@ -827,14 +1329,6 @@ function cellText(value: unknown) {
   } catch {
     return '';
   }
-}
-
-interface RangeAdapter {
-  copyFrom?: (source: RangeAdapter, type?: string) => unknown;
-  getValues?: () => unknown[][];
-  setValues?: (values: unknown[][]) => unknown;
-  getValue?: () => unknown;
-  setValue?: (value: unknown) => unknown;
 }
 
 interface A1Range {
@@ -918,8 +1412,10 @@ function sameValue(left: unknown, right: unknown) {
   if (Array.isArray(left) && left.length === 1 && !Array.isArray(right)) {
     return sameValue(left[0], right);
   }
-  if (typeof left === 'number' && typeof right === 'string' && String(left) === right.trim()) return true;
-  if (typeof right === 'number' && typeof left === 'string' && String(right) === left.trim()) return true;
+  if (typeof left === 'number' && typeof right === 'string' && String(left) === right.trim())
+    return true;
+  if (typeof right === 'number' && typeof left === 'string' && String(right) === left.trim())
+    return true;
   return Object.is(left, right) || JSON.stringify(left) === JSON.stringify(right);
 }
 
@@ -952,6 +1448,15 @@ function verifyWrite(read: () => unknown, expected: unknown) {
 }
 
 async function protectReadOnlyRanges(api: FUniver, bindings: TemplateBinding[]) {
+  const workbook = api.getActiveWorkbook();
+  if (workbook && readWorkbookInstance(workbook.save() as unknown as Record<string, unknown>)) {
+    // Univer's range protection also disables insert/delete on any intersecting column.
+    // Instance workspaces guard value mutations instead; retain user-authored protection rules.
+    for (const sheet of workbook.getSheets()) for (const rule of await sheet.getWorksheetPermission().listRangeProtectionRules()) {
+      if (rule.options.metadata?.source === 'FIELD_MODEL_V4') await rule.remove();
+    }
+    return;
+  }
   const targets = new Map<string, { binding: TemplateBinding; address: string }>();
   for (const binding of bindings) {
     if (binding.syncDirection === 'EDITOR_TO_DATA' && binding.role === 'FIELD') {

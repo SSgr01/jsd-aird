@@ -29,7 +29,7 @@ describe('ExperimentTemplateDataPanel', () => {
     expect(screen.getByText('字段数据')).toBeInTheDocument();
     expect(screen.getByText('字段结构')).toBeInTheDocument();
     expect(screen.getByText('字段映射')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '确认并提交本次数据' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '完成数据核对' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: /粘度.*未填写/ }));
     fireEvent.change(screen.getByRole('textbox', { name: '修改粘度' }), { target: { value: '1350' } });
     expect(onChange).toHaveBeenCalledWith('/viscosity', '1350');
@@ -39,9 +39,9 @@ describe('ExperimentTemplateDataPanel', () => {
     const { container } = render(<ExperimentTemplateDataPanel review={review} values={{}} editable
       confirmed={false} busy={false} onChange={vi.fn()} onConfirm={vi.fn()} onFocus={vi.fn()} />);
     const panel = container.querySelector('.experiment-template-data-panel');
-    expect(panel?.children[1]).toHaveClass('data-workbench-tabs');
-    expect(panel?.children[2]).toHaveClass('data-panel-body');
-    expect(panel?.lastElementChild).toHaveClass('data-workbench-footer');
+    const content = panel?.querySelector('.data-workbench-panel-content');
+    expect(content?.querySelector('.data-workbench-tabs')?.nextElementSibling).toHaveClass('data-panel-body');
+    expect(content?.lastElementChild).toHaveClass('data-workbench-footer');
     fireEvent.click(screen.getByRole('tab', { name: '字段映射' }));
     expect(screen.getByText(/模板字段和填写位置已锁定/)).toBeInTheDocument();
   });
@@ -50,7 +50,7 @@ describe('ExperimentTemplateDataPanel', () => {
     const onConfirm = vi.fn();
     render(<ExperimentTemplateDataPanel review={review} values={{ viscosity: '1350' }} editable
       confirmed={false} busy={false} onChange={vi.fn()} onConfirm={onConfirm} onFocus={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: '确认并提交本次数据' }));
+    fireEvent.click(screen.getByRole('button', { name: '完成数据核对' }));
     expect(onConfirm).toHaveBeenCalledOnce();
   });
 
@@ -62,7 +62,7 @@ describe('ExperimentTemplateDataPanel', () => {
     } satisfies ExperimentTemplateDataReview;
     const { rerender } = render(<ExperimentTemplateDataPanel review={repeated} values={{ records: [{}] }}
       editable confirmed={false} busy={false} onChange={vi.fn()} onConfirm={vi.fn()} onFocus={vi.fn()} />);
-    expect(screen.getByRole('button', { name: '确认并提交本次数据' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '完成数据核对' })).toBeDisabled();
     rerender(<ExperimentTemplateDataPanel review={repeated} values={{ records: [{ viscosity: '1250' }] }}
       editable confirmed={false} busy={false} onChange={vi.fn()} onConfirm={vi.fn()} onFocus={vi.fn()} />);
     expect(screen.getByRole('button', { name: '粘度 1250' })).toBeInTheDocument();
@@ -73,10 +73,10 @@ describe('ExperimentTemplateDataPanel', () => {
     const { rerender } = render(<ExperimentTemplateDataPanel review={review} values={{}} importedSnapshot={snapshot}
       editable confirmed={false} busy={false} onChange={vi.fn()} onConfirm={vi.fn()} onFocus={vi.fn()} />);
     expect(screen.getByRole('button', { name: '粘度 1350' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '确认并提交本次数据' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '完成数据核对' })).toBeEnabled();
     rerender(<ExperimentTemplateDataPanel review={review} values={{}} importedSnapshot={{
       sheets: { 'sheet-1': { name: '测试', cellData: {} } },
     }} editable confirmed={false} busy={false} onChange={vi.fn()} onConfirm={vi.fn()} onFocus={vi.fn()} />);
-    expect(screen.getByRole('button', { name: '确认并提交本次数据' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '完成数据核对' })).toBeDisabled();
   });
 });

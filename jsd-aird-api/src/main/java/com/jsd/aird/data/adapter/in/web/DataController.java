@@ -97,13 +97,13 @@ public class DataController {
     }
 
     @PostMapping("/experiment-import-jobs/{id}/retry")
-    public ApiResponse<DataRepository.Job> retryExperimentImport(@PathVariable UUID id) {
-        return success(service.retryExperimentImport(id));
+    public ApiResponse<DataRepository.Job> retryExperimentImport(@PathVariable UUID id, @Valid @RequestBody SourceVersionRequest request) {
+        return success(service.retryExperimentImport(id,request.revision()));
     }
 
     @DeleteMapping("/experiment-import-jobs/{id}")
-    public ApiResponse<Void> deleteExperimentImport(@PathVariable UUID id) {
-        service.hideExperimentImport(id);
+    public ApiResponse<Void> deleteExperimentImport(@PathVariable UUID id,@RequestParam String revision) {
+        service.hideExperimentImport(id,revision);
         return success(null);
     }
 
@@ -172,43 +172,39 @@ public class DataController {
     }
 
     @PostMapping("/import-jobs/{id}/retry")
-    public ApiResponse<DataRepository.Job> reprocess(@PathVariable UUID id) {
-        return success(service.reprocessDataCenterImport(id));
+    public ApiResponse<DataRepository.Job> reprocess(@PathVariable UUID id,@Valid @RequestBody SourceVersionRequest request) {
+        return success(service.reprocessDataCenterImport(id,request.revision()));
     }
 
     @DeleteMapping("/import-jobs/{id}")
-    public ApiResponse<Void> deleteImport(@PathVariable UUID id) {
-        service.hideDataCenterImport(id);
+    public ApiResponse<Void> deleteImport(@PathVariable UUID id,@RequestParam String revision) {
+        service.hideDataCenterImport(id,revision);
         return success(null);
     }
 
     @PostMapping("/import-jobs/{id}/parse")
-    public ApiResponse<DataRepository.Job> parse(@PathVariable UUID id) {
-        service.parse(id);
-        return success(service.get(id));
+    public ApiResponse<DataRepository.Job> parse(@PathVariable UUID id,@Valid @RequestBody SourceVersionRequest request) {
+        return success(service.parseAtRevision(id,request.revision(),false));
     }
 
     @PostMapping("/import-jobs/{id}/re-extract")
-    public ApiResponse<DataRepository.Job> reExtract(@PathVariable UUID id) {
-        service.reExtract(id);
-        return success(service.get(id));
+    public ApiResponse<DataRepository.Job> reExtract(@PathVariable UUID id,@Valid @RequestBody SourceVersionRequest request) {
+        return success(service.parseAtRevision(id,request.revision(),true));
     }
 
     @PutMapping("/import-jobs/{id}/sheets")
     public ApiResponse<DataRepository.Job> sheets(@PathVariable UUID id, @Valid @RequestBody SheetRequest request) {
-        service.confirmSheets(id, request.items().stream().map(item -> new DataRepository.SheetUpdate(
+        return success(service.confirmSheetsAtRevision(id,request.revision(), request.items().stream().map(item -> new DataRepository.SheetUpdate(
                 id, item.sheetId(), item.selected(), item.headerRows(), item.dataStartRow(), item.dataEndRow(), item.confirmationStatus()
-        )).toList());
-        return success(service.get(id));
+        )).toList()));
     }
 
     @PutMapping("/import-jobs/{id}/mappings")
     public ApiResponse<DataRepository.Job> mappings(@PathVariable UUID id, @Valid @RequestBody MappingRequest request) {
-        service.saveMappings(id, request.items().stream().map(item -> new DataImportService.MappingCommand(
+        return success(service.saveMappingsAtRevision(id,request.revision(), request.items().stream().map(item -> new DataImportService.MappingCommand(
                 item.sheetId(), item.sourceColumn(), item.sourceHeader(), item.fieldCode(), item.fieldName(), item.action(),
                 item.valueType(), item.sourceUnit(), item.standardUnit(), item.detail()
-        )).toList());
-        return success(service.get(id));
+        )).toList()));
     }
 
     @GetMapping("/import-jobs/{id}/issues")
@@ -223,24 +219,21 @@ public class DataController {
     }
 
     @PutMapping("/import-jobs/{id}/issues/{issueId}")
-    public ApiResponse<Void> resolve(@PathVariable UUID id, @PathVariable UUID issueId, @Valid @RequestBody IssueRequest request) {
-        service.resolveIssue(id, issueId, request.status(), request.reason());
-        return success(null);
+    public ApiResponse<DataRepository.Job> resolve(@PathVariable UUID id, @PathVariable UUID issueId, @Valid @RequestBody IssueRequest request) {
+        return success(service.resolveIssueAtRevision(id,request.revision(), issueId, request.status(), request.reason()));
     }
 
     @PutMapping("/import-jobs/{id}/records/{recordId}/values")
-    public ApiResponse<Void> correctValue(@PathVariable UUID id, @PathVariable UUID recordId,
+    public ApiResponse<DataRepository.Job> correctValue(@PathVariable UUID id, @PathVariable UUID recordId,
                                           @Valid @RequestBody CorrectValueRequest request) {
-        service.correctValue(id, recordId, request.bindingId(), request.valuePath(),
-                request.correctedValue(), request.reason());
-        return success(null);
+        return success(service.correctValueAtRevision(id,request.revision(), recordId, request.bindingId(), request.valuePath(),
+                request.correctedValue(), request.reason()));
     }
 
     @PutMapping("/import-jobs/{id}/records/{recordId}/exclusion")
-    public ApiResponse<Void> excludeRecord(@PathVariable UUID id, @PathVariable UUID recordId,
+    public ApiResponse<DataRepository.Job> excludeRecord(@PathVariable UUID id, @PathVariable UUID recordId,
                                            @Valid @RequestBody ExcludeRecordRequest request) {
-        service.excludeRow(id, recordId, request.excluded(), request.reason());
-        return success(null);
+        return success(service.excludeRowAtRevision(id,request.revision(), recordId, request.excluded(), request.reason()));
     }
 
     @GetMapping("/import-jobs/{id}/preview")
@@ -253,18 +246,30 @@ public class DataController {
         return success(workbookService.importJob(id));
     }
 
+    @PutMapping("/import-jobs/{id}/workbook-draft")
+    public ApiResponse<?> saveWorkbookDraft(@PathVariable UUID id,@Valid @RequestBody WorkbookDraftRequest request) {
+        var job=service.saveWorkbookDraft(id,request.revision(),request.snapshot(),request.templateInstance(),request.structureOperations());
+        return success(new WorkbookDraftResponse(job,workbookService.importJob(id)));
+    }
+    public record WorkbookDraftRequest(@NotBlank String revision,@NotNull JsonNode snapshot,@NotNull JsonNode templateInstance,JsonNode structureOperations) {}
+    public record WorkbookDraftResponse(DataRepository.Job job,DataWorkbookService.WorkbookContext workbook) {}
+    @PutMapping("/experiment-import-jobs/{id}/workbook-draft")
+    public ApiResponse<?> saveExperimentWorkbookDraft(@PathVariable UUID id,@Valid @RequestBody WorkbookDraftRequest request) {
+        var job=service.saveExperimentWorkbookDraft(id,request.revision(),request.snapshot(),request.templateInstance(),request.structureOperations());
+        return success(new WorkbookDraftResponse(job,workbookService.importJob(id)));
+    }
+
     @PutMapping("/import-jobs/{id}/components/{componentId}/anchor")
     public ApiResponse<DataRepository.Job> reanchorComponent(
             @PathVariable UUID id, @PathVariable String componentId,
             @Valid @RequestBody ComponentAnchorRequest request) {
-        service.reanchorComponent(id, componentId, request.sheetId(), request.sourceRange(), request.reason());
-        return success(service.get(id));
+        return success(service.reanchorAtRevision(id,request.revision(), componentId, request.sheetId(), request.sourceRange(), request.reason()));
     }
 
     @PostMapping("/import-jobs/{id}/commit")
-    public ApiResponse<DataRepository.Job> commit(@PathVariable UUID id) {
+    public ApiResponse<DataRepository.Job> commit(@PathVariable UUID id,@Valid @RequestBody(required=false) DataPublicationController.VersionRequest request) {
         if (service.isDataCenterJob(id)) {
-            publicationService.confirm(id);
+            publicationService.confirm(id,request==null?null:request.revision());
             return success(service.get(id));
         }
         service.commit(id);
@@ -327,19 +332,19 @@ public class DataController {
     @PutMapping("/categories/{categoryId}")
     public ApiResponse<com.jsd.aird.data.application.port.DataCategoryRepository.Category> renameCategory(
             @PathVariable UUID categoryId, @Valid @RequestBody RenameCategoryRequest request) {
-        return success(categoryService.rename(categoryId, request.name(), request.description()));
+        return success(categoryService.rename(categoryId, request.name(), request.description(),request.revision()));
     }
 
     @DeleteMapping("/categories/{categoryId}")
     public ApiResponse<Void> deleteCategory(@PathVariable UUID categoryId,
-                                            @RequestParam(required = false) UUID replacementCategoryId) {
-        categoryService.delete(categoryId, replacementCategoryId);
+                                            @RequestParam(required = false) UUID replacementCategoryId,@RequestParam String revision) {
+        categoryService.delete(categoryId, replacementCategoryId,revision);
         return success(null);
     }
 
     @PutMapping("/sources/{id}/category")
     public ApiResponse<Void> assignSourceCategory(@PathVariable UUID id, @Valid @RequestBody AssignCategoryRequest request) {
-        service.assignSourceCategory(id, request.categoryId());
+        service.assignSourceCategory(id, request.categoryId(),request.revision());
         return success(null);
     }
 
@@ -353,13 +358,13 @@ public class DataController {
 
     public record CreateRequest(@NotNull UUID sourceFileId, @NotNull UUID templateVersionId,
                                 UUID categoryId, boolean duplicateOverride,
-                                List<@Valid ProjectRelationRequest> projectRelations,
+                                List<@NotNull @Valid ProjectRelationRequest> projectRelations,
                                 String importPurpose, UUID targetExperimentCategoryId,
                                 String recognitionMode) {}
     public record RecognitionCreateRequest(@NotNull UUID sourceFileId, String sourceFormat,
                                            String recognitionMode, UUID templateVersionId, UUID categoryId,
                                            String importPurpose, UUID targetExperimentCategoryId,
-                                           List<@Valid ProjectRelationRequest> projectRelations,
+                                           List<@NotNull @Valid ProjectRelationRequest> projectRelations,
                                            LocalDate experimentDate, boolean duplicateOverride) {}
     public record RecognitionBoundariesRequest(long expectedRevision, @NotNull JsonNode items) {}
     public record RecognitionMappingsRequest(long expectedRevision, @NotNull JsonNode candidates,
@@ -368,23 +373,24 @@ public class DataController {
     public record RecognitionRevisionRequest(long expectedRevision) {}
     public record ProjectRelationRequest(@NotNull UUID projectId, UUID stageId, UUID taskId) {}
 
-    public record CategoryRequest(@NotBlank String name, @Size(max = 240) String description) {}
-    public record RenameCategoryRequest(@NotBlank String name, @Size(max = 240) String description) {}
-    public record AssignCategoryRequest(UUID categoryId) {}
-    public record SheetRequest(@NotNull List<@Valid SheetItem> items) {}
+    public record CategoryRequest(String revision,@NotBlank String name, @Size(max = 240) String description) {}
+    public record RenameCategoryRequest(@NotBlank String revision,@NotBlank String name, @Size(max = 240) String description) {}
+    public record AssignCategoryRequest(@NotBlank String revision, UUID categoryId) {}
+    public record SourceVersionRequest(@NotBlank String revision) {}
+    public record SheetRequest(@NotBlank String revision,@NotNull List<@NotNull @Valid SheetItem> items) {}
     public record SheetItem(@NotBlank String sheetId, boolean selected, List<Integer> headerRows,
                             Integer dataStartRow, Integer dataEndRow, @NotBlank String confirmationStatus) {}
 
-    public record MappingRequest(@NotNull List<@Valid MappingItem> items) {}
+    public record MappingRequest(@NotBlank String revision,@NotNull List<@NotNull @Valid MappingItem> items) {}
     public record MappingItem(@NotBlank String sheetId, @NotBlank String sourceColumn, String sourceHeader,
                               String fieldCode, String fieldName, @NotBlank String action, String valueType,
                               String sourceUnit, String standardUnit, JsonNode detail) {}
 
-    public record IssueRequest(@NotBlank String status, String reason) {}
-    public record CorrectValueRequest(@NotBlank String bindingId, @NotNull String valuePath,
+    public record IssueRequest(@NotBlank String revision,@NotBlank String status, String reason) {}
+    public record CorrectValueRequest(@NotBlank String revision,@NotBlank String bindingId, @NotNull String valuePath,
                                       @NotNull JsonNode correctedValue, String reason) {}
-    public record ExcludeRecordRequest(boolean excluded, String reason) {}
-    public record ComponentAnchorRequest(@NotBlank String sheetId, @NotBlank String sourceRange,
+    public record ExcludeRecordRequest(@NotBlank String revision,boolean excluded, String reason) {}
+    public record ComponentAnchorRequest(@NotBlank String revision,@NotBlank String sheetId, @NotBlank String sourceRange,
                                          @NotBlank @Size(max = 500) String reason) {}
     public record ExperimentSyncRequest(@NotNull UUID categoryId, List<String> assemblyKeys) {}
     public record FieldRequest(String fieldId, @NotBlank String displayName, String valueType,

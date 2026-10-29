@@ -74,14 +74,15 @@ public class ProductionOrderRecordController {
     }
 
     @PostMapping("/{id}/publish")
-    public ApiResponse<ProductionUploadRepository.VersionView> publish(@PathVariable UUID id) {
-        return success(service.publish(id));
+    public ApiResponse<ProductionUploadRepository.VersionView> publish(@PathVariable UUID id,@Valid @RequestBody VersionRequest request) {
+        return success(service.publish(id,request.lockVersion()));
     }
 
     private <T> ApiResponse<T> success(T value) {
         return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown());
     }
 
+    public record VersionRequest(@NotNull @Min(0) Long lockVersion) {}
     public record SaveBatchRequest(@NotNull List<@Valid SaveRecordRequest> records) {
     }
 

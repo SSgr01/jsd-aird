@@ -22,14 +22,7 @@ public class JsonCanonicalizer {
     }
 
     public String hash(JsonNode node) {
-        try {
-            var canonicalBytes = objectMapper.writeValueAsBytes(canonicalize(node));
-            return hex(MessageDigest.getInstance("SHA-256").digest(canonicalBytes));
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is not available", exception);
-        } catch (Exception exception) {
-            throw new IllegalArgumentException("JSON cannot be canonicalized", exception);
-        }
+        return CanonicalDigest.sha256(objectMapper,node);
     }
 
     public String hashText(String value) {

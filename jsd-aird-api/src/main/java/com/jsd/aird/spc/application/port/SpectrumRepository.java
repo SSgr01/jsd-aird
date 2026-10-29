@@ -6,6 +6,8 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface SpectrumRepository {
+    void lockCategory(UUID organizationId, UUID categoryId);
+    void lockChart(UUID organizationId, UUID chartId);
 
     List<CategoryRow> listCategories(UUID organizationId);
     Optional<CategoryRow> findCategory(UUID organizationId, UUID categoryId);

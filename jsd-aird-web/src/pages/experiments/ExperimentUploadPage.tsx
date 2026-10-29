@@ -265,7 +265,7 @@ export function ExperimentUploadPage() {
       submitDisabled={!experimentCategoryId || (mode === 'TEMPLATE' && !chosenTemplate)}
       rightTitle="导入历史"
       rightCount={jobs.length}
-      rightFilters={[{ key: 'ALL', label: '全部' }, { key: 'PARSING', label: '处理中' }, { key: 'WAITING_MAPPING', label: '待确认' }, { key: 'COMPLETED', label: '导入完成' }, { key: 'FAILED', label: '失败' }]}
+      rightFilters={[{ key: 'ALL', label: '全部' }, { key: 'PARSING', label: '处理中' }, { key: 'WAITING_MAPPING', label: '待核对' }, { key: 'COMPLETED', label: '导入完成' }, { key: 'FAILED', label: '失败' }]}
       activeFilter={filter}
       onFilterChange={(value) => { setFilter(value); setPage((current) => ({ ...current, current: 1 })); }}
       searchValue={keyword}
@@ -321,22 +321,22 @@ export function ExperimentUploadPage() {
             : assembly?.plan.readyCount ? { label: '草稿生成中', color: 'processing' }
               : { label: '导入完成', color: 'success' }
         : job.status === 'FAILED' ? { label: '处理失败', color: 'error' }
-          : { label: job.status === 'WAITING_MAPPING' || job.status === 'WAITING_CONFIRM' ? '待确认数据' : `处理中 ${progress}%`, color: job.status === 'WAITING_MAPPING' || job.status === 'WAITING_CONFIRM' ? 'warning' : 'processing' },
+          : { label: job.status === 'WAITING_MAPPING' || job.status === 'WAITING_CONFIRM' ? '待核对数据' : `处理中 ${progress}%`, color: job.status === 'WAITING_MAPPING' || job.status === 'WAITING_CONFIRM' ? 'warning' : 'processing' },
       progress,
-      actions: <Space size={2}><Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/experiments/template-imports/${job.id}`)}>确认数据</Button><Button type="link" icon={<ReloadOutlined />} disabled={!['FAILED', 'CANCELLED'].includes(job.status)} loading={retryingId === job.id} onClick={() => void retryTemplate(job)}>重试</Button><Popconfirm title="确认删除该导入记录？" description="删除后记录将从列表中移除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => deleteTemplate(job)}><Button type="link" danger icon={<DeleteOutlined />} disabled={ACTIVE_JOB_STATES.includes(job.status)}>删除</Button></Popconfirm><Button type="link" icon={<DownloadOutlined />} onClick={() => void dataApi.sourceBlob(job.sourceFileId).then((blob) => downloadBlob(blob, job.sourceFileName)).catch((error) => void message.error(error instanceof Error ? error.message : '原文件下载失败'))}>下载原文件</Button></Space>,
+      actions: <Space size={2}><Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/experiments/template-imports/${job.id}`)}>核对数据</Button><Button type="link" icon={<ReloadOutlined />} disabled={!['FAILED', 'CANCELLED'].includes(job.status)} loading={retryingId === job.id} onClick={() => void retryTemplate(job)}>重试</Button><Popconfirm title="确认删除该导入记录？" description="删除后记录将从列表中移除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => deleteTemplate(job)}><Button type="link" danger icon={<DeleteOutlined />} disabled={ACTIVE_JOB_STATES.includes(job.status)}>删除</Button></Popconfirm><Button type="link" icon={<DownloadOutlined />} onClick={() => void dataApi.sourceBlob(job.sourceFileId).then((blob) => downloadBlob(blob, job.sourceFileName)).catch((error) => void message.error(error instanceof Error ? error.message : '原文件下载失败'))}>下载原文件</Button></Space>,
     };
   }
 
   async function retryTemplate(job: DataJob) {
     setRetryingId(job.id);
-    try { await dataApi.retryExperimentJob(job.id); await load(); void message.success(`“${job.sourceFileName}”已加入重新处理队列`); }
+    try { await dataApi.retryExperimentJob(job.id,job.revision); await load(); void message.success(`“${job.sourceFileName}”已加入重新处理队列`); }
     catch (error) { void message.error(error instanceof Error ? error.message : '重试失败'); }
     finally { setRetryingId(undefined); }
   }
 
   async function deleteTemplate(job: DataJob) {
     try {
-      await dataApi.deleteExperimentJob(job.id);
+      await dataApi.deleteExperimentJob(job.id,job.revision);
       setAssemblyStatuses((current) => { const next = { ...current }; delete next[job.id]; return next; });
       requestedAssemblyStatuses.current.delete(job.id);
       await load();

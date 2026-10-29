@@ -22,8 +22,8 @@ export type FormulaContext = {
 export type GoalValue = number | [number | undefined, number | undefined] | { target?: number; tolerance?: number; label?: string }
 export type FormulaGoal = { targetId: string; valueType: FormulaTarget['valueType']; expectedModelVersionId?: string; operator: string; value?: GoalValue; mandatory: boolean; weight: number; minimumProbability?: number }
 export type FormulaRequest = {
-  typedGoals: FormulaGoal[]; targetTotal: number; formulaBasis: 'MASS_PERCENT'
-  baselineFormula: { basis: 'MASS_PERCENT'; compositionComplete: boolean; components: Array<{ materialId: string; ratio: number; unit: string; amountKnown: boolean }>; recordedTotal: number }
+  typedGoals: FormulaGoal[]; targetTotal: number; formulaBasis: 'ABSOLUTE_MASS' | 'MASS_PERCENT'
+  baselineFormula: { basis: 'ABSOLUTE_MASS' | 'MASS_PERCENT'; compositionComplete: boolean; components: Array<{ materialId: string; ratio: number; unit: string; amountKnown: boolean }>; recordedTotal: number }
   fixedInputs: Record<string, string | number | boolean>; searchSpace: { allowedMaterialIds: string[]; variableMaterials: Array<{ materialId: string; minimum: number; maximum: number }>; variableInputs: Record<string, { minimum: number; maximum: number; step?: number }> }; constraints: Record<string, unknown>; candidateCount: number
 }
 export type FormulaTargetResult = { targetId: string; targetName?: string; status: string; result?: TypedPrediction; prediction?: TypedPrediction; code?: string; errorCode?: string; applicability?: { status?: string } }

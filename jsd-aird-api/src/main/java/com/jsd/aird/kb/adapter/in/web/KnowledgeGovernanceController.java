@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.UUID;
 
 import com.jsd.aird.kb.application.KnowledgeGovernanceService;
+import com.jsd.aird.kb.application.KnowledgeGovernanceService.DocumentRevision;
 import com.jsd.aird.core.api.ProjectResourceFacade.ProjectRelationTarget;
 import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
 import com.jsd.aird.platform.web.RequestIdHolder;
@@ -79,7 +80,7 @@ public class KnowledgeGovernanceController {
             @PathVariable UUID documentId, @PathVariable UUID versionId,
             @Valid @RequestBody RevisionRequest request) {
         return success(service.publish(documentId, versionId, request.reviewRevisionId(), request.lockVersion(),
-                request.basePublicationId()));
+                request.basePublicationId(), request.authorizeAi()));
     }
 
     @PostMapping("/documents/{documentId}/revisions")
@@ -114,29 +115,29 @@ public class KnowledgeGovernanceController {
 
     @PostMapping("/documents/{documentId}/disable")
     public ApiResponse<Void> disable(@PathVariable UUID documentId, @Valid @RequestBody ReasonRequest request) {
-        service.lifecycle(documentId, "DISABLED", request.reason());
+        service.lifecycle(documentId, "DISABLED", request.reason(),request.revision());
         return success(null);
     }
 
     @PostMapping("/documents/{documentId}/restore")
-    public ApiResponse<Void> restore(@PathVariable UUID documentId) {
-        service.lifecycle(documentId, "ACTIVE", null);
+    public ApiResponse<Void> restore(@PathVariable UUID documentId,@Valid @RequestBody DocumentVersionRequest request) {
+        service.lifecycle(documentId, "ACTIVE", null,request.revision());
         return success(null);
     }
 
     @PostMapping("/documents/batch/move")
     public ApiResponse<List<KnowledgeGovernanceService.BatchResult>> batchMove(@Valid @RequestBody BatchMoveRequest request) {
-        return success(service.batchMove(request.documentIds(), request.categoryId()));
+        return success(service.batchMove(request.documents(), request.categoryId()));
     }
 
     @PostMapping("/documents/batch/tags")
     public ApiResponse<List<KnowledgeGovernanceService.BatchResult>> batchTags(@Valid @RequestBody BatchTagsRequest request) {
-        return success(service.batchTags(request.documentIds(), request.add(), request.remove()));
+        return success(service.batchTags(request.documents(), request.add(), request.remove()));
     }
 
     @PostMapping("/documents/batch/ai-usage")
     public ApiResponse<List<KnowledgeGovernanceService.BatchResult>> batchAiUsage(@Valid @RequestBody BatchAiRequest request) {
-        return success(service.batchAiUsage(request.documentIds(), request.action(), request.reason()));
+        return success(service.batchAiUsage(request.documents(), request.action(), request.reason()));
     }
 
     @GetMapping("/documents/{documentId}/publications")
@@ -194,7 +195,7 @@ public class KnowledgeGovernanceController {
                                 String libraryScope, @NotNull UUID categoryId, @Size(max = 50) List<String> tags,
                                 String resolution, UUID targetDocumentId,
                                 com.fasterxml.jackson.databind.JsonNode sourceInfo,
-                                List<@Valid ProjectRelationRequest> projectRelations) { }
+                                List<@NotNull @Valid ProjectRelationRequest> projectRelations) { }
     public record ProjectRelationRequest(@NotNull UUID projectId, UUID stageId, UUID taskId) { }
     public record ReviewRequest(UUID documentId, UUID versionId, @NotNull UUID reviewRevisionId,
                                 int lockVersion, UUID basePublicationId, @NotBlank String title,
@@ -204,7 +205,8 @@ public class KnowledgeGovernanceController {
                                 List<UUID> excludedReviewNodeIds,
                                 List<KnowledgeGovernanceRepository.IssueAction> issueActions) { }
     public record PublishedRevisionRequest(@NotNull UUID basePublicationId) { }
-    public record RevisionRequest(@NotNull UUID reviewRevisionId, int lockVersion, UUID basePublicationId) { }
+    public record RevisionRequest(@NotNull UUID reviewRevisionId, int lockVersion, UUID basePublicationId,
+                                  boolean authorizeAi) { }
     public record ReparseRequest(UUID reviewRevisionId, Integer lockVersion) { }
     public record RejectRequest(@NotNull UUID reviewRevisionId, int lockVersion,
                                 @NotBlank @Size(max = 1000) String reason) { }
@@ -212,11 +214,12 @@ public class KnowledgeGovernanceController {
                                      List<KnowledgeGovernanceRepository.CellPatch> patches,
                                      List<KnowledgeGovernanceRepository.RowState> rows,
                                      int rowOffset, int rowLimit, int columnOffset, int columnLimit) { }
-    public record ReasonRequest(@NotBlank @Size(max = 500) String reason) { }
-    public record BatchMoveRequest(@NotNull @Size(min = 1, max = 200) List<UUID> documentIds,
+    public record DocumentVersionRequest(@NotBlank String revision) {}
+    public record ReasonRequest(@NotBlank String revision,@NotBlank @Size(max = 500) String reason) { }
+    public record BatchMoveRequest(@NotNull @Size(min = 1, max = 200) List<@NotNull @Valid DocumentRevision> documents,
                                    @NotNull UUID categoryId) { }
-    public record BatchTagsRequest(@NotNull @Size(min = 1, max = 200) List<UUID> documentIds,
+    public record BatchTagsRequest(@NotNull @Size(min = 1, max = 200) List<@NotNull @Valid DocumentRevision> documents,
                                    @Size(max = 50) List<String> add, @Size(max = 50) List<String> remove) { }
-    public record BatchAiRequest(@NotNull @Size(min = 1, max = 200) List<UUID> documentIds,
+    public record BatchAiRequest(@NotNull @Size(min = 1, max = 200) List<@NotNull @Valid DocumentRevision> documents,
                                  @NotBlank String action, @Size(max = 500) String reason) { }
 }

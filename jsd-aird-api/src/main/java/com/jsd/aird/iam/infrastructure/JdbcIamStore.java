@@ -273,6 +273,15 @@ public class JdbcIamStore implements IamStore {
                 """, (rs, row) -> session(rs, row), hash(token)).stream().findFirst();
     }
 
+    public void lockAdministration(UUID org){jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?,0))",rs->{},"iam-administration:"+org);}
+    public void lockUser(UUID org,UUID id){lockRow("iam.app_user",org,id);}
+    public void lockRole(UUID org,UUID id){lockRow("iam.role",org,id);}
+    public void bumpUserVersion(UUID org,UUID id){jdbc.update("UPDATE iam.app_user SET auth_version=auth_version+1 WHERE organization_id=? AND id=?",org,id);}
+    private void lockRow(String table,UUID org,UUID id){
+        if(jdbc.query("SELECT id FROM "+table+" WHERE organization_id=? AND id=? FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),org,id).isEmpty())
+            throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,"用户或角色不存在");
+    }
+
     @Override
     public Optional<Session> activeSession(String token) {
         return jdbc.query("""

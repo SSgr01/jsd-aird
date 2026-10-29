@@ -29,31 +29,31 @@ public class MyBatisProjectRepository implements ProjectRepository {
 
     @Override
     public List<Project> findPage(ProjectQuery query) {
-        return mapper.findPage(query.keyword(), query.owner(), name(query.priority()), name(query.status()),
+        return mapper.findPage(ActorContext.required().organizationId(), query.keyword(), query.owner(), name(query.priority()), name(query.status()),
                 query.partnerId(), query.startDateFrom(), query.startDateTo(), query.offset(), query.size())
             .stream().map(MyBatisProjectRepository::toProject).toList();
     }
 
     @Override
     public long count(ProjectQuery query) {
-        return mapper.count(query.keyword(), query.owner(), name(query.priority()), name(query.status()),
+        return mapper.count(ActorContext.required().organizationId(), query.keyword(), query.owner(), name(query.priority()), name(query.status()),
             query.partnerId(), query.startDateFrom(), query.startDateTo());
     }
 
     @Override
     public Optional<Project> findById(UUID id) {
-        return mapper.findById(id).map(MyBatisProjectRepository::toProject);
+        return mapper.findById(ActorContext.required().organizationId(), id).map(MyBatisProjectRepository::toProject);
     }
 
     @Override
     public List<Project> findAllByIds(List<UUID> ids) {
         if (ids == null || ids.isEmpty()) return List.of();
-        return mapper.findAllByIds(ids).stream().map(MyBatisProjectRepository::toProject).toList();
+        return mapper.findAllByIds(ActorContext.required().organizationId(), ids).stream().map(MyBatisProjectRepository::toProject).toList();
     }
 
     @Override
     public boolean existsByProjectCode(String projectCode, UUID excludedId) {
-        return mapper.existsByProjectCode(projectCode, excludedId);
+        return mapper.existsByProjectCode(ActorContext.required().organizationId(), projectCode, excludedId);
     }
 
     @Override
@@ -66,36 +66,36 @@ public class MyBatisProjectRepository implements ProjectRepository {
 
     @Override
     public boolean update(Project project, long version, String operator) {
-        return mapper.update(project.id(), project.projectCode(), project.name(), project.partnerId(),
+        return mapper.update(ActorContext.required().organizationId(), project.id(), project.projectCode(), project.name(), project.partnerId(),
             project.partnerName(), project.owner(), project.startDate(), project.endDate(),
             project.priority().name(), project.status().name(), project.teamSize(), project.background(),
             json(project.customFields()), json(project.teamMembers()), version, operator) == 1;
     }
 
     @Override
-    public boolean softDelete(UUID id, String operator) {
-        return mapper.softDelete(id, operator) == 1;
+    public boolean softDelete(UUID id, long expectedVersion, String operator) {
+        return mapper.softDelete(ActorContext.required().organizationId(), id, expectedVersion, operator) == 1;
     }
 
     @Override
     public String nextProjectCode(int year) {
         var prefix = "JSD-PM-" + year + "-";
-        return prefix + String.format("%03d", mapper.maxSequence(prefix) + 1);
+        return prefix + String.format("%03d", mapper.maxSequence(ActorContext.required().organizationId(), prefix) + 1);
     }
 
     @Override
     public void assignPartner(UUID projectId, UUID partnerId, String partnerName, String operator) {
-        mapper.assignPartner(projectId, partnerId, partnerName, operator);
+        mapper.assignPartner(ActorContext.required().organizationId(), projectId, partnerId, partnerName, operator);
     }
 
     @Override
     public void clearPartner(UUID projectId, UUID partnerId, String operator) {
-        mapper.clearPartner(projectId, partnerId, operator);
+        mapper.clearPartner(ActorContext.required().organizationId(), projectId, partnerId, operator);
     }
 
     @Override
     public void refreshPartnerName(UUID partnerId, String partnerName, String operator) {
-        mapper.refreshPartnerName(partnerId, partnerName, operator);
+        mapper.refreshPartnerName(ActorContext.required().organizationId(), partnerId, partnerName, operator);
     }
 
     private static String name(Enum<?> value) {

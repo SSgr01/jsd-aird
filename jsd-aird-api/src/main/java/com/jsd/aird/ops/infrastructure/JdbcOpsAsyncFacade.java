@@ -7,6 +7,8 @@ import java.util.Optional;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
+import com.jsd.aird.shared.resource.CapacityProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -18,9 +20,26 @@ import org.springframework.transaction.annotation.Transactional;
 public class JdbcOpsAsyncFacade implements OpsAsyncFacade {
 
     private final JdbcTemplate jdbc;
+    private final CapacityProperties limits;
 
     public JdbcOpsAsyncFacade(JdbcTemplate jdbc) {
+        this(jdbc, CapacityProperties.defaults());
+    }
+
+    @Autowired
+    public JdbcOpsAsyncFacade(JdbcTemplate jdbc, CapacityProperties limits) {
         this.jdbc = jdbc;
+        this.limits = limits;
+    }
+    @Override @Transactional
+    public void requireExecution(com.jsd.aird.ops.application.port.AsyncJobHandler.ExecutionContext context,boolean terminal){
+        if(context==null)return;
+        boolean valid=!jdbc.query("""
+            SELECT id FROM ops.async_job WHERE id=? AND organization_id=? AND lease_generation=?
+                AND ((?=false AND status='RUNNING' AND lease_token=? AND lease_expires_at>now())
+                  OR (?=true AND status='FAILED')) FOR UPDATE
+            """,(rs,n)->rs.getObject(1),context.jobId(),context.organizationId(),context.leaseGeneration(),terminal,context.leaseToken(),terminal).isEmpty();
+        if(!valid)throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"旧任务租期已失效");
     }
 
     @Override
@@ -135,6 +154,22 @@ public class JdbcOpsAsyncFacade implements OpsAsyncFacade {
                 rs.getInt("max_attempts"), instant(rs.getTimestamp("next_attempt_at")),
                 rs.getString("last_error"), instant(rs.getTimestamp("finished_at"))),
                 organizationId, idempotencyKeyPrefix + "%").stream().findFirst();
+    }
+
+    @Override
+    public QueueCapacityView queueCapacity(UUID organizationId) {
+        var counts = jdbc.queryForObject("""
+                SELECT count(*) FILTER (WHERE status IN ('READY', 'RUNNING')) AS total_active,
+                       count(*) FILTER (WHERE organization_id = ? AND status IN ('READY', 'RUNNING')) AS organization_active
+                FROM ops.async_job
+                """, (rs, ignored) -> new int[]{rs.getInt("total_active"), rs.getInt("organization_active")},
+                organizationId);
+        var totalActive = counts == null ? 0 : counts[0];
+        var organizationActive = counts == null ? 0 : counts[1];
+        var available = Math.max(0, Math.min(limits.pendingJobs() - totalActive,
+                limits.organizationPendingJobs() - organizationActive));
+        return new QueueCapacityView(organizationActive, limits.organizationPendingJobs(), totalActive,
+                limits.pendingJobs(), available, 2);
     }
 
     @Override

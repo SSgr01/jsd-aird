@@ -1,3 +1,10 @@
+import { updateFieldDefinition } from '@/features/template-workspace/field-editing';
+import { deleteWorkbookField, addWorkbookField } from '@/features/template-workspace/workbook-instance';
+import { DocsEditor, SheetsEditor } from '@/features/template-workspace/editor-runtime';
+import { ContentLoading } from '@/components/loading/ContentLoading';
+import { trackSnapshot } from '@/features/template-workspace/workspace-loading';
+import { markPerformance } from '@/services/performance/metrics';
+import { editorUnchanged, flushEditorChanges, mergeAcknowledgement, pauseWorkspaceInputs, snapshotBlob, useSaveSession } from '@/features/template-workspace/editor-save';
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
@@ -26,15 +33,13 @@ import {
   Modal,
   Progress,
   Result,
-  Skeleton,
   Space,
-  Spin,
   Tabs,
   Tag,
   Timeline,
   Typography,
 } from 'antd';
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { generateUUID } from '@/utils/uuid';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
@@ -47,7 +52,6 @@ import {
   prepareFormalSchema,
   readFieldModel,
   removeBusinessField,
-  templateLocalFieldCode,
   updateBusinessField,
   writeFieldModel,
 } from '@/features/template-workspace/field-model';
@@ -59,7 +63,7 @@ import {
   synchronizeStructuredData,
   type BindingValuePair,
 } from '@/features/template-workspace/structured-data';
-import { createCustomFieldWorkspace, expandAdjacentRepeatRegion } from '@/features/template-workspace/custom-field-operations';
+import { expandAdjacentRepeatRegion } from '@/features/template-workspace/custom-field-operations';
 import {
   groupCode,
   normalizeFieldModel,
@@ -81,18 +85,13 @@ import {
   hasUnplacedWordFields,
   type PublishReviewSyncState,
 } from '@/features/template-workspace/publish-readiness';
-import { migrateWorkspaceStructure } from '@/features/template-workspace/structure-migration';
+import { createWorkbookInstance, type WorkbookTemplateInstance } from '@/features/template-workspace/workbook-instance';
 import {
   locatorLabelRange,
   locatorValueRange,
   mergeLocators,
   synchronizeLocatorCoordinates,
 } from '@/features/template-workspace/locator';
-import {
-  isSingleCellAddress,
-  isStructuredDataCell,
-  potentialFieldLabel,
-} from '@/features/template-workspace/live-field-discovery';
 import type {
   BusinessField,
   EditorHandle,
@@ -116,6 +115,7 @@ import type {
   TemplateVersionReview,
 } from '@/services/templates/template-api';
 import { DocumentOutlinePanel } from '@/features/template-workspace/DocumentOutlinePanel';
+import { preloadWorkspaceEditor } from '@/features/template-workspace/preload-editor';
 
 function isRegionModelField(field: BusinessField) {
   return field.displayRole === 'REGION' || ['FORM_REGION', 'ROW_TABLE', 'COLUMN_TABLE'].includes(
@@ -128,19 +128,11 @@ import {
   type FieldManagerTab,
   TemplateFieldManager,
 } from './TemplateFieldManager';
+import type { ProjectionRangeTarget } from '@/features/template-workspace/list-projection';
 import { RecognitionReviewPanel } from './RecognitionReviewPanel';
-import type { ProjectionRangeTarget } from './ExperimentSemanticsPanel';
 import { normalizeAddress, validateAddress } from './coordinates';
 
-const SheetsEditor = lazy(async () => {
-  const module = await import('@/features/template-workspace/UniverSheetsEditor');
-  return { default: module.UniverSheetsEditor };
-});
 
-const DocsEditor = lazy(async () => {
-  const module = await import('@/features/template-workspace/UniverDocsEditor');
-  return { default: module.UniverDocsEditor };
-});
 
 type SaveState = 'SAVED' | 'DIRTY' | 'SAVING' | 'FAILED' | 'CONFLICT';
 type WorkspaceView = 'preview' | 'edit' | 'versions';
@@ -152,9 +144,11 @@ export function TemplateWorkspacePage() {
   const [searchParams] = useSearchParams();
   const { message, modal } = App.useApp();
   const editorRef = useRef<EditorHandle>(null);
+  const saveSession = useSaveSession(versionId);
+  const workspaceRootRef = useRef<HTMLElement>(null);
+  const savedGenerationRef = useRef(0);
   const autoAppendKeysRef = useRef(new Set<string>());
   const selectionCycleRef = useRef({ key: '', index: 0 });
-  const unboundChangeTimersRef = useRef(new Map<string, number>());
   const [workspace, setWorkspace] = useState<TemplateWorkspace>();
   const [snapshot, setSnapshot] = useState<Record<string, unknown>>();
   const [schema, setSchema] = useState<Record<string, unknown>>({});
@@ -181,10 +175,7 @@ export function TemplateWorkspacePage() {
   const [loadError, setLoadError] = useState<string>();
   const [versionHistory, setVersionHistory] = useState<TemplateVersionHistoryItem[]>([]);
   const [picking, setPicking] = useState<{ fieldId: string; target: CoordinateTarget }>();
-  const [projectionPicking, setProjectionPicking] = useState<{
-    projectionId: string;
-    target: ProjectionRangeTarget;
-  }>();
+  const [projectionPicking, setProjectionPicking] = useState<{ projectionId: string; target: ProjectionRangeTarget }>();
   const [groupManagerOpen, setGroupManagerOpen] = useState(false);
   const [groupDrafts, setGroupDrafts] = useState<FieldModel['groups']>([]);
   const [fieldManagerTab, setFieldManagerTab] = useState<FieldManagerTab>('structure');
@@ -204,35 +195,41 @@ export function TemplateWorkspacePage() {
   const [recognitionJob, setRecognitionJob] = useState<TemplateImportJob>();
   const [recognitionBusy, setRecognitionBusy] = useState(false);
   const [structureOperations, setStructureOperations] = useState<WorkbookStructureOperation[]>([]);
-  const savedSnapshotSignatureRef = useRef<string>();
-  const savingSnapshotSignatureRef = useRef<string>();
-  const suppressEditorDirtyRef = useRef(false);
+  const savedEditorRef = useRef<{ editor: EditorHandle; revision: number | undefined }>();
+  const latestSaveRef = useRef({ workspace, schema, mapping, fieldModel, data, recognitionActions, recognitionAlternativeSelections, qualityActions, structureOperations });
+  latestSaveRef.current = { workspace, schema, mapping, fieldModel, data, recognitionActions, recognitionAlternativeSelections, qualityActions, structureOperations };
   const pendingEditorOperationsRef = useRef<Set<Promise<void>>>(new Set());
   const editGenerationRef = useRef(0);
   const savePromiseRef = useRef<Promise<boolean>>();
+  const saveOwnerRef = useRef<object>();
   const saveRef = useRef<(recognitionOverride?: {
     recognitionItemId: string;
     action: RecognitionAction;
     selectedAlternativeId?: string;
-  }) => Promise<boolean>>(async () => false);
+  }) => Promise<boolean>>(() => Promise.resolve(false));
   const isDesktop = useDesktopEditing();
 
   useEffect(() => {
     if (!versionId) return;
+    markPerformance('workspace-open');
+    setWorkspace(undefined); setSnapshot(undefined); setLoadError(undefined);
     let active = true;
     const load = async () => {
       try {
         const model = await templateApi.getEditModel(versionId);
-        const [history, review, versionReview] = await Promise.all([
-          templateApi.listVersions(model.templateId).catch(() => []),
+        if (!active) return;
+        if (requestedView !== 'versions') preloadWorkspaceEditor(model.format);
+        void templateApi.listVersions(model.templateId).then(history => { if (active) setVersionHistory(history); }).catch(() => undefined);
+        const [review, versionReview, originalSnapshot] = await Promise.all([
             model.recognitionRunId
               ? templateApi.getRecognitionReview(model.versionId).catch(() => undefined)
             : Promise.resolve(undefined),
           templateApi.review(model.versionId).catch(() => undefined),
+          model.snapshotFileId && model.snapshotHash
+            ? trackSnapshot(templateApi.downloadSnapshot(model.snapshotFileId))
+            : Promise.resolve(model.inlineSnapshot),
         ]);
-        let loadedSnapshot = model.snapshotFileId && model.snapshotHash
-          ? await templateApi.downloadSnapshot(model.snapshotFileId)
-          : model.inlineSnapshot;
+        let loadedSnapshot = originalSnapshot;
         // Some legacy saves persisted the JSON literal `null` as a staged
         // snapshot. Recognition can still use the original Office file, but
         // Univer cannot mount that value and the page otherwise remains on
@@ -319,8 +316,8 @@ export function TemplateWorkspacePage() {
         );
         setData(model.data ?? {});
         setSnapshot(loadedSnapshot);
-        savedSnapshotSignatureRef.current = snapshotSignature(loadedSnapshot);
-        setVersionHistory(history);
+        savedEditorRef.current = undefined;
+        savedGenerationRef.current = 0;
         setView(requestedView === 'versions' ? 'versions'
           : requestedView === 'preview' ? 'preview'
             : model.status === 'DRAFT' ? 'edit' : 'preview');
@@ -342,15 +339,16 @@ export function TemplateWorkspacePage() {
 
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
-      if (['DIRTY', 'FAILED', 'CONFLICT'].includes(saveState)) event.preventDefault();
+      const editor = editorRef.current;
+      editor?.flushChanges?.();
+      const baseline = savedEditorRef.current?.revision ?? 0;
+      if (['DIRTY', 'FAILED', 'CONFLICT', 'SAVING'].includes(saveState) || (editor?.getContentRevision && editor.getContentRevision() !== baseline)) event.preventDefault();
     };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [saveState]);
 
   useEffect(() => () => {
-    unboundChangeTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-    unboundChangeTimersRef.current.clear();
   }, []);
 
   const markDirty = useCallback(() => {
@@ -359,8 +357,16 @@ export function TemplateWorkspacePage() {
     setSaveState((current) => (current === 'SAVING' ? current : 'DIRTY'));
   }, []);
 
+  const hasPendingChanges = () => {
+    const editor = editorRef.current;
+    const baseline = savedEditorRef.current?.revision ?? 0;
+    return editGenerationRef.current !== savedGenerationRef.current
+      || Boolean(editor?.getContentRevision && editor.getContentRevision() !== baseline);
+  };
+
   const clearSelectedExperimentValues = useCallback(() => {
-    const clearRangeConstants = editorRef.current?.clearRangeConstants;
+    const editor = editorRef.current;
+    const clearRangeConstants = editor?.clearRangeConstants?.bind(editor);
     if (!activeSelection || workspace?.format !== 'XLSX' || !clearRangeConstants) {
       return;
     }
@@ -395,33 +401,24 @@ export function TemplateWorkspacePage() {
     // Saving updates the parent model and refreshes the review panel. Those
     // state changes must not be mistaken for a new Univer edit.
     if (workspace?.status !== 'DRAFT') return;
-    const currentSnapshot = editorRef.current?.getSnapshot();
-    if (suppressEditorDirtyRef.current) {
-      if (currentSnapshot && savingSnapshotSignatureRef.current
-          && snapshotSignature(currentSnapshot) !== savingSnapshotSignatureRef.current) markDirty();
-      return;
-    }
-    if (
-      currentSnapshot &&
-      savedSnapshotSignatureRef.current === snapshotSignature(currentSnapshot)
-    ) {
-      return;
-    }
     markDirty();
   }, [markDirty, workspace?.status]);
 
   const waitForPendingEditorOperations = async () => {
     for (let attempt = 0; attempt < 4; attempt += 1) {
+      flushEditorChanges(editorRef.current);
       const pending = [...pendingEditorOperationsRef.current];
-      if (pending.length) await Promise.all(pending);
-      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-      if (!pendingEditorOperationsRef.current.size) return;
+      if (!pending.length) return;
+      await Promise.all(pending);
     }
+    flushEditorChanges(editorRef.current);
+    if (pendingEditorOperationsRef.current.size) throw new Error('编辑器操作仍在进行，本次内容尚未提交');
   };
 
   const refreshRecognitionReview = async (
     notifyOnFailure = false,
     base?: { schema: Record<string, unknown>; mapping: TemplateBinding[]; model: FieldModel },
+    canApply: () => boolean = () => true,
   ): Promise<boolean> => {
     if (!versionId || !workspace?.recognitionRunId) {
       setReviewSyncState('FRESH');
@@ -430,6 +427,7 @@ export function TemplateWorkspacePage() {
     setReviewSyncState('REFRESHING');
     try {
       const latestReview = await templateApi.getRecognitionReview(versionId);
+      if (!canApply()) return false;
       // A structure confirmation is applied on the server during save.  The
       // resulting REGION_FIELDS suggestions are therefore not present in the
       // previous client model; merge the refreshed review immediately so the
@@ -453,6 +451,7 @@ export function TemplateWorkspacePage() {
       setReviewSyncState('FRESH');
       return true;
     } catch (error) {
+      if (!canApply()) return false;
       setReviewSyncState('STALE');
       if (notifyOnFailure) {
         void message.warning(
@@ -514,23 +513,23 @@ export function TemplateWorkspacePage() {
     action: RecognitionAction;
     selectedAlternativeId?: string;
   }): Promise<boolean> => {
-    if (!workspace || !versionId || !editorRef.current) return false;
-    const unnamed = workspace.format === 'XLSX'
-      ? fieldModel.fields.find((field) => !(field.name ?? '').trim())
-      : undefined;
-    if (unnamed) {
-      setSelectedFieldId(unnamed.id);
-      void message.warning('请先填写字段名称');
-      return false;
-    }
-    suppressEditorDirtyRef.current = true;
-    savingSnapshotSignatureRef.current = snapshotSignature(editorRef.current.getSnapshot());
+    const editor = editorRef.current;
+    const session = saveSession.current;
+    const isCurrent = () => session.active && saveSession.current === session && editorRef.current === editor;
+    if (!latestSaveRef.current.workspace || !versionId || !editor) return false;
     setSaveState('SAVING');
-    const saveGeneration = editGenerationRef.current;
     try {
       await waitForPendingEditorOperations();
-      const currentSnapshot = editorRef.current.getSnapshot();
-      savingSnapshotSignatureRef.current = snapshotSignature(currentSnapshot);
+      if (!isCurrent() || editorRef.current !== editor) { if (isCurrent()) setSaveState('DIRTY'); return false; }
+      flushEditorChanges(editor);
+      const { workspace, schema, mapping, fieldModel, data, recognitionActions, recognitionAlternativeSelections, qualityActions, structureOperations } = latestSaveRef.current;
+      if (!workspace) { setSaveState('DIRTY'); return false; }
+      const unnamed = workspace.format === 'XLSX' ? fieldModel.fields.find(field => !(field.name ?? '').trim()) : undefined;
+      if (unnamed) { setSelectedFieldId(unnamed.id); setSaveState('DIRTY'); void message.warning('请先填写字段名称'); return false; }
+      const currentSnapshot = editor.getSnapshot();
+      const revision = editor.getContentRevision?.();
+      const saveGeneration = editGenerationRef.current;
+      const upload = snapshotBlob(currentSnapshot, workspace.format);
       const formalMapping = prepareFormalMappings(mapping, fieldModel)
         .filter((binding) => workspace.format !== 'DOCX' || Boolean(binding.markerId));
       const synchronized = workspace.format === 'DOCX'
@@ -538,11 +537,12 @@ export function TemplateWorkspacePage() {
         : synchronizeStructuredData(
             data,
             formalMapping,
-            (binding) => editorRef.current?.readBinding(binding),
+            (binding) => editor.readBinding(binding),
           );
       const synchronizedData = synchronized.data;
       const bindingValues = synchronized.bindingValues;
-      const staged = await templateApi.stageSnapshot(currentSnapshot, workspace.format);
+      const staged = await templateApi.stageSnapshot(upload, workspace.format);
+      if (!isCurrent()) return false;
       const savedSchema = prepareFormalSchema(schema, fieldModel);
       const effectiveRecognitionActions = {
         ...recognitionActions,
@@ -564,8 +564,8 @@ export function TemplateWorkspacePage() {
         data: synchronizedData,
         snapshotFileId: staged?.fileId ?? workspace.snapshotFileId,
         snapshotHash: staged?.sha256 ?? workspace.snapshotHash,
-         editorAppVersion: workspace.format === 'DOCX' ? 'univer-docs-0.25.1' : 'univer-0.25.1',
-         pluginManifest: workspace.format === 'DOCX' ? 'word-document-v1' : 'business-editor-v2',
+         editorAppVersion: workspace.format === 'DOCX' ? 'univer-docs-1.2.0' : 'univer-1.2.0',
+         pluginManifest: workspace.format === 'DOCX' ? 'word-document-1.2.0' : 'business-editor-1.2.0',
         snapshotFormatVersion: snapshotVersion(currentSnapshot, workspace.snapshotFormatVersion),
          clientCommandSummary: workspace.format === 'DOCX'
            ? 'word-document-save'
@@ -589,14 +589,19 @@ export function TemplateWorkspacePage() {
         wordPatch: [],
         wordPatchBaseHash: undefined,
       });
-      savedSnapshotSignatureRef.current = snapshotSignature(currentSnapshot);
-      setData(synchronizedData);
+      if (!isCurrent()) return false;
+      const unchanged = () => editGenerationRef.current === saveGeneration && editorUnchanged(editorRef.current, editor, revision);
+      savedEditorRef.current = { editor, revision };
+      savedGenerationRef.current = saveGeneration;
+      setData(current => current === data ? synchronizedData : current);
       const persistedSchema = result.schema ?? savedSchema;
       const persistedMapping = result.mapping ?? formalMapping;
-      setSchema(persistedSchema);
-      setMapping(persistedMapping);
-      setWorkspace({
-        ...workspace,
+      setSchema(current => mergeAcknowledgement(schema, current, persistedSchema));
+      setMapping(current => mergeAcknowledgement(mapping, current, persistedMapping));
+      const persistedModel = readFieldModel(persistedSchema, persistedMapping, currentSnapshot);
+      setFieldModel(current => mergeAcknowledgement(fieldModel, current, persistedModel));
+      setWorkspace(current => current && ({
+        ...current,
         lockVersion: result.lockVersion,
         workspaceHash: result.workspaceHash,
         snapshotFileId: staged?.fileId ?? workspace.snapshotFileId,
@@ -604,21 +609,23 @@ export function TemplateWorkspacePage() {
         reconciliationRequired: result.reconciliationRequired,
         wordDocument: result.wordDocument ?? workspace.wordDocument,
         documentStructure: result.documentStructure ?? workspace.documentStructure,
-      });
+      }));
       // The live editor already contains currentSnapshot. Replacing the
       // snapshot prop here remounts Univer after every save and emits stale
       // command/selection events, which used to turn a successful save back
       // into “未保存” and could briefly create two editor instances.
-      setRecognitionActions({});
-      setRecognitionAlternativeSelections({});
-      setQualityActions({});
-      setStructureOperations([]);
-      const reviewRefreshed = await refreshRecognitionReview(true, {
+      setRecognitionActions(current => Object.fromEntries(Object.entries(current).filter(([key, value]) => effectiveRecognitionActions[key] !== value || latestSaveRef.current.recognitionAlternativeSelections[key] !== effectiveAlternativeSelections[key])));
+      setRecognitionAlternativeSelections(current => Object.fromEntries(Object.entries(current).filter(([key, value]) => effectiveAlternativeSelections[key] !== value || latestSaveRef.current.recognitionActions[key] !== effectiveRecognitionActions[key])));
+      setQualityActions(current => Object.fromEntries(Object.entries(current).filter(([key, value]) => qualityActions[key] !== value)));
+      const submittedOperations = new Set(structureOperations.map(operation => operation.operationId));
+      setStructureOperations(current => current.filter(operation => !submittedOperations.has(operation.operationId)));
+      const reviewRefreshed = unchanged() && await refreshRecognitionReview(false, {
         schema: persistedSchema,
         mapping: persistedMapping,
         model: fieldModel,
-      });
-      setSaveState(editGenerationRef.current === saveGeneration ? 'SAVED' : 'DIRTY');
+      }, () => isCurrent() && unchanged());
+      if (!isCurrent()) return false;
+      setSaveState(unchanged() ? 'SAVED' : 'DIRTY');
       if (reviewRefreshed) {
         void message.success(
           recognitionOverride
@@ -628,6 +635,7 @@ export function TemplateWorkspacePage() {
       }
       return true;
     } catch (error) {
+      if (!isCurrent()) return false;
       if (error instanceof HttpError && error.code === 'OPTIMISTIC_LOCK_CONFLICT') {
         setSaveState('CONFLICT');
         modal.confirm({
@@ -635,7 +643,7 @@ export function TemplateWorkspacePage() {
           content: '本地内容仍然保留。重新加载后可以继续处理，系统不会覆盖其他人的修改。',
           okText: '重新加载',
           cancelText: '先保留本地内容',
-          onOk: () => window.location.reload(),
+          onOk: () => { if (isCurrent()) window.location.reload(); },
         });
       } else {
         setSaveState('FAILED');
@@ -645,18 +653,15 @@ export function TemplateWorkspacePage() {
         // was accepted while REGION_FIELDS was rolled back.
         try {
           const persistedReview = await templateApi.getRecognitionReview(versionId);
-          setRecognitionReview(persistedReview);
-          setRecognitionActions({});
-          setRecognitionAlternativeSelections({});
+          if (isCurrent()) setRecognitionReview(persistedReview);
         } catch {
           // Keep the local draft visible when the recovery request itself is unavailable.
         }
-        void message.error(saveErrorMessage(error));
+        if (isCurrent()) void message.error(saveErrorMessage(error));
       }
       return false;
     } finally {
-      suppressEditorDirtyRef.current = false;
-      savingSnapshotSignatureRef.current = undefined;
+      if (session.active && saveSession.current === session && editorRef.current !== editor) setSaveState('DIRTY');
     }
   };
 
@@ -665,15 +670,17 @@ export function TemplateWorkspacePage() {
     action: RecognitionAction;
     selectedAlternativeId?: string;
   }): Promise<boolean> => {
-    if (savePromiseRef.current) {
+    const owner = saveSession.current;
+    if (savePromiseRef.current && saveOwnerRef.current === owner) {
       return recognitionOverride
-        ? savePromiseRef.current.then(() => saveRef.current(recognitionOverride))
+        ? savePromiseRef.current.then(() => saveSession.current === owner && owner.active ? saveRef.current(recognitionOverride) : false)
         : savePromiseRef.current;
     }
     const pending = performSave(recognitionOverride).finally(() => {
       if (savePromiseRef.current === pending) savePromiseRef.current = undefined;
     });
     savePromiseRef.current = pending;
+    saveOwnerRef.current = owner;
     return pending;
   };
   saveRef.current = save;
@@ -697,6 +704,11 @@ export function TemplateWorkspacePage() {
 
   const publishNow = async () => {
     if (!workspace || !versionId) return;
+    const session = saveSession.current;
+    const isCurrent = () => session.active && saveSession.current === session;
+    const resume = pauseWorkspaceInputs(workspaceRootRef.current);
+    flushEditorChanges(editorRef.current);
+    if (hasPendingChanges() || savePromiseRef.current) { resume(); void message.warning('请先保存当前内容再发布'); return; }
     setPublishBusy(true);
     try {
       await templateApi.publish(versionId);
@@ -704,6 +716,7 @@ export function TemplateWorkspacePage() {
         templateApi.getEditModel(versionId),
         templateApi.listVersions(workspace.templateId).catch(() => versionHistory),
       ]);
+      if (!isCurrent()) return;
       setWorkspace(publishedWorkspace);
       setVersionHistory(refreshedHistory);
       // A published version is immutable. Clear any draft indicator left by
@@ -713,14 +726,17 @@ export function TemplateWorkspacePage() {
       setView('preview');
       void message.success('模板已发布，当前版本已锁定');
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : '发布失败');
+      if (isCurrent()) void message.error(error instanceof Error ? error.message : '发布失败');
     } finally {
-      setPublishBusy(false);
+      resume();
+      if (isCurrent()) setPublishBusy(false);
     }
   };
 
   const submitTemplateReview = async (cleanupConfirmed = false) => {
-    if (!versionId) return;
+    if (!versionId || !workspace || !templateReview) return;
+    flushEditorChanges(editorRef.current);
+    if (hasPendingChanges() || savePromiseRef.current) { void message.warning('请先保存当前内容再提交审核'); return; }
     if (workspace?.origin?.type === 'EXPERIMENT' && !cleanupConfirmed) {
       modal.confirm({
         title: '确认已清理实验数据？',
@@ -731,21 +747,26 @@ export function TemplateWorkspacePage() {
       });
       return;
     }
+    const session = saveSession.current;
+    const resume = pauseWorkspaceInputs(workspaceRootRef.current);
     try {
-      setTemplateReview(await templateApi.submitReview(
+      const review = await templateApi.submitReview(
         versionId,
+        { workspaceVersion: workspace.lockVersion, reviewVersion: templateReview.lockVersion },
         workspace?.origin?.type === 'EXPERIMENT' ? true : undefined,
-      ));
+      );
+      if (!session.active || saveSession.current !== session) return;
+      setTemplateReview(review);
       void message.success('模板已提交审核');
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : '提交审核失败');
-    }
+      if (session.active && saveSession.current === session) void message.error(error instanceof Error ? error.message : '提交审核失败');
+    } finally { resume(); }
   };
 
   const approveTemplateReview = async () => {
-    if (!versionId) return;
+    if (!versionId || !workspace || !templateReview) return;
     try {
-      setTemplateReview(await templateApi.approveReview(versionId));
+      setTemplateReview(await templateApi.approveReview(versionId, { workspaceVersion: workspace.lockVersion, reviewVersion: templateReview.lockVersion }));
       void message.success('模板审核已通过');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '审核通过失败');
@@ -753,12 +774,12 @@ export function TemplateWorkspacePage() {
   };
 
   const rejectTemplateReview = async () => {
-    if (!versionId || !rejectReason.trim()) {
+    if (!versionId || !workspace || !templateReview || !rejectReason.trim()) {
       void message.warning('请填写驳回原因');
       return;
     }
     try {
-      setTemplateReview(await templateApi.rejectReview(versionId, rejectReason.trim()));
+      setTemplateReview(await templateApi.rejectReview(versionId, { workspaceVersion: workspace.lockVersion, reviewVersion: templateReview.lockVersion }, rejectReason.trim()));
       setRejectReviewOpen(false);
       setRejectReason('');
       void message.success('模板已驳回');
@@ -788,7 +809,8 @@ export function TemplateWorkspacePage() {
 
   const exportTemplate = async (targetVersionId: string, state: 'DRAFT' | 'PUBLISHED') => {
     if (!workspace) return;
-    if (state === 'DRAFT' && saveState !== 'SAVED') {
+    flushEditorChanges(editorRef.current);
+    if (state === 'DRAFT' && hasPendingChanges()) {
       if (!(await save())) return;
     }
     try {
@@ -814,18 +836,19 @@ export function TemplateWorkspacePage() {
 
   const requestPublish = () => {
     if (!workspace || workspace.status !== 'DRAFT') return;
+    flushEditorChanges(editorRef.current);
     if (templateReview?.status !== 'APPROVED') {
       void message.warning('请先提交并通过模板审核');
       return;
     }
     if (workspace.format === 'DOCX') {
       void (async () => {
-        if (saveState !== 'SAVED' && !(await save())) return;
+        if (hasPendingChanges() && !(await save())) return;
         await publishNow();
       })();
       return;
     }
-    const readinessBlocker = publishReadinessBlocker(saveState, reviewSyncState, templateReview?.status);
+    const readinessBlocker = publishReadinessBlocker(hasPendingChanges() ? 'DIRTY' : saveState, reviewSyncState, templateReview?.status);
     if (readinessBlocker) {
       setFieldManagerTab('recognition');
       void message.warning(readinessBlocker);
@@ -1021,71 +1044,6 @@ export function TemplateWorkspacePage() {
     );
   };
 
-  const handleEditorLabel = (binding: TemplateBinding, value: unknown) => {
-    const field = fieldModel.fields.find((item) => fieldMatchesIdentity(item, {
-      bindingId: binding.bindingId,
-      relationId: binding.relationId,
-      fieldId: binding.fieldId,
-    }));
-    if (!field) return;
-    const name = editorLabelText(value);
-    if (field.name === name) return;
-
-    const updated = updateBusinessField(schema, fieldModel, field.id, {
-      name,
-      reviewStatus: 'CONFIRMED',
-    });
-    setSchema(updated.schema);
-    setFieldModel(updated.model);
-          setMapping((current) =>
-      current.map((item) =>
-        bindingMatchesIdentity(item, {
-          bindingId: binding.bindingId,
-          relationId: binding.relationId,
-          fieldId: binding.fieldId,
-        })
-          ? {
-              ...item,
-              ...(workspace?.format === 'DOCX'
-                ? { locator: { ...item.locator, text: name } }
-                : {}),
-              diagnostic: { ...item.diagnostic, displayName: name },
-            }
-          : item,
-      ),
-    );
-    setRecognitionReview((current) => {
-      if (!current) return current;
-      const matchingItem = current.items.find(
-        (item) => fieldMatchesIdentity(field, {
-          bindingId: item.payload.bindingId,
-          relationId: item.payload.relationId,
-          fieldId: item.payload.fieldId,
-          recognitionItemId: item.id,
-        }),
-      );
-      if (!matchingItem) return current;
-      const renamed = {
-        ...current,
-        items: current.items.map((item) =>
-          item.id === matchingItem.id
-            ? {
-                ...item,
-                fieldName: name,
-                payload: { ...item.payload, fieldName: name },
-              }
-            : item,
-        ),
-      };
-      return updateRecognitionReview(renamed, new Map([[matchingItem.id, 'CONFIRMED']]));
-    });
-    if (field.recognitionItemId) {
-      setRecognitionActions((current) => ({
-        ...current,
-        [field.recognitionItemId as string]: 'CONFIRM',
-      }));
-    }
-  };
 
   const confirmRecognitionItem = async (item: RecognitionReviewItem, selectedAlternativeId?: string) => {
     if (workspace?.format === 'DOCX' && !isRecognitionRegionRoot(item)) {
@@ -1319,7 +1277,7 @@ export function TemplateWorkspacePage() {
     const updated = updateBusinessField(baseSchema, baseModel, currentField.id, normalizedUpdate);
     setSchema(updated.schema);
     setFieldModel(updated.model);
-    const updatedMapping = baseMapping.map((binding) =>
+    const rawUpdatedMapping = baseMapping.map((binding) =>
       bindingMatchesIdentity(binding, {
         bindingId: currentField.bindingId,
         relationId: currentField.relationId,
@@ -1390,8 +1348,9 @@ export function TemplateWorkspacePage() {
           }
         : binding,
     );
+    const updatedMapping = updateFieldDefinition(updated.model, rawUpdatedMapping, currentField.id, {}).mapping;
     setMapping(updatedMapping);
-    if (update.name !== undefined && update.name !== currentField.name) {
+    if (workspace?.format !== 'XLSX' && update.name !== undefined && update.name !== currentField.name) {
       const binding = updatedMapping.find((item) => bindingMatchesIdentity(item, {
         bindingId: currentField.bindingId,
         relationId: currentField.relationId,
@@ -1517,20 +1476,12 @@ export function TemplateWorkspacePage() {
     (selection: EditorSelection) => {
       setActiveSelection(selection);
       if (projectionPicking) {
-        setSchema((current) => {
+        setSchema(current => {
           const configuration = readExperimentImport(current);
-          return writeExperimentImport(current, {
-            ...configuration,
-            listProjections: configuration.listProjections.map((projection) =>
-              projection.listProjectionId === projectionPicking.projectionId
-                ? { ...projection, [projectionPicking.target]: normalizeAddress(selection.address) }
-                : projection),
-          });
+          return writeExperimentImport(current, { ...configuration, listProjections: configuration.listProjections.map(projection =>
+            projection.listProjectionId === projectionPicking.projectionId ? { ...projection, [projectionPicking.target]: normalizeAddress(selection.address) } : projection) });
         });
-        setProjectionPicking(undefined);
-        markDirty();
-        void message.success('配方区域已更新');
-        return;
+        setProjectionPicking(undefined); markDirty(); return;
       }
       if (picking) {
         const pickingField = fieldModel.fields.find((item) => item.id === picking.fieldId);
@@ -1583,221 +1534,32 @@ export function TemplateWorkspacePage() {
     [fieldModel.fields, mapping, message, picking, projectionPicking, recognitionReview?.items],
   );
 
-  const handleUnboundCellChange = useCallback(
-    (selection: EditorSelection, value: unknown) => {
-      if (!versionId) return;
-      if (!isSingleCellAddress(selection.address)) return;
-      // A structural region binding only describes the envelope. It must not
-      // block discovering an unbound scalar label inside a FORM_REGION. A
-      // concrete FIELD binding, however, remains protected from duplication.
-      const selectionMatch = resolveBindingSelection(mapping, selection);
-      if (selectionMatch?.binding.role === 'FIELD') return;
-      if (isStructuredDataCell(
-        selection,
-        mapping,
-        (recognitionReview?.regions ?? []).map((region) => ({
-          kind: region.kind,
-          sheetId: region.sheetId,
-          range: region.range,
-          structures: region.structures,
-        })),
-      )) return;
-      const label = potentialFieldLabel(value);
-      const labelAddress = selection.address.split(':')[0] ?? selection.address;
-      if (!label) return;
-      const timerKey = `${selection.sheetId}|${normalizeAddress(labelAddress)}`;
-      const pendingTimer = unboundChangeTimersRef.current.get(timerKey);
-      if (pendingTimer) window.clearTimeout(pendingTimer);
-      const timer = window.setTimeout(() => {
-        unboundChangeTimersRef.current.delete(timerKey);
-        if (
-          mapping.some(
-            (binding) =>
-              stringValue(binding.locator.sheetId) === selection.sheetId &&
-              normalizeAddress(stringValue(binding.locator.labelAddress)) ===
-                normalizeAddress(labelAddress),
-          )
-        )
-          return;
-        if (
-          fieldModel.fields.some((field) => {
-            const locator = field.locator ?? {};
-            return stringValue(locator.sheetId) === selection.sheetId
-              && normalizeAddress(stringValue(locator.labelAddress || field.labelRange)) === normalizeAddress(labelAddress);
-          })
-        ) return;
-        const id = generateUUID();
-        const bindingId = generateUUID();
-        const region = findFormRegionForCell(recognitionReview, selection.sheetId, labelAddress);
-        const group =
-          fieldModel.groups.find((item) => item.groupCode === 'BASIC_INFORMATION') ??
-          fieldModel.groups[0];
-        const groupId = group?.id ?? 'group-basic';
-        const dataPath = `/customFields/field_${id.replaceAll('-', '')}`;
-        const field: BusinessField = {
-          id,
-          bindingId,
-          dataPath,
-          groupId,
-          name: label,
-          kind: 'SCALAR',
-          valueType: 'string',
-          required: false,
-          reviewStatus: 'NEEDS_CONFIRMATION',
-          confidence: 0.6,
-          interpretation: `系统发现了新标签“${label}”，请核对填写位置。`,
-          fieldCode: templateLocalFieldCode(versionId, { id, name: label, dataPath }),
-          fieldOrigin: 'TEMPLATE_LOCAL',
-          standardSelectionStatus: 'CUSTOM',
-          standardMatchStatus: 'UNMATCHED',
-          requiresStandardConfirmation: false,
-          editability: 'EDITABLE',
-          valueSource: 'USER_INPUT',
-          regionId: region?.regionId,
-          blockId: region?.blockId,
-          parentBlockId: region?.blockId,
-        };
-        setFieldModel((current) =>
-          normalizeFieldModel({
-            ...current,
-            groups: current.groups.length
-              ? current.groups
-              : [
-                  {
-                    id: groupId,
-                    name: '基础信息',
-                    groupCode: 'BASIC_INFORMATION',
-                    order: 0,
-                  },
-                ],
-            fields: [...current.fields, field],
-          }),
-        );
-        setSchema((current) => addCustomFieldSchema(current, field));
-        setMapping((current) => [
-          ...current,
-          {
-            bindingId,
-            fieldCode: field.fieldCode,
-            dataPath,
-            role: 'FIELD',
-            locatorType: 'CELL_RANGE',
-            locator: {
-              sheetId: selection.sheetId,
-              sheetName: selection.sheetName,
-              labelAddress,
-              labelRange: labelAddress,
-              anchorAddress: '',
-              logicalInputRange: '',
-              address: '',
-              valueMode: 'ANCHOR',
-            },
-            syncDirection: 'TWO_WAY',
-            primaryBinding: true,
-            bindingStatus: 'MISSING',
-            diagnostic: {
-              source: 'LIVE_DISCOVERED',
-              displayName: label,
-              regionId: region?.regionId,
-              blockId: region?.blockId,
-            },
-          },
-        ]);
-        setSelectedFieldId(id);
-        setFieldManagerTab('structure');
-        markDirty();
-        void message.info(`已发现新字段“${label}”，请核对填写位置`);
-      }, 800);
-      unboundChangeTimersRef.current.set(timerKey, timer);
-    },
-    [fieldModel.fields, fieldModel.groups, mapping, markDirty, message, recognitionReview, versionId],
-  );
-
-  const handleStructureChange = useCallback(
-    (operation: WorkbookStructureOperation) => {
-      const migrated = migrateWorkspaceStructure(mapping, fieldModel, operation);
-      setMapping(migrated.mapping);
-      setFieldModel(migrated.model);
-      setSchema((current) => writeFieldModel(current, migrated.model));
-      setStructureOperations((current) => [...current, operation]);
-      markDirty();
-    },
-    [fieldModel, mapping, markDirty],
-  );
+  const handleInstanceChange = useCallback((instance: WorkbookTemplateInstance) => {
+    const { schema } = latestSaveRef.current;
+    let projectedSchema = schema;
+    for (const old of latestSaveRef.current.fieldModel.fields) if (!instance.model.fields.some(field => field.id === old.id)) projectedSchema = removeBusinessField(projectedSchema, latestSaveRef.current.fieldModel, old.id).schema;
+    for (const field of instance.model.fields) if (JSON.stringify(field) !== JSON.stringify(latestSaveRef.current.fieldModel.fields.find(old => old.id === field.id))) projectedSchema = updateBusinessField(projectedSchema, instance.model, field.id, {}).schema;
+    const nextSchema = writeFieldModel({ ...projectedSchema, ...(instance.execution ? { 'x-jsd-experiment-import': instance.execution } : {}) }, instance.model);
+    latestSaveRef.current = { ...latestSaveRef.current, mapping: instance.mapping, fieldModel: instance.model, schema: nextSchema };
+    setMapping(instance.mapping); setFieldModel(instance.model); setSchema(nextSchema); markDirty();
+  }, [markDirty]);
 
   const addField = (groupId?: string) => {
     if (!versionId) return;
-    const id = generateUUID();
-    const bindingId = generateUUID();
-    const selectedGroupId = groupId ?? fieldModel.groups[0]?.id ?? 'group-other';
-    const dataPath = `/customFields/field_${id.replaceAll('-', '')}`;
-    const field: BusinessField = {
-      id,
-      bindingId,
-      dataPath,
-      groupId: selectedGroupId,
-      name: '新字段',
-      kind: 'SCALAR',
-      valueType: 'string',
-      required: false,
-      reviewStatus: 'CONFIRMED',
-      fieldCode: templateLocalFieldCode(versionId, { id, name: '新字段', dataPath }),
-      fieldOrigin: 'TEMPLATE_LOCAL',
-      standardSelectionStatus: 'CUSTOM',
-      standardMatchStatus: 'CONFIRMED',
-      requiresStandardConfirmation: false,
-    };
-    const nextModel = { ...fieldModel, fields: [...fieldModel.fields, field] };
-    setFieldModel(nextModel);
-    setSchema(addCustomFieldSchema(writeFieldModel(schema, nextModel), field));
-    setMapping((current) => [
-      ...current,
-      {
-        bindingId,
-        fieldCode: field.fieldCode,
-        dataPath,
-        role: 'FIELD',
-        locatorType: workspace?.format === 'DOCX' ? 'DOC_CUSTOM_RANGE' : 'CELL_RANGE',
-        locator: {},
-        syncDirection: 'TWO_WAY',
-        primaryBinding: true,
-        bindingStatus: workspace?.format === 'DOCX' ? 'MISSING' : 'VALID',
-        diagnostic: { source: 'CUSTOMER_CREATED', displayName: field.name },
-      },
-    ]);
-    setSelectedFieldId(id);
-    markDirty();
+    const current = editorRef.current?.getTemplateInstance?.() ?? createWorkbookInstance(fieldModel, mapping, readExperimentImport(schema));
+    const created = addWorkbookField(current, { ownerId: versionId, origin: 'TEMPLATE_LOCAL', selection: editorRef.current?.getSelection?.() ?? activeSelection, snapshot: editorRef.current?.getSnapshot(), groupId });
+    if (workspace?.format === 'XLSX') void editorRef.current?.setTemplateInstance?.(created.instance);
+    else handleInstanceChange(created.instance);
+    setSelectedFieldId(created.fieldId); setFieldManagerTab('properties'); markDirty();
   };
 
-  const addStructuredField = (
-    parent: BusinessField,
-    kind: 'REPEAT_FIELD',
-  ) => {
-    if (!versionId || !parent.bindingId) return;
-    const parentBinding = mapping.find((binding) => binding.bindingId === parent.bindingId);
-    if (!parentBinding) return;
-    try {
-      const created = createCustomFieldWorkspace(schema, fieldModel, mapping, {
-        ownerId: versionId,
-        origin: 'TEMPLATE_LOCAL',
-        kind,
-        name: '新明细字段',
-        parentField: parent,
-        parentBinding,
-        sheet: {
-          sheetId: String(parentBinding.locator.sheetId || activeSelection?.sheetId || ''),
-          sheetName: String(parentBinding.locator.sheetName || activeSelection?.sheetName || ''),
-        },
-      });
-      setSchema(created.schema);
-      setFieldModel(created.model);
-      setMapping(created.mapping);
-      setSelectedFieldId(created.field.id);
-      setFieldManagerTab('properties');
-      markDirty();
-    } catch (reason) {
-      void message.error(reason instanceof Error ? reason.message : '字段添加失败');
-    }
+  const addStructuredField = (parent: BusinessField) => {
+    if (!versionId) return;
+    const current = editorRef.current?.getTemplateInstance?.() ?? createWorkbookInstance(fieldModel, mapping, readExperimentImport(schema));
+    const created = addWorkbookField(current, { ownerId: versionId, origin: 'TEMPLATE_LOCAL', parentId: parent.id, groupId: parent.groupId });
+    if (workspace?.format === 'XLSX') void editorRef.current?.setTemplateInstance?.(created.instance);
+    else handleInstanceChange(created.instance);
+    setSelectedFieldId(created.fieldId); setFieldManagerTab('properties'); markDirty();
   };
 
   const deleteField = (field: BusinessField) => {
@@ -1816,6 +1578,14 @@ export function TemplateWorkspacePage() {
             recognitionItemId: item.id,
           }),
         );
+        if (workspace?.format === 'XLSX') {
+          const current = editorRef.current?.getTemplateInstance?.() ?? createWorkbookInstance(fieldModel, mapping, readExperimentImport(schema));
+          const next = deleteWorkbookField(current, field.id);
+          void editorRef.current?.setTemplateInstance?.(next);
+          setSelectedFieldId(undefined);
+          if (recognizedItem) recordRecognitionAction(recognizedItem.id, 'IGNORE', 'IGNORED');
+          markDirty(); return;
+        }
         const removed = removeBusinessField(schema, fieldModel, field.id);
         setSchema(removed.schema);
         setFieldModel(removed.model);
@@ -1946,9 +1716,10 @@ export function TemplateWorkspacePage() {
       />
     );
   }
-  if (!workspace || !snapshot) return <Skeleton active paragraph={{ rows: 12 }} />;
+  if (!workspace || !snapshot) return <ContentLoading label="下载文档…" />;
 
-  const editable = workspace.status === 'DRAFT' && isDesktop && view === 'edit';
+  const editable = workspace.status === 'DRAFT' && isDesktop && view === 'edit'
+    && (templateReview?.status === 'NOT_SUBMITTED' || templateReview?.status === 'REJECTED');
   const recognitionBlocksPublish = Boolean(recognitionReview?.recognitionRunId)
     && (reviewSyncState === 'STALE'
       || recognitionReview?.runStatus === 'FAILED'
@@ -1963,6 +1734,7 @@ export function TemplateWorkspacePage() {
 
   return (
     <section
+      ref={workspaceRootRef}
       className="workspace-shell template-business-workspace"
       aria-label={`${workspace.name}模板工作台`}
     >
@@ -2213,21 +1985,9 @@ export function TemplateWorkspacePage() {
                   <Button onClick={() => setPicking(undefined)}>取消选择</Button>
                 </div>
               )}
-              {projectionPicking && (
-                <div className="selection-guide" role="status">
-                  <div>
-                    <strong>
-                      请在 Excel 中框选
-                      {projectionPicking.target === 'labelRange' ? '材料名称区域' : '配方数值区域'}
-                    </strong>
-                    <span>拖动选择连续区域，系统会自动保存范围。</span>
-                  </div>
-                  <Button onClick={() => setProjectionPicking(undefined)}>取消选择</Button>
-                </div>
-              )}
               <Suspense
                 fallback={
-                  <Spin indicator={<LoadingOutlined spin />} tip="正在加载文档" fullscreen />
+                  <ContentLoading label="加载编辑器…" />
                 }
               >
                 {workspace.format === 'XLSX' ? (
@@ -2238,10 +1998,11 @@ export function TemplateWorkspacePage() {
                     editable={editable}
                     onDirty={handleEditorDirty}
                     onEditorValue={handleEditorValue}
-                    onEditorLabel={handleEditorLabel}
                     onSelectionChange={handleSelection}
-                    onUnboundCellChange={handleUnboundCellChange}
-                    onStructureChange={handleStructureChange}
+                    fieldCreationOrigin="TEMPLATE_LOCAL"
+                    instance={createWorkbookInstance(fieldModel, mapping, readExperimentImport(schema))}
+                    onInstanceChange={handleInstanceChange}
+                    onStructureChange={operation => setStructureOperations(current => [...current, operation])}
                   />
                 ) : (
                   <div className={editable ? undefined : 'document-readonly'}>
@@ -2262,6 +2023,8 @@ export function TemplateWorkspacePage() {
                 fieldModel={fieldModel}
                 mapping={mapping}
                 selectedFieldId={selectedFieldId}
+                selection={activeSelection}
+                onFocusBinding={(binding) => editorRef.current?.focusBinding(binding)}
                 selectedRecognitionItemId={selectedRecognitionItemId}
                 selectedQualityIssueId={selectedQualityIssueId}
                 picking={picking}
@@ -2286,10 +2049,7 @@ export function TemplateWorkspacePage() {
                 onUpdateField={updateField}
                 onUpdateCoordinates={updateCoordinates}
                 onPickCoordinate={(fieldId, target) => setPicking({ fieldId, target })}
-                onPickProjectionRange={(projectionId, target) => {
-                  setPicking(undefined);
-                  setProjectionPicking({ projectionId, target });
-                }}
+                onPickProjectionRange={(projectionId, target) => { setPicking(undefined); setProjectionPicking({ projectionId, target }); }}
                 onAddField={addField}
                 onAddStructuredField={addStructuredField}
                 onDeleteField={deleteField}
@@ -2757,13 +2517,6 @@ function updateRecognitionReview(
   };
 }
 
-function editorLabelText(value: unknown) {
-  if (value === null || value === undefined) return '';
-  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
-    ? String(value)
-    : '';
-}
-
 function nextRecognitionItem(review?: RecognitionReview, excludedId?: string) {
   if (!review) return undefined;
   const active = review.items.filter((item) => item.id !== excludedId && item.status !== 'IGNORED');
@@ -2791,9 +2544,6 @@ function delay(milliseconds: number) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
-function snapshotSignature(snapshot: Record<string, unknown>) {
-  return JSON.stringify(snapshot);
-}
 
 function SaveStateIndicator({
   state,
@@ -2913,70 +2663,6 @@ function duplicatePositionCount(mapping: TemplateBinding[]) {
     positions.set(key, (positions.get(key) ?? 0) + 1);
   }
   return [...positions.values()].filter((count) => count > 1).length;
-}
-
-function addCustomFieldSchema(schema: Record<string, unknown>, field: BusinessField) {
-  const next = structuredClone(schema);
-  const properties = isRecord(next.properties) ? next.properties : {};
-  const customFields = isRecord(properties.customFields)
-    ? properties.customFields
-    : { type: 'object', properties: {} };
-  const customProperties = isRecord(customFields.properties) ? customFields.properties : {};
-  const key = field.dataPath?.split('/').at(-1) ?? field.id;
-  customProperties[key] = { type: 'string', title: field.name };
-  customFields.properties = customProperties;
-  properties.customFields = customFields;
-  next.properties = properties;
-  return next;
-}
-
-interface A1Range {
-  startRow: number;
-  endRow: number;
-  startColumn: number;
-  endColumn: number;
-}
-
-function parseA1Range(value: string): A1Range | undefined {
-  const match = /^([A-Z]{1,4})([1-9][0-9]*)(?::([A-Z]{1,4})([1-9][0-9]*))?$/i.exec(value);
-  if (!match) return undefined;
-  const startColumn = columnNumber(match[1] ?? '');
-  const startRow = Number(match[2]);
-  const endColumn = columnNumber(match[3] ?? match[1] ?? '');
-  const endRow = Number(match[4] ?? match[2]);
-  return {
-    startRow: Math.min(startRow, endRow),
-    endRow: Math.max(startRow, endRow),
-    startColumn: Math.min(startColumn, endColumn),
-    endColumn: Math.max(startColumn, endColumn),
-  };
-}
-
-function findFormRegionForCell(
-  review: RecognitionReview | undefined,
-  sheetId: string,
-  address: string,
-) {
-  const cell = parseA1Range(address);
-  if (!cell) return undefined;
-  return review?.regions?.find((region) => {
-    if (region.kind !== 'FORM_REGION' || region.sheetId && region.sheetId !== sheetId) return false;
-    const range = parseA1Range(region.range || '');
-    return Boolean(
-      range
-      && cell.startRow >= range.startRow
-      && cell.startRow <= range.endRow
-      && cell.startColumn >= range.startColumn
-      && cell.startColumn <= range.endColumn,
-    );
-  });
-}
-
-function columnNumber(value: string) {
-  return [...value.toUpperCase()].reduce(
-    (result, letter) => result * 26 + letter.charCodeAt(0) - 64,
-    0,
-  );
 }
 
 function stringValue(value: unknown) {

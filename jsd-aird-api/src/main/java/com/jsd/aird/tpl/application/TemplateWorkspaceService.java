@@ -51,8 +51,8 @@ import org.springframework.util.StringUtils;
 @Service
 public class TemplateWorkspaceService {
 
-    public static final String EDITOR_APP_VERSION = "univer-0.25.1";
-    public static final String PLUGIN_MANIFEST = "preset-core-v1";
+    public static final String EDITOR_APP_VERSION = "univer-1.2.0";
+    public static final String PLUGIN_MANIFEST = "office-editor-1.2.0";
 
     private final TemplateRepository repository;
     private final TemplateImportRepository importRepository;
@@ -208,8 +208,10 @@ public class TemplateWorkspaceService {
     }
 
     @Transactional
-    public TemplateRepository.TemplateCategoryItem renameCategory(UUID categoryId, String name, String description) {
+    public TemplateRepository.TemplateCategoryItem renameCategory(UUID categoryId, String name, String description,String revision) {
         var actor = ActorContext.required();
+        repository.lockCategory(actor.organizationId(),categoryId);
+        com.jsd.aird.shared.json.RevisionToken.require(revision,repository.findCategory(actor.organizationId(),categoryId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"分类不存在")).getRevision());
         var normalized = validCategoryName(name);
         repository.lockCategoryName(actor.organizationId(), normalized);
         if (repository.categoryNameExists(actor.organizationId(), normalized, categoryId)) {
@@ -233,8 +235,10 @@ public class TemplateWorkspaceService {
     }
 
     @Transactional
-    public void deleteCategory(UUID categoryId, UUID replacementCategoryId) {
+    public void deleteCategory(UUID categoryId, UUID replacementCategoryId,String revision) {
         var actor = ActorContext.required();
+        repository.lockCategory(actor.organizationId(),categoryId);
+        com.jsd.aird.shared.json.RevisionToken.require(revision,repository.findCategory(actor.organizationId(),categoryId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"分类不存在")).getRevision());
         var organizationId = actor.organizationId();
         if (categoryId.equals(replacementCategoryId)) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "不能迁移到当前分类");
@@ -257,8 +261,9 @@ public class TemplateWorkspaceService {
     }
 
     @Transactional
-    public void assignTemplateCategory(UUID templateId, UUID categoryId) {
+    public void assignTemplateCategory(UUID templateId, UUID categoryId,String revision) {
         var actor = ActorContext.required();
+        requireCatalogRevision(templateId,revision);
         var organizationId = actor.organizationId();
         if (categoryId != null) repository.findCategory(organizationId, categoryId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "分类不存在"));
@@ -483,6 +488,25 @@ public class TemplateWorkspaceService {
         if (experiment.summary().status() == ExperimentStatus.VOIDED) {
             throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "作废实验不支持另存为模板");
         }
+        var labSource=currentExperimentSnapshot(experiment);
+        if(com.jsd.aird.shared.lab.LabWorkbook.supported(labSource)&&experiment.templateVersionId()!=null) {
+            var source=get(experiment.templateVersionId());
+            authorizationService.require(new PermissionCheck(actor.organizationId(),actor.userId(),"template.update","TEMPLATE",source.versionId(),"WRITE"));
+            if(source.status()!=TemplateStatus.PUBLISHED)throw new ApiException(ApiErrorCode.BAD_REQUEST,"公共模板已有更新，请从当前发布版本创建修订");
+            if(repository.findPublishedDataTemplates(actor.organizationId()).stream().noneMatch(item->item.versionId().equals(source.versionId())))throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"公共模板已有新版本，请先合并到当前发布版本再申请发布");
+            var model=experiment.editModel();if(model.path("templateInstance").path("issues").size()>0)throw new ApiException(ApiErrorCode.BINDING_INVALID,"请先确认实验中的新增字段和配方数据");
+            var draft=createRevision(source.versionId());
+            var clean=com.jsd.aird.shared.lab.LabWorkbook.blank(labSource);
+            var definition=(ObjectNode)com.jsd.aird.shared.lab.LabWorkbook.definition(clean);
+            for(var f:definition.path("fields"))if(f.path("local").asBoolean())((ObjectNode)f).put("local",false).put("confirmed",true).put("trainingEligible",true);
+            var pack=new UnifiedLabTemplateCatalog(objectMapper).describe(source.templateCode(),clean,objectMapper.createObjectNode());
+            var p=pack.payload();var staged=stageWorkbookSnapshot(p.path("snapshot"),draft.versionId(),actor);
+            var layout=(ObjectNode)p.path("layout");layout.put("derivedFromVersionId",source.versionId().toString());
+            var empty=objectMapper.createObjectNode();var hash=canonicalizer.workspaceHash(draft.versionId().toString(),p.path("schema"),p.path("mapping"),empty,staged.sha256(),source.editorAppVersion(),source.pluginManifestHash());
+            if(repository.updateDraft(new TemplateRepository.DraftUpdate(actor.organizationId(),draft.versionId(),draft.lockVersion(),p.path("schema"),layout,staged.id(),staged.sha256(),source.editorAppVersion(),source.pluginManifestHash(),source.snapshotFormatVersion(),canonicalizer.hash(p.path("schema")),canonicalizer.hash(p.path("mapping")),canonicalizer.hash(empty),hash,false,actor.userId()))==0)throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
+            repository.replaceMappings(draft.versionId(),source.format(),p.path("mapping"));requestFileActivation(staged.id());
+            return get(draft.versionId());
+        }
         var name = trimToNull(requestedName);
         if (name == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "模板名称不能为空");
         if (name.length() > 160) throw new ApiException(ApiErrorCode.BAD_REQUEST, "模板名称不能超过 160 个字符");
@@ -612,8 +636,9 @@ public class TemplateWorkspaceService {
     }
 
     @Transactional
-    public void renameTemplate(UUID templateId, String name) {
+    public void renameTemplate(UUID templateId, String name,String revision) {
         var actor = ActorContext.required();
+        requireCatalogRevision(templateId,revision);
         var normalized = trimToNull(name);
         if (normalized == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "模板名称不能为空");
         if (normalized.length() > 160) throw new ApiException(ApiErrorCode.BAD_REQUEST, "模板名称不能超过 160 个字符");
@@ -684,6 +709,12 @@ public class TemplateWorkspaceService {
         return createRevision(sourceVersionId);
     }
 
+    private void requireCatalogRevision(UUID templateId,String revision){
+        var org=ActorContext.required().organizationId();
+        repository.lockTemplate(org,templateId);
+        com.jsd.aird.shared.json.RevisionToken.require(revision,repository.findCatalogItem(org,templateId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"模板不存在")).getRevision());
+    }
+
     public List<BatchActionResult> batch(BatchActionCommand command) {
         var actor = ActorContext.required();
         var permissionCode = switch (command.action().toUpperCase(Locale.ROOT)) {
@@ -700,9 +731,9 @@ public class TemplateWorkspaceService {
                 transactionTemplate.executeWithoutResult(ignored -> {
                     switch (command.action()) {
                         case "COPY" -> copyVersion(item.versionId(), item.name(), command.categoryId());
-                        case "MOVE" -> assignTemplateCategory(item.templateId(), command.categoryId());
-                        case "DELETE_DRAFT" -> deleteDraft(item.versionId());
-                        case "RETIRE" -> retire(item.templateId());
+                        case "MOVE" -> assignTemplateCategory(item.templateId(), command.categoryId(),item.revision());
+                        case "DELETE_DRAFT" -> deleteDraft(item.versionId(),item.revision());
+                        case "RETIRE" -> retire(item.templateId(),item.revision());
                         default -> throw new ApiException(ApiErrorCode.BAD_REQUEST, "不支持的批量操作");
                     }
                 });
@@ -715,7 +746,7 @@ public class TemplateWorkspaceService {
         return List.copyOf(results);
     }
 
-    @Transactional
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public SaveResult saveDraft(UUID versionId, SaveDraftCommand command) {
         var actor = ActorContext.required();
         var current = get(versionId);
@@ -728,14 +759,6 @@ public class TemplateWorkspaceService {
                     "保存基线已变化，请先比较本地修改与服务端草稿"
             );
         }
-        // Apply review decisions first (inside this transaction), so a just-confirmed item can
-        // enter the same saved draft while an unconfirmed candidate cannot slip into Mapping.
-        recognitionReviewService.applyActions(
-                actor.organizationId(), actor.userId(), versionId, command.recognitionActions()
-        );
-        recognitionReviewService.applyQualityActions(
-                actor.organizationId(), actor.userId(), versionId, command.qualityActions()
-        );
         JsonNode normalizedSchema;
         JsonNode normalizedMapping;
         boolean reconciliationRequired;
@@ -747,9 +770,6 @@ public class TemplateWorkspaceService {
             normalizedMapping = normalizeMapping(command.mapping(), normalizedSchema);
             validateSchema(normalizedSchema);
             reconciliationRequired = validateMappings(current.format(), normalizedMapping);
-            recognitionReviewService.validateAcceptedMappings(
-                    actor.organizationId(), versionId, normalizedMapping
-            );
         } else {
             normalizedSchema = normalizeFieldGroups(command.schema());
             normalizedSchema = standardFieldService.normalizeDraftFields(normalizedSchema);
@@ -766,9 +786,6 @@ public class TemplateWorkspaceService {
             validateSchema(normalizedSchema);
             standardFieldService.validateFormalFields(normalizedSchema);
             reconciliationRequired = validateMappings(current.format(), normalizedMapping);
-            recognitionReviewService.validateAcceptedMappings(
-                    actor.organizationId(), versionId, normalizedMapping
-            );
         }
         validateBindingValues(command.bindingValues());
         validateStructureOperations(command.structureOperations());
@@ -802,7 +819,7 @@ public class TemplateWorkspaceService {
             var sourceFile = fileRepository.find(actor.organizationId(), currentFileId)
                     .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "Word 原生工件不存在"));
             try (var stored = objectStorage.get(sourceFile.objectKey())) {
-                var patched = wordOoxmlPatchService.apply(stored.stream().readAllBytes(), command.wordPatch());
+                var patched = wordOoxmlPatchService.apply(stored.stream(), command.wordPatch(),sourceFile.sha256());
                 var parsed = wordDocumentParser.parse(new ByteArrayInputStream(patched));
                 documentStructure = parsed.structureSummary().path("documentIR").deepCopy();
                 var staged = stageWordDocument(patched, sourceFile.originalName(), actor);
@@ -833,10 +850,10 @@ public class TemplateWorkspaceService {
                     .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "Word 编辑快照不存在"));
              try (var source = objectStorage.get(currentFile.objectKey());
                   var stagedSnapshot = objectStorage.get(snapshotFile.objectKey())) {
-                 var snapshot = objectMapper.readTree(stagedSnapshot.stream().readAllBytes());
+                 var snapshot = objectMapper.readTree(com.jsd.aird.shared.resource.BoundedStreams.readBytes(stagedSnapshot.stream(),64L*1024*1024));
                  requireCurrentWordSnapshot(snapshot);
-                 var patched = wordOoxmlPatchService.applySnapshot(source.stream().readAllBytes(),
-                         wordSnapshotWithFormalControls(snapshot, normalizedMapping));
+                 var patched = wordOoxmlPatchService.applySnapshot(source.stream(),
+                         wordSnapshotWithFormalControls(snapshot, normalizedMapping),currentFile.sha256());
                  var parsed = wordDocumentParser.parse(new ByteArrayInputStream(patched));
                 documentStructure = parsed.structureSummary().path("documentIR").deepCopy();
                 var staged = stageWordDocument(patched, currentFile.originalName(), actor);
@@ -888,11 +905,24 @@ public class TemplateWorkspaceService {
         if (wordDocument != null) layoutSummary.set("wordDocument", wordDocument);
         if (current.origin() != null && current.origin().isObject()) layoutSummary.set("origin", current.origin().deepCopy());
 
+        final var preparedSchema=normalizedSchema;
+        final var preparedMapping=normalizedMapping;
+        final var preparedStructure=documentStructure;
+        final var preparedWordFile=stagedWordFileId;
+        try { return transactionTemplate.execute(transaction -> {
+            templateVersionReviewService.requireEditable(actor.organizationId(),versionId);
+            var latest=get(versionId);
+            if(latest.lockVersion()!=command.lockVersion() || !latest.workspaceHash().equals(command.baseWorkspaceHash()))
+                throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
+            authorizationService.require(new PermissionCheck(actor.organizationId(),actor.userId(),"template.update","TEMPLATE",versionId,"WRITE"));
+            recognitionReviewService.applyActions(actor.organizationId(),actor.userId(),versionId,command.recognitionActions());
+            recognitionReviewService.applyQualityActions(actor.organizationId(),actor.userId(),versionId,command.qualityActions());
+            recognitionReviewService.validateAcceptedMappings(actor.organizationId(),versionId,preparedMapping);
         var updated = repository.updateDraft(new TemplateRepository.DraftUpdate(
                 actor.organizationId(),
                 versionId,
                 command.lockVersion(),
-                normalizedSchema,
+                preparedSchema,
                 layoutSummary,
                 command.snapshotFileId(),
                 command.snapshotHash(),
@@ -909,7 +939,7 @@ public class TemplateWorkspaceService {
         if (updated == 0) {
             throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
         }
-        repository.replaceMappings(versionId, current.format(), normalizedMapping);
+        repository.replaceMappings(versionId, current.format(), preparedMapping);
         repository.appendStructureChanges(
                 versionId,
                 current.mappingHash(),
@@ -937,13 +967,16 @@ public class TemplateWorkspaceService {
         if (command.snapshotFileId() != null) {
             requestFileActivation(command.snapshotFileId());
         }
-        if (stagedWordFileId != null) requestFileActivation(stagedWordFileId);
+        if (preparedWordFile != null) requestFileActivation(preparedWordFile);
         return new SaveResult(command.lockVersion() + 1, workspaceHash, reconciliationRequired,
-                normalizedSchema.deepCopy(), normalizedMapping.deepCopy(),
+                preparedSchema.deepCopy(), preparedMapping.deepCopy(),
                 wordDocument == null ? null : wordDocument.deepCopy(),
-                documentStructure == null ? null : documentStructure.deepCopy());
+                preparedStructure == null ? null : preparedStructure.deepCopy());
+        }); } catch(RuntimeException failure) {
+            if(preparedWordFile!=null)discardPreparedWord(actor.organizationId(),preparedWordFile);
+            throw failure;
+        }
     }
-
     /**
      * Region roots are deliberately hidden from the editable business-field
      * model. Formula matrix projections live on those roots, so persist them
@@ -1176,11 +1209,11 @@ public class TemplateWorkspaceService {
     @Transactional
     public void publish(UUID versionId) {
         var actor = ActorContext.required();
+        templateVersionReviewService.requireApproved(actor.organizationId(), versionId);
         var workspace = get(versionId);
         if (workspace.status() != TemplateStatus.DRAFT) {
             throw new ApiException(ApiErrorCode.TEMPLATE_VERSION_IMMUTABLE);
         }
-        templateVersionReviewService.requireApproved(actor.organizationId(), versionId);
         if (workspace.format() == TemplateFormat.XLSX && workspace.snapshotFileId() == null) {
             if (!workspace.inlineSnapshot().path("sheets").isObject()
                     || workspace.inlineSnapshot().path("sheets").isEmpty()) {
@@ -1528,6 +1561,18 @@ public class TemplateWorkspaceService {
         }
     }
 
+    private void discardPreparedWord(UUID organizationId,UUID fileId) {
+        try {
+            var file=fileRepository.find(organizationId,fileId).orElse(null);
+            if(file==null)return;
+            var discarded=transactionTemplate.execute(status->{
+                if(fileRepository.discardUnreferencedStaged(organizationId,fileId)==0)return false;
+                repository.appendOutbox("FILE_OBJECT",fileId,"FILE_DELETION_REQUESTED",objectMapper.createObjectNode().put("organizationId",organizationId.toString()));return true;
+            });
+            if(Boolean.TRUE.equals(discarded))deleteWordObjectQuietly(file.objectKey());
+        }catch(RuntimeException ignored){ /* Existing staged cleanup remains the recovery path. */ }
+    }
+
     private StagedWord stageWordDocument(byte[] bytes, String originalName, Actor actor) {
         String key = null;
         try {
@@ -1778,6 +1823,7 @@ public class TemplateWorkspaceService {
         var layoutSummary = objectMapper.createObjectNode()
                 .put("reconciliationRequired", source.reconciliationRequired())
                 .put("derivedFromVersionId", sourceVersionId.toString());
+        if(source.inlineSnapshot().isObject())layoutSummary.set("initialSnapshot",source.inlineSnapshot().deepCopy());
         if (source.documentStructure().isObject()) layoutSummary.set("documentStructure", source.documentStructure().deepCopy());
         if (source.origin() != null && source.origin().isObject()) layoutSummary.set("origin", source.origin().deepCopy());
         if (source.wordDocument().isObject()) {
@@ -1812,9 +1858,12 @@ public class TemplateWorkspaceService {
     }
 
     @Transactional
-    public void deleteDraft(UUID versionId) {
+    public void deleteDraft(UUID versionId,String revision) {
         var actor = ActorContext.required();
         var workspace = get(versionId);
+        requireCatalogRevision(workspace.templateId(),revision);
+        repository.lockWorkspace(actor.organizationId(),versionId);
+        workspace=get(versionId);
         if (workspace.status() != TemplateStatus.DRAFT) {
             throw new ApiException(ApiErrorCode.TEMPLATE_VERSION_IMMUTABLE, "仅草稿版本可以删除");
         }
@@ -1839,8 +1888,9 @@ public class TemplateWorkspaceService {
     }
 
     @Transactional
-    public void retire(UUID templateId) {
+    public void retire(UUID templateId,String revision) {
         var actor = ActorContext.required();
+        requireCatalogRevision(templateId,revision);
         if (repository.retireTemplate(actor.organizationId(), templateId) == 0) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "模板没有可停用的已发布版本");
         }
@@ -1889,7 +1939,15 @@ public class TemplateWorkspaceService {
         var storedFile = fileRepository.find(ActorContext.required().organizationId(), fileId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.FILE_NOT_READY));
         try (var stored = objectStorage.get(storedFile.objectKey())) {
-            var snapshot = objectMapper.readTree(stored.stream());
+              var digest=MessageDigest.getInstance("SHA-256");
+              var input=new java.security.DigestInputStream(com.jsd.aird.shared.resource.BoundedStreams.limit(stored.stream(),64L*1024*1024),digest);
+              JsonNode snapshot;
+              try(var parser=objectMapper.getFactory().createParser(input)){
+                  parser.disable(com.fasterxml.jackson.core.JsonParser.Feature.AUTO_CLOSE_SOURCE);snapshot=objectMapper.readTree(parser);
+              }
+              // readTree need not consume trailing bytes; verify the entire stored artifact.
+              input.transferTo(java.io.OutputStream.nullOutputStream());
+              if(!java.util.HexFormat.of().formatHex(digest.digest()).equals(expectedHash))throw new ApiException(ApiErrorCode.SNAPSHOT_PERSIST_FAILED,"快照文件已变化");
             if (snapshot == null || !snapshot.isObject()) {
                 throw new ApiException(ApiErrorCode.SNAPSHOT_PERSIST_FAILED, "编辑器快照内容无效");
             }
@@ -2031,7 +2089,7 @@ public class TemplateWorkspaceService {
             Instant updatedTo
     ) {}
 
-    public record BatchActionItem(UUID templateId, UUID versionId, String name) {}
+    public record BatchActionItem(UUID templateId, UUID versionId, String name,String revision) {}
 
     public record BatchActionCommand(String action, UUID categoryId, List<BatchActionItem> items) {
         public BatchActionCommand {

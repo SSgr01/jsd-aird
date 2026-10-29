@@ -396,6 +396,13 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
 
     @Override
     public UUID submit(SubmitRevision revision) {
+        var updated = jdbcTemplate.update("""
+                UPDATE mfg.production_order SET status='SUBMITTED',lock_version=lock_version+1,
+                    updated_by=?,updated_at=now()
+                WHERE id=? AND organization_id=? AND status='DRAFT' AND lock_version=?
+                """,revision.actorId(),revision.orderId(),revision.organizationId(),revision.expectedLockVersion());
+        if (updated != 1) throw new com.jsd.aird.shared.error.ApiException(
+                com.jsd.aird.shared.error.ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"生产单已变化或已提交");
         var revisionNo = jdbcTemplate.queryForObject("""
                 SELECT COALESCE(max(revision_no), 0) + 1
                 FROM tpl.record_revision
@@ -424,11 +431,6 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
                 revision.workspaceHash(),
                 revision.actorId()
         );
-        jdbcTemplate.update("""
-                UPDATE mfg.production_order
-                SET status = 'SUBMITTED', updated_by = ?, updated_at = now()
-                WHERE id = ? AND organization_id = ? AND status = 'DRAFT'
-                """, revision.actorId(), revision.orderId(), revision.organizationId());
         return revision.id();
     }
 
@@ -523,24 +525,24 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
     }
 
     @Override
-    public int cancel(UUID organizationId, UUID orderId, UUID actorId) {
+    public int cancel(UUID organizationId, UUID orderId, long expectedVersion, UUID actorId) {
         return jdbcTemplate.update("""
                         UPDATE mfg.production_order
-                        SET status = 'CANCELLED', updated_by = ?, updated_at = now()
-                        WHERE id = ? AND organization_id = ? AND status = 'DRAFT'
-                """, actorId, orderId, organizationId);
+                        SET status = 'CANCELLED', lock_version=lock_version+1, updated_by = ?, updated_at = now()
+                        WHERE id = ? AND organization_id = ? AND status = 'DRAFT' AND lock_version=?
+                """, actorId, orderId, organizationId, expectedVersion);
     }
 
     @Override
-    public int delete(UUID organizationId, UUID orderId) {
+    public int delete(UUID organizationId, UUID orderId, long expectedVersion) {
         // Ingest jobs and their source/item rows are ON DELETE CASCADE.  A
         // submitted order is intentionally excluded so production history and
         // its revision projections cannot be removed from this list screen.
         return jdbcTemplate.update("""
                 DELETE FROM mfg.production_order
                 WHERE id = ? AND organization_id = ?
-                  AND status IN ('DRAFT', 'CANCELLED')
-                """, orderId, organizationId);
+                  AND status IN ('DRAFT', 'CANCELLED') AND lock_version=?
+                """, orderId, organizationId, expectedVersion);
     }
 
     @Override

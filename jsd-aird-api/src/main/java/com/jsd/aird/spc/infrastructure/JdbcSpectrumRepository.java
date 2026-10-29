@@ -15,6 +15,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 public class JdbcSpectrumRepository implements SpectrumRepository {
+    @Override public void lockCategory(UUID org,UUID id){
+        if(jdbc.query("SELECT id FROM spc.chart_category WHERE organization_id=? AND id=? FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),org,id).isEmpty())
+            throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,"图谱分类不存在");
+    }
+    @Override public void lockChart(UUID org,UUID id){
+        if(jdbc.query("SELECT id FROM spc.chart_asset WHERE organization_id=? AND id=? AND status<>'DELETED' FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),org,id).isEmpty())
+            throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,"图谱不存在或已删除");
+    }
 
     private final JdbcTemplate jdbc;
 
@@ -119,7 +127,7 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
 
     @Override
     public Optional<ChartRow> findChart(UUID organizationId, UUID chartId) {
-        return jdbc.query(chartQuery("WHERE a.organization_id = ? AND a.id = ?"), this::mapChart,
+        return jdbc.query(chartQuery("WHERE a.organization_id = ? AND a.id = ? AND a.status = 'READY'"), this::mapChart,
                 organizationId, chartId).stream().findFirst();
     }
 

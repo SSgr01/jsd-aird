@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { Outlet } from 'react-router-dom';
+import { ContentBoundary } from '@/components/loading/ContentBoundary';
 import { AuthGate } from '@/components/auth/AuthGate';
 
 const OperationAssistant = lazy(async () => ({
@@ -10,7 +11,7 @@ const OperationAssistant = lazy(async () => ({
 export function AuthenticatedAssistantLayout() {
   return (
     <AuthGate>
-      <Outlet />
+      <ContentBoundary startup><Outlet /></ContentBoundary>
       <Suspense fallback={null}>
         <OperationAssistant />
       </Suspense>

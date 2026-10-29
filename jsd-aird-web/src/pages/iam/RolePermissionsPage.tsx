@@ -28,6 +28,7 @@ import {
   type PermissionDefinition,
 } from '@/services/iam/iam-api';
 import { HttpError } from '@/services/http/errors';
+import { useRequestGuard } from '@/services/query/use-request-guard';
 import { moduleDisplayLabel, riskDisplayLabel } from '@/routes/route-permissions';
 import { PermissionTargetPicker } from './PermissionTargetPicker';
 import './iam.css';
@@ -55,6 +56,9 @@ export function RolePermissionsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const activeRole = roles.find((role) => role.id === activeRoleId);
+  const beginBindingsRequest = useRequestGuard(activeRoleId || '');
+  const [bindingOwner, setBindingOwner] = useState<string>();
+  const bindingsReady = Boolean(activeRoleId && bindingOwner === activeRoleId);
 
   const load = async () => {
     setLoading(true);
@@ -74,14 +78,19 @@ export function RolePermissionsPage() {
   };
   const loadBindings = async () => {
     if (!activeRoleId) return;
+    const request = beginBindingsRequest();
+    setBindingOwner(undefined);
+    setBindings({});
     try {
-      const data = await iamApi.rolePermissions(activeRoleId);
+      const data = await iamApi.rolePermissions(activeRoleId, request.signal);
+      if (!request.current()) return;
+      setBindingOwner(activeRoleId);
       setVersion(data.version);
       setBindings(
         Object.fromEntries(data.bindings.map((binding) => [binding.permissionCode, binding])),
       );
     } catch (error) {
-      message.error(error instanceof HttpError ? error.message : '权限配置加载失败');
+      if (request.current()) message.error(error instanceof HttpError ? error.message : '权限配置加载失败');
     }
   };
   useEffect(() => {
@@ -113,7 +122,8 @@ export function RolePermissionsPage() {
       return next;
     });
   const save = async () => {
-    if (!activeRoleId) return;
+    if (!activeRoleId || !bindingsReady) return;
+    const request = beginBindingsRequest();
     const invalid = Object.values(bindings).find(
       (binding) =>
         binding.effect === 'ALLOW' &&
@@ -131,7 +141,9 @@ export function RolePermissionsPage() {
         version,
         Object.values(bindings),
       );
+      if (!request.current()) return;
       setVersion(result.version);
+      setRoles(current => current.map(role => role.id === activeRoleId ? { ...role, policyVersion: result.version } : role));
       message.success('角色权限已保存');
     } catch (error) {
       message.error(error instanceof HttpError ? error.message : '保存失败，请刷新后重试');
@@ -191,7 +203,7 @@ export function RolePermissionsPage() {
         />
       ),
       onOk: async () => {
-        await iamApi.renameRole(activeRole.id, name);
+        await iamApi.renameRole(activeRole.id, name,activeRole.policyVersion);
         await load();
         message.success('角色名称已更新');
       },
@@ -204,7 +216,7 @@ export function RolePermissionsPage() {
       content: '删除后无法恢复，且角色不能再被用户使用。',
       okType: 'danger',
       onOk: async () => {
-        await iamApi.deleteRole(activeRole.id);
+        await iamApi.deleteRole(activeRole.id,activeRole.policyVersion);
         await load();
         message.success('角色已删除');
       },
@@ -238,7 +250,7 @@ export function RolePermissionsPage() {
             type="primary"
             icon={<SaveOutlined />}
             loading={saving}
-            disabled={!activeRoleId}
+            disabled={!bindingsReady}
             onClick={() => void save()}
           >
             保存权限
@@ -284,7 +296,8 @@ export function RolePermissionsPage() {
                 return (
                   <div className="iam-permission-row" key={definition.code}>
                     <Checkbox
-                      checked={Boolean(binding)}
+                      checked={bindingsReady && Boolean(binding)}
+                      disabled={!bindingsReady}
                       onChange={(event) => toggle(definition, event.target.checked)}
                     >
                       <span className="iam-permission-name">

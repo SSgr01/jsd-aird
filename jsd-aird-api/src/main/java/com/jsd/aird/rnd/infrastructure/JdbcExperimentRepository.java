@@ -143,19 +143,21 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         return detail(org,id).orElseThrow().summary();
     }
     @Override @Transactional public Detail saveDraft(UUID org,UUID id,long revision,Draft d,UUID actor,String name){
-        var old=required(org,id); if(!old.summary().status().isEditable()) conflict("待审核、已完成或作废实验不可直接编辑");
+        var old=required(org,id); requireVersion(old,revision); if(!old.summary().status().isEditable()) conflict("待审核、已完成或作废实验不可直接编辑");
         if(!text(d.experimentNo())) invalid("实验编号不能为空");
         if(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM rnd.experiment WHERE organization_id=? AND experiment_no=? AND id<>? AND deleted=false)",Boolean.class,org,d.experimentNo().trim(),id))) conflict("实验编号 " + d.experimentNo().trim() + " 已存在");
-        int n=jdbc.update("UPDATE rnd.experiment SET experiment_no=?,title=?,category_id=?,category_name=?,project_id=?,stage_id=?,task_id=?,owner_name=?,experiment_date=?,revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",
+        int n=jdbc.update("UPDATE rnd.experiment SET experiment_no=?,title=?,category_id=?,category_name=?,project_id=?,stage_id=?,task_id=?,owner_name=?,experiment_date=?,revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=? AND deleted=false",
                 d.experimentNo().trim(),d.title(),d.categoryId(),d.categoryName(),d.projectId(),d.stageId(),d.taskId(),d.ownerName(),d.experimentDate(),actor,org,id,revision); lock(n);
         jdbc.update("UPDATE rnd.experiment_version SET template_version_id=?,template_snapshot_hash=?,template_snapshot_jsonb=?,edit_model_jsonb=? WHERE id=?",d.templateVersionId(),d.templateHash(),pg(d.templateSnapshot()),pg(d.editModel()),old.currentVersionId());
         audit(org,id,old.currentVersionId(),"DRAFT_SAVED",old.editModel(),d.editModel(),actor,name); return required(org,id);
     }
-    @Override @Transactional public void delete(UUID org,UUID id,long revision,UUID actor,String name){var old=required(org,id);if(old.summary().status()==ExperimentStatus.COMPLETED)conflict("已完成实验不可删除，请使用作废");int n=jdbc.update("UPDATE rnd.experiment SET deleted=true,revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=? AND deleted=false",actor,org,id,revision);lock(n);audit(org,id,old.currentVersionId(),"DELETED",old.editModel(),null,actor,name);}
-    @Override @Transactional public Detail publish(UUID org,UUID id,long revision,UUID actor,String name){var old=required(org,id);if(old.summary().status()==ExperimentStatus.COMPLETED||old.summary().status()==ExperimentStatus.VOIDED)conflict("当前实验不可发布");int n=jdbc.update("UPDATE rnd.experiment SET status='COMPLETED',revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",actor,org,id,revision);lock(n);jdbc.update("UPDATE rnd.experiment_version SET status='COMPLETED',published_at=now() WHERE id=?",old.currentVersionId());audit(org,id,old.currentVersionId(),"PUBLISHED",old.editModel(),old.editModel(),actor,name);event(org,id,ExperimentEvents.PUBLISHED,old.currentVersionId(),old.summary().versionNo());return required(org,id);}
+    @Override @Transactional public void delete(UUID org,UUID id,long revision,UUID actor,String name){var old=required(org,id); requireVersion(old,revision);if(old.summary().status()==ExperimentStatus.COMPLETED)conflict("已完成实验不可删除，请使用作废");int n=jdbc.update("UPDATE rnd.experiment SET deleted=true,revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=? AND deleted=false",actor,org,id,revision);lock(n);audit(org,id,old.currentVersionId(),"DELETED",old.editModel(),null,actor,name);}
+    @Override @Transactional public Detail publish(UUID org,UUID id,long revision,UUID actor,String name){
+        return transition(org,id,revision,ExperimentStatus.COMPLETED,null,actor,name);
+    }
     @Override @Transactional public Detail transition(UUID org,UUID id,long revision,ExperimentStatus target,String comment,UUID actor,String name){
-        var old=required(org,id); if(!old.summary().status().canTransitionTo(target)) conflict("不允许从 "+old.summary().status()+" 转换到 "+target);
-        validate(old,target,comment); int n=jdbc.update("UPDATE rnd.experiment SET status=?,revision=revision+1,void_reason=?,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",target.name(),target==ExperimentStatus.VOIDED?comment:null,actor,org,id,revision);lock(n);
+        var old=required(org,id); requireVersion(old,revision); if(!old.summary().status().canTransitionTo(target)) conflict("不允许从 "+old.summary().status()+" 转换到 "+target);
+        validate(old,target,comment); int n=jdbc.update("UPDATE rnd.experiment SET status=?,revision=revision+1,void_reason=?,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=? AND deleted=false",target.name(),target==ExperimentStatus.VOIDED?comment:null,actor,org,id,revision);lock(n);
         jdbc.update("UPDATE rnd.experiment_version SET status=?,submitted_at=CASE WHEN ?='PENDING_REVIEW' THEN now() ELSE submitted_at END,published_at=CASE WHEN ?='COMPLETED' THEN now() ELSE published_at END WHERE id=?",target.name(),target.name(),target.name(),old.currentVersionId());
         jdbc.update("INSERT INTO rnd.experiment_review(id,organization_id,experiment_id,experiment_version_id,action,comment,operator_id,operator_name) VALUES(?,?,?,?,?,?,?,?)",UUID.randomUUID(),org,id,old.currentVersionId(),target.name(),comment,actor,name);
         String ev=target==ExperimentStatus.PENDING_REVIEW?ExperimentEvents.SUBMITTED:target==ExperimentStatus.COMPLETED?ExperimentEvents.PUBLISHED:target==ExperimentStatus.VOIDED?ExperimentEvents.VOIDED:null;if(ev!=null)event(org,id,ev,old.currentVersionId(),old.summary().versionNo());
@@ -163,20 +165,20 @@ public class JdbcExperimentRepository implements ExperimentRepository {
     }
     @Override public List<Version> versions(UUID org,UUID id){return jdbc.query("SELECT * FROM rnd.experiment_version WHERE organization_id=? AND experiment_id=? AND (status='COMPLETED' OR (status='VOIDED' AND published_at IS NOT NULL)) ORDER BY version_no DESC",this::version,org,id);}
     @Override @Transactional public Detail createRevision(UUID org,UUID id,long revision,String reason,UUID actor,String name){
-        var old=required(org,id);if(old.summary().status()!=ExperimentStatus.COMPLETED)conflict("仅已完成实验可创建修订版本");if(!text(reason))invalid("必须填写修订原因");var vid=UUID.randomUUID();int next=old.summary().versionNo()+1;
-        int n=jdbc.update("UPDATE rnd.experiment SET status='DRAFT',current_version_id=NULL,revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",actor,org,id,revision);lock(n);
+        var old=required(org,id); requireVersion(old,revision);if(old.summary().status()!=ExperimentStatus.COMPLETED)conflict("仅已完成实验可创建修订版本");if(!text(reason))invalid("必须填写修订原因");var vid=UUID.randomUUID();int next=old.summary().versionNo()+1;
+        int n=jdbc.update("UPDATE rnd.experiment SET status='DRAFT',current_version_id=NULL,revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=? AND deleted=false",actor,org,id,revision);lock(n);
         jdbc.update("INSERT INTO rnd.experiment_version(id,organization_id,experiment_id,version_no,status,template_version_id,template_snapshot_hash,template_snapshot_jsonb,edit_model_jsonb,revision_reason,created_by) VALUES(?,?,?,?,'DRAFT',?,?,?,?,?,?)",vid,org,id,next,old.templateVersionId(),old.templateSnapshotHash(),pg(old.templateSnapshot()),pg(old.editModel()),reason,actor);
         jdbc.update("UPDATE rnd.experiment SET current_version_id=? WHERE id=?",vid,id);audit(org,id,vid,"REVISION_CREATED",null,old.editModel(),actor,name);event(org,id,ExperimentEvents.REVISION_STARTED,vid,next);return required(org,id);
     }
     @Override @Transactional public Detail rollback(UUID org,UUID id,long revision,int targetVersion,String reason,UUID actor,String name){
-        var old=required(org,id);
+        var old=required(org,id); requireVersion(old,revision);
         if(old.summary().status()!=ExperimentStatus.COMPLETED) conflict("仅已完成实验可回退历史版本");
         if(!text(reason)) invalid("必须填写回退原因");
         var target=versions(org,id).stream().filter(v->v.versionNo()==targetVersion).findFirst()
                 .orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"历史版本不存在"));
         var vid=UUID.randomUUID();
         int next=jdbc.queryForObject("SELECT COALESCE(MAX(version_no),0)+1 FROM rnd.experiment_version WHERE organization_id=? AND experiment_id=?",Integer.class,org,id);
-        int n=jdbc.update("UPDATE rnd.experiment SET status='DRAFT',current_version_id=NULL,revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",actor,org,id,revision);lock(n);
+        int n=jdbc.update("UPDATE rnd.experiment SET status='DRAFT',current_version_id=NULL,revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=? AND deleted=false",actor,org,id,revision);lock(n);
         jdbc.update("INSERT INTO rnd.experiment_version(id,organization_id,experiment_id,version_no,status,template_version_id,template_snapshot_hash,template_snapshot_jsonb,edit_model_jsonb,revision_reason,created_by) VALUES(?,?,?,?,'DRAFT',?,?,?,?,?,?)",vid,org,id,next,target.templateVersionId(),target.snapshotHash(),pg(target.templateSnapshot()),pg(target.editModel()),reason,actor);
         jdbc.update("UPDATE rnd.experiment SET current_version_id=? WHERE id=?",vid,id);
         audit(org,id,vid,"ROLLED_BACK",null,target.editModel(),actor,name);
@@ -187,19 +189,26 @@ public class JdbcExperimentRepository implements ExperimentRepository {
     @Override public List<Audit> audits(UUID org,UUID id){return jdbc.query("SELECT * FROM rnd.experiment_audit WHERE organization_id=? AND experiment_id=? ORDER BY created_at DESC",(r,n)->new Audit(r.getObject("id",UUID.class),r.getString("action"),node(r,"before_jsonb"),node(r,"after_jsonb"),r.getString("operator_name"),r.getTimestamp("created_at").toInstant()),org,id);}
     @Override public List<Category> categories(UUID org,boolean all){return jdbc.query("SELECT * FROM rnd.experiment_category WHERE organization_id=?"+(all?"":" AND active=true")+" ORDER BY name",(r,n)->new Category(r.getObject("id",UUID.class),r.getString("code"),r.getString("name"),r.getString("description"),r.getBoolean("active"),r.getLong("revision")),org);}
     @Override @Transactional public Category createCategory(UUID org,String code,String name,String description,UUID actor){if(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM rnd.experiment_category WHERE organization_id=? AND lower(name)=lower(?) AND active=true)",Boolean.class,org,name.trim())))conflict("实验分类名称已存在");var id=UUID.randomUUID();jdbc.update("INSERT INTO rnd.experiment_category(id,organization_id,code,name,description) VALUES(?,?,?,?,?)",id,org,code,name.trim(),description.trim());return new Category(id,code,name.trim(),description.trim(),true,0);}
-    @Override @Transactional public Category updateCategory(UUID org,UUID id,long revision,String name,String description,UUID actor){var current=jdbc.query("SELECT * FROM rnd.experiment_category WHERE organization_id=? AND id=?",(r,n)->new Category(r.getObject("id",UUID.class),r.getString("code"),r.getString("name"),r.getString("description"),r.getBoolean("active"),r.getLong("revision")),org,id).stream().findFirst().orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"实验分类不存在"));if(!current.name().equalsIgnoreCase(name)&&Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM rnd.experiment_category WHERE organization_id=? AND lower(name)=lower(?) AND id<>? AND active=true)",Boolean.class,org,name.trim(),id)))conflict("实验分类名称已存在");int n=jdbc.update("UPDATE rnd.experiment_category SET name=?,description=?,revision=revision+1,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",name.trim(),description.trim(),org,id,revision);lock(n);jdbc.update("UPDATE rnd.experiment SET category_name=? WHERE organization_id=? AND category_id=? AND deleted=false",name.trim(),org,id);return categories(org,true).stream().filter(c->c.id().equals(id)).findFirst().orElseThrow();}
+    @Override @Transactional public Category updateCategory(UUID org,UUID id,long revision,String name,String description,UUID actor){var current=jdbc.query("SELECT * FROM rnd.experiment_category WHERE organization_id=? AND id=?",(r,n)->new Category(r.getObject("id",UUID.class),r.getString("code"),r.getString("name"),r.getString("description"),r.getBoolean("active"),r.getLong("revision")),org,id).stream().findFirst().orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"实验分类不存在"));if(!current.name().equalsIgnoreCase(name)&&Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM rnd.experiment_category WHERE organization_id=? AND lower(name)=lower(?) AND id<>? AND active=true)",Boolean.class,org,name.trim(),id)))conflict("实验分类名称已存在");int n=jdbc.update("UPDATE rnd.experiment_category SET name=?,description=?,revision=revision+1,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",name.trim(),description.trim(),org,id,revision);lock(n);jdbc.update("UPDATE rnd.experiment SET category_name=?,revision=revision+1,updated_at=now() WHERE organization_id=? AND category_id=? AND deleted=false",name.trim(),org,id);return categories(org,true).stream().filter(c->c.id().equals(id)).findFirst().orElseThrow();}
     @Override @Transactional public Category setCategoryActive(UUID org,UUID id,long rev,boolean active){if(!active&&Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM rnd.experiment WHERE organization_id=? AND category_id=? AND deleted=false)",Boolean.class,org,id)))conflict("该分类仍有关联实验，请先移动或删除实验");int n=jdbc.update("UPDATE rnd.experiment_category SET active=?,revision=revision+1,updated_at=now() WHERE organization_id=? AND id=? AND revision=?",active,org,id,rev);lock(n);return categories(org,true).stream().filter(x->x.id().equals(id)).findFirst().orElseThrow();}
-    @Override @Transactional public int deleteCategory(UUID org,UUID id,UUID replacementCategoryId){
+    @Override @Transactional public int deleteCategory(UUID org,UUID id,long expectedVersion,UUID replacementCategoryId){
+        var revisions=jdbc.query("SELECT revision FROM rnd.experiment_category WHERE organization_id=? AND id=? FOR UPDATE",(rs,n)->rs.getLong(1),org,id);
+        if(revisions.isEmpty())throw new ApiException(ApiErrorCode.NOT_FOUND,"实验分类不存在");
+        if(expectedVersion<0||revisions.getFirst()!=expectedVersion)throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"实验分类已被修改");
         String replacementName=null;
         if(replacementCategoryId!=null){
             if(replacementCategoryId.equals(id))conflict("不能迁移到当前分类");
             replacementName=jdbc.query("SELECT name FROM rnd.experiment_category WHERE organization_id=? AND id=?",(r,n)->r.getString(1),org,replacementCategoryId).stream().findFirst().orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"目标实验分类不存在"));
         }
         // 分类主键被 rnd.experiment.category_id 外键引用，必须先迁移（含已软删除记录）再删除分类。
-        jdbc.update("UPDATE rnd.experiment SET category_id=?,category_name=?,updated_at=now() WHERE organization_id=? AND category_id=?",replacementCategoryId,replacementName,org,id);
+        jdbc.update("UPDATE rnd.experiment SET category_id=?,category_name=?,revision=revision+1,updated_at=now() WHERE organization_id=? AND category_id=?",replacementCategoryId,replacementName,org,id);
         return jdbc.update("DELETE FROM rnd.experiment_category WHERE organization_id=? AND id=?",org,id);
     }
 
+    private static void requireVersion(Detail current,long expected){
+        if(expected<0||current.summary().revision()!=expected)
+            throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"实验已被其他会话修改，请重新加载后处理冲突");
+    }
     private Detail required(UUID o,UUID id){return detail(o,id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"实验不存在"));}
     private CompletedQuery completedFactsWhere(UUID org, CompletedFactsSearch q) {
         var where = new StringBuilder(" WHERE e.organization_id=? AND e.deleted=false AND e.status='COMPLETED' AND v.status='COMPLETED'");

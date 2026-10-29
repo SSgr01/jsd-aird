@@ -1,3 +1,4 @@
+import { useRequestGuard } from '@/services/query/use-request-guard';
 import {
   AppstoreOutlined,
   CopyOutlined,
@@ -149,13 +150,18 @@ export function QualityDataPage() {
   const [msg, holder] = message.useMessage();
   const type = types.find((t) => t.id === typeId);
   const activeRows = editing ? draft : rows;
+  const beginCategoryRequest = useRequestGuard(typeId);
   const loadCategories = useCallback(async () => {
-    const cs = await qualityApi.categories(typeId);
+    const request = beginCategoryRequest();
+    const cs = await qualityApi.categories(typeId, request.signal).catch(() => undefined);
+    if (!request.current() || !cs) return;
     setCategories(cs);
     setCategoryId((v) => (cs.some((c) => c.id === v) ? v : cs[0]?.id));
-  }, [typeId]);
+  }, [beginCategoryRequest, typeId]);
+  const beginRowsRequest = useRequestGuard(JSON.stringify([typeId,categoryId,keyword,projectId,page,size]));
   const loadRows = useCallback(async () => {
     if (!categoryId) return;
+    const request = beginRowsRequest();
     try {
       const r = await qualityApi.records({
         type: typeId,
@@ -164,14 +170,15 @@ export function QualityDataPage() {
         projectId: projectId || undefined,
         page,
         size,
-      });
+      }, request.signal);
+      if (!request.current()) return;
       setRows(r.items);
       setTotal(r.total);
       setSelected(new Set());
     } catch {
-      msg.error('品管数据加载失败');
+      if (request.current()) msg.error('品管数据加载失败');
     }
-  }, [typeId, categoryId, keyword, projectId, page, size, msg]);
+  }, [beginRowsRequest, typeId, categoryId, keyword, projectId, page, size, msg]);
   useEffect(() => {
     void qualityApi.types().then(setTypes);
   }, []);
@@ -532,7 +539,11 @@ export function QualityDataPage() {
             taskName: r.taskName,
             lockVersion: r.lockVersion,
           })),
-        deleteIds: deleted.filter((id) => !id.startsWith('new-')),
+        deletes: deleted.filter((id) => !id.startsWith('new-')).map(id => {
+          const original=rows.find(row=>row.id===id);
+          if(!original)throw new Error('删除数据的原版本缺失，请重新核对');
+          return {id,lockVersion:original.lockVersion};
+        }),
       });
       msg.success('品管数据已保存');
       setEditing(false);
@@ -561,7 +572,7 @@ export function QualityDataPage() {
     if (!window.confirm('确定要删除这条品管数据吗？删除后数据将从列表中隐藏。')) return;
     void (async () => {
       try {
-        await qualityApi.deleteRecord(row.id);
+        await qualityApi.deleteRecord(row.id,row.lockVersion);
         msg.success('品管数据已删除');
         await Promise.all([loadRows(), loadCategories()]);
       } catch (error) {
@@ -649,7 +660,11 @@ export function QualityDataPage() {
     const ids = Array.from(selected).filter((id) => !id.startsWith('new-'));
     if (!ids.length) return;
     if (!window.confirm('确定要删除选中的品管数据吗？删除后数据将从列表中隐藏。')) return;
-    void Promise.all(ids.map((id) => qualityApi.deleteRecord(id)))
+    void qualityApi.deleteRecords(ids.map(id=>{
+      const original=rows.find(row=>row.id===id);
+      if(!original)throw new Error('删除数据的原版本缺失，请重新核对');
+      return {id,lockVersion:original.lockVersion};
+    }))
       .then(async () => {
         msg.success('选中的品管数据已删除');
         setSelected(new Set());
@@ -781,7 +796,7 @@ export function QualityDataPage() {
       onOk: async () => {
         if (!name.trim() || !description.trim()) throw new Error('请填写分类名称和简介');
         if (current)
-          await qualityApi.updateCategory(current.id, {
+          await qualityApi.updateCategory(current.id, { revision: current.revision,
             name: name.trim(),
             description: description.trim(),
           });
@@ -797,7 +812,7 @@ export function QualityDataPage() {
   };
   const removeCategory = async (category: QualityCategory) => {
     try {
-      await qualityApi.deleteCategory(category.id);
+      await qualityApi.deleteCategory(category.id,category.revision);
       await loadCategories();
     } catch {
       msg.warning('该分类下存在数据，请先移动或删除数据');

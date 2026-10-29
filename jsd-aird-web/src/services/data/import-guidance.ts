@@ -1,4 +1,4 @@
-import type { DataPreview, DataTemplateOption } from './data-api';
+import type { DataIssue, DataPreview, DataTemplateOption } from './data-api';
 
 export const templateCategory = (item: DataTemplateOption) => item.category?.trim() || '未分类';
 export function templateGroups(items: DataTemplateOption[], category?: string) {
@@ -42,6 +42,11 @@ export function confirmationBlockReason(preview: DataPreview) {
 
 export function requiresTemplateChange(issueType: string) {
   return ['UNMAPPED_FIELD', 'REQUIRED_MAPPING_MISSING', 'DUPLICATE_FIELD_MAPPING', 'SHEET_MAPPING_MISSING', 'SHEET_RECORDS_MISSING'].includes(issueType);
+}
+
+export function isFieldDefinitionIssue(issue: DataIssue) {
+  return issue.issueType === 'FIELD_UNCONFIRMED'
+    || (issue.issueType === 'INSTANCE_STRUCTURE_UNCONFIRMED' && issue.detail?.code === 'FIELD_UNCONFIRMED');
 }
 
 export function importIssueMessage(issueType: string, message: string) {

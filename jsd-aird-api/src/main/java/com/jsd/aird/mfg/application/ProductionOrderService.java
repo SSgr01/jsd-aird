@@ -136,10 +136,11 @@ public class ProductionOrderService {
     }
 
     @Transactional
-    public void cancel(UUID orderId) {
+    public void cancel(UUID orderId, long expectedVersion) {
         var actor = ActorContext.required();
-        if (repository.cancel(actor.organizationId(), orderId, actor.userId()) == 0) {
-            throw new ApiException(ApiErrorCode.NOT_FOUND, "只有草稿生产单可以取消");
+        requireVersion(get(orderId), expectedVersion);
+        if (repository.cancel(actor.organizationId(), orderId, expectedVersion, actor.userId()) == 0) {
+            throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT, "生产单已变化或不可取消");
         }
         repository.appendOutbox(
                 "PRODUCTION_ORDER",
@@ -151,12 +152,13 @@ public class ProductionOrderService {
     }
 
     @Transactional
-    public void delete(UUID orderId) {
+    public void delete(UUID orderId, long expectedVersion) {
         var actor = ActorContext.required();
         var current = get(orderId);
-        if (repository.delete(actor.organizationId(), orderId) == 0) {
-            throw new ApiException(ApiErrorCode.TEMPLATE_VERSION_IMMUTABLE,
-                    "只有草稿或已取消的生产单可以删除，已提交生产单请保留历史");
+        requireVersion(current, expectedVersion);
+        if (repository.delete(actor.organizationId(), orderId, expectedVersion) == 0) {
+            throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,
+                    "生产单已变化或不可删除，已提交生产单请保留历史");
         }
         audit(actor, orderId, "PRODUCTION_ORDER_DELETED", objectMapper.createObjectNode().put("orderNo", current.orderNo()));
     }
@@ -223,9 +225,10 @@ public class ProductionOrderService {
     }
 
     @Transactional
-    public UUID submit(UUID orderId) {
+    public UUID submit(UUID orderId, long expectedVersion) {
         var actor = ActorContext.required();
         var current = get(orderId);
+        requireVersion(current, expectedVersion);
         if (!"DRAFT".equals(current.status())) {
             throw new ApiException(ApiErrorCode.TEMPLATE_VERSION_IMMUTABLE, "生产单已提交");
         }
@@ -244,7 +247,7 @@ public class ProductionOrderService {
                 .put("unitCode", current.unitCode())
                 .put("plannedDate", current.plannedDate() == null ? null : current.plannedDate().toString());
         repository.submit(new ProductionOrderRepository.SubmitRevision(
-                revisionId,
+                expectedVersion, revisionId,
                 actor.organizationId(),
                 orderId,
                 core,
@@ -323,6 +326,11 @@ public class ProductionOrderService {
         audit(actor, orderId, "PRODUCTION_ORDER_INGEST_CONFIRMED", objectMapper.createObjectNode()
                 .put("lockVersion", expectedLockVersion + 1));
         return new SaveResult(expectedLockVersion + 1, workspaceHash, reconciliationRequired);
+    }
+
+    private static void requireVersion(ProductionOrderRepository.ProductionWorkspace current, long expected) {
+        if (expected < 0 || current.lockVersion() != expected)
+            throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT, "生产单已被修改，请核对最新版本后操作");
     }
 
     private void audit(com.jsd.aird.shared.security.Actor actor, UUID orderId, String action, JsonNode detail) {

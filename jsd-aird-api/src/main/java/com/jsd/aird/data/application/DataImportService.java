@@ -50,6 +50,10 @@ public class DataImportService {
     private void beforeEdit(UUID organizationId, UUID jobId) {
         if (reviewGuard != null) reviewGuard.beforeEdit(organizationId, jobId);
     }
+
+    private void assertNotFreeform(UUID organizationId, UUID jobId) {
+        if (reviewGuard != null) reviewGuard.assertNotFreeform(organizationId, jobId);
+    }
     @Autowired
     public DataImportService(
             DataRepository repository,
@@ -138,13 +142,13 @@ public class DataImportService {
         var format = sourceFormat(file.originalName());
         var templateFormat = template.format();
         var expectedTemplateFormat = switch (format) {
-            case "DOCX" -> "DOCX";
+            case "DOC", "DOCX" -> "DOCX";
             case "XLS", "XLSX", "CSV" -> "XLSX";
             default -> null;
         };
         if (expectedTemplateFormat == null || !expectedTemplateFormat.equals(templateFormat)) {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR,
-                    "所选模板格式与文件类型不匹配：Excel / CSV 请选择 Excel 模板，DOCX 请选择 Word 模板；PDF 请使用自由识别");
+                    "所选模板格式与文件类型不匹配：Excel / CSV 请选择 Excel 模板，DOC / DOCX 请选择 Word 模板；PDF 不支持数据中心导入");
         }
         var duplicate = repository.findCompletedDuplicate(actor.organizationId(), file.sha256(), command.templateVersionId());
         if (duplicate.isPresent() && !command.duplicateOverride()) {
@@ -188,11 +192,12 @@ public class DataImportService {
     }
 
     @Transactional
-    public DataRepository.Job retryExperimentImport(UUID importJobId) {
+    public DataRepository.Job retryExperimentImport(UUID importJobId, String revision) {
         var actor = ActorContext.required();
         var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验导入任务不存在"));
         requireExperimentImportOwner(actor.organizationId(), importJobId);
+        com.jsd.aird.shared.json.RevisionToken.require(revision, job.getRevision());
         if (!Set.of("FAILED", "CANCELLED").contains(job.status())) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "仅失败或已取消的实验导入任务可以重试");
         }
@@ -203,8 +208,9 @@ public class DataImportService {
     }
 
     @Transactional
-    public DataRepository.Job reprocessDataCenterImport(UUID importJobId) {
+    public DataRepository.Job reprocessDataCenterImport(UUID importJobId, String revision) {
         var actor = ActorContext.required();
+        requireJobRevision(actor.organizationId(), importJobId, revision);
         beforeEdit(actor.organizationId(), importJobId);
         var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据导入任务不存在"));
@@ -220,11 +226,13 @@ public class DataImportService {
     }
 
     @Transactional
-    public void hideDataCenterImport(UUID importJobId) {
+    public void hideDataCenterImport(UUID importJobId, String revision) {
         var actor = ActorContext.required();
+        assertNotFreeform(actor.organizationId(), importJobId);
         var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据导入任务不存在"));
         requireDataCenterImportOwner(actor.organizationId(), importJobId);
+        com.jsd.aird.shared.json.RevisionToken.require(revision, job.getRevision());
         if (Set.of("QUEUED", "PARSING", "VALIDATING", "COMMITTING").contains(job.status())) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "处理中任务不可删除，请等待处理结束");
         }
@@ -242,11 +250,12 @@ public class DataImportService {
     }
 
     @Transactional
-    public void hideExperimentImport(UUID importJobId) {
+    public void hideExperimentImport(UUID importJobId, String revision) {
         var actor = ActorContext.required();
         var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验导入任务不存在"));
         requireExperimentImportOwner(actor.organizationId(), importJobId);
+        com.jsd.aird.shared.json.RevisionToken.require(revision, job.getRevision());
         if (Set.of("QUEUED", "PARSING", "VALIDATING", "COMMITTING").contains(job.status())) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "处理中任务不可删除，请等待处理结束");
         }
@@ -307,8 +316,10 @@ public class DataImportService {
     }
 
     @Transactional
-    public void assignSourceCategory(UUID importJobId, UUID categoryId) {
+    public void assignSourceCategory(UUID importJobId, UUID categoryId, String revision) {
         var actor = ActorContext.required();
+        requireJobRevision(actor.organizationId(), importJobId, revision);
+        assertNotFreeform(actor.organizationId(), importJobId);
         var sourceOwner = repository.findSourceOwner(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "来源文件不存在"));
         if (!"DATA_CENTER".equals(sourceOwner)) {
@@ -322,11 +333,66 @@ public class DataImportService {
         }
     }
 
+    private void requireJobRevision(UUID organizationId, UUID id, String revision) {
+        var job = repository.findJobForUpdate(organizationId, id)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
+        com.jsd.aird.shared.json.RevisionToken.require(revision, job.getRevision());
+    }
+
+    @Transactional
+    public DataRepository.Job confirmSheetsAtRevision(UUID id,String revision,List<DataRepository.SheetUpdate> updates) {
+        requireJobRevision(ActorContext.required().organizationId(),id,revision); confirmSheets(id,updates); return get(id);
+    }
+    @Transactional
+    public DataRepository.Job saveMappingsAtRevision(UUID id,String revision,List<MappingCommand> commands) {
+        requireJobRevision(ActorContext.required().organizationId(),id,revision); saveMappings(id,commands); return get(id);
+    }
+    @Transactional
+    public DataRepository.Job correctValueAtRevision(UUID id,String revision,UUID recordId,String bindingId,String valuePath,JsonNode value,String reason) {
+        requireJobRevision(ActorContext.required().organizationId(),id,revision); correctValue(id,recordId,bindingId,valuePath,value,reason); return get(id);
+    }
+    @Transactional
+    public DataRepository.Job excludeRowAtRevision(UUID id,String revision,UUID recordId,boolean excluded,String reason) {
+        requireJobRevision(ActorContext.required().organizationId(),id,revision); excludeRow(id,recordId,excluded,reason); return get(id);
+    }
+    @Transactional
+    public DataRepository.Job resolveIssueAtRevision(UUID id,String revision,UUID issueId,String status,String reason) {
+        requireJobRevision(ActorContext.required().organizationId(),id,revision); resolveIssue(id,issueId,status,reason); return get(id);
+    }
+    @Transactional
+    public DataRepository.Job reanchorAtRevision(UUID id,String revision,String componentId,String sheetId,String sourceRange,String reason) {
+        requireJobRevision(ActorContext.required().organizationId(),id,revision); reanchorComponent(id,componentId,sheetId,sourceRange,reason); return get(id);
+    }
+    @Transactional
+    public DataRepository.Job parseAtRevision(UUID id,String revision,boolean force) {
+        requireJobRevision(ActorContext.required().organizationId(),id,revision);
+        if(force) reExtract(id); else parse(id);
+        return get(id);
+    }
+
     public TemplateDataImportFacade.FieldRequest requestField(UUID importJobId, FieldRequestCommand command) {
         var actor = ActorContext.required();
+        assertNotFreeform(actor.organizationId(), importJobId);
         var job = requireJob(actor.organizationId(), importJobId);
         return templates.requestField(actor.organizationId(), job.templateVersionId(), new TemplateDataImportFacade.FieldRequestCommand(
                 command.fieldId(), command.displayName(), command.valueType(), command.uiType(), command.groupCode(), command.description()));
+    }
+
+    @Transactional
+    public DataRepository.Job saveWorkbookDraft(UUID id,String revision,JsonNode source,JsonNode provided,JsonNode operations) {
+        var actor=ActorContext.required();
+        requireJobRevision(actor.organizationId(),id,revision);
+        var job=repository.findJobForUpdate(actor.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"导入任务不存在"));
+        if(!Set.of("WAITING_MAPPING","WAITING_CONFIRM","COMPLETED").contains(job.status())||!Set.of("XLSX","XLS","CSV").contains(job.sourceFormat()))throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"当前导入任务不能修改工作簿结构");
+        beforeEdit(actor.organizationId(),id);
+        if(source==null||!source.path("sheets").isObject())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"工作簿草稿无效");
+        var snapshot=source.deepCopy();
+        var instance=com.jsd.aird.shared.excel.WorkbookStructure.validate(objectMapper,snapshot,provided);
+        if(operations!=null&&!operations.isArray())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"结构操作记录无效");
+        repository.saveWorkbookDraft(actor.organizationId(),id,snapshot,instance,operations==null?objectMapper.createArrayNode():operations,actor.userId());
+        parseInternal(actor.organizationId(),id,true);
+        auditLog.append(actor.organizationId(),actor.userId(),"DATA_IMPORT_WORKBOOK_DRAFT","DATA_IMPORT_JOB",id,objectMapper.createObjectNode().put("structureVersion",2));
+        return get(id);
     }
 
     @Transactional
@@ -334,6 +400,13 @@ public class DataImportService {
         var actor = ActorContext.required();
         beforeEdit(actor.organizationId(), importJobId);
         parseInternal(actor.organizationId(), importJobId);
+    }
+
+    @Transactional
+    public DataRepository.Job saveExperimentWorkbookDraft(UUID id,String revision,JsonNode source,JsonNode provided,JsonNode operations) {
+        var actor=ActorContext.required();
+        if(!"EXPERIMENT".equals(repository.findSourceOwner(actor.organizationId(),id).orElse("")))throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN,"此任务不属于实验文件导入");
+        return saveWorkbookDraft(id,revision,source,provided,operations);
     }
 
     public void parseInternal(UUID organizationId, UUID importJobId) {
@@ -354,16 +427,21 @@ public class DataImportService {
         if (!force && List.of("WAITING_MAPPING", "VALIDATING", "WAITING_CONFIRM", "COMPLETED").contains(job.status())) return;
         repository.updateJobStatus(organizationId, importJobId, "PARSING", 10, "READING_SOURCE", null);
         try {
-            var definition = templates.getVersion(organizationId, job.templateVersionId());
-            var experimentV9 = definition.importContractVersion() >= 9
-                    && "EXPERIMENT_DATA".equals(definition.importContract().path("templateUsage").asText(""));
-            var documentSource = Set.of("DOCX", "IMAGE").contains(job.sourceFormat());
+            var originalDefinition = templates.getVersion(organizationId, job.templateVersionId());
+            var experimentV9 = originalDefinition.importContractVersion() >= 9
+                    && "EXPERIMENT_DATA".equals(originalDefinition.importContract().path("templateUsage").asText(""));
+            var documentSource = Set.of("DOC", "DOCX", "IMAGE").contains(job.sourceFormat());
+            var workbookDraft=repository.findWorkbookDraft(organizationId,importJobId).orElse(null);
+            var labExecution=workbookDraft!=null?templates.prepareWorkbookImport(organizationId,job.templateVersionId(),workbookDraft.snapshot(),workbookDraft.instance())
+                    :!documentSource
+                    ?templates.prepareImport(organizationId,job.templateVersionId(),job.sourceFileId()):null;
+            var definition=labExecution==null?originalDefinition:labExecution.definition();
             var parsed = documentSource && documentParser != null
                     ? documentParser.parse(organizationId, job.sourceFileId(), job.sourceFileName(),
                             job.sourceSha256(), job.sourceFormat(), definition.fields())
-                    : templates.parse(organizationId, job.templateVersionId(), job.sourceFileId());
+                    : labExecution==null?templates.parse(organizationId, job.templateVersionId(), job.sourceFileId()):labExecution.parsed();
             repository.updateJobStatus(organizationId, importJobId, "PARSING", 45, "ANALYZING_STRUCTURE", null);
-            var originalBindings = templates.getBindings(organizationId, job.templateVersionId());
+            var originalBindings = labExecution==null?templates.getBindings(organizationId, job.templateVersionId()):labExecution.bindings();
             var overrides = repository.listComponentOverrides(organizationId, importJobId);
             var bindings = applyComponentOverrides(originalBindings, overrides, definition.importContract());
             var labelResolution = documentSource ? null : new BindingLabelResolver(objectMapper)
@@ -382,7 +460,7 @@ public class DataImportService {
                     documentSource ? "COMPATIBLE" : compatibility.status(), compatibilityReport);
             var configured = repository.listSheets(organizationId, importJobId).stream()
                     .collect(java.util.stream.Collectors.toMap(DataRepository.Sheet::sheetId, item -> item, (left, right) -> left));
-            var previousRows = force ? repository.listRows(organizationId, importJobId) : List.<DataRepository.Row>of();
+            var previousRows = force && workbookDraft==null ? repository.listRows(organizationId, importJobId) : List.<DataRepository.Row>of();
             if (force) repository.clearParsed(organizationId, importJobId);
             var sheets = new ArrayList<DataRepository.Sheet>();
             var mappings = new ArrayList<DataRepository.Mapping>();
@@ -399,6 +477,12 @@ public class DataImportService {
                         ? (noHeader ? parsedSheet.firstRow() : parsedSheet.suggestedDataStartRow()) : previous.dataStartRow();
                 var dataEnd = previous == null || previous.dataEndRow() == null
                         ? parsedSheet.lastRow() : previous.dataEndRow();
+                if (workbookDraft != null) {
+                    // The instance bindings describe the current physical workbook.
+                    // A source-file row limit must not truncate inserted records.
+                    dataStart = parsedSheet.firstRow();
+                    dataEnd = parsedSheet.lastRow();
+                }
                 dataStart = Math.max(1, Math.min(dataStart, parsedSheet.lastRow()));
                 dataEnd = Math.max(dataStart, Math.min(dataEnd, parsedSheet.lastRow()));
                 ObjectNode structure = objectMapper.createObjectNode();
@@ -406,6 +490,7 @@ public class DataImportService {
                         .put("sheetName", parsedSheet.sheetName())
                         .put("structureFingerprint", parsedSheet.structureFingerprint() == null ? "" : parsedSheet.structureFingerprint());
                 structure.set("rows", objectMapper.valueToTree(parsedSheet.rows()));
+                if(labExecution!=null&&labExecution.issues()!=null)structure.set("labParseIssues",labExecution.issues().deepCopy());
                 if (parsedSheet.layoutIr() != null) structure.set("layoutIr", parsedSheet.layoutIr().deepCopy());
                 structure.set("componentMatches", documentSource
                         ? objectMapper.createArrayNode() : compatibility.componentMatches().deepCopy());
@@ -452,8 +537,10 @@ public class DataImportService {
                 var structured = structuredExtractor.extract(parsedSheet, definition.fields(), bindings, dataStart, dataEnd,
                         definition.importContractVersion(), definition.importContract());
                 if (structured.isPresent()) {
-                    mappings.addAll(structured.get().mappings());
-                    rows.addAll(structured.get().rows());
+                    var identities=workbookDraft==null?definition.schema().path("x-jsd-workbook-instance"):workbookDraft.instance();
+                    var resolved=structuredExtractor.applyInstanceIdentities(structured.get(),identities,importJobId.toString());
+                    mappings.addAll(resolved.mappings());
+                    rows.addAll(resolved.rows());
                     continue;
                 }
                 if (experimentV9) continue;
@@ -561,7 +648,7 @@ public class DataImportService {
                             raw.deepCopy(), "STAGED", metadata));
                 }
             }
-            if (experimentV9 && rows.isEmpty()) {
+            if (experimentV9 && rows.isEmpty() && workbookDraft==null) {
                 throw new ApiException(ApiErrorCode.VALIDATION_ERROR,
                         "文件中没有可导入的实验数据；请填写本次实验数据后重传，或使用在线新建");
             }
@@ -640,11 +727,23 @@ public class DataImportService {
 
     public void validateInternal(UUID organizationId, UUID importJobId) {
         var job = requireJob(organizationId, importJobId);
-        var definition = templates.getVersion(organizationId, job.templateVersionId());
+        var draft=repository.findWorkbookDraft(organizationId,importJobId).orElse(null);
+        var definition = draft==null?templates.getVersion(organizationId, job.templateVersionId()):templates.prepareWorkbookImport(organizationId,job.templateVersionId(),draft.snapshot(),draft.instance()).definition();
         var mappings = repository.listMappings(organizationId, importJobId);
         var rows = repository.listRows(organizationId, importJobId);
+        var sourceSheets = repository.listSheets(organizationId, importJobId);
         var issues = new ArrayList<DataRepository.Issue>();
-        for (var sheet : repository.listSheets(organizationId, importJobId)) {
+        for(var sheet:sourceSheets)if(sheet.selected())for(var pending:sheet.structure().path("labParseIssues")) {
+            var code=pending.path("code").asText("INSTANCE_STRUCTURE_UNCONFIRMED");
+            // Per-value quantity validation below supplies the specific warning.
+            if(code.equals("FORMULA_INCOMPLETE"))continue;
+            issues.add(new DataRepository.Issue(null,sheet.sheetId(),null,"WARNING",code,null,null,pending.path("address").asText(null),pending.path("message").asText("数据待核对"),pending.deepCopy(),"OPEN"));
+        }
+        if(draft!=null)for(var pending:draft.instance().path("issues")) {
+            boolean included=duplicatesParsedWorkbookIssue(draft.instance(),pending,sourceSheets);
+            if(!included)issues.add(new DataRepository.Issue(null,pending.path("sheetId").asText(null),null,"WARNING","INSTANCE_STRUCTURE_UNCONFIRMED",null,null,pending.path("address").asText(null),pending.path("message").asText("结构或字段待确认"),pending.deepCopy(),"OPEN"));
+        }
+        for (var sheet : sourceSheets) {
             if (!sheet.selected()) continue;
             var mapped = mappings.stream().anyMatch(item -> sheet.sheetId().equals(item.sheetId()) && "MAP".equals(item.action())
                     && item.fieldCode()!=null && !item.fieldCode().isBlank());
@@ -717,6 +816,30 @@ public class DataImportService {
                         if (cell.has(key)) value.set(key, cell.path(key).deepCopy());
                     }
                 }
+                if ("FORMULA".equals(value.path("experimentField").path("domain").asText())
+                        && "ACTUAL_QTY".equals(value.path("experimentField").path("field").asText())
+                        && "LIST_PROJECTION".equals(mapping.detail().path("mappingKind").asText())) {
+                    var quantityField=objectMapper.createObjectNode().put("semantic","ACTUAL_QTY").put("resultKind","NUMBER").put("unit","g");
+                    var parsedQuantity=com.jsd.aird.shared.lab.LabValues.parse(objectMapper,objectMapper.getNodeFactory().textNode(effectiveInput),quantityField,"");
+                    value.put("rawUnit",parsedQuantity.path("rawUnit").asText(""));
+                    value.put("parseStatus",parsedQuantity.path("parseStatus").asText());
+                    if("CONFLICT".equals(parsedQuantity.path("parseStatus").asText())) {
+                        value.put("normalizedUnit","").put("valueStatus","WARNING").put("trainingEligible",false);
+                        issues.add(issue(row,mapping,"WARNING","MATERIAL_QUANTITY_INVALID","用量需要使用非负数和 g，请核对原始填写内容"));
+                    }
+                    if(value.path("itemLabel").asText().isBlank()&&!effectiveInput.isBlank())value.put("valueStatus","WARNING").put("trainingEligible",false);
+                }
+                var address=cell==null?"":cell.path("cellAddress").asText("");
+                for(var sheet:sourceSheets)if(sheet.sheetId().equals(row.sheetId()))for(var pending:sheet.structure().path("labParseIssues")) {
+                    var at=pending.path("address").asText("");var code=pending.path("code").asText("");
+                    if(code.equals("FORMULA_INCOMPLETE"))continue;
+                    boolean same=at.equalsIgnoreCase(address);
+                    if(!same&&Set.of("DUPLICATE_FIELD","MATERIAL_CODE_MISSING","FIELD_UNCONFIRMED").contains(code)) {
+                        var left=at.replaceAll("^[A-Za-z]+","");var right=address.replaceAll("^[A-Za-z]+","");
+                        same=!left.isBlank()&&left.equals(right);
+                    }
+                    if(same)value.put("valueStatus","WARNING").put("trainingEligible",false);
+                }
                 var valueSource = value.path("valueSource").asText("INPUT").toUpperCase(Locale.ROOT);
                 if (Set.of("FORMULA", "DERIVED").contains(valueSource)) value.put("trainingEligible", false);
                 if ("FORMULA".equals(valueSource)) {
@@ -774,6 +897,38 @@ public class DataImportService {
         var blocker = issues.stream().anyMatch(item -> "BLOCKER".equals(item.severity()));
         repository.replaceValidation(organizationId, importJobId, normalizedRows, issues,
                 blocker ? "WAITING_MAPPING" : "WAITING_CONFIRM");
+    }
+
+    private boolean duplicatesParsedWorkbookIssue(JsonNode instance, JsonNode pending,
+                                                    List<DataRepository.Sheet> sourceSheets) {
+        var code=pending.path("code").asText();
+        var fieldId=pending.path("fieldId").asText();
+        var address=pending.path("address").asText();
+        var sheetId=pending.path("sheetId").asText();
+        if(!fieldId.isBlank())for(var field:instance.path("model").path("fields")) {
+            if(!field.path("id").asText().equals(fieldId))continue;
+            var locator=field.path("locator");
+            if(address.isBlank())address=locator.path("labelRange").asText(field.path("labelRange").asText());
+            if(sheetId.isBlank())sheetId=locator.path("sheetId").asText();
+            var bindingId=field.path("bindingId").asText();
+            for(var binding:instance.path("mapping"))if(binding.path("bindingId").asText().equals(bindingId)) {
+                var bindingLocator=binding.path("locator");
+                if(address.isBlank())address=bindingLocator.path("labelRange").asText();
+                if(sheetId.isBlank())sheetId=bindingLocator.path("sheetId").asText();
+                break;
+            }
+            break;
+        }
+        for(var sheet:sourceSheets) {
+            if(!sheet.selected()||!sheetId.isBlank()&&!sheetId.equals(sheet.sheetId()))continue;
+            for(var parsed:sheet.structure().path("labParseIssues")) {
+                if(!parsed.path("code").asText().equals(code))continue;
+                boolean sameField=!fieldId.isBlank()&&parsed.path("fieldId").asText().equals(fieldId);
+                boolean sameCell=!address.isBlank()&&parsed.path("address").asText().equalsIgnoreCase(address);
+                if(sameField||sameCell)return true;
+            }
+        }
+        return false;
     }
 
     private String mappingKey(String sheetId, String componentId, String sourceColumn) {
@@ -921,6 +1076,7 @@ public class DataImportService {
     @Transactional
     public void commit(UUID importJobId) {
         var actor = ActorContext.required();
+        assertNotFreeform(actor.organizationId(), importJobId);
         var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
         if ("COMPLETED".equals(job.status())) return;
@@ -1086,9 +1242,14 @@ public class DataImportService {
     private String normalize(String raw, DataRepository.Mapping mapping, DataRepository.Row row,
                              List<DataRepository.Issue> issues) {
         if (raw == null || raw.isBlank()) return "";
+        if(mapping.detail().path("experimentField").isObject()&&!com.jsd.aird.shared.lab.LabValues.recorded(raw))return "";
         var type = mapping.valueType() == null ? "TEXT" : mapping.valueType().toUpperCase(Locale.ROOT);
+        var evidence=row.sourceMetadata()==null?objectMapper.createObjectNode():row.sourceMetadata().path("cells").path(mapping.sourceColumn());
+        boolean sourceNumeric=evidence.hasNonNull("rawNumericValue")&&raw.equals(row.rawValues().path(mapping.sourceColumn()).asText());
+        var sourceText=sourceNumeric?evidence.path("rawNumericValue").asText():raw;
+        var numberFormat=evidence.path("numberFormat").asText("");
         BigDecimal numeric = null;
-        if (type.contains("NUM") || type.contains("DECIMAL")) {
+        if (type.contains("NUM") || type.contains("DECIMAL") || type.equals("INTEGER")) {
             try {
                 var numericText = raw.trim().replace(",", "");
                 // Excel percentage cells may arrive from the renderer as their
@@ -1114,6 +1275,7 @@ public class DataImportService {
                     }
                 }
                 numeric = parseStructuredNumeric(numericText, mapping);
+                if(type.equals("INTEGER")&&numeric.stripTrailingZeros().scale()>0)throw new NumberFormatException("整数不能包含小数");
             }
             catch (NumberFormatException exception) {
                 issues.add(issue(row, mapping, "BLOCKER", "TYPE_ERROR", "数值字段无法解析：" + raw));
@@ -1121,22 +1283,20 @@ public class DataImportService {
         }
         if (type.contains("DATE") || type.contains("TIME")) {
             try {
-                var value = raw.trim();
-                if (value.matches("\\d{4}[./-]\\d{1,2}[./-]\\d{1,2}")) {
-                    var parts = value.split("[./-]");
-                    value = "%s-%02d-%02d".formatted(parts[0], Integer.parseInt(parts[1]), Integer.parseInt(parts[2]));
-                }
-                java.time.LocalDate.parse(value);
-                return value;
-            } catch (java.time.DateTimeException | NumberFormatException exception) {
-                issues.add(issue(row, mapping, "BLOCKER", "TYPE_ERROR", "日期字段无法解析：" + raw));
+                return com.jsd.aird.shared.data.FieldValueTypes.normalize(type,sourceText,sourceNumeric,numberFormat,mapping.standardUnit());
+            } catch (java.time.DateTimeException | IllegalArgumentException exception) {
+                issues.add(issue(row, mapping, "BLOCKER", "TYPE_ERROR", "日期或时间字段无法解析：" + raw));
             }
         }
         if (type.contains("BOOL")) {
             var value = raw.trim().toLowerCase(Locale.ROOT);
             if (!Set.of("true", "false", "是", "否", "1", "0", "y", "n", "yes", "no").contains(value)) {
                 issues.add(issue(row, mapping, "BLOCKER", "TYPE_ERROR", "布尔字段无法解析：" + raw));
-            }
+            } else return com.jsd.aird.shared.data.FieldValueTypes.normalize("boolean",raw,false,"","");
+        }
+        if(type.equals("DURATION")) {
+            try {return com.jsd.aird.shared.data.FieldValueTypes.durationSeconds(sourceText,sourceNumeric,numberFormat,mapping.standardUnit()).divide(com.jsd.aird.shared.data.FieldValueTypes.durationFactor(mapping.standardUnit()),12,java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();}
+            catch(IllegalArgumentException invalid){issues.add(issue(row,mapping,"BLOCKER","TYPE_ERROR","时长字段无法解析："+raw));}
         }
         if (mapping.sourceUnit() != null && mapping.standardUnit() != null
                 && !mapping.sourceUnit().isBlank() && !mapping.standardUnit().isBlank()
@@ -1407,9 +1567,10 @@ public class DataImportService {
         if (lower.endsWith(".xlsx")) return "XLSX";
         if (lower.endsWith(".xls")) return "XLS";
         if (lower.endsWith(".csv")) return "CSV";
+        if (lower.endsWith(".doc")) return "DOC";
         if (lower.endsWith(".docx")) return "DOCX";
         if (lower.matches(".*\\.(png|jpg|jpeg|gif|webp|bmp|tif|tiff)$")) return "IMAGE";
-        throw new ApiException(ApiErrorCode.BAD_REQUEST, "数据中心仅支持 XLS、XLSX 或 CSV");
+        throw new ApiException(ApiErrorCode.BAD_REQUEST, "数据中心仅支持 XLS、XLSX、CSV、DOC 或 DOCX 文件；PDF 不支持导入");
     }
 
     private String columnName(int value) {

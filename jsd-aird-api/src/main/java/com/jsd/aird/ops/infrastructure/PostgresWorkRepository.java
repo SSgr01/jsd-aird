@@ -162,6 +162,15 @@ public class PostgresWorkRepository implements WorkRepository {
     }
 
     @Override
+    public void deferClaimedJob(AsyncJob job){
+        jdbcTemplate.update("""
+            UPDATE ops.async_job SET status='READY',attempt_count=greatest(0,attempt_count-1),
+                next_attempt_at=now()+interval '2 seconds',lease_owner=NULL,lease_expires_at=NULL,lease_token=NULL,updated_at=now()
+            WHERE id=? AND status='RUNNING' AND lease_token=? AND lease_generation=?
+            """,job.id(),job.leaseToken(),job.leaseGeneration());
+    }
+
+    @Override
     public void failJob(AsyncJob job, Exception exception) {
         var terminal = job.attemptCount() >= job.maxAttempts();
         jdbcTemplate.update("""

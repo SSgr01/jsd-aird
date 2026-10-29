@@ -29,6 +29,35 @@ public class DataPublicationService {
     private final AuditLogFacade audit;
     private ExperimentAssemblyService assembly;
     @org.springframework.beans.factory.annotation.Autowired
+    private com.jsd.aird.shared.resource.TemporarySpace temporarySpace;
+    @Transactional(readOnly=true)
+    public com.jsd.aird.shared.resource.PreparedFile prepareExport(UUID jobId) {
+        return com.jsd.aird.shared.resource.PreparedFile.create(temporarySpace,512L*1024*1024,output->writeExport(jobId,output));
+    }
+    private org.springframework.transaction.support.TransactionTemplate submissionTransaction;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void configureCapacity(org.springframework.transaction.PlatformTransactionManager manager) {
+        submissionTransaction=new org.springframework.transaction.support.TransactionTemplate(manager);
+    }
+    private record PreparedSnapshot(String revision,UUID snapshotId,String contentHash) { }
+    private PreparedSnapshot prepareSnapshot(UUID jobId,String expected) {
+        require(jobId,"data.approve",false);
+        requireRevision(jobId,expected);
+        var snapshot=currentSnapshot(jobId);
+        check(snapshot!=null,"请先确认当前数据");
+        String digest=hashPayload(jobId);
+        requireRevision(jobId,expected);
+        check(snapshot.contentHash().equals(digest),"数据、映射、工作表或项目关系已变化，请重新确认后送审");
+        return new PreparedSnapshot(expected,snapshot.id(),digest);
+    }
+    private Snapshot verifyPrepared(UUID jobId,PreparedSnapshot prepared) {
+        if(prepared==null)return verifySnapshot(jobId);
+        requireRevision(jobId,prepared.revision());
+        var current=currentSnapshot(jobId);
+        check(current!=null && current.id().equals(prepared.snapshotId()) && current.contentHash().equals(prepared.contentHash()),"审核快照已变化，请刷新后重新核对");
+        return current;
+    }
+    @org.springframework.beans.factory.annotation.Autowired
     public void setAssembly(ExperimentAssemblyService assembly) { this.assembly = assembly; }
 
     public DataPublicationService(JdbcTemplate jdbc, ObjectMapper json, DataRepository repository,
@@ -44,7 +73,13 @@ public class DataPublicationService {
     }
 
     @Transactional
-    public Workspace confirm(UUID jobId) {
+    public Workspace confirm(UUID jobId,String revision) {
+        require(jobId,"data.update",true);
+        requireRevision(jobId,revision);
+        return confirmCurrent(jobId);
+    }
+
+    private Workspace confirmCurrent(UUID jobId) {
         var job = require(jobId, "data.update", true);
         ensure(jobId);
         var state = status(jobId);
@@ -73,8 +108,9 @@ public class DataPublicationService {
     }
 
     @Transactional
-    public Workspace submit(UUID jobId, UUID reviewerId) {
+    public Workspace submit(UUID jobId, UUID reviewerId,String revision) {
         require(jobId, "data.submit", true);
+        requireRevision(jobId,revision);
         ensure(jobId);
         var state = status(jobId);
         var previous = currentSnapshot(jobId);
@@ -83,7 +119,7 @@ public class DataPublicationService {
         if (needsConfirmation && !isFreeform(jobId)) {
             // Like the experiment workbench, submitting a saved draft confirms its immutable snapshot
             // in the same transaction. A failed submission must not leave a partial confirmation.
-            confirm(jobId);
+            confirmCurrent(jobId);
         }
         check("CONFIRMED".equals(status(jobId)), "请先确认当前数据，修改后需要重新确认");
         verifySnapshot(jobId);
@@ -97,19 +133,26 @@ public class DataPublicationService {
     }
 
     @Transactional
-    public Workspace withdraw(UUID jobId) {
+    public Workspace withdraw(UUID jobId,String revision) {
         require(jobId, "data.submit", true);
+        requireRevision(jobId,revision);
         check(Set.of("PENDING_REVIEW", "APPROVED").contains(status(jobId)), "当前数据不能撤回");
         setStatus(jobId, "CONFIRMED");
         event(jobId, "WITHDRAWN", null);
         return workspace(jobId);
     }
 
-    @Transactional
-    public Workspace review(UUID jobId, UUID snapshotId, boolean approved, String comment) {
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    public Workspace review(UUID jobId, UUID snapshotId, boolean approved, String comment,String revision) {
+        if(submissionTransaction==null)return reviewLocked(jobId,snapshotId,approved,comment,revision,null);
+        var prepared=prepareSnapshot(jobId,revision);
+        return submissionTransaction.execute(status->reviewLocked(jobId,snapshotId,approved,comment,revision,prepared));
+    }
+    private Workspace reviewLocked(UUID jobId,UUID snapshotId,boolean approved,String comment,String revision,PreparedSnapshot prepared) {
         require(jobId, "data.approve", true);
+        requireRevision(jobId,revision);
         check("PENDING_REVIEW".equals(status(jobId)), "当前数据不在审核中，请刷新后查看");
-        var snapshot = verifySnapshot(jobId);
+        var snapshot = verifyPrepared(jobId,prepared);
         check(snapshot.id().equals(snapshotId), "审核快照已变化，请刷新后重新核对");
         if (!approved) {
             check(comment != null && !comment.isBlank(), "退回时必须填写原因");
@@ -124,11 +167,17 @@ public class DataPublicationService {
         return workspace(jobId);
     }
 
-    @Transactional
-    public Workspace publish(UUID jobId) {
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    public Workspace publish(UUID jobId,String revision) {
+        if(submissionTransaction==null)return publishLocked(jobId,revision,null);
+        var prepared=prepareSnapshot(jobId,revision);
+        return submissionTransaction.execute(status->publishLocked(jobId,revision,prepared));
+    }
+    private Workspace publishLocked(UUID jobId,String revision,PreparedSnapshot prepared) {
         require(jobId, "data.approve", true);
+        requireRevision(jobId,revision);
         check("APPROVED".equals(status(jobId)), "请先完成审核，再发布导入数据");
-        var snapshot = verifySnapshot(jobId);
+        var snapshot = verifyPrepared(jobId,prepared);
         UUID submissionId = snapshot.confirmedSubmissionId();
         if (submissionId == null) {
             imports.commit(jobId);
@@ -168,8 +217,9 @@ public class DataPublicationService {
     }
 
     @Transactional
-    public Workspace setPublishedEnabled(UUID jobId, boolean enabled) {
+    public Workspace setPublishedEnabled(UUID jobId, boolean enabled,String revision) {
         var job = require(jobId, "data.update", true);
+        requireRevision(jobId,revision);
         ensure(jobId);
         var legacyPublished = !enabled && "DRAFT".equals(status(jobId)) && "COMPLETED".equals(job.status());
         check(legacyPublished || (enabled ? "DISABLED" : "PUBLISHED").equals(status(jobId)), "当前状态不能" + (enabled ? "恢复使用" : "停用"));
@@ -180,8 +230,9 @@ public class DataPublicationService {
     }
 
     @Transactional
-    public Workspace revise(UUID jobId) {
+    public Workspace revise(UUID jobId,String revision) {
         var job = require(jobId, "data.update", true);
+        requireRevision(jobId,revision);
         ensure(jobId);
         check(Set.of("PUBLISHED", "DISABLED").contains(status(jobId)) || ("DRAFT".equals(status(jobId)) && "COMPLETED".equals(job.status())),
                 "仅已发布或历史已入库数据可创建修订");
@@ -218,10 +269,11 @@ public class DataPublicationService {
     }
 
     @Transactional
-    public void govern(UUID jobId, UUID recordId, String name, String nextStatus, String reason) {
+    public void govern(UUID jobId, UUID recordId, String name, String nextStatus, String reason,String revision) {
         require(jobId, "data.update", true);
         var record = formalRecords(jobId).stream().filter(item -> item.id().equals(recordId)).findFirst()
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "正式记录不存在"));
+        com.jsd.aird.shared.json.RevisionToken.require(revision,record.getRevision());
         check(name != null && !name.isBlank() && name.strip().length() <= 200, "记录名称须为 1 至 200 个字符");
         check(Set.of("ACTIVE", "DISABLED").contains(nextStatus), "记录仅支持有效、停用两种状态");
         if (!nextStatus.equals(record.status())) check(reason != null && !reason.isBlank(), "变更记录状态必须填写原因");
@@ -237,6 +289,10 @@ public class DataPublicationService {
 
     @Transactional(readOnly = true)
     public byte[] export(UUID jobId) {
+        var output=new java.io.ByteArrayOutputStream();
+        try {writeExport(jobId,output);return output.toByteArray();}catch(java.io.IOException error){throw new java.io.UncheckedIOException(error);}
+    }
+    private void writeExport(UUID jobId,java.io.OutputStream output)throws java.io.IOException {
         require(jobId, "data.export", false);
         var job = repository.findJob(org(), jobId).orElseThrow();
         var version = jdbc.query("""
@@ -244,7 +300,8 @@ public class DataPublicationService {
                 WHERE p.organization_id=? AND p.import_job_id=?
                 """, (rs, n) -> "V" + rs.getInt(1), org(), jobId).stream().findFirst().orElse("历史入库");
         var out = new StringBuilder("\ufeff记录ID,记录名称,状态,发布版本,字段,值,单位,来源文件,工作表,位置\r\n");
-        for (var record : formalRecords(jobId)) {
+        output.write(out.toString().getBytes(StandardCharsets.UTF_8));out.setLength(0);
+        forEachFormalRecord(jobId,record->{
             var values = record.values();
             if (values.has("recognizedItems") && values.path("recognizedItems").isArray()) {
                 for (var item : values.path("recognizedItems")) appendCsv(out, record.id(), record.name(), record.status(), version,
@@ -259,11 +316,14 @@ public class DataPublicationService {
                             value.path("labelPath").asText(value.path("fieldName").asText(value.path("fieldCode").asText(field.getKey()))),
                             nodeValue(value.has("normalizedValue") ? value.get("normalizedValue") : value),
                             value.path("normalizedUnit").asText(), job.sourceFileName(), record.sheetName(),
-                            sourceAddress(record.id(), value));
+                            java.util.stream.StreamSupport.stream(record.locations().spliterator(),false)
+                                .filter(anchor->anchor.path("bindingId").asText().equals(value.path("bindingId").asText()) && anchor.path("valuePath").asText().equals(value.path("valuePath").asText()))
+                                .map(anchor->anchor.path("address").asText()).findFirst().orElse(""));
                 }
             }
-        }
-        return out.toString().getBytes(StandardCharsets.UTF_8);
+            try {output.write(out.toString().getBytes(StandardCharsets.UTF_8));out.setLength(0);}
+            catch(java.io.IOException error){throw new java.io.UncheckedIOException(error);}
+        });
     }
 
     private void insertConfirmation(UUID jobId, JsonNode payload, UUID submissionId) {
@@ -282,7 +342,8 @@ public class DataPublicationService {
         event(jobId, "CONFIRMED", null);
     }
 
-    private JsonNode payload(UUID jobId) {
+    private JsonNode payload(UUID jobId) { return payload(jobId,true); }
+    private ObjectNode payload(UUID jobId,boolean includeRows) {
         var job = repository.findJob(org(), jobId).orElseThrow();
         var payload = json.createObjectNode();
         payload.put("sourceFileId", job.sourceFileId().toString()).put("sourceFileName", job.sourceFileName()).put("sourceSha256", job.sourceSha256())
@@ -302,8 +363,9 @@ public class DataPublicationService {
         } else {
             payload.set("sheets", json.valueToTree(repository.listSheets(org(), jobId)));
             payload.set("mappings", json.valueToTree(repository.listMappings(org(), jobId)));
-            payload.set("rows", json.valueToTree(repository.listRows(org(), jobId)));
+            if(includeRows)payload.set("rows", json.valueToTree(repository.listRows(org(), jobId)));
             payload.set("issues", json.valueToTree(repository.listIssues(org(), jobId)));
+            repository.findWorkbookDraft(org(),jobId).ifPresent(draft->payload.set("workbookDraft",json.valueToTree(draft)));
         }
         return payload;
     }
@@ -311,7 +373,7 @@ public class DataPublicationService {
     private Snapshot verifySnapshot(UUID jobId) {
         var current = currentSnapshot(jobId);
         check(current != null, "请先确认当前数据");
-        check(current.contentHash().equals(hash(payload(jobId))), "数据、映射、工作表或项目关系已变化，请重新确认后送审");
+        check(current.contentHash().equals(hashPayload(jobId)), "数据、映射、工作表或项目关系已变化，请重新确认后送审");
         return current;
     }
 
@@ -349,6 +411,21 @@ public class DataPublicationService {
                 """, jobId, org(), submissionId);
     }
 
+    private void requireRevision(UUID jobId,String expected){
+        com.jsd.aird.shared.json.RevisionToken.require(expected,revision(jobId));
+    }
+    private String revision(UUID jobId){
+        var token=jdbc.queryForObject("""
+            SELECT md5(to_jsonb(j)::text || coalesce(to_jsonb(p)::text,'') ||
+                (SELECT count(*)::text FROM data.publication_event e WHERE e.organization_id=j.organization_id AND e.import_job_id=j.id) ||
+                coalesce((SELECT jsonb_agg(to_jsonb(l) ORDER BY l.id)::text FROM core.project_resource_link l
+                    WHERE l.organization_id=j.organization_id AND l.resource_type='DATA_IMPORT_JOB' AND l.resource_id=j.id),'[]'))
+            FROM data.import_job j LEFT JOIN data.publication p ON p.organization_id=j.organization_id AND p.import_job_id=j.id
+            WHERE j.organization_id=? AND j.id=?
+            """,String.class,org(),jobId);
+        return com.jsd.aird.shared.json.RevisionToken.of(jobId,token);
+    }
+
     private Workspace workspace(UUID jobId) {
         var states = jdbc.query("SELECT status,published_snapshot_id,legacy_published FROM data.publication WHERE organization_id=? AND import_job_id=?",
                 (rs, n) -> new State(rs.getString(1), rs.getObject(2, UUID.class), rs.getBoolean(3)), org(), jobId);
@@ -367,7 +444,7 @@ public class DataPublicationService {
                 (rs,n) -> new Reviewer(rs.getObject(1,UUID.class),rs.getString(2)),org(),jobId).stream().findFirst().orElse(null);
         var publishedEnabled = jdbc.query("SELECT published_enabled FROM data.publication WHERE organization_id=? AND import_job_id=?",
                 (rs,n) -> rs.getBoolean(1),org(),jobId).stream().findFirst().orElse(true);
-        return new Workspace(state.status(), currentSnapshot(jobId), state.publishedSnapshotId(), state.legacyPublished(), publishedEnabled, reviewer, snapshots, events);
+        return new Workspace(revision(jobId),state.status(), currentSnapshot(jobId), state.publishedSnapshotId(), state.legacyPublished(), publishedEnabled, reviewer, snapshots, events);
     }
 
     private List<FormalRecord> formalRecords(UUID jobId) {
@@ -384,6 +461,21 @@ public class DataPublicationService {
                 rs.getString(5), rs.getString(6), (Integer) rs.getObject(7), parse(rs.getString(8)),parse(rs.getString(9))), org(), jobId);
     }
 
+    private void forEachFormalRecord(UUID jobId,java.util.function.Consumer<FormalRecord> consumer) {
+        jdbc.query(connection->{var statement=connection.prepareStatement("""
+                SELECT r.id,r.record_key,coalesce(g.display_name,CASE WHEN r.synthetic_key
+                         THEN j.source_file_name || ' · 记录' || r.record_index ELSE r.record_key END),coalesce(g.status,'ACTIVE'),g.reason,
+                       r.sheet_name,r.source_row_number,r.effective_data_jsonb::text,
+                       coalesce((SELECT jsonb_agg(jsonb_build_object('bindingId',a.binding_id,'valuePath',a.value_path,
+                         'sheetName',a.sheet_name,'address',a.cell_address)) FROM data.source_anchor a WHERE a.record_id=r.id),'[]'::jsonb)::text
+                FROM data.data_record r JOIN data.import_job j ON j.id=r.import_job_id
+                LEFT JOIN data.record_governance g ON g.organization_id=r.organization_id AND g.record_id=r.id
+                WHERE r.organization_id=? AND r.import_job_id=? ORDER BY r.record_index,r.id
+                """);statement.setObject(1,org());statement.setObject(2,jobId);statement.setFetchSize(256);return statement;
+        },(org.springframework.jdbc.core.RowCallbackHandler)rs->{com.jsd.aird.shared.resource.OperationBudget.check();consumer.accept(new FormalRecord(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3), rs.getString(4),
+                rs.getString(5), rs.getString(6), (Integer) rs.getObject(7), parse(rs.getString(8)),parse(rs.getString(9))));});
+    }
+
     private String sourceAddress(UUID recordId, JsonNode value) {
         return jdbc.query("SELECT cell_address FROM data.source_anchor WHERE record_id=? AND binding_id=? AND value_path=? ORDER BY id LIMIT 1",
                 (rs, n) -> Objects.toString(rs.getString(1), ""), recordId, value.path("bindingId").asText(),
@@ -396,6 +488,10 @@ public class DataPublicationService {
         var job = (lock ? repository.findJobForUpdate(org(), jobId) : repository.findJob(org(), jobId))
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据来源不存在"));
         check("DATA_CENTER".equals(repository.findSourceOwner(org(), jobId).orElse("")), "该来源不属于数据中心");
+        if (lock && isFreeform(jobId)) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                    "历史自由识别记录已设为只读，只能查看和下载原文件");
+        }
         return job;
     }
 
@@ -442,16 +538,44 @@ public class DataPublicationService {
     private JsonNode parse(String value) { try { return json.readTree(value); } catch (Exception ex) { throw new IllegalStateException(ex); } }
     static void check(boolean condition, String message) { if (!condition) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, message); }
     String hash(JsonNode value) {
-        try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json.writeValueAsBytes(canonical(value)))); }
-        catch (Exception ex) { throw new IllegalStateException(ex); }
+        return digest(generator->writeCanonical(generator,value));
     }
-    private JsonNode canonical(JsonNode node) {
-        if (node.isObject()) {
-            ObjectNode result = json.createObjectNode(); var names = new TreeSet<String>(); node.fieldNames().forEachRemaining(names::add);
-            names.forEach(name -> result.set(name, canonical(node.get(name)))); return result;
-        }
-        if (node.isArray()) { var result = json.createArrayNode(); node.forEach(item -> result.add(canonical(item))); return result; }
-        return node;
+    private String hashPayload(UUID jobId) {
+        var metadata=payload(jobId,false);
+        if(isFreeform(jobId))return hash(metadata);
+        return digest(generator->{
+            generator.writeStartObject();
+            var names=new TreeSet<String>();metadata.fieldNames().forEachRemaining(names::add);names.add("rows");
+            for(String name:names){
+                generator.writeFieldName(name);
+                if(name.equals("rows")){
+                    generator.writeStartArray();
+                    repository.forEachRow(org(),jobId,row->{
+                        try { com.jsd.aird.shared.resource.OperationBudget.check();writeCanonical(generator,json.valueToTree(row)); }
+                        catch(java.io.IOException error){throw new java.io.UncheckedIOException(error);}
+                    });
+                    generator.writeEndArray();
+                }else writeCanonical(generator,metadata.get(name));
+            }
+            generator.writeEndObject();
+        });
+    }
+    @FunctionalInterface private interface JsonOutput {void write(com.fasterxml.jackson.core.JsonGenerator generator)throws java.io.IOException;}
+    private String digest(JsonOutput output){
+        try {
+            var digest=MessageDigest.getInstance("SHA-256");
+            try(var generator=json.getFactory().createGenerator(new java.security.DigestOutputStream(java.io.OutputStream.nullOutputStream(),digest))){output.write(generator);}
+            return HexFormat.of().formatHex(digest.digest());
+        }catch(java.io.IOException|java.security.NoSuchAlgorithmException error){throw new IllegalStateException(error);}
+    }
+    private void writeCanonical(com.fasterxml.jackson.core.JsonGenerator generator,JsonNode node)throws java.io.IOException{
+        if(node.isObject()){
+            generator.writeStartObject();var names=new TreeSet<String>();node.fieldNames().forEachRemaining(names::add);
+            for(String name:names){generator.writeFieldName(name);writeCanonical(generator,node.get(name));}
+            generator.writeEndObject();
+        }else if(node.isArray()){
+            generator.writeStartArray();for(var item:node)writeCanonical(generator,item);generator.writeEndArray();
+        }else json.writeValue(generator,node);
     }
     private static Object nodeValue(JsonNode node) { return node == null || node.isNull() ? "" : node.isValueNode() ? node.asText() : node.toString(); }
     static void appendCsv(StringBuilder out, Object... values) {
@@ -470,6 +594,8 @@ public class DataPublicationService {
     public record Snapshot(UUID id, int versionNo, String contentHash, UUID confirmedSubmissionId, UUID confirmedBy, Instant confirmedAt) {}
     public record Event(UUID id, UUID snapshotId, String action, String actorName, String comment, Instant createdAt) {}
     public record Reviewer(UUID id, String name) {}
-    public record Workspace(String status, Snapshot confirmedSnapshot, UUID publishedSnapshotId, boolean legacyPublished, boolean publishedEnabled, Reviewer reviewer, List<Snapshot> versions, List<Event> events) {}
-    public record FormalRecord(UUID id, String recordKey, String name, String status, String reason, String sheetName, Integer rowNumber, JsonNode values, JsonNode locations) {}
+    public record Workspace(String revision,String status, Snapshot confirmedSnapshot, UUID publishedSnapshotId, boolean legacyPublished, boolean publishedEnabled, Reviewer reviewer, List<Snapshot> versions, List<Event> events) {}
+    public record FormalRecord(UUID id, String recordKey, String name, String status, String reason, String sheetName, Integer rowNumber, JsonNode values, JsonNode locations) {
+        public String getRevision(){return com.jsd.aird.shared.json.RevisionToken.of(id,recordKey,name,status,reason,values,locations);}
+    }
 }

@@ -17,7 +17,7 @@ const statusFilters = [
   { key: 'ALL', label: '全部' },
   { key: 'QUEUED', label: '上传中' },
   { key: 'PARSING', label: '解析中' },
-  { key: 'WAITING_CONFIRM', label: '待确认数据' },
+  { key: 'WAITING_CONFIRM', label: '待核对数据' },
   { key: 'COMPLETED', label: '已完成' },
   { key: 'FAILED', label: '失败' },
   { key: 'CANCELLED', label: '已取消' },
@@ -30,18 +30,14 @@ const statusView: Record<string, { label: string; color: string }> = {
   WAITING_SHEET: { label: '待确认 Sheet', color: 'gold' },
   WAITING_MAPPING: { label: '待字段映射', color: 'gold' },
   VALIDATING: { label: '校验中', color: 'processing' },
-  WAITING_CONFIRM: { label: '待确认数据', color: 'orange' },
+  WAITING_CONFIRM: { label: '待核对数据', color: 'orange' },
   COMMITTING: { label: '提交中', color: 'processing' },
   COMPLETED: { label: '已完成', color: 'success' },
   FAILED: { label: '处理失败', color: 'error' },
   CANCELLED: { label: '已取消', color: 'default' },
 };
 
-const supportedSourceFileName = /\.(?:xls|xlsx|csv|doc|docx|pdf)$/i;
-
-function documentSourceFormat(fileName: string) {
-  return /\.pdf$/i.test(fileName) ? 'PDF' : 'DOCX';
-}
+const supportedSourceFileName = /\.(?:xls|xlsx|csv|doc|docx)$/i;
 
 function jobRecord(
   job: DataJob,
@@ -55,13 +51,14 @@ function jobRecord(
   const status = statusView[job.status] || { label: job.status, color: 'default' };
   const parseProgress = dataParseProgress(job);
   const terminal = ['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status);
+  const historicalFreeform = !job.templateVersionId;
   return {
     id: job.id,
     name: job.sourceFileName,
     icon: job.sourceFormat === 'PDF' ? <FilePdfOutlined />
-      : job.sourceFormat === 'DOCX' ? <FileWordOutlined />
+      : ['DOC', 'DOCX'].includes(job.sourceFormat.toUpperCase()) ? <FileWordOutlined />
         : <FileExcelOutlined />,
-    meta: job.templateVersionId ? `模板版本 ${job.templateVersionId}` : '自由识别',
+    meta: job.templateVersionId ? `模板版本 ${job.templateVersionId}` : '历史自由识别（只读）',
     detail: job.status === 'FAILED' && job.errorMessage
       ? `${new Date(job.createdAt).toLocaleString('zh-CN')} · ${job.errorMessage}`
       : `${new Date(job.createdAt).toLocaleString('zh-CN')} · ${dataParseStageLabel(job)}`,
@@ -71,8 +68,10 @@ function jobRecord(
     commonActions: {
       view: { onClick: () => navigate(job.templateVersionId ? `/data/import-jobs/${job.id}` : `/data/recognition-jobs/${job.id}`) },
       download: { onClick: () => { void onDownload(job); } },
-      retry: { disabled: !terminal, loading: retrying, onClick: () => { void onRetry(job); } },
-      delete: { disabled: !terminal, loading: deleting, onClick: () => onDelete(job) },
+      ...(!historicalFreeform ? {
+        retry: { disabled: !terminal, loading: retrying, onClick: () => { void onRetry(job); } },
+        delete: { disabled: !terminal, loading: deleting, onClick: () => onDelete(job) },
+      } : {}),
     },
   };
 }
@@ -146,7 +145,7 @@ export function DataUploadPage() {
     const spreadsheetFiles = selectedFiles.filter(({ file }) => /\.(?:xls|xlsx|csv)$/i.test(file.name));
     if (spreadsheetFiles.length && !chosenSpreadsheetTemplate) { void message.warning('Excel / CSV 文件请选择已发布的 Excel 模板'); return; }
     if ((spreadsheetFiles.length && chosenSpreadsheetTemplate?.experimentImportReady
-      || selectedFiles.some(({ file }) => /\.docx$/i.test(file.name)) && chosenWordTemplate?.experimentImportReady)
+      || selectedFiles.some(({ file }) => /\.docx?$/i.test(file.name)) && chosenWordTemplate?.experimentImportReady)
       && !experimentCategoryId) { void message.warning('实验模板暂未配置默认实验分类'); return; }
     setLoading(true);
     const failedUids = new Set<string>();
@@ -160,22 +159,8 @@ export function DataUploadPage() {
         updateUploadFile('uploading', 0);
         try {
           const staged = await dataApi.stageSource(entry.file, (percent) => updateUploadFile('uploading', percent));
-          const isPdf = /\.pdf$/i.test(entry.file.name);
           const isWord = /\.docx?$/i.test(entry.file.name);
-          const isDocx = /\.docx$/i.test(entry.file.name);
-          const template = isDocx ? chosenWordTemplate : isWord ? undefined : chosenSpreadsheetTemplate;
-          if (isPdf || isWord && !template) {
-            await dataApi.createRecognitionJob({
-              sourceFileId: staged.fileId,
-              sourceFormat: documentSourceFormat(entry.file.name),
-              recognitionMode: 'FREEFORM',
-              importPurpose: 'DATA_ONLY',
-              projectRelations,
-            });
-            succeeded += 1;
-            updateUploadFile('done', 100);
-            continue;
-          }
+          const template = isWord ? chosenWordTemplate : chosenSpreadsheetTemplate;
           if (!template) throw new Error(isWord ? 'Word 文件请选择已发布的 Word 模板' : 'Excel / CSV 文件请选择已发布的 Excel 模板');
           const create = (duplicateOverride: boolean) => dataApi.createJob({
             sourceFileId: staged.fileId,
@@ -225,10 +210,13 @@ export function DataUploadPage() {
     catch (error) { void message.error(error instanceof Error ? error.message : '原文件下载失败'); }
   };
   const retryJob = async (job: DataJob) => {
+    if (!job.templateVersionId) {
+      void message.warning('历史自由识别记录已设为只读');
+      return;
+    }
     setRetryingJobId(job.id);
     try {
-      if (job.templateVersionId) await dataApi.reprocessJob(job.id);
-      else await dataApi.retryRecognitionJob(job.id);
+      await dataApi.reprocessJob(job.id,job.revision);
       await loadJobs();
       void message.success('已重新处理');
     }
@@ -242,7 +230,7 @@ export function DataUploadPage() {
       okText: '删除记录', okButtonProps: { danger: true }, cancelText: '取消',
       onOk: async () => {
         setDeletingJobId(job.id);
-        try { await dataApi.hideJob(job.id); await loadJobs(); void message.success('上传历史已隐藏'); }
+        try { await dataApi.hideJob(job.id,job.revision); await loadJobs(); void message.success('上传历史已隐藏'); }
         catch (error) { void message.error(error instanceof Error ? error.message : '删除上传记录失败'); }
         finally { setDeletingJobId(undefined); }
       },
@@ -256,7 +244,7 @@ export function DataUploadPage() {
       <UploadWorkspace
       breadcrumbs={[{ title: '数据中心' }, { title: '数据上传' }]}
       title="数据上传"
-      description="Excel / CSV 和 Word 可选择对应的已发布模板导入；Word 不选模板或上传 PDF 时使用自由识别。上传后可查看处理状态与失败原因。"
+      description="Excel / CSV 文件使用已发布的 Excel 模板，DOC / DOCX 文件使用已发布的 Word 模板。数据中心不支持 PDF 导入。上传后可查看处理状态与失败原因。"
       leftTitle="选择导入模板"
       classification={<Form layout="vertical" component={false}>
         <Form.Item label="模板分类">
@@ -279,19 +267,18 @@ export function DataUploadPage() {
             notFoundContent={templateCategoryFilter ? '该分类暂无已发布模板，可切换分类' : '暂无已发布模板'}
           />
         </Form.Item>
-        <Form.Item label="Word 导入模板（可选）">
+        <Form.Item label="Word 导入模板">
           <Select
             allowClear
             showSearch
             optionFilterProp="label"
-            placeholder="选择 Word 模板；不选时使用自由识别"
+            placeholder="请选择已发布的 Word 模板"
             value={wordTemplateVersionId}
             onChange={setWordTemplateVersionId}
             options={templateGroups(wordTemplates, templateCategoryFilter)}
             notFoundContent={templateCategoryFilter ? '该分类暂无已发布 Word 模板，可切换分类' : '暂无已发布 Word 模板'}
           />
         </Form.Item>
-        <Alert type="info" showIcon message="Excel / CSV 使用 Excel 模板；Word 可选 Word 模板或自由识别；PDF 使用自由识别。" />
         {chosenSpreadsheetTemplate && <Alert
           showIcon
           type={chosenSpreadsheetTemplate.experimentImportReady ? 'success' : 'info'}
@@ -310,10 +297,10 @@ export function DataUploadPage() {
         />}
         <Form.Item label="关联项目 / 阶段 / 任务" extra="所选关联会应用到本次导入的工作表、数据行和来源文件。"><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></Form.Item>
       </Form>}
-      accept=".xls,.xlsx,.csv,.doc,.docx,.pdf"
+      accept=".xls,.xlsx,.csv,.doc,.docx"
       beforeUpload={(file) => {
         if (!supportedSourceFileName.test(file.name)) {
-          void message.error(`不支持“${file.name}”：请上传 Excel、CSV、Word 或 PDF 文件`);
+          void message.error(`不支持“${file.name}”：请上传 Excel、CSV 或 Word 文件；PDF 暂不支持数据中心导入`);
           return Upload.LIST_IGNORE;
         }
         return false;
@@ -325,7 +312,7 @@ export function DataUploadPage() {
       onRemoveFile={(file) => setFiles((current) => current.filter((item) => item.uid !== file.uid))}
       onClearFiles={() => setFiles([])}
       uploadMainText="拖拽文件到此处/点击选择文件/点击拍照上传"
-      uploadHint="支持 XLS / XLSX / CSV / DOC / DOCX / PDF；单次最多 20 个文件，单个文件最大 100M。"
+      uploadHint="支持 XLS / XLSX / CSV / DOC / DOCX；Excel / CSV 需选择 Excel 模板，DOC / DOCX 需选择 Word 模板。单次最多 20 个文件，单个文件最大 100M。"
       uploadDisabled={loading}
       previewEmptyText="暂无待导入文件，点击上方区域选择文件"
       submitLabel="创建导入任务"
@@ -334,8 +321,8 @@ export function DataUploadPage() {
       submitting={loading}
       submitDisabled={files.some((item) => item.originFileObj && /\.(?:xls|xlsx|csv)$/i.test(item.name))
         && (!chosenSpreadsheetTemplate || (chosenSpreadsheetTemplate.experimentImportReady && !experimentCategoryId))
-        || files.some((item) => item.originFileObj && /\.docx$/i.test(item.name))
-        && Boolean(chosenWordTemplate?.experimentImportReady && !experimentCategoryId)}
+        || files.some((item) => item.originFileObj && /\.docx?$/i.test(item.name))
+        && (!chosenWordTemplate || (chosenWordTemplate.experimentImportReady && !experimentCategoryId))}
       rightTitle="已上传数据"
       rightCount={jobs.total}
       rightFilters={statusFilters}

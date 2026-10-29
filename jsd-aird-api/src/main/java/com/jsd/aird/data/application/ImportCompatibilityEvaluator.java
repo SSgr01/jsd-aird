@@ -220,6 +220,15 @@ final class ImportCompatibilityEvaluator {
             if (!"FORMULA".equalsIgnoreCase(binding.path("valueSource").asText("INPUT"))) continue;
             var locator = binding.path("locator");
             var range = firstRange(locator, "valueRange", "dataRange", "range");
+            if ("formula.total".equals(binding.path("fieldCode").asText()) && sheet.layoutIr() != null) {
+                boolean enteredTotal = false;
+                for (var cell : sheet.layoutIr().path("cells")) {
+                    if (inRange(cell.path("address").asText(""), range)
+                            && "INPUT".equals(cell.path("valueSource").asText())
+                            && cell.hasNonNull("rawNumericValue")) { enteredTotal = true; break; }
+                }
+                if (enteredTotal) continue;
+            }
             if (!range.isBlank() && formulaAddresses.stream().noneMatch(address -> inRange(address, range))) return false;
         }
         return true;

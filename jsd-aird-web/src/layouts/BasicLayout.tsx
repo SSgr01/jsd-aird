@@ -29,9 +29,12 @@ import {
 } from '@ant-design/icons';
 import { ProLayout, type MenuDataItem } from '@ant-design/pro-components';
 import { Avatar, Button, Dropdown, Input, Result, Tooltip, Typography, type InputRef } from 'antd';
-import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useMemo, useRef } from 'react';
 
+import { ContentBoundary } from '@/components/loading/ContentBoundary';
+import { PrefetchLink } from '@/components/loading/PrefetchLink';
+import { RouteScrollRestoration } from '@/components/loading/RouteScrollRestoration';
 import { appEnv } from '@/app/config/env';
 import { AuthGate } from '@/components/auth/AuthGate';
 import { useAppStore } from '@/stores/app-store';
@@ -264,7 +267,8 @@ export function BasicLayout() {
   const location = useLocation();
   const isTemplateWorkspace = /^\/templates\/[^/]+\/workspace$/.test(location.pathname);
   const isExperimentPage = ['/experiments/new', '/experiments/upload', '/experiments/list'].includes(location.pathname);
-  const isExperimentWorkspace = /^\/experiments\/(?!imports\/)[^/]+$/.test(location.pathname) && !isExperimentPage;
+  const isExperimentWorkspace = /^\/experiments\/template-imports\/[^/]+$/.test(location.pathname)
+    || /^\/experiments\/(?!imports\/)[^/]+$/.test(location.pathname) && !isExperimentPage;
   const isDataWorkspace = /^\/data\/(?:import-jobs|assets)\/[^/]+$/.test(location.pathname);
   const isProjectDocumentWorkspace = /^\/projects\/[^/]+\/documents\/[^/]+$/.test(location.pathname);
   const isKnowledgeWorkbench = location.pathname.startsWith('/knowledge/review/') || location.pathname.startsWith('/knowledge/documents/');
@@ -300,13 +304,13 @@ export function BasicLayout() {
         actionsRender={false}
         rightContentRender={() => null}
         contentStyle={{ minHeight: 'calc(100dvh - 64px)', padding: 0 }}
-        menuItemRender={(item: MenuDataItem & { isUrl: boolean; onClick: () => void }, dom: React.ReactNode, menuProps: { isMobile?: boolean }) => (item.path ? <Link to={item.path} onClick={menuProps.isMobile ? item.onClick : undefined}>{dom}</Link> : dom)}
+        menuItemRender={(item: MenuDataItem & { isUrl: boolean; onClick: () => void }, dom: React.ReactNode, menuProps: { isMobile?: boolean }) => (item.path ? <PrefetchLink to={item.path} onClick={menuProps.isMobile ? item.onClick : undefined}>{dom}</PrefetchLink> : dom)}
       >
         <main
           className={`app-content${isWorkspace ? ' app-content-workspace' : ''}${isProjectDocumentWorkspace ? ' app-content-project-document-workspace' : ''}${isKnowledgeWorkbench ? ' app-content-knowledge-workbench' : ''}${isPermissionManagement ? ' app-content-permission-management' : ''}`}
           id="main-content"
         >
-          {requiredPermission && !canViewPathWithMenus(location.pathname, permissions, menuKeys) ? <AccessDenied permissions={permissions} menuKeys={menuKeys} /> : <Outlet />}
+          {requiredPermission && !canViewPathWithMenus(location.pathname, permissions, menuKeys) ? <AccessDenied permissions={permissions} menuKeys={menuKeys} /> : <ContentBoundary><Outlet /><RouteScrollRestoration /></ContentBoundary>}
         </main>
       </ProLayout>
       </div>

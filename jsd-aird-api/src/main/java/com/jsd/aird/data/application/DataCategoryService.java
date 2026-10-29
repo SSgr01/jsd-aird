@@ -37,8 +37,10 @@ public class DataCategoryService {
     }
 
     @Transactional
-    public DataCategoryRepository.Category rename(UUID id, String name, String description) {
+    public DataCategoryRepository.Category rename(UUID id, String name, String description,String revision) {
         var actor = ActorContext.required();
+        repository.lockCategory(actor.organizationId(),id);
+        com.jsd.aird.shared.json.RevisionToken.require(revision,require(actor.organizationId(),id).getRevision());
         require(actor.organizationId(), id);
         var normalizedName = normalizeName(name);
         ensureNameAvailable(actor.organizationId(), normalizedName, id);
@@ -46,8 +48,10 @@ public class DataCategoryService {
     }
 
     @Transactional
-    public void delete(UUID id, UUID replacementId) {
+    public void delete(UUID id, UUID replacementId,String revision) {
         var actor = ActorContext.required();
+        repository.lockCategory(actor.organizationId(),id);
+        com.jsd.aird.shared.json.RevisionToken.require(revision,require(actor.organizationId(),id).getRevision());
         if (replacementId != null) {
             if (id.equals(replacementId)) {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "替代分类不能是待删除分类本身");
@@ -55,6 +59,10 @@ public class DataCategoryService {
             require(actor.organizationId(), replacementId);
         }
         require(actor.organizationId(), id);
+        if (repository.hasHistoricalFreeformSources(actor.organizationId(), id)) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                    "该分类仍包含历史自由识别记录，删除分类会修改这些记录；请保留该分类");
+        }
         repository.delete(actor.organizationId(), id, replacementId);
     }
 

@@ -55,6 +55,12 @@ public class ExperimentDraftApplicationFacade implements ExperimentDraftFacade {
         var versionId = UUID.randomUUID();
         var editModel = editModels.normalize(
                 command.editModel() == null ? json.createObjectNode() : command.editModel(), versionId);
+        if (com.jsd.aird.shared.lab.LabWorkbook.supported(command.templateSnapshot())) {
+            var workbook = com.jsd.aird.shared.lab.LabWorkbook.prepare(json, editModel.path("documentSnapshot"),
+                    command.templateSnapshot(), id.toString());
+            editModel = com.jsd.aird.shared.lab.LabWorkbook.extract(json, workbook, editModel, id.toString());
+            editModel.putObject("templateDataReview").put("required", true).put("confirmed", false);
+        }
         var sourceType = ExperimentSourceType.fromNullable(command.sourceType()).name();
         var result = repository.create(new ExperimentRepository.Create(
                 id, command.organizationId(), null, command.title().strip(), category.id(), category.name(),

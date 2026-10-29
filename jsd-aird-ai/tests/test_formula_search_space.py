@@ -6,6 +6,21 @@ from jsd_aird_ai.service_v2 import FormulaModelV2Service
 from jsd_aird_ai.settings import Settings
 
 
+def test_gram_materials_vary_independently_without_fixed_total():
+    service = FormulaModelV2Service(Settings())
+    baseline = FormulaV2.model_validate({'basis': 'ABSOLUTE_MASS', 'compositionComplete': True, 'recordedTotal': 300,
+        'components': [{'materialId': 'a', 'ratio': 250, 'unit': 'g', 'amountKnown': True},
+                       {'materialId': 'b', 'ratio': 50, 'unit': 'g', 'amountKnown': True}]})
+    space = {'variableMaterials': [{'materialId': 'a', 'minimum': 150, 'maximum': 400},
+                                   {'materialId': 'b', 'minimum': 20, 'maximum': 90}]}
+    pool = service._formula_pool(baseline, 300, 32, 17, space)
+    values = np.array([[c.ratio for c in formula.components] for formula in pool])
+    assert len(pool) == 32
+    assert np.linalg.matrix_rank(values - values[0], tol=1e-6) == 2
+    assert np.ptp(values.sum(axis=1)) > 1
+    assert all(f.recorded_total == pytest.approx(sum(c.ratio for c in f.components)) for f in pool)
+
+
 def test_all_free_materials_vary_while_fixed_material_and_total_are_preserved():
     service = FormulaModelV2Service(Settings())
     baseline = FormulaV2.model_validate({'basis': 'MASS_PERCENT', 'compositionComplete': True, 'recordedTotal': 100,

@@ -31,7 +31,7 @@ from baybe.targets import NumericalTarget
 from jsd_aird_ai.contracts_v2 import ApplicabilityV2, BinaryResultV2, CategoricalResultV2, ContinuousResultV2, DomainStatusV2, OrdinalResultV2, ScoreRequestV2, ScoreResponseV2, TargetBlockedV2, TargetFailedV2, TargetSuccessV2, ValueTypeV2, FormulaV2, FormulaComponentV2, RecommendRequestV2, RecommendResponseV2, RecommendedCandidateV2
 from jsd_aird_ai.errors import ErrorCode, FormulaModelError
 from jsd_aird_ai.settings import Settings
-from jsd_aird_ai.workbench_training import candidates as workbench_candidates, fitted_metrics, prepare_data
+from jsd_aird_ai.workbench_training import candidates as workbench_candidates, fitted_metrics, prepare_data, validation_groups
 
 
 def _sha(data: bytes) -> str:
@@ -107,12 +107,13 @@ class FormulaModelV2Service:
         fold_count = min(5, sample_count // 2) if numeric_y else min(5, int(counts.min()))
         # Repeated inputs belong to one fold, including replicates with different Y,
         # so seeing the same input during training cannot inflate validation scores.
-        group_keys = [tuple(sorted(row.items())) for row in feature_rows]
-        group_ids = {key: index for index, key in enumerate(dict.fromkeys(group_keys))}
-        groups = np.asarray([group_ids[key] for key in group_keys])
-        grouped = len(group_ids) < sample_count
+        groups, grouping = validation_groups(feature_rows, checks.get("sourceExperimentIds", []))
+        group_count = len(np.unique(groups))
+        grouped = group_count < sample_count
         if grouped:
-            fold_count = min(fold_count, len(group_ids))
+            fold_count = min(fold_count, group_count)
+            if fold_count < 2:
+                raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "独立实验不足2份，无法进行可靠验证；请补充其他实验记录")
             splitter = (GroupKFold(n_splits=fold_count, shuffle=True, random_state=seed) if numeric_y else
                         StratifiedGroupKFold(n_splits=fold_count, shuffle=True, random_state=seed))
             splits = splitter.split(feature_rows, target, groups)
@@ -152,7 +153,7 @@ class FormulaModelV2Service:
         metrics.update(selectedAlgorithm=selected_algorithm, selectedCandidateId=selected_id,
                        selectionMetric="mae" if numeric_y else "logLoss", selectionDirection="MINIMIZE",
                        candidateCount=len(results), validationFolds=fold_count,
-                       validationGrouping="IDENTICAL_X" if grouped else "ROWS",
+                       validationGrouping=grouping if grouped else "ROWS",
                        baselineMetrics=self._baseline_metrics(target, folds, target_type, classes),
                        dataChecks=checks, failedCandidates=failures,
                        preprocessing=dict(numericScaling="STANDARD", categoricalEncoding="ONE_HOT", fitScope="TRAIN_FOLD"))
@@ -648,7 +649,10 @@ class FormulaModelV2Service:
                                     "这组配方比例范围无法生成总量一致的新方案，请调整比例范围")
         encoded_candidates = np.asarray([encode(row) for row in candidates], dtype=float)
 
-        kernel = Matern(length_scale=0.5, nu=2.5) + WhiteKernel(noise_level=1e-5, noise_level_bounds="fixed")
+        # Real measurements (and synthetic exercises) contain noise.  A fixed,
+        # near-zero noise level can collapse the length scale and reduce all
+        # unseen predictions to the training mean.
+        kernel = Matern(length_scale=0.5, length_scale_bounds=(0.02, 20.0), nu=2.5) + WhiteKernel(noise_level=0.05, noise_level_bounds=(1e-5, 1.0))
         gp = GaussianProcessRegressor(kernel=kernel, normalize_y=True, alpha=1e-8,
                                       random_state=seed, n_restarts_optimizer=0)
         oriented_y = observed if direction == "MAXIMIZE" else -observed
@@ -715,6 +719,31 @@ class FormulaModelV2Service:
     def _formula_pool(self, baseline: FormulaV2, total: float, count: int, seed: int,
                       constraints: dict[str, Any] | None = None) -> list[FormulaV2]:
         components = list(baseline.components)
+        if baseline.basis == "ABSOLUTE_MASS":
+            bounds = {str(item.get("materialId")): (float(item["minimum"]), float(item["maximum"]))
+                      for item in (constraints or {}).get("variableMaterials", []) if item.get("materialId")}
+            rng = np.random.default_rng(int(seed) & 0xFFFFFFFF)
+            formulas: list[FormulaV2] = []
+            seen: set[tuple[float, ...]] = set()
+            for i in range(max(count * 8, 32)):
+                values = []
+                for component in components:
+                    if component.material_id in bounds:
+                        low, high = bounds[component.material_id]
+                        value = low + (high - low) * float(rng.random())
+                    else:
+                        value = float(component.ratio or 0)
+                    values.append(round(value, 8))
+                key = tuple(values)
+                if key in seen or sum(values) <= 0:
+                    continue
+                seen.add(key)
+                formulas.append(FormulaV2(basis=baseline.basis, composition_complete=True,
+                    components=[FormulaComponentV2(material_id=c.material_id, ratio=value, unit=c.unit, amount_known=True)
+                                for c, value in zip(components, values)], recorded_total=sum(values)))
+                if len(formulas) >= count:
+                    break
+            return formulas
         if len(components) == 1:
             return [baseline]
         requested_variables = (constraints or {}).get("variableMaterials") or []
@@ -804,7 +833,8 @@ class FormulaModelV2Service:
                 material_id = field.encoding.get("formulaMaterialId")
                 if material_id is None:
                     continue
-                if material_id not in known or field.code != f"formula:{material_id}" or field.value_type != "NUMBER":
+                expected_code = f"formula:{material_id}|g|mass_amount" if formula.basis == "ABSOLUTE_MASS" else f"formula:{material_id}"
+                if material_id not in known or field.code != expected_code or field.value_type != "NUMBER":
                     raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "模型的材料比例关联不一致，请检查模型输入")
                 if material_id not in ratios or ratios[material_id] is None:
                     raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, f"候选配方缺少材料比例：{field.name or field.code}")
@@ -814,7 +844,7 @@ class FormulaModelV2Service:
                 inputs[field.code] = float(ratios[material_id])
         if mappings and (not formula.composition_complete or len(ratios) != len(formula.components)
                          or any(value is None or not np.isfinite(value) or value < 0 for value in ratios.values())
-                         or abs(sum(Decimal(str(value)) for value in ratios.values()) - Decimal('100')) > Decimal('0.001')):
+                         or (formula.basis == "MASS_PERCENT" and abs(sum(Decimal(str(value)) for value in ratios.values()) - Decimal('100')) > Decimal('0.001'))):
             raise FormulaModelError(ErrorCode.INSUFFICIENT_DATA, "候选配方的材料比例需完整、非负且合计为 100%")
         return inputs
 
@@ -1179,21 +1209,36 @@ class FormulaModelV2Service:
             if len(raw) >= 3 and raw[0] == "/" and raw[2] == ":":
                 raw = raw[1:]
             try:
-                data = Path(raw).read_bytes()
+                with Path(raw).open("rb") as source:
+                    data = self._bounded_artifact(source, expected_sha)
             except OSError as exc:
                 raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "unable to read artifact", retryable=True) from exc
         else:
             try:
-                response = httpx.get(str(url), timeout=self.settings.artifact_timeout_seconds, follow_redirects=False)
-                response.raise_for_status()
-                data = response.content
+                with httpx.stream("GET", str(url), timeout=self.settings.artifact_timeout_seconds, follow_redirects=False) as response:
+                    response.raise_for_status()
+                    data = self._bounded_artifact(response.iter_bytes(65536), expected_sha)
             except httpx.HTTPError as exc:
                 raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "unable to download artifact", retryable=True) from exc
         if len(data) > self.settings.maximum_artifact_bytes:
             raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "artifact exceeds configured size limit")
-        if _sha(data) != expected_sha:
-            raise FormulaModelError(ErrorCode.HASH_MISMATCH, "artifact SHA-256 does not match the request")
         return data
+
+    def _bounded_artifact(self, source, expected_sha: str | None = None) -> bytes:
+        # Do not trust Content-Length; stop before storing bytes beyond the limit.
+        chunks = iter(lambda: source.read(65536), b"") if hasattr(source, "read") else source
+        with io.BytesIO() as output:
+            size = 0
+            digest = hashlib.sha256()
+            for chunk in chunks:
+                size += len(chunk)
+                if size > self.settings.maximum_artifact_bytes:
+                    raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "artifact exceeds configured size limit")
+                output.write(chunk)
+                digest.update(chunk)
+            if expected_sha is not None and digest.hexdigest() != expected_sha:
+                raise FormulaModelError(ErrorCode.HASH_MISMATCH, "artifact SHA-256 does not match the request")
+            return output.getvalue()
 
     def _write(self, url: Any, data: bytes) -> None:
         if len(data) > self.settings.maximum_artifact_bytes:

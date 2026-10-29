@@ -191,7 +191,7 @@ export function InventoryControlPage({ mode }: { mode: ControlMode }) {
         addRecord({ kind: '产品主档', documentNo: createdId, productName: values.name, note: `${scopeLabels[values.scope as InventoryScope]} / ${values.category || '库存产品'}` });
         message.success('产品主档已保存');
       } else if (mode === 'warnings') {
-        await inventoryApi.updatePolicy(values.productId, values.scope, { packageKg: values.packageKg, lowStockKg: values.lowStockKg });
+        await inventoryApi.updatePolicy(values.productId, values.scope, { revision: balances.find(item=>item.productId===values.productId && item.scope===values.scope)?.policyRevision ?? '', packageKg: values.packageKg, lowStockKg: values.lowStockKg });
         addRecord({ kind: '预警规则', documentNo: values.productId, productName: productName(values.productId), note: `包装 ${values.packageKg || '—'} KG；预警 ${values.lowStockKg} KG` });
         message.success('库存预警规则已保存');
       } else if (mode === 'batches' || mode === 'expiry') {

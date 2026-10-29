@@ -26,6 +26,28 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class JdbcTemplateRepository implements TemplateRepository {
 
+    @Override public void lockTemplate(UUID org,UUID id){
+        if(jdbcTemplate.query("SELECT id FROM tpl.template WHERE organization_id=? AND id=? FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),org,id).isEmpty())
+            throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,"模板不存在");
+    }
+
+    @Override public void lockCategory(UUID organizationId,UUID categoryId){
+        if(jdbcTemplate.query("SELECT id FROM tpl.template_category WHERE organization_id=? AND id=? FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),organizationId,categoryId).isEmpty())
+            throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,"分类不存在");
+    }
+
+    @Override
+    public void lockWorkspace(UUID organizationId, UUID versionId) {
+        var parents=jdbcTemplate.query("SELECT t.id FROM tpl.template t JOIN tpl.template_version v ON v.template_id=t.id WHERE t.organization_id=? AND v.id=? FOR UPDATE OF t",(rs,n)->rs.getObject(1,UUID.class),organizationId,versionId);
+        if(parents.isEmpty())throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,"模板版本不存在");
+        var rows = jdbcTemplate.query("""
+                SELECT tv.id FROM tpl.template_version tv JOIN tpl.template t ON t.id=tv.template_id
+                WHERE tv.id=? AND t.organization_id=? FOR UPDATE OF tv
+                """, (rs, index) -> rs.getObject(1, UUID.class), versionId, organizationId);
+        if (rows.isEmpty()) throw new com.jsd.aird.shared.error.ApiException(
+                com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND, "模板版本不存在");
+    }
+
     private static final String LOGICAL_TEMPLATES_CTE = """
             WITH logical_templates AS (
                 SELECT t.id AS template_id,

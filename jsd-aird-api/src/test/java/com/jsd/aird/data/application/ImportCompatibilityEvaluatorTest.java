@@ -51,6 +51,19 @@ class ImportCompatibilityEvaluatorTest {
     }
 
     @Test
+    void acceptsAnEnteredNumericRecipeTotal() {
+        var binding=mapper.createObjectNode().put("fieldCode","formula.total").put("labelPath","合计").put("valueSource","FORMULA");
+        binding.putObject("locator").put("valueRange","C2:C2");
+        var contract=mapper.createObjectNode();
+        contract.putArray("components").addObject().put("componentId","formula").put("range","A1:C2").put("requiredComponent",true).set("bindings",mapper.createArrayNode().add(binding));
+        var layout=mapper.createObjectNode();
+        var cells=layout.putArray("cells");cells.addObject().put("address","C1").put("displayValue","合计");
+        cells.addObject().put("address","C2").put("displayValue","10.2").put("valueSource","INPUT").put("rawNumericValue","10.2");
+        var sheet=new TemplateDataImportFacade.ParsedSheet("sheet-1","sheet-1",0,1,2,1,3,List.of(1),1,2,List.of(List.of("项目","值","合计"),List.of("a","10","10.2")),layout,"hash");
+        assertThat(evaluator.evaluate(contract,List.of(sheet)).status()).isEqualTo("COMPATIBLE");
+    }
+
+    @Test
     void ignoresRegionOnlyScaffoldingAndAcceptsInlineLabelValues() {
         var scaffold = mapper.createObjectNode().put("mappingKind", "REPEAT_REGION")
                 .put("labelPath", "基本信息区域");

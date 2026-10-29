@@ -38,6 +38,39 @@ class JdbcExperimentRepositoryTest {
     private final JdbcExperimentRepository repository = new JdbcExperimentRepository(jdbc, mapper);
 
     @Test
+    void legacyPublishCannotSkipReview() {
+        givenDetail(detail(ExperimentStatus.DRAFT));
+        assertThatThrownBy(() -> repository.publish(ORGANIZATION_ID, UUID.randomUUID(), 0, USER_ID, "editor"))
+                .isInstanceOfSatisfying(ApiException.class,
+                        error -> assertThat(error.errorCode()).isEqualTo(ApiErrorCode.RESOURCE_CONFLICT));
+        verify(jdbc, never()).update(anyString(), any(Object[].class));
+    }
+
+    @Test
+    void staleReviewOrDeleteDoesNotExecuteAnyWrite() {
+        givenDetail(detail(ExperimentStatus.PENDING_REVIEW));
+        assertThatThrownBy(() -> repository.publish(ORGANIZATION_ID, UUID.randomUUID(), 1, USER_ID, "reviewer"))
+                .isInstanceOfSatisfying(ApiException.class,
+                        error -> assertThat(error.errorCode()).isEqualTo(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT));
+        assertThatThrownBy(() -> repository.delete(ORGANIZATION_ID, UUID.randomUUID(), 1, USER_ID, "editor"))
+                .isInstanceOfSatisfying(ApiException.class,
+                        error -> assertThat(error.errorCode()).isEqualTo(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT));
+        verify(jdbc, never()).update(anyString(), any(Object[].class));
+    }
+
+    @Test
+    void aRaceLostDuringApprovalStopsBeforeVersionAuditOrOutboxUpdates() {
+        givenDetail(detail(ExperimentStatus.PENDING_REVIEW));
+        when(jdbc.update(anyString(), any(Object[].class))).thenReturn(0);
+        assertThatThrownBy(() -> repository.publish(ORGANIZATION_ID, UUID.randomUUID(), 0, USER_ID, "reviewer"))
+                .isInstanceOfSatisfying(ApiException.class,
+                        error -> assertThat(error.errorCode()).isEqualTo(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT));
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).update(sql.capture(), any(Object[].class));
+        assertThat(sql.getValue()).contains("UPDATE rnd.experiment SET", "revision=?", "deleted=false");
+    }
+
+    @Test
     void refusesToChangeASubmittedVersionInPlace() {
         givenDetail(detail(ExperimentStatus.PENDING_REVIEW));
 

@@ -10,6 +10,8 @@ import java.util.UUID;
 
 public interface ProductionUploadRepository {
 
+    void claimVersion(UUID organizationId, UUID uploadId, long expectedVersion);
+
     void insert(NewUpload upload);
 
     void attachAsyncJob(UUID uploadId, UUID asyncJobId);

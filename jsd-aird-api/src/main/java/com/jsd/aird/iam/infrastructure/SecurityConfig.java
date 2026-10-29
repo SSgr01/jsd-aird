@@ -97,6 +97,7 @@ public class SecurityConfig {
                     auth.dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll();
                     auth.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();
                     auth.requestMatchers("/api/v1/auth/csrf", "/api/v1/auth/login", "/actuator/health").permitAll();
+                    auth.requestMatchers("/actuator/metrics", "/actuator/metrics/**").access((authentication,context)->new org.springframework.security.authorization.AuthorizationDecision(java.util.Set.of("127.0.0.1","0:0:0:0:0:0:0:1","::1").contains(context.getRequest().getRemoteAddr())));
                     if (developmentMode) auth.anyRequest().permitAll();
                     else auth.anyRequest().authenticated();
                 })

@@ -30,7 +30,8 @@ public class ExperimentController {
     @GetMapping("/experiments/{id}/data-review") public ApiResponse<?> dataReview(@PathVariable UUID id){return ok(service.templateDataReview(id));}
     @PostMapping("/experiments/{id}/confirm-data") public ApiResponse<?> confirmData(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.confirmTemplateData(id,r.revision));}
     @GetMapping("/experiments/{id}/sources") public ApiResponse<?> sources(@PathVariable UUID id){return ok(service.sourceReferences(id));}
-    @GetMapping("/experiments/{id}/export") public ResponseEntity<byte[]> export(@PathVariable UUID id){return download(exportService.export(id));}
+    @GetMapping("/experiments/{id}/export") public ResponseEntity<byte[]> export(@PathVariable UUID id,@RequestParam(defaultValue="RESULT")String view){return download(exportService.export(id,view));}
+    @GetMapping("/experiments/{id}/presentation") public ApiResponse<?> presentation(@PathVariable UUID id,@RequestParam long revision){return ok(service.presentation(id,revision));}
     @PostMapping("/experiments/{id}/draft") public ApiResponse<?> draft(@PathVariable UUID id,@Valid @RequestBody DraftRequest r){return ok(service.save(id,r.revision,new ExperimentService.DraftCommand(r.experimentNo,r.title,r.categoryId,r.categoryName,r.projectId,r.stageId,r.taskId,r.ownerName,r.experimentDate,r.templateVersionId,r.templateSnapshotHash,r.templateSnapshot,r.editModel)));}
     /** ELN soft-delete endpoint. Project-scoped callers use ProjectExperimentController. */
     @DeleteMapping("/experiments/{id}/eln-delete") public ApiResponse<?> delete(@PathVariable UUID id,@RequestParam long revision){service.delete(id,revision);return ok(null);}
@@ -42,14 +43,14 @@ public class ExperimentController {
     @PostMapping("/experiments/{id}/void") public ApiResponse<?> voided(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.VOIDED,r.comment));}
     @GetMapping("/experiments/{id}/versions") public ApiResponse<?> versions(@PathVariable UUID id){return ok(service.versions(id));}
     @PostMapping("/experiments/{id}/versions") public ApiResponse<?> revision(@PathVariable UUID id,@Valid @RequestBody RevisionRequest r){return ok(service.revision(id,r.revision,r.reason));}
-    @PostMapping("/experiments/{id}/versions/{versionNo}/rollback") public ApiResponse<?> rollback(@PathVariable UUID id,@PathVariable int versionNo,@RequestBody RevisionRequest r){return ok(service.rollback(id,r.revision,versionNo,r.reason));}
+    @PostMapping("/experiments/{id}/versions/{versionNo}/rollback") public ApiResponse<?> rollback(@PathVariable UUID id,@PathVariable int versionNo,@Valid @RequestBody RevisionRequest r){return ok(service.rollback(id,r.revision,versionNo,r.reason));}
     @GetMapping("/experiments/{id}/versions/compare") public ApiResponse<?> compare(@PathVariable UUID id,@RequestParam int from,@RequestParam int to){return ok(service.compare(id,from,to));}
     @GetMapping("/experiments/{id}/audits") public ApiResponse<?> audits(@PathVariable UUID id){return ok(service.audits(id));}
     @GetMapping("/experiment-categories") public ApiResponse<?> categories(@RequestParam(defaultValue="false")boolean includeInactive){return ok(service.categories(includeInactive));}
     @PostMapping("/experiment-categories") public ApiResponse<?> category(@Valid @RequestBody CategoryRequest r){return ok(service.createCategory(r.code,r.name,r.description));}
     @PutMapping("/experiment-categories/{id}") public ApiResponse<?> updateCategory(@PathVariable UUID id,@Valid @RequestBody CategoryUpdateRequest r){return ok(service.updateCategory(id,r.revision,r.name,r.description));}
     @PutMapping("/experiment-categories/{id}/active") public ApiResponse<?> categoryActive(@PathVariable UUID id,@Valid @RequestBody CategoryActiveRequest r){return ok(service.categoryActive(id,r.revision,r.active));}
-    @DeleteMapping("/experiment-categories/{id}") public ApiResponse<?> deleteCategory(@PathVariable UUID id,@RequestParam(required=false)UUID replacementCategoryId){service.deleteCategory(id,replacementCategoryId);return ok(null);}
+    @DeleteMapping("/experiment-categories/{id}") public ApiResponse<?> deleteCategory(@PathVariable UUID id,@RequestParam @PositiveOrZero long revision,@RequestParam(required=false)UUID replacementCategoryId){service.deleteCategory(id,revision,replacementCategoryId);return ok(null);}
     private static <T>ApiResponse<T> ok(T data){return ResponseFactory.success(data,RequestIdHolder.currentOrUnknown());}
     private static ResponseEntity<byte[]> download(ExperimentExportService.Download file){
         var disposition=ContentDisposition.attachment().filename(file.fileName(), StandardCharsets.UTF_8).build();
@@ -57,6 +58,6 @@ public class ExperimentController {
                 .header(HttpHeaders.CONTENT_DISPOSITION,disposition.toString()).contentLength(file.content().length).body(file.content());
     }
     public record CreateRequest(String experimentNo,@NotBlank String title,UUID categoryId,String categoryName,String sourceType,UUID projectId,UUID stageId,UUID taskId,@NotBlank String ownerName,LocalDate experimentDate,UUID sourceFileId,UUID templateVersionId,String templateSnapshotHash,JsonNode templateSnapshot,JsonNode editModel){}
-    public record DraftRequest(@NotNull Long revision,@NotBlank String experimentNo,@NotBlank String title,UUID categoryId,String categoryName,UUID projectId,UUID stageId,UUID taskId,String ownerName,LocalDate experimentDate,UUID templateVersionId,String templateSnapshotHash,JsonNode templateSnapshot,@NotNull JsonNode editModel){}
-    public record ActionRequest(@NotNull Long revision,String comment){} public record RevisionRequest(@NotNull Long revision,@NotBlank String reason){}public record CategoryRequest(@NotBlank String code,@NotBlank @Size(max=100) String name,@NotBlank @Size(max=500) String description){}public record CategoryUpdateRequest(@NotNull Long revision,@NotBlank @Size(max=100) String name,@NotBlank @Size(max=500) String description){}public record CategoryActiveRequest(@NotNull Long revision,boolean active){}
+    public record DraftRequest(@NotNull @PositiveOrZero Long revision,@NotBlank String experimentNo,@NotBlank String title,UUID categoryId,String categoryName,UUID projectId,UUID stageId,UUID taskId,String ownerName,LocalDate experimentDate,UUID templateVersionId,String templateSnapshotHash,JsonNode templateSnapshot,@NotNull JsonNode editModel){}
+    public record ActionRequest(@NotNull @PositiveOrZero Long revision,String comment){} public record RevisionRequest(@NotNull @PositiveOrZero Long revision,@NotBlank String reason){}public record CategoryRequest(@NotBlank String code,@NotBlank @Size(max=100) String name,@NotBlank @Size(max=500) String description){}public record CategoryUpdateRequest(@NotNull @PositiveOrZero Long revision,@NotBlank @Size(max=100) String name,@NotBlank @Size(max=500) String description){}public record CategoryActiveRequest(@NotNull @PositiveOrZero Long revision,boolean active){}
 }

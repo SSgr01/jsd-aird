@@ -30,15 +30,11 @@ public class TemplateVersionReviewService {
     }
 
     @Transactional
-    public View submit(UUID versionId) {
-        return submit(versionId, false);
-    }
-
-    @Transactional
-    public View submit(UUID versionId, boolean dataCleanupConfirmed) {
+    public View submit(UUID versionId, long workspaceVersion, long reviewVersion, boolean dataCleanupConfirmed) {
         var actor = ActorContext.required();
         requireDraft(actor.organizationId(), versionId);
         var current = reviews.ensure(actor.organizationId(), versionId);
+        requireVersions(actor.organizationId(), versionId, current, workspaceVersion, reviewVersion);
         if (!current.status().equals("NOT_SUBMITTED") && !current.status().equals("REJECTED")) {
             throw new ApiException(ApiErrorCode.REVIEW_STATE_CONFLICT, "当前版本不允许提交审核");
         }
@@ -51,7 +47,7 @@ public class TemplateVersionReviewService {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "实验来源模板提交审核前必须确认已清理实际实验数据");
         }
         var comment = experimentOrigin ? "已确认检查并清理实际实验数据" : null;
-        var result = reviews.transition(actor.organizationId(), versionId, current.status(), "SUBMITTED",
+        var result = reviews.transition(actor.organizationId(), versionId, reviewVersion, current.status(), "SUBMITTED",
                 actor.userId(), comment);
         if (experimentOrigin) {
             templates.appendAudit(actor.organizationId(), actor.userId(),
@@ -62,33 +58,36 @@ public class TemplateVersionReviewService {
     }
 
     @Transactional
-    public View approve(UUID versionId, String comment) {
+    public View approve(UUID versionId, long workspaceVersion, long reviewVersion, String comment) {
         var actor = ActorContext.required();
         requireDraft(actor.organizationId(), versionId);
         var current = reviews.ensure(actor.organizationId(), versionId);
+        requireVersions(actor.organizationId(), versionId, current, workspaceVersion, reviewVersion);
         if (!current.status().equals("SUBMITTED")) {
             throw new ApiException(ApiErrorCode.REVIEW_STATE_CONFLICT, "只有待审核版本可以通过审核");
         }
-        return view(reviews.transition(actor.organizationId(), versionId, "SUBMITTED", "APPROVED",
+        return view(reviews.transition(actor.organizationId(), versionId, reviewVersion, "SUBMITTED", "APPROVED",
                 actor.userId(), blankToNull(comment)), reviews.events(actor.organizationId(), versionId));
     }
 
     @Transactional
-    public View reject(UUID versionId, String reason) {
+    public View reject(UUID versionId, long workspaceVersion, long reviewVersion, String reason) {
         var actor = ActorContext.required();
         requireDraft(actor.organizationId(), versionId);
         if (reason == null || reason.isBlank()) {
             throw new ApiException(ApiErrorCode.REVIEW_REASON_REQUIRED, "驳回原因不能为空");
         }
         var current = reviews.ensure(actor.organizationId(), versionId);
+        requireVersions(actor.organizationId(), versionId, current, workspaceVersion, reviewVersion);
         if (!current.status().equals("SUBMITTED")) {
             throw new ApiException(ApiErrorCode.REVIEW_STATE_CONFLICT, "只有待审核版本可以驳回");
         }
-        return view(reviews.transition(actor.organizationId(), versionId, "SUBMITTED", "REJECTED",
+        return view(reviews.transition(actor.organizationId(), versionId, reviewVersion, "SUBMITTED", "REJECTED",
                 actor.userId(), reason.trim()), reviews.events(actor.organizationId(), versionId));
     }
 
     public void requireApproved(UUID organizationId, UUID versionId) {
+        templates.lockWorkspace(organizationId, versionId);
         var workspace = templates.findWorkspace(organizationId, versionId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "模板版本不存在"));
         if (workspace.status() == TemplateStatus.PUBLISHED) return;
@@ -99,6 +98,7 @@ public class TemplateVersionReviewService {
     }
 
     private void requireDraft(UUID organizationId, UUID versionId) {
+        templates.lockWorkspace(organizationId, versionId);
         var workspace = templates.findWorkspace(organizationId, versionId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "模板版本不存在"));
         if (workspace.status() != TemplateStatus.DRAFT) {
@@ -106,10 +106,27 @@ public class TemplateVersionReviewService {
         }
     }
 
+    public void requireEditable(UUID organizationId, UUID versionId) {
+        templates.lockWorkspace(organizationId, versionId);
+        var review = reviews.ensure(organizationId, versionId);
+        if ("SUBMITTED".equals(review.status()) || "APPROVED".equals(review.status())) {
+            throw new ApiException(ApiErrorCode.REVIEW_STATE_CONFLICT, "待审核或已审核模板不可修改，请使用修订流程");
+        }
+    }
+
+    private void requireVersions(UUID organizationId, UUID versionId,
+                                 TemplateVersionReviewRepository.Review review, long workspaceVersion, long reviewVersion) {
+        var workspace = templates.findWorkspace(organizationId, versionId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "模板版本不存在"));
+        if (workspace.lockVersion() != workspaceVersion || review.lockVersion() != reviewVersion) {
+            throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT, "模板内容或审核版本已变化，请核对最新版本后操作");
+        }
+    }
+
     private View view(TemplateVersionReviewRepository.Review review,
                       List<TemplateVersionReviewRepository.ReviewEvent> events) {
         return new View(review.versionId(), review.status(), review.submittedBy(), review.submittedAt(),
-                review.reviewedBy(), review.reviewedAt(), review.comment(), events);
+                review.reviewedBy(), review.reviewedAt(), review.comment(), events, review.lockVersion());
     }
 
     private String blankToNull(String value) {
@@ -118,5 +135,5 @@ public class TemplateVersionReviewService {
 
     public record View(UUID versionId, String status, UUID submittedBy, java.time.Instant submittedAt,
                        UUID reviewedBy, java.time.Instant reviewedAt, String comment,
-                       List<TemplateVersionReviewRepository.ReviewEvent> events) { }
+                       List<TemplateVersionReviewRepository.ReviewEvent> events, long lockVersion) { }
 }

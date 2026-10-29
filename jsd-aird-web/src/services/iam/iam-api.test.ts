@@ -56,8 +56,8 @@ describe('IAM and session API contracts', () => {
   });
 
   it('encodes permission codes when restoring a user override', async () => {
-    await iamApi.restoreUserPermission('user-1', 'knowledge.document.view');
+    await iamApi.restoreUserPermission('user-1', 'knowledge.document.view', 0);
 
-    expect(httpMock.delete).toHaveBeenCalledWith('/api/v1/iam/users/user-1/permissions/knowledge.document.view');
+    expect(httpMock.delete).toHaveBeenCalledWith('/api/v1/iam/users/user-1/permissions/knowledge.document.view', { params: { expectedVersion: 0 } });
   });
 });

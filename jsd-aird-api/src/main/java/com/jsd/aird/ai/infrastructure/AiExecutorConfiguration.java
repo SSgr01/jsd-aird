@@ -13,9 +13,10 @@ import org.springframework.context.annotation.Configuration;
 @Configuration(proxyBeanMethods = false)
 public class AiExecutorConfiguration {
 
-    @Bean(name = "aiStreamExecutor", destroyMethod = "close")
+    @Bean(name = "aiStreamExecutor", destroyMethod = "shutdownNow")
     ExecutorService aiStreamExecutor() {
-        return Executors.newVirtualThreadPerTaskExecutor();
+        return new ThreadPoolExecutor(16,16,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(4),
+                Thread.ofVirtual().name("aird-ai-stream-",0).factory(),new ThreadPoolExecutor.AbortPolicy());
     }
 
     @Bean(name = "operationManualVectorExecutor", destroyMethod = "shutdown")

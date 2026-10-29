@@ -106,10 +106,24 @@ public class ProjectResourceService implements ProjectResourceFacade {
 
     @Override
     @Transactional
+    public List<RelatedProjectView> replaceLinksChecked(Actor actor, ResourceType resourceType, UUID resourceId,
+                                                       List<ProjectRelationTarget> targets,
+                                                       List<ProjectRelationTarget> expectedTargets) {
+        if (expectedTargets == null) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "原项目关联不能为空");
+        lockDataSource(actor, resourceType, resourceId);
+        var expected = normalizeTargets(expectedTargets).stream().map(TargetKey::new).collect(java.util.stream.Collectors.toSet());
+        var current = rawTargets(actor.organizationId(), resourceType, resourceId).stream().map(TargetKey::new)
+                .collect(java.util.stream.Collectors.toSet());
+        if (!expected.equals(current)) throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT, "项目关联已被修改，未覆盖当前关联");
+        return replaceLinks(actor, resourceType, resourceId, targets);
+    }
+
+    @Override
+    @Transactional
     public List<RelatedProjectView> replaceLinks(Actor actor, ResourceType resourceType, UUID resourceId,
                                                  List<ProjectRelationTarget> targets) {
-        var source = requireResource(actor.organizationId(), resourceType, resourceId);
         lockDataSource(actor, resourceType, resourceId);
+        var source = requireResource(actor.organizationId(), resourceType, resourceId);
         var desired = normalizeTargets(targets);
         var existing = rawTargets(actor.organizationId(), resourceType, resourceId);
         var involvedProjects = new LinkedHashSet<UUID>();
@@ -156,9 +170,18 @@ public class ProjectResourceService implements ProjectResourceFacade {
     }
 
     private void lockDataSource(Actor actor, ResourceType type, UUID id) {
-        if (type == ResourceType.DATA_IMPORT_JOB) jdbc.query(
-                "SELECT id FROM data.import_job WHERE organization_id=? AND id=? FOR UPDATE",
-                (rs,n) -> rs.getObject(1,UUID.class),actor.organizationId(),id);
+        if (type == ResourceType.KNOWLEDGE_DOCUMENT) {
+            jdbc.queryForList("SELECT id FROM kb.document WHERE organization_id=? AND id=? FOR UPDATE", UUID.class,
+                    actor.organizationId(), id);
+        }
+        if (type == ResourceType.DATA_IMPORT_JOB) {
+            var modes = jdbc.query("SELECT source_owner,recognition_mode FROM data.import_job WHERE organization_id=? AND id=? FOR UPDATE",
+                    (rs, n) -> new String[]{rs.getString(1), rs.getString(2)}, actor.organizationId(), id);
+            if (modes.stream().anyMatch(row -> "DATA_CENTER".equals(row[0]) && "FREEFORM".equals(row[1]))) {
+                throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                        "历史自由识别记录已设为只读，不能修改项目关联");
+            }
+        }
     }
 
     @Override
@@ -214,6 +237,7 @@ public class ProjectResourceService implements ProjectResourceFacade {
     @Transactional
     public ReferenceView restoreReference(Actor actor, UUID referenceId) {
         var row = requireReference(actor.organizationId(), referenceId);
+        lockDataSource(actor, row.resourceType(), row.resourceId());
         requireProject(actor, "project.assign", row.projectId(), "WRITE");
         if (!row.sourceAvailable()) {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "来源资料已不可用，无法恢复项目引用");

@@ -20,8 +20,7 @@ public class ConfigurationHashing {
     public String hash(Object value) {
         try {
             var node = value instanceof JsonNode json ? json : mapper.valueToTree(value);
-            var bytes = mapper.writeValueAsBytes(canonical(node));
-            return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+            return com.jsd.aird.shared.json.CanonicalDigest.sha256(mapper,node);
         } catch (Exception exception) {
             throw new IllegalArgumentException("配置内容无法计算哈希", exception);
         }

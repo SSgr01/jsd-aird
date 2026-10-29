@@ -6,6 +6,7 @@ const RANGE_KEYS = [
   'address',
   'range',
   'labelAddress',
+  'labelAnchor',
   'labelRange',
   'anchorAddress',
   'anchorRange',
@@ -13,9 +14,12 @@ const RANGE_KEYS = [
   'headerRange',
   'dataRange',
   'valueRange',
+  'valueAddress',
+  'valueAnchor',
   'totalRange',
   'identityRange',
   'recordRange',
+  'parentRange',
   'sourceRange',
 ] as const;
 
@@ -24,6 +28,10 @@ export function operationFromUniverCommand(command: {
   params?: object;
 }): WorkbookStructureOperation | undefined {
   const params = asRecord(command.params);
+  if (command.id === 'sheet.command.set-worksheet-name' && text(params.subUnitId) && text(params.name)) return {
+    operationId: generateUUID(), type: 'RENAME_SHEET', sheetId: text(params.subUnitId),
+    previousSheetName: text(params.oldName), nextSheetName: text(params.name), source: 'CUSTOMER',
+  };
   const range = asRecord(params.range);
   const sheetId = text(params.subUnitId);
   if (!sheetId || !validCommandRange(range)) return undefined;
@@ -35,27 +43,25 @@ export function operationFromUniverCommand(command: {
     source: 'CUSTOMER' as const,
   };
   if (command.id === 'sheet.command.insert-row') {
-    const after = number(params.direction) === 2;
     return {
       ...base,
       type: 'INSERT_ROWS',
-      index: (after ? number(range.endRow) + 1 : number(range.startRow)) + 1,
+      index: number(range.startRow) + 1,
       count: rowCount,
     };
   }
-  if (command.id === 'sheet.command.remove-row') {
+  if (['sheet.command.remove-row', 'sheet.command.remove-row-by-range'].includes(command.id)) {
     return { ...base, type: 'DELETE_ROWS', index: number(range.startRow) + 1, count: rowCount };
   }
   if (command.id === 'sheet.command.insert-col') {
-    const after = number(params.direction) === 1;
     return {
       ...base,
       type: 'INSERT_COLUMNS',
-      index: (after ? number(range.endColumn) + 1 : number(range.startColumn)) + 1,
+      index: number(range.startColumn) + 1,
       count: columnCount,
     };
   }
-  if (command.id === 'sheet.command.remove-col') {
+  if (['sheet.command.remove-col', 'sheet.command.remove-col-by-range'].includes(command.id)) {
     return {
       ...base,
       type: 'DELETE_COLUMNS',
@@ -108,7 +114,23 @@ export function migrateWorkspaceStructure(
         : undefined;
       return {
         ...field,
-        ...(binding ? { locator: structuredClone(binding.locator) } : {}),
+        ...(binding
+          ? {
+              locator: structuredClone(binding.locator),
+              valueRange: text(binding.locator.valueRange) || undefined,
+              labelRange: text(binding.locator.labelRange) || undefined,
+              columns: field.columns?.map((column) => {
+                const child = nextMapping.find((item) => item.bindingId === column.bindingId);
+                return child
+                  ? {
+                      ...column,
+                      valueRange: text(child.locator.valueRange) || undefined,
+                      labelRange: text(child.locator.labelRange) || undefined,
+                    }
+                  : column;
+              }),
+            }
+          : {}),
         ...(candidate ? { candidateLocator: candidate.locator } : {}),
         ...(status === 'MISSING' ? { reviewStatus: 'ISSUE' as const } : {}),
       };
@@ -159,7 +181,7 @@ function migrateLocator(
       changed = true;
     }
   }
-  for (const key of ['tableModel']) {
+  for (const key of ['tableModel', 'label', 'value', 'anchor']) {
     if (isObjectRecord(next[key])) {
       next[key] = migrateStructuredRecord(asRecord(next[key]), operation);
     }
@@ -172,6 +194,16 @@ function migrateLocator(
     const axis = binding.repeatAxis === 'COLUMN' ? 'COLUMN' : 'ROW';
     const expanded = expandRepeatTail(next, operation, axis);
     changed ||= expanded;
+    // Legacy locators retain nested value/label aliases; the server normalizer
+    // consumes these too, so they must be in the same structure transaction.
+    if (isObjectRecord(next.value)) {
+      const value = asRecord(next.value);
+      const range = text(next.valueRange) || text(next.logicalInputRange) || text(next.address);
+      if (range) value.range = range;
+      const address = text(next.anchorAddress) || range.split(':')[0];
+      if (address) value.address = address;
+      next.value = value;
+    }
   }
   return { locator: next, changed, removed };
 }
@@ -191,7 +223,8 @@ function migrateStructuredRecord(
     if (Array.isArray(value)) {
       const values = unknownArray(value);
       next[key] = values.map((item) =>
-        isObjectRecord(item) ? migrateStructuredRecord(asRecord(item), operation) : item);
+        isObjectRecord(item) ? migrateStructuredRecord(asRecord(item), operation) : item,
+      );
     } else if (isObjectRecord(value)) {
       next[key] = migrateStructuredRecord(asRecord(value), operation);
     }
@@ -225,7 +258,7 @@ function expandRepeatTail(
   return changed;
 }
 
-function migrateRange(value: string, operation: WorkbookStructureOperation) {
+export function migrateRange(value: string, operation: WorkbookStructureOperation) {
   const parsed = parseRange(value);
   if (!parsed || !operation.index || !operation.count) return { value, removed: false };
   const rows = operation.type.endsWith('ROWS');
@@ -258,14 +291,14 @@ function deleteInterval(start: number, end: number, index: number, count: number
   return nextEnd < nextStart ? undefined : { start: nextStart, end: nextEnd };
 }
 
-interface ParsedRange {
+export interface ParsedRange {
   startRow: number;
   endRow: number;
   startColumn: number;
   endColumn: number;
 }
 
-function parseRange(value: string): ParsedRange | undefined {
+export function parseRange(value: string): ParsedRange | undefined {
   const match = /^([A-Z]{1,4})([1-9][0-9]*)(?::([A-Z]{1,4})([1-9][0-9]*))?$/i.exec(value);
   if (!match) return undefined;
   return {
@@ -276,7 +309,7 @@ function parseRange(value: string): ParsedRange | undefined {
   };
 }
 
-function formatRange(range: ParsedRange) {
+export function formatRange(range: ParsedRange) {
   const start = `${columnLetters(range.startColumn)}${range.startRow}`;
   const end = `${columnLetters(range.endColumn)}${range.endRow}`;
   return start === end ? start : `${start}:${end}`;

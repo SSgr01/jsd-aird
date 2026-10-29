@@ -17,7 +17,7 @@ export const isMappedFormulaColumn = (column: HistoryDatasetColumn) => {
 }
 
 export const isUnmappedFormulaColumn = (column: HistoryDatasetColumn) =>
-  column.semanticType === 'MATERIAL_RATIO' && column.mappingStatus === 'UNMAPPED'
+  (column.semanticType === 'MATERIAL_RATIO' || column.semanticType === 'MATERIAL_AMOUNT') && column.mappingStatus === 'UNMAPPED'
 
 /**
  * Combine matching experiment fields by stable code, or by an unambiguous

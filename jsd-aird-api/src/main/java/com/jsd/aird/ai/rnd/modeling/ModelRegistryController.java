@@ -4,6 +4,11 @@ import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
 import org.springframework.web.bind.annotation.*;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 
 import java.util.UUID;
 
@@ -16,7 +21,11 @@ public class ModelRegistryController {
     public ModelRegistryController(ModelRegistryService service){this.service=service;}
     @GetMapping("/models") public ApiResponse<?> models(@RequestParam(required=false)String status,@RequestParam(required=false)String category,@RequestParam(required=false)String keyword,@RequestParam(defaultValue="1")int page,@RequestParam(defaultValue="20")int size){return ok(service.models(status,category,keyword,page,size));}
     @GetMapping("/models/{id}") public ApiResponse<?> model(@PathVariable UUID id){return ok(service.model(id));}
-    @PostMapping("/models/{id}/pause") public ApiResponse<?> pause(@PathVariable UUID id,@RequestBody ModelActionCommand body,@RequestHeader("Idempotency-Key") String key){return ok(service.pause(id,body,key));}
-    @PostMapping("/models/{id}/rollback") public ApiResponse<?> rollback(@PathVariable UUID id,@RequestBody ModelActionCommand body,@RequestHeader("Idempotency-Key") String key){return ok(service.rollback(id,body,key));}
+    @PostMapping("/models/{id}/pause") public ApiResponse<?> pause(@PathVariable UUID id,@Valid @RequestBody ModelActionRequest body,@RequestHeader("Idempotency-Key") String key){return ok(service.pause(id,body.command(),key));}
+    @PostMapping("/models/{id}/rollback") public ApiResponse<?> rollback(@PathVariable UUID id,@Valid @RequestBody ModelActionRequest body,@RequestHeader("Idempotency-Key") String key){return ok(service.rollback(id,body.command(),key));}
+    public record ModelActionRequest(@NotNull @Min(0) Long expectedRevision, UUID expectedActiveModelVersionId,
+                                     @NotBlank @Size(max=2000) String reason) {
+        ModelActionCommand command(){return new ModelActionCommand(expectedRevision,expectedActiveModelVersionId,reason);}
+    }
     private static <T> ApiResponse<T> ok(T value){return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown());}
 }

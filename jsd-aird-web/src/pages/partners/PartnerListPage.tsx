@@ -1,3 +1,4 @@
+import { useRequestGuard } from '@/services/query/use-request-guard';
 import { AppstoreOutlined, CopyOutlined, DownloadOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, UnorderedListOutlined } from '@ant-design/icons';
 import { App, Button, Checkbox, Empty, Input, Pagination, Popconfirm, Select, Space, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -77,10 +78,13 @@ export function PartnerListPage() {
     owner: owner || undefined,
     status: 'ACTIVE',
   }), [keyword, industry, level, cooperation, owner]);
+  const beginListRequest = useRequestGuard(JSON.stringify([query,page,pageSize]));
   const load = useCallback(async () => {
+    const request = beginListRequest();
     setLoading(true);
     try {
-      const result = await getPartners({ ...query, page, size: pageSize });
+      const result = await getPartners({ ...query, page, size: pageSize }, request.signal);
+      if (!request.current()) return;
       setRows(result.items);
       setTotal(result.total);
       setSelectedPartnersById((prev) => {
@@ -88,10 +92,12 @@ export function PartnerListPage() {
         result.items.forEach((item) => { next[item.id] = item; });
         return next;
       });
+    } catch {
+      // Keep the current list for failed or superseded reads.
     } finally {
-      setLoading(false);
+      if (request.current()) setLoading(false);
     }
-  }, [page, pageSize, query]);
+  }, [beginListRequest, page, pageSize, query]);
   useEffect(() => {
     void load();
   }, [load]);

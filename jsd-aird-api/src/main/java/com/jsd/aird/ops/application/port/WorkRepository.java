@@ -34,6 +34,7 @@ public interface WorkRepository {
     }
 
     void failJob(AsyncJob job, Exception exception);
+    default void deferClaimedJob(AsyncJob job){failJob(job,new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.SERVER_BUSY));}
 
     void failJobTerminal(AsyncJob job, Exception exception);
 

@@ -1,3 +1,4 @@
+import { useRequestGuard } from '@/services/query/use-request-guard';
 import { EditOutlined, LockOutlined, MoreOutlined, PlusOutlined, ReloadOutlined, UserOutlined } from '@ant-design/icons';
 import { App, Avatar, Button, Card, Col, Dropdown, Form, Input, Modal, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd';
 import { forwardRef, type ReactNode, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
@@ -55,16 +56,19 @@ export function UserManagementPage() {
   const passwordInputRef = useRef<PasswordFieldHandle>(null);
   const resetPasswordInputRef = useRef<PasswordFieldHandle>(null);
 
+  const beginUsersRequest = useRequestGuard('iam-users');
   const load = async (nextPage = currentPage) => {
+    const request = beginUsersRequest();
     setLoading(true);
     try {
       const [page, roleItems] = await Promise.all([
-        iamApi.users({ keyword: keyword || undefined, page: nextPage, size: 20 }),
+        iamApi.users({ keyword: keyword || undefined, page: nextPage, size: 20 }, request.signal),
         iamApi.roles(),
       ]);
+      if (!request.current()) return;
       setUsers(page.items); setTotal(page.total); setRoles(roleItems);
-    } catch (error) { message.error(error instanceof HttpError ? error.message : '用户列表加载失败'); }
-    finally { setLoading(false); }
+    } catch (error) { if (request.current()) message.error(error instanceof HttpError ? error.message : '用户列表加载失败'); }
+    finally { if (request.current()) setLoading(false); }
   };
 
   useEffect(() => { void load(); }, []);
@@ -95,7 +99,7 @@ export function UserManagementPage() {
   const submit = async (values: UserForm) => {
     try {
       if (editing) {
-        await iamApi.updateUser(editing.id, {
+        await iamApi.updateUser(editing.id, { expectedVersion: editing.authVersion,
           displayName: values.displayName,
           email: values.email,
           phone: values.phone,
@@ -134,7 +138,7 @@ export function UserManagementPage() {
     }
     setResetting(true);
     try {
-      await iamApi.resetPassword(resetTarget.id, resetPassword);
+      await iamApi.resetPassword(resetTarget.id, resetPassword,resetTarget.authVersion);
       message.success('密码已重置，旧密码已失效');
       setResetOpen(false);
       clearPasswordInputs();
@@ -146,9 +150,9 @@ export function UserManagementPage() {
   const action = async (key: string, user: IamUser) => {
     if (key === 'reset') { openReset(user); return; }
     try {
-      if (key === 'enable') await iamApi.enableUser(user.id);
-      if (key === 'disable') await iamApi.disableUser(user.id);
-      if (key === 'logout') await iamApi.forceLogout(user.id);
+      if (key === 'enable') await iamApi.enableUser(user.id,user.authVersion);
+      if (key === 'disable') await iamApi.disableUser(user.id,user.authVersion);
+      if (key === 'logout') await iamApi.forceLogout(user.id,user.authVersion);
       message.success('操作已完成'); await load();
     } catch (error) { message.error(error instanceof HttpError ? error.message : '操作失败'); }
   };

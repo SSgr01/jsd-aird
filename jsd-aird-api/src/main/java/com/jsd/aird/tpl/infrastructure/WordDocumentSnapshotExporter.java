@@ -4,8 +4,10 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
@@ -15,6 +17,7 @@ import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
+import com.jsd.aird.shared.office.EmbeddedOfficeImage;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -63,8 +66,10 @@ final class WordDocumentSnapshotExporter {
             var body = document.createElementNS(W, "w:body");
             root.appendChild(body);
 
-            var renderer = new SnapshotRenderer(document, original, snapshot);
+            var images = new SnapshotImages(parts);
+            var renderer = new SnapshotRenderer(document, snapshot, images);
             renderer.render(body);
+            images.finish();
             appendSectionProperties(document, body, original, snapshot.path("documentStyle"));
             var generatedXml = write(document);
             if (containsList(snapshot)) ensureNumberingParts(parts);
@@ -87,17 +92,15 @@ final class WordDocumentSnapshotExporter {
 
     private final class SnapshotRenderer {
         private final Document target;
-        private final Document original;
+        private final SnapshotImages images;
         private final JsonNode snapshot;
         private final String stream;
         private final JsonNode body;
         private final List<JsonNode> mappingRanges = new ArrayList<>();
-        private final List<Element> originalDrawings = new ArrayList<>();
-        private int nextDrawing;
 
-        private SnapshotRenderer(Document target, Document original, JsonNode snapshot) {
+        private SnapshotRenderer(Document target, JsonNode snapshot, SnapshotImages images) {
             this.target = target;
-            this.original = original;
+            this.images = images;
             this.snapshot = snapshot;
             this.body = snapshot.path("body");
             this.stream = body.path("dataStream").asText("\r\n");
@@ -111,10 +114,6 @@ final class WordDocumentSnapshotExporter {
             }
             mappingRanges.sort((left, right) -> Integer.compare(
                     left.path("startIndex").asInt(), right.path("startIndex").asInt()));
-            var drawings = original.getElementsByTagNameNS("*", "drawing");
-            for (var index = 0; index < drawings.getLength(); index++) {
-                if (drawings.item(index) instanceof Element drawing) originalDrawings.add(drawing);
-            }
         }
 
         private void render(Element targetBody) {
@@ -206,7 +205,7 @@ final class WordDocumentSnapshotExporter {
                     continue;
                 }
                 if (stream.charAt(cursor) == IMAGE_BLOCK) {
-                    appendOriginalDrawing(paragraph);
+                    appendSnapshotDrawing(paragraph, cursor);
                     cursor++;
                     continue;
                 }
@@ -404,9 +403,16 @@ final class WordDocumentSnapshotExporter {
             if (rPr.getChildNodes().getLength() > 0) run.appendChild(rPr);
         }
 
-        private void appendOriginalDrawing(Element paragraph) {
-            if (nextDrawing >= originalDrawings.size()) return;
-            paragraph.appendChild(target.importNode(originalDrawings.get(nextDrawing++), true));
+        private void appendSnapshotDrawing(Element paragraph, int offset) {
+            for (var block : body.path("customBlocks")) {
+                if (block.path("startIndex").asInt(-1) != offset) continue;
+                var id = block.path("blockId").asText("");
+                var drawing = snapshot.path("drawings").path(id);
+                if (!drawing.isObject()) throw new IllegalArgumentException("图片无法导出：找不到图片块 " + id);
+                images.append(paragraph, drawing, snapshot.path("resources"));
+                return;
+            }
+            throw new IllegalArgumentException("图片无法导出：找不到位置 " + offset + " 对应的图片块");
         }
 
         private void applyTableProperties(Element table, JsonNode source) {
@@ -554,6 +560,172 @@ final class WordDocumentSnapshotExporter {
             if (parent.getChildNodes().item(index) instanceof Element element) result.add(element);
         }
         return result;
+    }
+
+    /** Writes media and relationships from the live drawing IDs, never from original image order. */
+    private final class SnapshotImages {
+        private static final String R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        private static final String REL = "http://schemas.openxmlformats.org/package/2006/relationships";
+        private static final String CT = "http://schemas.openxmlformats.org/package/2006/content-types";
+        private static final String WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+        private static final String A = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        private static final String PIC = "http://schemas.openxmlformats.org/drawingml/2006/picture";
+        private final Map<String, byte[]> parts;
+        private final Document relationships;
+        private final Document contentTypes;
+        private final Set<String> replacedImageTargets = new HashSet<>();
+        private long sequence;
+
+        private SnapshotImages(Map<String, byte[]> parts) throws Exception {
+            this.parts = parts;
+            relationships = part("word/_rels/document.xml.rels", REL, "Relationships");
+            contentTypes = part("[Content_Types].xml", CT, "Types");
+            // The body is rebuilt from the snapshot, so its previous image relations are obsolete.
+            var previous = relationships.getElementsByTagNameNS(REL, "Relationship");
+            for (int index = previous.getLength() - 1; index >= 0; index--) {
+                if (previous.item(index) instanceof Element relation
+                        && (R + "/image").equals(relation.getAttribute("Type"))) {
+                    if (!"External".equals(relation.getAttribute("TargetMode"))) {
+                        replacedImageTargets.add(resolveTarget("word/_rels/document.xml.rels", relation.getAttribute("Target")));
+                    }
+                    relation.getParentNode().removeChild(relation);
+                }
+            }
+            // Drawing IDs are document-wide, including retained headers and footers.
+            for (var entry : parts.entrySet()) {
+                if (!entry.getKey().startsWith("word/") || !entry.getKey().endsWith(".xml")) continue;
+                var xml = parse(entry.getValue());
+                var ids = xml.getElementsByTagNameNS(WP, "docPr");
+                for (int i = 0; i < ids.getLength(); i++) {
+                    if (ids.item(i) instanceof Element id) {
+                        try { sequence = Math.max(sequence, Long.parseLong(id.getAttribute("id"))); }
+                        catch (NumberFormatException ignored) { /* Missing IDs are replaced on new drawings. */ }
+                    }
+                }
+            }
+        }
+
+        private Document part(String name, String namespace, String root) throws Exception {
+            if (parts.containsKey(name)) return parse(parts.get(name));
+            var document = newDocument();
+            document.appendChild(document.createElementNS(namespace, root));
+            return document;
+        }
+
+        private Element element(Element parent, String namespace, String tag, String... attributes) {
+            var result = parent.getOwnerDocument().createElementNS(namespace, tag);
+            for (int index = 0; index < attributes.length; index += 2) {
+                result.setAttribute(attributes[index], attributes[index + 1]);
+            }
+            parent.appendChild(result);
+            return result;
+        }
+
+        private void append(Element paragraph, JsonNode drawing, JsonNode resources) {
+            var image = EmbeddedOfficeImage.read(drawing, resources);
+            var id = ++sequence;
+            var media = "jsd-image-" + id + "." + image.extension();
+            while (parts.containsKey("word/media/" + media)) media = "jsd-image-" + (++sequence) + "." + image.extension();
+            var relId = "rIdJsdImage" + sequence;
+            while (hasRelationship(relId)) relId = "rIdJsdImage" + (++sequence);
+            parts.put("word/media/" + media, image.bytes());
+            element(relationships.getDocumentElement(), REL, "Relationship", "Id", relId,
+                    "Type", R + "/image", "Target", "media/" + media);
+            boolean hasType = false;
+            var defaults = contentTypes.getElementsByTagNameNS(CT, "Default");
+            for (int i = 0; i < defaults.getLength(); i++) {
+                if (defaults.item(i) instanceof Element value && image.extension().equals(value.getAttribute("Extension"))) hasType = true;
+            }
+            if (!hasType) element(contentTypes.getDocumentElement(), CT, "Default", "Extension", image.extension(), "ContentType", image.contentType());
+            var size = drawing.path("docTransform").path("size");
+            var width = Math.round(EmbeddedOfficeImage.dimension(size.path("width"),
+                    EmbeddedOfficeImage.dimension(drawing.path("transform").path("width"), image.width())) * 9525);
+            var height = Math.round(EmbeddedOfficeImage.dimension(size.path("height"),
+                    EmbeddedOfficeImage.dimension(drawing.path("transform").path("height"), image.height())) * 9525);
+            var run = element(paragraph, W, "w:r");
+            var wDrawing = element(run, W, "w:drawing");
+            var floating = drawing.path("layoutType").asInt(0) != 0;
+            var anchor = element(wDrawing, WP, floating ? "wp:anchor" : "wp:inline",
+                    "distT", "0", "distB", "0", "distL", "0", "distR", "0");
+            if (floating) {
+                for (var pair : Map.of("simplePos", "0", "relativeHeight", Long.toString(id), "behindDoc", "0",
+                        "locked", "0", "layoutInCell", "1", "allowOverlap", "1").entrySet()) anchor.setAttribute(pair.getKey(), pair.getValue());
+                anchor.setAttribute("behindDoc", drawing.path("behindDoc").asInt(0) == 1 ? "1" : "0");
+                element(anchor, WP, "wp:simplePos", "x", "0", "y", "0");
+                var h = drawing.path("docTransform").path("positionH");
+                var v = drawing.path("docTransform").path("positionV");
+                var positionH = element(anchor, WP, "wp:positionH", "relativeFrom", switch (h.path("relativeFrom").asInt(3)) {
+                    case 0 -> "page"; case 1 -> "column"; case 2 -> "character"; case 4 -> "insideMargin";
+                    case 5 -> "outsideMargin"; case 6 -> "leftMargin"; case 7 -> "rightMargin"; default -> "margin";
+                });
+                element(positionH, WP, "wp:posOffset").setTextContent(Long.toString(Math.round(h.path("posOffset").asDouble() * 9525)));
+                var positionV = element(anchor, WP, "wp:positionV", "relativeFrom", switch (v.path("relativeFrom").asInt(1)) {
+                    case 0 -> "page"; case 2 -> "line"; case 3 -> "margin"; case 4 -> "topMargin";
+                    case 5 -> "bottomMargin"; case 6 -> "insideMargin"; case 7 -> "outsideMargin"; default -> "paragraph";
+                });
+                element(positionV, WP, "wp:posOffset").setTextContent(Long.toString(Math.round(v.path("posOffset").asDouble() * 9525)));
+            }
+            element(anchor, WP, "wp:extent", "cx", Long.toString(width), "cy", Long.toString(height));
+            if (floating) {
+                var layout = drawing.path("layoutType").asInt();
+                if (layout == 6) element(anchor, WP, "wp:wrapTopAndBottom");
+                else if (layout == 3) element(anchor, WP, "wp:wrapSquare", "wrapText", "bothSides");
+                else element(anchor, WP, "wp:wrapNone");
+            }
+            element(anchor, WP, "wp:docPr", "id", Long.toString(id), "name", media,
+                    "descr", drawing.path("description").asText(""));
+            var graphic = element(anchor, A, "a:graphic");
+            var graphicData = element(graphic, A, "a:graphicData", "uri", PIC);
+            var picture = element(graphicData, PIC, "pic:pic");
+            var nv = element(picture, PIC, "pic:nvPicPr");
+            element(nv, PIC, "pic:cNvPr", "id", "0", "name", media);
+            element(nv, PIC, "pic:cNvPicPr");
+            var fill = element(picture, PIC, "pic:blipFill");
+            var blip = element(fill, A, "a:blip");
+            blip.setAttributeNS(R, "r:embed", relId);
+            element(element(fill, A, "a:stretch"), A, "a:fillRect");
+            var spPr = element(picture, PIC, "pic:spPr");
+            var xfrm = element(spPr, A, "a:xfrm");
+            var angle = drawing.path("docTransform").path("angle").asDouble(drawing.path("transform").path("angle").asDouble());
+            if (angle != 0) xfrm.setAttribute("rot", Long.toString(Math.round(angle * 60000)));
+            element(xfrm, A, "a:off", "x", "0", "y", "0");
+            element(xfrm, A, "a:ext", "cx", Long.toString(width), "cy", Long.toString(height));
+            element(element(spPr, A, "a:prstGeom", "prst", "rect"), A, "a:avLst");
+        }
+
+        private boolean hasRelationship(String id) {
+            var list = relationships.getElementsByTagNameNS(REL, "Relationship");
+            for (int i = 0; i < list.getLength(); i++) if (list.item(i) instanceof Element e && id.equals(e.getAttribute("Id"))) return true;
+            return false;
+        }
+
+        private void finish() throws Exception {
+            parts.put("word/_rels/document.xml.rels", write(relationships));
+            var retainedTargets = new HashSet<String>();
+            for (var entry : parts.entrySet()) {
+                if (!entry.getKey().endsWith(".rels")) continue;
+                var relations = parse(entry.getValue()).getElementsByTagNameNS(REL, "Relationship");
+                for (int index = 0; index < relations.getLength(); index++) {
+                    if (relations.item(index) instanceof Element relation
+                            && !"External".equals(relation.getAttribute("TargetMode"))) {
+                        retainedTargets.add(resolveTarget(entry.getKey(), relation.getAttribute("Target")));
+                    }
+                }
+            }
+            // A header or footer may share a media part with the replaced body.
+            for (var target : replacedImageTargets) {
+                if (target.startsWith("word/media/") && !retainedTargets.contains(target)) parts.remove(target);
+            }
+            parts.put("[Content_Types].xml", write(contentTypes));
+        }
+
+        private String resolveTarget(String relationshipPart, String target) throws Exception {
+            var separator = relationshipPart.lastIndexOf("/_rels/");
+            var base = separator < 0 ? "" : relationshipPart.substring(0, separator + 1);
+            var resolved = new java.net.URI(null, null, base, null)
+                    .resolve(new java.net.URI(null, null, target.replace('\\', '/'), null)).normalize().getPath();
+            return resolved.startsWith("/") ? resolved.substring(1) : resolved;
+        }
     }
 
     private Map<String, byte[]> readParts(byte[] source) throws Exception {

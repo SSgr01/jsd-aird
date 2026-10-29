@@ -15,6 +15,7 @@ Example (Linux):
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import hashlib
 import json
 import os
@@ -29,13 +30,6 @@ from pathlib import Path
 from typing import Any
 
 
-MAX_FILE_BYTES = 512 * 1024 * 1024
-SUPPORTED_SUFFIXES = {
-    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-    ".txt", ".md", ".html", ".htm", ".csv", ".rtf",
-    ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp",
-    ".wav", ".mp3", ".m4a", ".mp4",
-}
 DOCUMENT_STATE_FIELDS = (
     "status", "scanStatus", "aiStatus", "lifecycleStatus", "reviewStatus",
     "reviewRevisionStatus", "currentPublicationId", "currentPublicationNo", "parseError",
@@ -45,6 +39,13 @@ DOCUMENT_STATUSES = {"QUEUED", "PROCESSING", "READY", "FAILED", "REJECTED", "PEN
 
 class ImportErrorWithMessage(Exception):
     pass
+
+
+class ApiHttpError(ImportErrorWithMessage):
+    def __init__(self, status: int, code: str | None, message: str):
+        super().__init__(f"HTTP {status}: {message}")
+        self.status = status
+        self.code = code
 
 
 class ApiClient:
@@ -77,9 +78,11 @@ class ApiClient:
         if not 200 <= status < 300:
             if isinstance(payload, dict):
                 message = payload.get("message") or payload.get("error") or str(payload)
+                code = payload.get("code")
             else:
                 message = str(payload or f"HTTP {status}")
-            raise ImportErrorWithMessage(f"HTTP {status}: {message}")
+                code = None
+            raise ApiHttpError(status, code, message)
         if isinstance(payload, dict) and "data" in payload:
             return payload["data"]
         return payload
@@ -177,6 +180,38 @@ def refresh_document_state(api: ApiClient, record: dict[str, Any], document_id: 
     return document
 
 
+def upload_capabilities(api: ApiClient) -> dict[str, Any]:
+    capabilities = api.json("GET", "/api/v1/knowledge/upload-capabilities")
+    if not isinstance(capabilities, dict) or not isinstance(capabilities.get("queue"), dict):
+        raise ImportErrorWithMessage("服务器没有返回有效的知识库上传能力")
+    return capabilities
+
+
+def queue_api_call(api: ApiClient, operation: Any, timeout_seconds: int,
+                   required_slots: int = 1) -> Any:
+    deadline = time.monotonic() + timeout_seconds
+    delay = 2
+    while True:
+        try:
+            capabilities = upload_capabilities(api)
+            queue = capabilities["queue"]
+            organization_limit = max(1, int(queue.get("organizationJobLimit") or 1))
+            total_limit = max(1, int(queue.get("totalJobLimit") or 1))
+            needed = min(max(1, required_slots), organization_limit, total_limit)
+            if int(queue.get("availableSlots") or 0) >= needed:
+                return operation()
+            retry_after = max(1, int(queue.get("retryAfterSeconds") or 2))
+        except ApiHttpError as error:
+            if error.status != 503 or error.code not in {"SERVER_BUSY", "DATABASE_BUSY"}:
+                raise
+            retry_after = delay
+            delay = min(30, delay * 2)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ImportErrorWithMessage("等待知识库任务队列容量超时")
+        time.sleep(min(retry_after, remaining))
+
+
 def wait_for_parse(api: ApiClient, document_id: str, version_id: str, timeout_seconds: int) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -192,14 +227,16 @@ def wait_for_parse(api: ApiClient, document_id: str, version_id: str, timeout_se
 
 
 def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_seconds: int,
-                    retry_failed: bool) -> dict[str, Any]:
+                    retry_failed: bool, queue_timeout_seconds: int) -> dict[str, Any]:
     document = api.json("GET", api_path_document(document_id))
     if not document.get("currentPublicationId"):
         processing = api.json("GET", f"{api_path_document(document_id)}/processing")
         if processing.get("parseRunStatus") in {"FAILED", "REJECTED"}:
             if not retry_failed:
                 raise ImportErrorWithMessage(processing.get("parseRunError") or "文件解析失败；可使用 --retry-failed 重试")
-            api.json("POST", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/reparse", {})
+            queue_api_call(api, lambda: api.json(
+                "POST", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/reparse", {}
+            ), queue_timeout_seconds)
         wait_for_parse(api, document_id, version_id, timeout_seconds)
         review = api.json("GET", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/review")
         revision = review.get("reviewRevision")
@@ -208,26 +245,37 @@ def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_s
         if revision.get("status") == "FAILED":
             raise ImportErrorWithMessage(revision.get("failureReason") or "校对版本生成失败")
         if revision.get("status") == "DRAFT":
-            api.json("POST", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/publish", {
-                "reviewRevisionId": revision["id"],
-                "lockVersion": revision["lockVersion"],
-                "basePublicationId": revision.get("basePublicationId"),
-            })
+            queue_api_call(api, lambda: api.json(
+                "POST", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/publish", {
+                    "reviewRevisionId": revision["id"],
+                    "lockVersion": revision["lockVersion"],
+                    "basePublicationId": revision.get("basePublicationId"),
+                    "authorizeAi": True,
+                }
+            ), queue_timeout_seconds, 2)
 
         deadline = time.monotonic() + min(timeout_seconds, 600)
         while time.monotonic() < deadline:
             document = api.json("GET", api_path_document(document_id))
             if document.get("currentPublicationId"):
                 break
+            latest_review = api.json("GET", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/review")
+            latest_revision = latest_review.get("reviewRevision") or {}
+            if latest_revision.get("status") == "FAILED":
+                raise ImportErrorWithMessage(latest_revision.get("failureReason") or "发布任务失败")
             time.sleep(3)
         else:
             raise ImportErrorWithMessage("发布任务已提交，尚未看到发布版本；可在知识库继续查看")
 
     if document.get("aiStatus") != "APPROVED":
-        document = api.json("POST", f"{api_path_document(document_id)}/ai-grant", {
-            "action": "APPROVE",
-            "reason": "服务器目录批量导入自动授权",
-        })
+        document = api.json("GET", api_path_document(document_id))
+        document = queue_api_call(api, lambda: api.json(
+            "POST", f"{api_path_document(document_id)}/ai-grant", {
+                "revision": document["revision"],
+                "action": "APPROVE",
+                "reason": "服务器目录批量导入自动授权",
+            }
+        ), queue_timeout_seconds)
     if document.get("aiStatus") != "APPROVED":
         raise ImportErrorWithMessage("文件已发布，但 AI 授权未生效")
     return document
@@ -246,7 +294,8 @@ def import_directory(args: argparse.Namespace) -> int:
     )
     if args.dry_run:
         total_bytes = sum(path.stat().st_size for path in files)
-        print(f"扫描到 {len(files)} 个文件，总计 {total_bytes / (1024 ** 3):.2f} GB。清单：{manifest}")
+        print(f"扫描到 {len(files)} 个文件，总计 {total_bytes / (1024 ** 3):.2f} GB。"
+              f"dry-run 不登录，因此未执行服务端格式校验。清单：{manifest}")
         return 0
 
     username = args.username or os.environ.get("JSD_AIRD_USERNAME")
@@ -261,10 +310,50 @@ def import_directory(args: argparse.Namespace) -> int:
 
     completed = 0
     failed = 0
-    pending: list[tuple[Path, dict[str, Any]]] = []
+    pending: deque[dict[str, Any]] = deque()
     with tempfile.TemporaryDirectory(prefix="jsd-kb-import-") as temp_dir:
         api = ApiClient(args.base_url, Path(temp_dir) / "cookies.txt", curl)
         api.login(username, password)
+        capabilities = upload_capabilities(api)
+        max_file_bytes = int(capabilities.get("maxFileBytes") or 0)
+        supported_suffixes = {str(value).lower() for value in capabilities.get("supportedExtensions") or []}
+        if max_file_bytes <= 0 or not supported_suffixes:
+            raise ImportErrorWithMessage("服务器返回的文件大小或格式限制无效")
+        organization_limit = max(1, int(capabilities["queue"].get("organizationJobLimit") or 1))
+        effective_max_in_flight = min(args.max_in_flight, max(1, organization_limit // 2))
+        queue_timeout_seconds = args.queue_wait_timeout_minutes * 60
+        processed_pending = 0
+
+        def finish_next() -> None:
+            nonlocal completed, failed, processed_pending
+            record = pending.popleft()
+            processed_pending += 1
+            relative = record["relativePath"]
+            document_id = record.get("documentId")
+            try:
+                if not document_id or not record.get("versionId"):
+                    raise ImportErrorWithMessage("断点记录缺少知识文档或版本编号")
+                document = finish_document(api, document_id, record["versionId"],
+                                           args.parse_timeout_minutes * 60, args.retry_failed,
+                                           queue_timeout_seconds)
+                copy_document_state(record, document)
+                record["message"] = "已发布并授权 AI"
+                append_manifest(manifest, record)
+                print(f"[处理 {processed_pending}] {record['message']}：{relative}")
+                completed += 1
+            except Exception as error:
+                failed += 1
+                record.update({"sha256": record.get("sha256", ""), "message": str(error),
+                               "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+                if document_id:
+                    try:
+                        refresh_document_state(api, record, document_id)
+                    except Exception:
+                        for field in DOCUMENT_STATE_FIELDS:
+                            record.pop(field, None)
+                append_manifest(manifest, record)
+                print(f"[处理 {processed_pending}] 失败：{relative} — {error}", file=sys.stderr)
+
         for index, file_path in enumerate(files, start=1):
             relative = file_path.relative_to(source).as_posix()
             digest = ""
@@ -285,13 +374,13 @@ def import_directory(args: argparse.Namespace) -> int:
                     record.pop(field, None)
                 if record.get("status") not in DOCUMENT_STATUSES:
                     record.pop("status", None)
-                if size > MAX_FILE_BYTES:
-                    record["message"] = "文件超过 512 MB 限制"
+                if size > max_file_bytes:
+                    record["message"] = f"文件超过 {max_file_bytes} 字节限制"
                     append_manifest(manifest, record)
                     print(f"[{index}/{len(files)}] 超过限制：{relative}")
                     failed += 1
                     continue
-                if file_path.suffix.lower() not in SUPPORTED_SUFFIXES:
+                if file_path.suffix.lower() not in supported_suffixes:
                     record["message"] = "文件格式不在知识库导入支持范围内"
                     append_manifest(manifest, record)
                     print(f"[{index}/{len(files)}] 暂不支持：{relative}")
@@ -305,8 +394,10 @@ def import_directory(args: argparse.Namespace) -> int:
                     refresh_document_state(api, record, document_id)
                     record.update(documentId=document_id, versionId=version_id, fileId=file_id)
                     append_manifest(manifest, record)
-                    pending.append((file_path, record.copy()))
+                    pending.append(record.copy())
                     print(f"[{index}/{len(files)}] 已加入处理队列：{relative}")
+                    if len(pending) >= effective_max_in_flight:
+                        finish_next()
                     continue
                 else:
                     if not file_id:
@@ -334,27 +425,31 @@ def import_directory(args: argparse.Namespace) -> int:
                         completed += 1
                         continue
                     title = file_path.stem[:260]
-                    created = api.json("POST", "/api/v1/knowledge/documents", {
-                        "fileId": file_id,
-                        "title": title,
-                        "libraryScope": args.scope,
-                        "categoryId": args.category_id,
-                        "tags": [],
-                        "resolution": "NEW_DOCUMENT",
-                        "targetDocumentId": None,
-                        "sourceInfo": {
-                            "description": "服务器目录批量导入",
-                            "originalName": relative,
-                        },
-                        "projectRelations": [],
-                    })
+                    created = queue_api_call(api, lambda: api.json(
+                        "POST", "/api/v1/knowledge/documents", {
+                            "fileId": file_id,
+                            "title": title,
+                            "libraryScope": args.scope,
+                            "categoryId": args.category_id,
+                            "tags": [],
+                            "resolution": "NEW_DOCUMENT",
+                            "targetDocumentId": None,
+                            "sourceInfo": {
+                                "description": "服务器目录批量导入",
+                                "originalName": relative,
+                            },
+                            "projectRelations": [],
+                        }
+                    ), queue_timeout_seconds, 2)
                     document_id = created["id"]
                     version_id = created["currentVersionId"]
                     record.update(documentId=document_id, versionId=version_id)
                     refresh_document_state(api, record, document_id)
                     append_manifest(manifest, record)
-                    pending.append((file_path, record.copy()))
+                    pending.append(record.copy())
                     print(f"[{index}/{len(files)}] 已建文档并加入解析队列：{relative}")
+                    if len(pending) >= effective_max_in_flight:
+                        finish_next()
             except Exception as error:  # Preserve progress for this item and continue the directory.
                 failed += 1
                 record.update({"sha256": digest or record.get("sha256", ""),
@@ -372,33 +467,8 @@ def import_directory(args: argparse.Namespace) -> int:
                 append_manifest(manifest, record)
                 print(f"[{index}/{len(files)}] 失败：{relative} — {error}", file=sys.stderr)
 
-        # Upload every file first so the existing worker can parse documents in parallel.
-        for index, (file_path, record) in enumerate(pending, start=1):
-            relative = record["relativePath"]
-            try:
-                document_id = record["documentId"]
-                version_id = record["versionId"]
-                document = finish_document(api, document_id, version_id,
-                                           args.parse_timeout_minutes * 60, args.retry_failed)
-                copy_document_state(record, document)
-                record.update(documentId=document_id, versionId=version_id,
-                              fileId=record.get("fileId"))
-                record["message"] = "已发布并授权 AI"
-                append_manifest(manifest, record)
-                print(f"[处理 {index}/{len(pending)}] {record['message']}：{relative}")
-                completed += 1
-            except Exception as error:  # Preserve progress for this item and continue the directory.
-                failed += 1
-                record.update({"sha256": record.get("sha256", ""),
-                               "message": str(error),
-                               "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
-                try:
-                    refresh_document_state(api, record, document_id)
-                except Exception:
-                    for field in DOCUMENT_STATE_FIELDS:
-                        record.pop(field, None)
-                append_manifest(manifest, record)
-                print(f"[处理 {index}/{len(pending)}] 失败：{relative} — {error}", file=sys.stderr)
+        while pending:
+            finish_next()
 
     print(f"处理完成：已发布/已关联 {completed}，失败或待人工处理 {failed}。明细：{manifest}")
     return 1 if failed else 0
@@ -414,10 +484,16 @@ def main() -> int:
     parser.add_argument("--scope", choices=("INTERNAL", "EXTERNAL"), default="INTERNAL")
     parser.add_argument("--manifest", help="断点续跑清单 JSONL，默认写在来源目录内")
     parser.add_argument("--parse-timeout-minutes", type=int, default=24 * 60)
+    parser.add_argument("--max-in-flight", type=int, default=8,
+                        help="同时处于解析/发布流程的最大文件数，默认 8，并自动受组织队列容量限制")
+    parser.add_argument("--queue-wait-timeout-minutes", type=int, default=24 * 60,
+                        help="单次等待任务队列容量的最长分钟数，默认 1440")
     parser.add_argument("--retry-failed", action="store_true", help="重新解析知识库中解析失败的文档")
     parser.add_argument("--dry-run", action="store_true", help="只扫描并统计文件，不登录、不上传")
     args = parser.parse_args()
     try:
+        if args.parse_timeout_minutes < 1 or args.max_in_flight < 1 or args.queue_wait_timeout_minutes < 1:
+            raise ValueError("超时和并行参数必须为正整数")
         uuid.UUID(args.category_id) if args.category_id else None
         return import_directory(args)
     except (ImportErrorWithMessage, OSError, ValueError) as error:

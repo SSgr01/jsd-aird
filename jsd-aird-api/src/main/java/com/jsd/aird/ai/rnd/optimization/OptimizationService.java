@@ -74,7 +74,7 @@ public class OptimizationService {
     private JsonNode historyDatasetList(UUID organizationId,String keyword) {
         var root=json.createObjectNode();var items=root.putArray("items");
         repository.historyDatasets(organizationId,keyword).forEach(row->items.add(json.createObjectNode()
-                .put("id",row.id().toString()).put("name",row.name()).put("rowCount",repository.historyRecords(organizationId,row.id()).stream().mapToInt(record->new HistorySampleProjection(json).sampleCount(record.editModel())).sum())
+                .put("id",row.id().toString()).put("name",row.name()).put("rowCount",row.rowCount())
                 .put("updatedAt",row.updatedAt().toString())));
         return root;
     }

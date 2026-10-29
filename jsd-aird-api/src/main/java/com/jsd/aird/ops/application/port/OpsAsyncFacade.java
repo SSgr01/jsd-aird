@@ -46,6 +46,10 @@ public interface OpsAsyncFacade {
         return Optional.empty();
     }
 
+    default QueueCapacityView queueCapacity(UUID organizationId) {
+        return new QueueCapacityView(0, 20, 0, 100, 20, 2);
+    }
+
     /**
      * Cancels queued/running jobs whose idempotency key belongs to the supplied
      * aggregate. Implementations that do not persist async jobs may no-op.
@@ -59,4 +63,8 @@ public interface OpsAsyncFacade {
                         Instant finishedAt) {
         public boolean terminal() { return "FAILED".equals(status) || "SUCCEEDED".equals(status) || "CANCELLED".equals(status); }
     }
+
+    record QueueCapacityView(int organizationActiveJobs, int organizationJobLimit,
+                             int totalActiveJobs, int totalJobLimit,
+                             int availableSlots, int retryAfterSeconds) { }
 }

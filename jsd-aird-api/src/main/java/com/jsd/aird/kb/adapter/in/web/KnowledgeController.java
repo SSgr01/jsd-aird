@@ -7,10 +7,12 @@ import java.util.UUID;
 
 import com.jsd.aird.kb.application.KnowledgeService;
 import com.jsd.aird.kb.application.KnowledgeUploadTaskService;
+import com.jsd.aird.kb.domain.FileSafetyScanner;
 import com.jsd.aird.platform.web.HttpContentDisposition;
 import com.jsd.aird.kb.application.KnowledgeGovernanceService;
 import com.jsd.aird.kb.api.KnowledgeSearchFacade;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
+import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
@@ -40,13 +42,18 @@ public class KnowledgeController {
     private final KnowledgeService service;
     private final KnowledgeGovernanceService governance;
     private final KnowledgeUploadTaskService uploadTasks;
+    private final FileSafetyScanner fileSafetyScanner;
+    private final OpsAsyncFacade async;
 
     public KnowledgeController(KnowledgeService service, FileStorageFacade storage,
-                               KnowledgeGovernanceService governance, KnowledgeUploadTaskService uploadTasks) {
+                               KnowledgeGovernanceService governance, KnowledgeUploadTaskService uploadTasks,
+                               FileSafetyScanner fileSafetyScanner, OpsAsyncFacade async) {
         this.service = service;
         this.storage = storage;
         this.governance = governance;
         this.uploadTasks = uploadTasks;
+        this.fileSafetyScanner = fileSafetyScanner;
+        this.async = async;
     }
 
     @PostMapping(value = "/documents", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -80,6 +87,15 @@ public class KnowledgeController {
     ) {
         return success(service.list(keyword, status, scope, categoryId, lifecycleStatus, reviewStatus,
                 projectId, page, size));
+    }
+
+    @GetMapping("/upload-capabilities")
+    public ApiResponse<UploadCapabilities> uploadCapabilities() {
+        var actor = com.jsd.aird.shared.security.ActorContext.required();
+        var extensions = fileSafetyScanner.supportedExtensions().stream().sorted()
+                .map(extension -> "." + extension).toList();
+        return success(new UploadCapabilities(fileSafetyScanner.maxFileBytes(), extensions,
+                async.queueCapacity(actor.organizationId())));
     }
 
     @PostMapping("/upload-tasks")
@@ -271,6 +287,8 @@ public class KnowledgeController {
     }
 
     public record GrantRequest(@NotBlank String revision,@Size(max = 20) String action, @Size(max = 500) String reason) { }
+    public record UploadCapabilities(long maxFileBytes, List<String> supportedExtensions,
+                                     OpsAsyncFacade.QueueCapacityView queue) { }
     public record SearchRequest(@Size(min = 1, max = 1000) String query, int limit) {
         public int limit() { return limit <= 0 ? 20 : Math.min(limit, 50); }
     }

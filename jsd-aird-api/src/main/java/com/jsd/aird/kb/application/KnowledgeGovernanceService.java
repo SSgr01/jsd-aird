@@ -13,6 +13,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.core.api.ProjectResourceFacade;
 import com.jsd.aird.core.api.ProjectResourceFacade.ProjectRelationTarget;
 import com.jsd.aird.core.api.ProjectResourceFacade.ResourceType;
+import com.jsd.aird.iam.api.AuthorizationService;
+import com.jsd.aird.iam.api.PermissionCheck;
 import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
 import com.jsd.aird.kb.application.port.KnowledgeRepository;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
@@ -42,6 +44,7 @@ public class KnowledgeGovernanceService {
     private final SystemParsingPolicy systemParsingPolicy;
     private final TransactionTemplate itemTransaction;
     private final ProjectResourceFacade projectResources;
+    private final AuthorizationService authorization;
 
     public KnowledgeGovernanceService(KnowledgeGovernanceRepository governance,
                                       KnowledgeRepository knowledgeRepository,
@@ -53,7 +56,8 @@ public class KnowledgeGovernanceService {
                                       StructuredDocumentCodec documents,
                                       SystemParsingPolicy systemParsingPolicy,
                                       PlatformTransactionManager transactionManager,
-                                      ProjectResourceFacade projectResources) {
+                                      ProjectResourceFacade projectResources,
+                                      AuthorizationService authorization) {
         this.governance = governance;
         this.knowledgeRepository = knowledgeRepository;
         this.knowledge = knowledge;
@@ -64,6 +68,7 @@ public class KnowledgeGovernanceService {
         this.documents = documents;
         this.systemParsingPolicy = systemParsingPolicy;
         this.projectResources = projectResources;
+        this.authorization = authorization;
         this.itemTransaction = new TransactionTemplate(transactionManager);
         this.itemTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -175,9 +180,14 @@ public class KnowledgeGovernanceService {
         return saved;
     }
 
+    @Transactional
     public IndexBuildView publish(UUID documentId, UUID versionId, UUID reviewRevisionId,
-                                  int lockVersion, UUID basePublicationId) {
+                                  int lockVersion, UUID basePublicationId, boolean authorizeAi) {
         var actor = ActorContext.required();
+        if (authorizeAi) {
+            authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "ai.external",
+                    "KNOWLEDGE", documentId, "WRITE"));
+        }
         var review = review(documentId, versionId);
         if (review.reviewRevision() == null || !review.reviewRevision().id().equals(reviewRevisionId)
                 || review.reviewRevision().lockVersion() != lockVersion
@@ -198,7 +208,8 @@ public class KnowledgeGovernanceService {
             optimisticConflict(documentId, versionId);
         }
         knowledge.markIndexStale(actor.organizationId(), documentId, versionId, reviewRevisionId);
-        enqueueIndex(actor.organizationId(), actor.userId(), documentId, versionId, reviewRevisionId, lockVersion);
+        enqueueIndex(actor.organizationId(), actor.userId(), documentId, versionId, reviewRevisionId, lockVersion,
+                authorizeAi);
         audit(actor.organizationId(), actor.userId(), "KB_PUBLICATION_INDEX_QUEUED", documentId,
                 objectMapper.createObjectNode().put("versionId", versionId.toString())
                         .put("reviewRevisionId", reviewRevisionId.toString()));
@@ -449,11 +460,11 @@ public class KnowledgeGovernanceService {
     }
 
     private void enqueueIndex(UUID organizationId, UUID actorId, UUID documentId, UUID versionId,
-                              UUID reviewRevisionId, int lockVersion) {
+                              UUID reviewRevisionId, int lockVersion, boolean authorizeAi) {
         var payload = objectMapper.createObjectNode().put("organizationId", organizationId.toString())
                 .put("actorId", actorId.toString()).put("documentId", documentId.toString())
                 .put("versionId", versionId.toString()).put("reviewRevisionId", reviewRevisionId.toString())
-                .put("lockVersion", lockVersion);
+                .put("lockVersion", lockVersion).put("authorizeAi", authorizeAi);
         async.enqueue(organizationId, "KB_BUILD_KNOWLEDGE_INDEX", payload,
                 "kb-index:" + reviewRevisionId, 50);
     }

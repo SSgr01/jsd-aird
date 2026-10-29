@@ -877,6 +877,15 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     public KnowledgeGovernanceRepository.PublicationRow buildAndPublish(UUID organizationId, UUID actorId,
                                                                          UUID documentId, UUID versionId,
                                                                          UUID reviewRevisionId, int expectedLockVersion) {
+        return buildAndPublish(organizationId, actorId, documentId, versionId, reviewRevisionId,
+                expectedLockVersion, false);
+    }
+
+    @Transactional
+    public KnowledgeGovernanceRepository.PublicationRow buildAndPublish(UUID organizationId, UUID actorId,
+                                                                         UUID documentId, UUID versionId,
+                                                                         UUID reviewRevisionId, int expectedLockVersion,
+                                                                         boolean authorizeAi) {
         var review = governance.review(organizationId, documentId, versionId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "待发布内容不存在"));
         if (review.reviewRevision() == null || !reviewRevisionId.equals(review.reviewRevision().id())
@@ -905,6 +914,16 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var publication = governance.publish(organizationId, actorId, documentId, versionId,
                 reviewRevisionId, expectedLockVersion);
         if (publication == null) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "发布内容已发生变化，请刷新后重试");
+        if (authorizeAi) {
+            if (!governance.updateAiUsage(organizationId, actorId, documentId, "APPROVE", "知识文档发布后默认授权")) {
+                throw new ApiException(ApiErrorCode.AI_DOCUMENT_NOT_APPROVED, "当前文档不可授权 AI 使用");
+            }
+            audit.append(organizationId, actorId, "KB_AI_GRANT_APPROVE", "KB_DOCUMENT", documentId,
+                    objectMapper.createObjectNode().put("reason", "知识文档发布后默认授权"));
+            if (!prepared.aiApproved()) {
+                enqueueVectorBuild(organizationId, documentId, publication.id(), publication.reviewRevisionId());
+            }
+        }
         repository.rebuildTermStats(organizationId);
         appendIngestAudit(organizationId, actorId, "KB_DOCUMENT_PUBLISHED", documentId,
                 objectMapper.createObjectNode().put("publicationId", publication.id().toString())

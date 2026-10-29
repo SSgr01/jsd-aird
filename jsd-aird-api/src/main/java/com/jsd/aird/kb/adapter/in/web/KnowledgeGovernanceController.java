@@ -80,7 +80,7 @@ public class KnowledgeGovernanceController {
             @PathVariable UUID documentId, @PathVariable UUID versionId,
             @Valid @RequestBody RevisionRequest request) {
         return success(service.publish(documentId, versionId, request.reviewRevisionId(), request.lockVersion(),
-                request.basePublicationId()));
+                request.basePublicationId(), request.authorizeAi()));
     }
 
     @PostMapping("/documents/{documentId}/revisions")
@@ -205,7 +205,8 @@ public class KnowledgeGovernanceController {
                                 List<UUID> excludedReviewNodeIds,
                                 List<KnowledgeGovernanceRepository.IssueAction> issueActions) { }
     public record PublishedRevisionRequest(@NotNull UUID basePublicationId) { }
-    public record RevisionRequest(@NotNull UUID reviewRevisionId, int lockVersion, UUID basePublicationId) { }
+    public record RevisionRequest(@NotNull UUID reviewRevisionId, int lockVersion, UUID basePublicationId,
+                                  boolean authorizeAi) { }
     public record ReparseRequest(UUID reviewRevisionId, Integer lockVersion) { }
     public record RejectRequest(@NotNull UUID reviewRevisionId, int lockVersion,
                                 @NotBlank @Size(max = 1000) String reason) { }

@@ -1,6 +1,6 @@
 import type { DataFormalRecord } from '@/services/data/data-api';
 
-export const publicationLabels: Record<string, string> = { DRAFT: '导入草稿', CONFIRMED: '已确认，待送审', PENDING_REVIEW: '待审核', RETURNED: '已驳回', APPROVED: '审核通过，待发布', PUBLISHED: '已发布', DISABLED: '已停用' };
+export const publicationLabels: Record<string, string> = { DRAFT: '导入草稿', CONFIRMED: '已核对，待送审', PENDING_REVIEW: '待审核', RETURNED: '已驳回', APPROVED: '审核通过，待发布', PUBLISHED: '已发布', DISABLED: '已停用' };
 export const actionLabels: Record<string, string> = { CONFIRMED: '确认导入数据', SUBMITTED: '提交审核', WITHDRAWN: '撤回修改', RETURNED: '驳回', APPROVED: '审核通过', PUBLISHED: '发布', DISABLED: '停用', RESTORED: '恢复使用', REVISION_CREATED: '创建修订', RECORD_UPDATED: '维护正式记录' };
 export const recordLabels: Record<string, string> = { ACTIVE: '有效', DISABLED: '停用' };
 const text = (value: unknown): string => {

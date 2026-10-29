@@ -31,6 +31,26 @@ import org.springframework.util.StringUtils;
 @Service
 public class FileObjectService implements FileStorageFacade {
 
+    private com.jsd.aird.shared.resource.CapacityProperties capacity=com.jsd.aird.shared.resource.CapacityProperties.defaults();
+    private com.jsd.aird.shared.resource.TemporarySpace temporarySpace;
+    private org.springframework.transaction.support.TransactionTemplate stagingTransaction;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void configureCapacity(com.jsd.aird.shared.resource.CapacityProperties limits,
+                           com.jsd.aird.shared.resource.TemporarySpace temporary,
+                           org.springframework.transaction.PlatformTransactionManager transactions){
+        capacity=limits;temporarySpace=temporary;
+        stagingTransaction=new org.springframework.transaction.support.TransactionTemplate(transactions);
+        stagingTransaction.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
+
+    private long uploadLimit(String kind){return switch(kind==null?"":kind.toUpperCase(java.util.Locale.ROOT)){
+        case "KNOWLEDGE"->Math.min(capacity.fileBytes(),MAX_KNOWLEDGE_UPLOAD_BYTES);
+        case "PROJECT_DOCUMENT","EXPERIMENT_SOURCE"->Math.min(capacity.fileBytes(),MAX_DOCUMENT_UPLOAD_BYTES);
+        case "SPC_CHART"->Math.min(capacity.fileBytes(),MAX_SPC_UPLOAD_BYTES);
+        default->capacity.fileBytes();
+    };}
+
     private static final long MAX_KNOWLEDGE_UPLOAD_BYTES = 512L * 1024 * 1024;
 
     private static final long MAX_DOCUMENT_UPLOAD_BYTES = 200L * 1024 * 1024;
@@ -57,7 +77,7 @@ public class FileObjectService implements FileStorageFacade {
         this.bucket = bucket;
     }
 
-    @Transactional
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public StagedFile stage(
             String originalName,
             String contentType,
@@ -68,7 +88,7 @@ public class FileObjectService implements FileStorageFacade {
         return stageFor(actor.organizationId(), actor.userId(), originalName, contentType, kind, source, false);
     }
 
-    @Transactional
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     @Override
     public FileStorageFacade.StagedFile stageDerived(UUID organizationId, UUID actorId, String originalName,
                                                       String contentType, String kind, InputStream source) {
@@ -83,11 +103,14 @@ public class FileObjectService implements FileStorageFacade {
     private StagedFile stageFor(UUID organizationId, UUID actorId, String originalName, String contentType,
                                 String kind, InputStream source, boolean derived) {
         Path temporary = null;
+        String uploadedKey=null;
+        if(temporarySpace==null)temporarySpace=new com.jsd.aird.shared.resource.TemporarySpace(capacity.temporaryBytes(),Path.of(System.getProperty("java.io.tmpdir"),"jsd-aird-bounded"));
+        var reservation=temporarySpace.reserve(uploadLimit(kind));
         try {
-            temporary = Files.createTempFile("jsd-aird-upload-", ".staged");
+            temporary = temporarySpace.create();
             var digest = MessageDigest.getInstance("SHA-256");
-            try (var digestStream = new DigestInputStream(source, digest)) {
-                Files.copy(digestStream, temporary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            try (source;var output=Files.newOutputStream(temporary)) {
+                com.jsd.aird.shared.resource.BoundedStreams.copy(source,output,uploadLimit(kind),digest);
             }
             var size = Files.size(temporary);
             var sha256 = hex(digest.digest());
@@ -109,10 +132,11 @@ public class FileObjectService implements FileStorageFacade {
             var id = UUID.randomUUID();
             var safeName = sanitizeFileName(originalName);
             var objectKey = organizationId + "/" + (derived ? "derived" : "staged") + "/" + id + "/" + safeName;
+            uploadedKey=objectKey;
             try (var uploadStream = Files.newInputStream(temporary)) {
                 objectStorage.put(objectKey, uploadStream, size, effectiveContentType);
             }
-            repository.insert(new FileObjectRepository.NewFileObject(
+            var insert=new FileObjectRepository.NewFileObject(
                     id,
                     organizationId,
                     bucket,
@@ -122,18 +146,18 @@ public class FileObjectService implements FileStorageFacade {
                     size,
                     sha256,
                     actorId
-            ));
+            );
+            if(stagingTransaction==null)repository.insert(insert);
+            else stagingTransaction.executeWithoutResult(status->repository.insert(insert));
+            uploadedKey=null;
             return new StagedFile(id, safeName, effectiveContentType, size, sha256, "STAGED");
         } catch (IOException | NoSuchAlgorithmException exception) {
             throw new ApiException(ApiErrorCode.SNAPSHOT_PERSIST_FAILED, "文件暂存失败");
         } finally {
+            if(uploadedKey!=null)try{objectStorage.delete(uploadedKey);}catch(RuntimeException ignored){ }
             if (temporary != null) {
-                try {
-                    Files.deleteIfExists(temporary);
-                } catch (IOException ignored) {
-                    // The staged-object cleanup worker remains the final recovery path.
-                }
-            }
+                temporarySpace.deleteAndRelease(temporary,reservation);
+            }else reservation.close();
         }
     }
 
@@ -149,7 +173,7 @@ public class FileObjectService implements FileStorageFacade {
                 file.originalName(),
                 file.contentType(),
                 file.size(),
-                stored
+                new ObjectStorage.StoredObject(com.jsd.aird.shared.resource.BoundedStreams.limit(stored.stream(),capacity.fileBytes()),stored.size(),stored.contentType())
         );
     }
 
@@ -177,7 +201,7 @@ public class FileObjectService implements FileStorageFacade {
                 file.contentType(),
                 file.size(),
                 file.sha256(),
-                stored.stream()
+                com.jsd.aird.shared.resource.BoundedStreams.limit(stored.stream(),capacity.fileBytes())
         );
     }
 

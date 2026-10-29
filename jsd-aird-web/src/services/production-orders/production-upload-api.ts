@@ -191,6 +191,8 @@ export interface CreateProductionUploadInput {
   sourceType?: 'XLSX' | 'PHOTO';
   templateVersionId?: string;
   replaceExisting?: boolean;
+  replacementId?: string;
+  replacementVersion?: number;
   productionName?: string;
   orderNo?: string;
   productName?: string;
@@ -220,10 +222,10 @@ export const productionUploadApi = {
     viewableOnly?: boolean;
     page: number;
     size: number;
-  }) {
+  }, signal?: AbortSignal) {
     const response = await httpClient.get<ApiResponse<ProductionUploadPage>>(
       '/api/v1/production-uploads',
-      { params },
+      { params, signal },
     );
     return response.data.data;
   },
@@ -253,8 +255,8 @@ export const productionUploadApi = {
     return response.data.data;
   },
 
-  async delete(id: string) {
-    await httpClient.delete(`/api/v1/production-uploads/${id}`);
+  async delete(id: string, lockVersion: number) {
+    await httpClient.delete(`/api/v1/production-uploads/${id}`, { params: { lockVersion } });
   },
 
   async fields(id: string) {
@@ -264,24 +266,24 @@ export const productionUploadApi = {
     return response.data.data;
   },
 
-  async ensureFieldReview(id: string) {
+  async ensureFieldReview(id: string, lockVersion: number) {
     const response = await httpClient.post<ApiResponse<ProductionUpload>>(
-      `/api/v1/production-uploads/${id}/field-review`,
+      `/api/v1/production-uploads/${id}/field-review`, { lockVersion },
     );
     return response.data.data;
   },
 
-  async selectTemplate(id: string, templateVersionId: string) {
+  async selectTemplate(id: string, templateVersionId: string, lockVersion: number) {
     const response = await httpClient.post<ApiResponse<ProductionUpload>>(
       `/api/v1/production-uploads/${id}/select-template`,
-      { templateVersionId },
+      { templateVersionId, lockVersion },
     );
     return response.data.data;
   },
 
-  async retry(id: string) {
+  async retry(id: string, lockVersion: number) {
     const response = await httpClient.post<ApiResponse<ProductionUpload>>(
-      `/api/v1/production-uploads/${id}/retry`,
+      `/api/v1/production-uploads/${id}/retry`, { lockVersion },
     );
     return response.data.data;
   },
@@ -299,18 +301,19 @@ export const productionUploadApi = {
       value?: string;
       reviewStatus?: string;
     }>,
+    lockVersion: number,
   ) {
     const response = await httpClient.put<ApiResponse<ProductionUpload>>(
       `/api/v1/production-uploads/${id}/fields`,
-      { fields },
+      { fields, lockVersion },
     );
     return response.data.data;
   },
 
   /** Writes a photo upload's recognized values into its template workbook. */
-  async convertToWorkbook(id: string) {
+  async convertToWorkbook(id: string, lockVersion: number) {
     const response = await httpClient.post<ApiResponse<ProductionUpload>>(
-      `/api/v1/production-uploads/${id}/workbook`,
+      `/api/v1/production-uploads/${id}/workbook`, { lockVersion },
     );
     return response.data.data;
   },
@@ -336,7 +339,7 @@ export const productionOrderRecordApi = {
       manufactureDate?: string;
     }>;
   }) {
-    await httpClient.put('/api/v1/production-orders/records/batch', input);
+    await httpClient.put('/api/v1/production-orders/records/batch', JSON.stringify(input), { headers: { 'Content-Type': 'application/json' } });
   },
 
   async versions(id: string) {
@@ -354,9 +357,9 @@ export const productionOrderRecordApi = {
     return response.data;
   },
 
-  async publish(id: string) {
+  async publish(id: string, lockVersion: number) {
     const response = await httpClient.post<ApiResponse<ProductionUploadVersion>>(
-      `/api/v1/production-orders/records/${id}/publish`,
+      `/api/v1/production-orders/records/${id}/publish`, { lockVersion },
     );
     return response.data.data;
   },

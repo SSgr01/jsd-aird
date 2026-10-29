@@ -44,6 +44,8 @@ public class MinioObjectStorage implements ObjectStorage {
                 .credentials(accessKey, secretKey)
                 .build();
         this.bucket = bucket;
+        this.client.setTimeout(TimeUnit.SECONDS.toMillis(3),TimeUnit.SECONDS.toMillis(120),TimeUnit.SECONDS.toMillis(30));
+        if(this.publicClient!=null)this.publicClient.setTimeout(TimeUnit.SECONDS.toMillis(3),TimeUnit.SECONDS.toMillis(120),TimeUnit.SECONDS.toMillis(30));
     }
 
     private void ensureBucket() {

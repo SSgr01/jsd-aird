@@ -353,6 +353,22 @@ describe('experiment-workbook round trip', () => {
     const sanitized = withoutOcrSourceSheet(snapshot);
     expect(sanitized.sheetOrder).toEqual(['sheet-result', 'sheet-content']);
     expect((sanitized.sheets as Record<string, unknown>)['sheet-ocr-text']).toBeUndefined();
-    expect(sanitized.resources).toEqual([{ name: 'OTHER_PLUGIN', data: '{}' }]);
+    expect(sanitized.resources).toEqual([
+      { name: 'SHEET_DRAWING_PLUGIN', data: '{}' },
+      { name: 'OTHER_PLUGIN', data: '{}' },
+    ]);
+  });
+
+  it('keeps user pictures on other sheets while removing OCR drawings', () => {
+    const picture = { data: { 'user-picture': { source: 'data:image/png;base64,test' } }, order: ['user-picture'] };
+    const source = {
+      sheetOrder: ['sheet-1', 'sheet-ocr-text'],
+      sheets: { 'sheet-1': { name: '结果' }, 'sheet-ocr-text': { name: 'OCR原文' } },
+      resources: [{ name: 'SHEET_DRAWING_PLUGIN', data: JSON.stringify({ 'sheet-1': picture, 'sheet-ocr-text': {} }) }],
+    };
+    const result = withoutOcrSourceSheet(source);
+    const resources = result.resources as Array<{ data: string }>;
+    expect(JSON.parse(resources[0]!.data)).toEqual({ 'sheet-1': picture });
+    expect(JSON.parse(source.resources[0]!.data)).toHaveProperty('sheet-ocr-text');
   });
 });

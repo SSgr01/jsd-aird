@@ -1,3 +1,5 @@
+import type { WorkbookTemplateInstance } from './workbook-instance';
+
 export type TemplateFormat = 'XLSX' | 'DOCX';
 export type TemplateStatus = 'DRAFT' | 'PUBLISHED' | 'RETIRED';
 export type BindingRole = 'FIELD' | 'REPEAT_REGION' | 'CONDITIONAL';
@@ -7,7 +9,7 @@ export type SyncDirection = 'TWO_WAY' | 'DATA_TO_EDITOR' | 'EDITOR_TO_DATA';
 export type BindingStatus = 'VALID' | 'INVALID' | 'AMBIGUOUS' | 'MISSING';
 export type Editability = 'EDITABLE' | 'READ_ONLY' | 'CONDITIONAL' | 'UNKNOWN';
 export type ValueSource = 'USER_INPUT' | 'FORMULA' | 'REFERENCE' | 'STATIC' | 'MIXED' | 'UNKNOWN';
-export type FieldOrigin = 'STANDARD' | 'TEMPLATE_LOCAL' | 'ORDER_LOCAL' | 'PENDING_STANDARD';
+export type FieldOrigin = 'STANDARD' | 'TEMPLATE_LOCAL' | 'ORDER_LOCAL' | 'INSTANCE_LOCAL' | 'PENDING_STANDARD';
 export type FieldUiType = 'TEXT' | 'SIGNATURE';
 export type TemplateFieldType = 'FIELD' | 'TABLE_COLUMN' | 'REGION' | 'MANUAL_VALUE';
 export type LabelStatus = 'RESOLVED' | 'UNRESOLVED' | 'NOT_APPLICABLE';
@@ -22,6 +24,10 @@ export interface ExperimentIdentityRule {
 }
 export interface ExperimentListProjection {
   listProjectionId: string;
+  displayName?: string;
+  unit?: string;
+  labelField?: { name?: string; description?: string };
+  valueField?: { name?: string; description?: string };
   domain: 'FORMULA' | 'PROCESS' | 'TEST';
   componentId: string;
   parentBindingId?: string;
@@ -52,6 +58,7 @@ export interface ExperimentImportConfiguration {
 }
 
 export interface TemplateListItem {
+  revision: string;
   templateId: string;
   versionId: string;
   templateCode: string;
@@ -121,6 +128,8 @@ export interface FieldGroup {
 }
 
 export interface BusinessField {
+  /** Geometry-only root created for bindings; business grouping remains template-defined. */
+  structuralOnly?: boolean;
   id: string;
   fieldId?: string;
   relationId?: string;
@@ -133,6 +142,7 @@ export interface BusinessField {
   displayRole?: 'REGION' | 'FIELD';
   fieldType?: TemplateFieldType;
   labelStatus?: LabelStatus;
+  labelTextMissing?: boolean;
   pathSegments?: string[];
   kind: FieldKind;
   valueType: string;
@@ -186,6 +196,8 @@ export interface BusinessField {
   experimentSemanticAlternatives?: ExperimentFieldSemantic[];
   experimentSemanticIssue?: string;
   listProjections?: ExperimentListProjection[];
+  /** View of an existing list definition; never persisted as a separate scalar binding. */
+  projectionField?: { projectionId: string; target: 'labelRange' | 'valueRange' };
   columns?: Array<{
     code: string;
     bindingId?: string;
@@ -288,6 +300,7 @@ export interface EditorSelection {
 export interface EditorCellChange extends EditorSelection {
   value: unknown;
   previousValue: unknown;
+  numberFormat?: string;
 }
 
 export interface TemplateWorkspace {
@@ -295,7 +308,7 @@ export interface TemplateWorkspace {
   versionId: string;
   recognitionRunId?: string;
   origin?: {
-    type: 'EXPERIMENT' | string;
+    type: string;
     experimentId?: string;
     experimentNo?: string;
     experimentTitle?: string;
@@ -471,6 +484,11 @@ export interface TemplateVersionHistoryItem {
 }
 
 export interface EditorHandle {
+  getSelection?(): EditorSelection | undefined;
+  getTemplateInstance?(): WorkbookTemplateInstance | undefined;
+  setTemplateInstance?(instance: WorkbookTemplateInstance): Promise<void>;
+  flushChanges?(): void;
+  getContentRevision?(): number;
   getSnapshot(): Record<string, unknown>;
   readBinding(binding: TemplateBinding): unknown;
   writeBinding(binding: TemplateBinding, value: unknown): Promise<void>;
@@ -478,13 +496,13 @@ export interface EditorHandle {
   focusBinding(binding: TemplateBinding): void;
   focusCell?(sheetId: string, address: string): void;
   focusRange?(sheetId: string, address: string): void;
-  writeCell?(sheetId: string, address: string, value: unknown): Promise<void>;
+  writeCell?(sheetId: string, address: string, value: unknown, options?: { raw?: boolean }): Promise<void>;
   clearRangeConstants?(sheetId: string, address: string): Promise<{
     cleared: number;
     formulasKept: number;
   }>;
   focusNode?(node: DocumentStructureNode): void;
-  appendRepeatRecord?(binding: TemplateBinding): Promise<void>;
+  appendRepeatRecord?(binding: TemplateBinding, options?: { count?: number; index?: number }): Promise<void>;
   applyCellPatch?(patch: Record<string, unknown>): Promise<void>;
   insertWordControl?(
     role: BindingRole,

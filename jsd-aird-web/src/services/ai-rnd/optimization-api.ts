@@ -15,7 +15,7 @@ export type HistoryDatasetColumn = {
   testMethods?: string[]
   testStage?: string
   semanticKey?: string
-  semanticType?: 'MATERIAL_RATIO'
+  semanticType?: 'MATERIAL_RATIO' | 'MATERIAL_AMOUNT'
   materialId?: string
   materialCode?: string
   mappingStatus?: 'MAPPED'|'UNMAPPED'

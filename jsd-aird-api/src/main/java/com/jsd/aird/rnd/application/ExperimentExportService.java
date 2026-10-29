@@ -51,6 +51,11 @@ public class ExperimentExportService {
     }
 
     public Download export(UUID id) {
+        return export(id,"RESULT");
+    }
+
+    public Download export(UUID id,String view) {
+        if(!java.util.Set.of("RESULT","BLANK").contains(view))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"导出视图必须为RESULT或BLANK");
         var actor = ActorContext.required();
         var detail = repository.detail(actor.organizationId(), id)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验不存在"));
@@ -60,19 +65,22 @@ public class ExperimentExportService {
                 && ("word".equalsIgnoreCase(format) || isDocumentSnapshot(snapshot))) {
             return exportWord(detail, actor.organizationId());
         }
-        return exportWorkbook(detail, actor.organizationId());
+        return exportWorkbook(detail, actor.organizationId(),view);
     }
 
-    private Download exportWorkbook(Detail detail, UUID organizationId) {
+    private Download exportWorkbook(Detail detail, UUID organizationId,String view) {
         var snapshot = currentSnapshot(detail);
         if (snapshot == null || !snapshot.isObject() || snapshot.isEmpty()) {
             throw new ApiException(ApiErrorCode.FILE_NOT_READY, "实验工作簿快照不存在，请先保存实验");
         }
+        if(com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot))snapshot=view.equals("BLANK")
+                ?com.jsd.aird.shared.lab.LabWorkbook.blank(snapshot)
+                :com.jsd.aird.shared.lab.LabWorkbook.present(objectMapper,snapshot).snapshot();
         var result = workbookExporter.export(
                 snapshot,
                 objectMapper.createArrayNode(),
                 objectMapper.createObjectNode(),
-                new SnapshotWorkbookExporter.Manifest(detail.summary().id().toString(), null, null,
+                new SnapshotWorkbookExporter.Manifest(detail.templateVersionId()==null?null:detail.templateVersionId().toString(), null, null,
                         detail.summary().status().name(), null));
         return new Download(fileName(detail, "xlsx"), XLSX_CONTENT_TYPE, result.content());
     }

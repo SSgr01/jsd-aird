@@ -30,6 +30,10 @@ public interface AsyncJobHandler {
         // Most jobs only need the generic async_job failure record.
     }
 
+    default void handleTerminalFailure(JsonNode payload, Exception exception, ExecutionContext context) {
+        handleTerminalFailure(payload,exception);
+    }
+
     record ExecutionContext(UUID jobId, UUID organizationId, int attempt,
                             UUID leaseToken, long leaseGeneration,
                             BooleanSupplier cancellationRequested) {

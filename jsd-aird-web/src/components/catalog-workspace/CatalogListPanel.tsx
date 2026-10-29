@@ -1,5 +1,6 @@
-import { Alert, Button, Empty, Skeleton, Tag, Typography } from 'antd';
+import { Alert, Button, Empty, Tag, Typography } from 'antd';
 import type { ReactNode } from 'react';
+import { ContentLoading } from '@/components/loading/ContentLoading';
 
 interface CatalogListPanelProps {
   title: string;
@@ -24,7 +25,7 @@ export function CatalogListPanel({ title, count, countLabel = '条', filters, ac
       <div className="catalog-list-actions">{actions}</div>
       {loading ? (
         <div className="catalog-list-state catalog-list-loading" role="status" aria-label="正在加载列表">
-          <Skeleton active title={false} paragraph={{ rows: 6, width: ['100%', '92%', '96%', '88%', '94%', '72%'] }} />
+          <ContentLoading label="正在加载列表…" />
         </div>
       ) : error ? (
         <div className="catalog-list-state">

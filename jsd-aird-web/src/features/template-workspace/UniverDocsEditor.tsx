@@ -1,5 +1,10 @@
+import { markPerformance } from '@/services/performance/metrics';
+import { editorReady } from './workspace-loading';
 import {
   createUniver,
+  ICommandService,
+  IUniverInstanceService,
+  type DocumentDataModel,
   DocumentFlavor,
   LocaleType,
   mergeLocales,
@@ -10,9 +15,10 @@ import {
   DocBackScrollRenderController,
   IRenderManagerService,
   UniverDocsCorePreset,
+  unmount,
 } from '@univerjs/preset-docs-core';
 import UniverPresetDocsCoreZhCN from '@univerjs/preset-docs-core/locales/zh-CN';
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 
 import { generateUUID } from '@/utils/uuid';
 
@@ -25,6 +31,8 @@ import type {
   TemplateBinding,
 } from './types';
 import { upgradeLegacyDocxTextRunEnds } from './word-snapshot-compatibility';
+import { docsFeatureLocale, docsFeaturePlugins, docsFeaturePresets } from './docs-features';
+import { EditorChanges, isPersistentMutation } from './editor-changes';
 
 interface Props {
   snapshot: Record<string, unknown>;
@@ -33,6 +41,10 @@ interface Props {
   onEditorValue?: (binding: TemplateBinding, value: unknown) => void;
   bindings?: TemplateBinding[];
 }
+
+// Univer 1.2 keeps document layout caches keyed by unit ID. Finish retiring
+// an old runtime before reopening the same snapshot in another instance.
+let pendingRuntimeDisposal: Promise<void> = Promise.resolve();
 
 export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverDocsEditor(
   {
@@ -45,13 +57,20 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
   ref,
 ) {
   const normalizedSnapshot = useMemo(() => normalizeDocumentSnapshot(snapshot), [snapshot]);
+  const [initializationError, setInitializationError] = useState<Error>();
   const containerRef = useRef<HTMLDivElement>(null);
   const univerRef = useRef<ReturnType<typeof createUniver>['univer']>();
   const apiRef = useRef<FUniver>();
+  const changesRef = useRef<EditorChanges>();
+  const contentRevisionRef = useRef(0);
+  const rawSnapshotRef = useRef<() => IDocumentData | undefined>(() => undefined);
   const sourceSnapshotRef = useRef(normalizedSnapshot as unknown as Record<string, unknown>);
+  const modeSnapshotRef = useRef<{ source: IDocumentData; value: IDocumentData; revision: number }>();
   const bindingsRef = useRef(bindings);
   const callbacksRef = useRef({ onDirty, onEditorValue });
   const bodySelectionRef = useRef(false);
+  const editableRef = useRef(editable);
+  editableRef.current = editable;
   sourceSnapshotRef.current = normalizedSnapshot as unknown as Record<string, unknown>;
   bindingsRef.current = bindings;
   callbacksRef.current = { onDirty, onEditorValue };
@@ -59,8 +78,11 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    markPerformance('editor-init-start');
     const host = document.createElement('div');
     host.className = 'univer-editor-host';
+    host.setAttribute('aria-busy', 'true');
+    host.setAttribute('data-loading-label', '初始化内容…');
     container.replaceChildren(host);
     bodySelectionRef.current = false;
     const trackBodySelection = (event: Event) => {
@@ -72,7 +94,6 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
     let animationFrame = 0;
     let initialSelectionTimer = 0;
     let initialized = false;
-    let lastDocumentSignature = '';
     let commandSubscription: { dispose(): void } | undefined;
     let ownedUniver: ReturnType<typeof createUniver>['univer'] | undefined;
     let ownedApi: FUniver | undefined;
@@ -107,7 +128,7 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
         const { univer, univerAPI } = createUniver({
           locale: LocaleType.ZH_CN,
           locales: {
-            [LocaleType.ZH_CN]: mergeLocales(UniverPresetDocsCoreZhCN),
+            [LocaleType.ZH_CN]: mergeLocales(UniverPresetDocsCoreZhCN as Record<string, unknown>, docsFeatureLocale),
           },
           presets: [
             UniverDocsCorePreset({
@@ -119,24 +140,36 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
               ribbonType: editable ? 'classic' : 'collapsed',
               header: true,
               footer: true,
+              // The workspace supplies structure navigation. Univer 1.2's
+              // floating outline can read retired page transforms on reopen.
+              toc: false,
             }),
+            ...docsFeaturePresets(),
           ],
+          plugins: docsFeaturePlugins,
         });
         ownedUniver = univer;
         ownedApi = univerAPI;
         univerRef.current = univer;
         apiRef.current = univerAPI;
-        const document = univerAPI.createUniverDoc(normalizedSnapshot);
-        lastDocumentSignature = documentContentSignature(document.getSnapshot());
+        const restored = modeSnapshotRef.current?.source === normalizedSnapshot ? modeSnapshotRef.current : undefined;
+        const document = univerAPI.createDocument(restored?.value ?? normalizedSnapshot);
+        const model = univer.__getInjector().get(IUniverInstanceService).getUnit<DocumentDataModel>(document.getId());
+        rawSnapshotRef.current = () => model?.getSnapshot();
+        contentRevisionRef.current = restored?.revision ?? 0;
+        const changes = new EditorChanges(() => callbacksRef.current.onDirty(), () => { contentRevisionRef.current += 1; });
+        changesRef.current = changes;
+        const bindingValues = new Map<string, unknown>();
+        const initialModel = model?.getSnapshot();
+        for (const binding of bindingsRef.current) bindingValues.set(binding.bindingId, locateMarker(initialModel, binding.markerId)?.value);
+        if (!editable) void document.getPermission().setReadOnly();
         // Docs disables paragraph commands until it has an active text range.
         // Put the editable surface at a valid caret position so alignment and
         // other paragraph commands work immediately after the document opens.
         // The first call can happen before the document skeleton has rendered,
         // so repeat it after the first layout pass.
         if (editable) {
-          const body = normalizedSnapshot.body && typeof normalizedSnapshot.body === 'object'
-            ? normalizedSnapshot.body as { dataStream?: unknown }
-            : undefined;
+          const body = (restored?.value ?? normalizedSnapshot).body as { dataStream?: unknown } | undefined;
           const dataStream = typeof body?.dataStream === 'string' ? body.dataStream : '';
           const initialOffset = Math.max(0, dataStream.length - 2);
           const focusDocument = () => {
@@ -172,41 +205,52 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
           }, 800);
         }
         initialized = true;
-        commandSubscription = univerAPI.onCommandExecuted((commandInfo) => {
-          // Tables, lists, paragraph styles, page breaks, undo and redo all
-          // mutate the document. Compare the content snapshot instead of
-          // maintaining a brittle list of text-only command IDs.
+        window.requestAnimationFrame(() => { if (!cancelled) { host.removeAttribute('aria-busy'); editorReady(); } });
+        commandSubscription = univer.__getInjector().get(ICommandService).onCommandExecuted((commandInfo, options) => {
           const commandParams = commandInfo.params as { unitId?: string } | undefined;
           if (commandParams?.unitId && commandParams.unitId !== document.getId()) return;
-          window.setTimeout(() => {
-            const nextSignature = documentContentSignature(document.getSnapshot());
-            if (nextSignature === lastDocumentSignature) return;
-            lastDocumentSignature = nextSignature;
-            callbacksRef.current.onDirty();
+          if (cancelled || !editable || !isPersistentMutation(commandInfo, options)) return;
+          changes.change();
+          changes.synchronize('bindings', () => {
+            const raw = model?.getSnapshot();
             for (const binding of bindingsRef.current) {
               if (binding.syncDirection === 'DATA_TO_EDITOR') continue;
-              callbacksRef.current.onEditorValue(binding, readMarkerValue(univerAPI, binding));
+              const value = locateMarker(raw, binding.markerId)?.value;
+              if (!Object.is(value, bindingValues.get(binding.bindingId))) {
+                bindingValues.set(binding.bindingId, value);
+                callbacksRef.current.onEditorValue(binding, value);
+              }
             }
-          }, 0);
+          });
         });
       } catch (error) {
-        host.textContent = 'Word 文档编辑器初始化失败，请刷新后重试';
-        host.classList.add('univer-editor-error');
-        console.error('Univer Docs 初始化失败', error);
+        host.removeAttribute('aria-busy');
+        setInitializationError(error instanceof Error ? error : new Error('Word 文档编辑器初始化失败'));
       }
     };
     const resizeObserver = typeof ResizeObserver === 'undefined'
       ? undefined
       : new ResizeObserver(initialize);
-    resizeObserver?.observe(container);
-    initialize();
+    void pendingRuntimeDisposal.then(() => {
+      if (cancelled) return;
+      resizeObserver?.observe(container);
+      initialize();
+    });
 
     return () => {
       cancelled = true;
+      // An explicit edit/preview mode change must retain the current document.
+      // Save acknowledgements intentionally leave the original snapshot prop stable.
+      if (editableRef.current !== editable && sourceSnapshotRef.current === (normalizedSnapshot as unknown) && ownedApi?.getActiveDocument()) {
+        modeSnapshotRef.current = { source: normalizedSnapshot, value: ownedApi.getActiveDocument()!.save(), revision: contentRevisionRef.current };
+      } else modeSnapshotRef.current = undefined;
       window.cancelAnimationFrame(animationFrame);
       window.clearTimeout(initialSelectionTimer);
       resizeObserver?.disconnect();
       commandSubscription?.dispose();
+      changesRef.current?.dispose();
+      changesRef.current = undefined;
+      rawSnapshotRef.current = () => undefined;
       host.removeEventListener('beforeinput', preventReadOnlyInput, true);
       host.removeEventListener('paste', preventReadOnlyInput, true);
       host.removeEventListener('drop', preventReadOnlyInput, true);
@@ -215,29 +259,37 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
       host.removeEventListener('mousedown', trackBodySelection, true);
       if (apiRef.current === ownedApi) apiRef.current = undefined;
       if (univerRef.current === ownedUniver) univerRef.current = undefined;
-      window.setTimeout(() => {
-        ownedUniver?.dispose();
-        if (host.parentNode) host.parentNode.removeChild(host);
-      }, 32);
+      if (host.parentNode) host.parentNode.removeChild(host);
+      pendingRuntimeDisposal = pendingRuntimeDisposal.then(() => new Promise<void>((resolve) => {
+        window.setTimeout(() => {
+          // Stop React observers before releasing their page transforms.
+          unmount(host);
+          ownedUniver?.dispose();
+          resolve();
+        }, 0);
+      }));
     };
   }, [normalizedSnapshot, editable]);
 
   useImperativeHandle(
     ref,
     () => ({
+      flushChanges() { changesRef.current?.flush(); },
+      getContentRevision() { return contentRevisionRef.current; },
       getSnapshot() {
+        changesRef.current?.flush();
         const document = apiRef.current?.getActiveDocument();
         return preserveWordSnapshotMetadata(
-          (document?.getSnapshot() ?? {}) as Record<string, unknown>,
+          (document?.save() ?? sourceSnapshotRef.current) as Record<string, unknown>,
           sourceSnapshotRef.current,
         );
       },
       readBinding(binding) {
-        return apiRef.current ? readMarkerValue(apiRef.current, binding) : undefined;
+        return locateMarker(rawSnapshotRef.current(), binding.markerId)?.value;
       },
       async writeBinding(binding, value) {
         const document = apiRef.current?.getActiveDocument();
-        const marker = document ? locateMarker(document.getSnapshot(), binding.markerId) : null;
+        const marker = locateMarker(rawSnapshotRef.current(), binding.markerId);
         if (document && marker && binding.markerId) {
           await apiRef.current?.executeCommand('doc.command.insert-custom-range', {
             unitId: document.getId(),
@@ -256,7 +308,7 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
       },
       focusBinding(binding) {
         const document = apiRef.current?.getActiveDocument();
-        const marker = document ? locateMarker(document.getSnapshot(), binding.markerId) : null;
+        const marker = locateMarker(rawSnapshotRef.current(), binding.markerId);
         if (document && marker) {
           document.setSelection(marker.start, marker.end);
         }
@@ -265,19 +317,19 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
         const selectNode = () => {
           const document = apiRef.current?.getActiveDocument();
           if (!document) return;
-          const currentSnapshot = document.getSnapshot();
+          const currentSnapshot = rawSnapshotRef.current();
           const locator = node.editorLocator;
           let start = locator?.startOffset;
           let end = locator?.endOffset;
           if (!Number.isFinite(start) || !Number.isFinite(end)) {
             const text = node.text || node.title || '';
-            const found = text ? currentSnapshot.body?.dataStream?.indexOf(text) ?? -1 : -1;
+            const found = text ? currentSnapshot?.body?.dataStream?.indexOf(text) ?? -1 : -1;
             if (found < 0) return;
             start = found;
             end = found + text.length - 1;
           }
           const renderManager = univerRef.current?.__getInjector().get(IRenderManagerService);
-          const render = renderManager?.getRenderById(document.getId());
+          const render = renderManager?.getRenderUnitById(document.getId());
           document.setSelection(start as number, (end as number) + 1);
           render?.with(DocBackScrollRenderController)?.scrollToRange({
             startOffset: start as number,
@@ -302,7 +354,7 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
           properties: { source: 'JSD_MAPPING', dataPath, fieldCode, role },
         });
         if (!inserted) throw new Error('字段插入失败，请重新选择正文位置后再试');
-        onDirty();
+        changesRef.current?.flush();
         return {
           markerId,
           locatorType:
@@ -311,9 +363,10 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
         };
       },
     }),
-    [onDirty],
+    [normalizedSnapshot, editable],
   );
 
+  if (initializationError) throw initializationError;
   return <div ref={containerRef} className="univer-editor-surface" aria-label="Word 模板编辑器" />;
 });
 
@@ -415,7 +468,9 @@ function preserveWordSnapshotMetadata(
     ),
     editorMode: 'UNIVER_DOCS',
   } as Record<string, unknown>;
-  const metadataKeys = ['wordImport', 'tableSource', 'resources', 'drawings', 'headers', 'footers'] as const;
+  // Live collections may disappear when their last item is deleted. Only
+  // restore import metadata, otherwise deleted pictures/tables reappear.
+  const metadataKeys = ['wordImport'] as const;
   for (const key of metadataKeys) {
     if (source[key] !== undefined && current[key] === undefined) result[key] = structuredClone(source[key]);
   }
@@ -433,33 +488,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function locateMarker(snapshot: IDocumentData, markerId?: string) {
+function locateMarker(snapshot: IDocumentData | undefined, markerId?: string) {
   if (!markerId) return null;
-  const stream = snapshot.body?.dataStream ?? '';
-  const range = snapshot.body?.customRanges?.find((item) => item.rangeId === markerId);
+  const stream = snapshot?.body?.dataStream ?? '';
+  const range = snapshot?.body?.customRanges?.find((item) => item.rangeId === markerId);
   if (!range) return null;
   return {
     start: range.startIndex,
     end: range.endIndex + 1,
     value: stream.slice(range.startIndex, range.endIndex + 1),
   };
-}
-
-function readMarkerValue(api: FUniver, binding: TemplateBinding) {
-  const document = api.getActiveDocument();
-  const marker = document ? locateMarker(document.getSnapshot(), binding.markerId) : null;
-  return marker?.value;
-}
-
-function documentContentSignature(snapshot: IDocumentData) {
-  const body = snapshot.body;
-  return JSON.stringify({
-    dataStream: body?.dataStream,
-    paragraphs: body?.paragraphs,
-    textRuns: body?.textRuns,
-    tables: body?.tables,
-    customRanges: body?.customRanges,
-    lists: snapshot.lists,
-    tableSource: snapshot.tableSource,
-  });
 }

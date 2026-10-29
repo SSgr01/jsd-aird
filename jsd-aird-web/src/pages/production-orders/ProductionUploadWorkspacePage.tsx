@@ -22,6 +22,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 
 import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
 import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
+import { editorUnchanged, flushEditorChanges, pauseWorkspaceInputs, useSaveSession } from '@/features/template-workspace/editor-save';
 import { usePermission } from '@/components/auth/usePermission';
 import {
   downloadBlob,
@@ -167,11 +168,21 @@ export function ProductionUploadWorkspacePage() {
   const canSubmit = usePermission('production.submit');
   const canCreateTemplate = usePermission('template.create');
   const editorRef = useRef<EditorHandle>(null);
+  const saveSession = useSaveSession(uploadId);
+  const workspaceRootRef = useRef<HTMLElement>(null);
+  const savedGenerationRef = useRef(0);
+  const savedEditorRef = useRef<{ editor: EditorHandle | null; revision: number | undefined }>();
+  const editGenerationRef = useRef(0);
+  const savePromiseRef = useRef<Promise<false | { lockVersion: number }>>();
+  const saveOwnerRef = useRef<object>();
+  const saveDraftRef = useRef<(business?: ProductionBusinessSnapshot, silent?: boolean) => Promise<false | { lockVersion: number }>>(() => Promise.resolve(false));
   const [record, setRecord] = useState<ProductionUpload>();
   const [versions, setVersions] = useState<ProductionUploadVersion[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<ProductionUploadVersion>();
   const [snapshot, setSnapshot] = useState<Record<string, unknown>>();
   const [business, setBusiness] = useState<ProductionBusinessSnapshot>(createEmptyBusinessSnapshot);
+  const latestSaveRef = useRef({ record, snapshot, business });
+  latestSaveRef.current = { record, snapshot, business };
   const [view, setView] = useState<WorkspaceView>('edit');
   const [fieldTab, setFieldTab] = useState<FieldManagerTab>('recognition');
   const [reviewBusy, setReviewBusy] = useState(false);
@@ -180,6 +191,8 @@ export function ProductionUploadWorkspacePage() {
   const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const markDirty = () => { editGenerationRef.current += 1; setDirty(true); };
+  useEffect(() => { setSaving(false); }, [uploadId]);
   const [publishing, setPublishing] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [downloadingSource, setDownloadingSource] = useState(false);
@@ -201,6 +214,8 @@ export function ProductionUploadWorkspacePage() {
   const [msg, holder] = message.useMessage();
 
   const load = useCallback(async () => {
+    const session = saveSession.current;
+    const isCurrent = () => session.active && saveSession.current === session;
     setLoading(true);
     setDirty(false);
     setSelectedVersion(undefined);
@@ -213,8 +228,9 @@ export function ProductionUploadWorkspacePage() {
       const detail = (formatOf(loadedDetail.originalName) === 'XLSX'
         || (formatOf(loadedDetail.originalName) === 'PHOTO' && !!loadedDetail.selectedTemplateVersionId))
         && !loadedDetail.recognitionResult?.recognitionReview
-        ? await productionUploadApi.ensureFieldReview(uploadId).catch(() => loadedDetail)
+        ? await productionUploadApi.ensureFieldReview(uploadId,loadedDetail.lockVersion).catch(() => loadedDetail)
         : loadedDetail;
+      if (!isCurrent()) return;
       setRecord(detail);
       setVersions(history);
       const detailFormat = formatOf(detail.originalName);
@@ -232,6 +248,7 @@ export function ProductionUploadWorkspacePage() {
             detail.originalName,
           );
         }
+        if (!isCurrent()) return;
         if (isWorkbookSnapshot(loadedSnapshot)) {
           const recoveredSnapshot = {
             ...loadedSnapshot,
@@ -246,6 +263,7 @@ export function ProductionUploadWorkspacePage() {
       setView(detailFormat === 'PHOTO' && !isWorkbookSnapshot(loadedSnapshot) ? 'preview' : 'edit');
       if (detailFormat === 'PHOTO') {
         const blob = await fetchFileBlob(detail.fileId);
+        if (!isCurrent()) return;
         const url = URL.createObjectURL(blob);
         setPhotoUrl((current) => {
           if (current) URL.revokeObjectURL(current);
@@ -256,12 +274,15 @@ export function ProductionUploadWorkspacePage() {
         setSnapshot(detail.workbookSnapshot ?? { wordPatches: [] });
       }
       setEditorReady(false);
+      savedGenerationRef.current = editGenerationRef.current = 0; savedEditorRef.current = undefined;
       setError(undefined);
     } catch (reason) {
+      if (!isCurrent()) return;
       // A reload while recognition is running makes the records endpoint refuse the
       // upload ("尚未解析完成").  Fall back to the permissive upload endpoint so the
       // workspace can show the running job instead of an error screen.
       const running = await productionUploadApi.get(uploadId).catch(() => undefined);
+      if (!isCurrent()) return;
       if (running && IN_PROGRESS_STATUSES.includes(running.status)) {
         setRecord(running);
         setRecognitionProgress(running.recognitionProgress ?? 0);
@@ -271,7 +292,7 @@ export function ProductionUploadWorkspacePage() {
       }
       setError(reason instanceof Error ? reason.message : '生产单文件加载失败');
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [uploadId]);
 
@@ -286,10 +307,15 @@ export function ProductionUploadWorkspacePage() {
     void load();
   }, [load]);
 
-  const saveDraft = async (
-    businessOverride: ProductionBusinessSnapshot = business,
+  const performSaveDraft = async (
+    override?: ProductionBusinessSnapshot,
     silent = false,
-  ): Promise<boolean> => {
+  ): Promise<false | {lockVersion: number}> => {
+    const session = saveSession.current, editor = editorRef.current;
+    const isCurrent = () => session.active && saveSession.current === session && editorRef.current === editor;
+    flushEditorChanges(editor);
+    const { record, snapshot, business } = latestSaveRef.current;
+    const businessOverride = override ?? business;
     if (!record || !snapshot) return false;
     const sourceFormat = formatOf(record.originalName);
     const usesWorkbookEditor =
@@ -302,7 +328,8 @@ export function ProductionUploadWorkspacePage() {
     }
     setSaving(true);
     try {
-      const liveSnapshot = editorRef.current?.getSnapshot();
+      const liveSnapshot = editor?.getSnapshot();
+      const generation = editGenerationRef.current, revision = editor?.getContentRevision?.();
       const current = usesWorkbookEditor
         ? isWorkbookSnapshot(liveSnapshot)
           ? liveSnapshot
@@ -321,19 +348,35 @@ export function ProductionUploadWorkspacePage() {
         ],
       });
       const saved = await productionOrderRecordApi.get(record.id);
+      if (!isCurrent()) return false;
+      // A later writer may commit between our batch acknowledgement and this GET.
+      // Never adopt their newer version as the base of our still-local workbook.
+      if (saved.lockVersion !== record.lockVersion + 1) throw new Error('生产单已在其他位置更新，本地内容仍然保留');
+      savedGenerationRef.current = generation; savedEditorRef.current = { editor, revision };
       setRecord(saved);
-      setSnapshot(nextSnapshot);
-      setBusiness(businessOverride);
-      setDirty(false);
+      setBusiness(current => current === business ? businessOverride : current);
+      setDirty(editGenerationRef.current !== generation || !editorUnchanged(editorRef.current, editor, revision));
       if (!silent) msg.success('生产单草稿已保存');
-      return true;
+      return {lockVersion: saved.lockVersion};
     } catch (reason) {
-      msg.error(reason instanceof Error ? reason.message : '保存失败');
+      if (isCurrent()) { setDirty(true); msg.error(reason instanceof Error ? reason.message : '保存失败'); }
       return false;
     } finally {
-      setSaving(false);
+      if (session.active && saveSession.current === session) {
+        setSaving(false);
+        if (editorRef.current !== editor) setDirty(true);
+      }
     }
   };
+  const saveDraft = (override?: ProductionBusinessSnapshot, silent = false): Promise<false | { lockVersion: number }> => {
+    const owner = saveSession.current;
+    if (savePromiseRef.current && saveOwnerRef.current === owner) {
+      return override ? savePromiseRef.current.then(() => owner.active && saveSession.current === owner ? saveDraftRef.current(override, silent) : false) : savePromiseRef.current;
+    }
+    const pending = performSaveDraft(override, silent).finally(() => { if (savePromiseRef.current === pending) savePromiseRef.current = undefined; });
+    savePromiseRef.current = pending; saveOwnerRef.current = owner; return pending;
+  };
+  saveDraftRef.current = saveDraft;
 
   const publish = async () => {
     if (!record || selectedVersion) return;
@@ -342,10 +385,16 @@ export function ProductionUploadWorkspacePage() {
       return;
     }
     setPublishing(true);
+    const session = saveSession.current, editor = editorRef.current;
+    const isCurrent = () => session.active && saveSession.current === session && editorRef.current === editor;
+    const resume = pauseWorkspaceInputs(workspaceRootRef.current);
+    flushEditorChanges(editor);
+    const generation = editGenerationRef.current, revision = editor?.getContentRevision?.();
     try {
       if (formatOf(record.originalName) === 'XLSX'
         || (formatOf(record.originalName) === 'PHOTO' && !!record.selectedTemplateVersionId)) {
         const fields = await productionUploadApi.fields(record.id);
+        if (!isCurrent()) return;
         if (fields.some((field) => !['CONFIRMED', 'IGNORED'].includes(field.reviewStatus))) {
           msg.warning('请先确认生产单的全部识别字段');
           setView('edit');
@@ -354,22 +403,30 @@ export function ProductionUploadWorkspacePage() {
         }
       }
       // 编辑中的内容随发布一起落库，不需要先手动保存草稿。
-      if (dirty || !record.workbookSnapshot) {
-        const saved = await saveDraft(business, true);
+      let version=record.lockVersion;
+      const baseline = savedEditorRef.current?.editor === editor ? savedEditorRef.current.revision : 0;
+      if (generation !== savedGenerationRef.current || (editor?.getContentRevision && revision !== baseline) || savePromiseRef.current || !record.workbookSnapshot) {
+        const saved = await saveDraft(undefined, true);
         if (!saved) return;
+        version=saved.lockVersion;
       }
-      await productionOrderRecordApi.publish(record.id);
+      if (!isCurrent()) return;
+      if (generation !== editGenerationRef.current || !editorUnchanged(editorRef.current, editor, revision)) { setDirty(true); return; }
+      await productionOrderRecordApi.publish(record.id,version);
+      if (!isCurrent()) return;
       msg.success('生产单已发布，并生成新版本');
       const [detail, history] = await Promise.all([
         productionOrderRecordApi.get(record.id),
         productionOrderRecordApi.versions(record.id),
       ]);
+      if (!isCurrent()) return;
       setRecord(detail);
       setVersions(history);
     } catch (reason) {
-      msg.error(reason instanceof Error ? reason.message : '发布失败');
+      if (isCurrent()) msg.error(reason instanceof Error ? reason.message : '发布失败');
     } finally {
-      setPublishing(false);
+      resume();
+      if (isCurrent()) setPublishing(false);
     }
   };
 
@@ -400,7 +457,7 @@ export function ProductionUploadWorkspacePage() {
   const chooseTemplate = async (templateVersionId: string) => {
     setSelectingTemplate(templateVersionId);
     try {
-      await productionUploadApi.selectTemplate(uploadId, templateVersionId);
+      await productionUploadApi.selectTemplate(uploadId, templateVersionId,record!.lockVersion);
       msg.loading({ content: '正在识别图片字段，请稍候…', duration: 0, key: 'photo-recognition' });
       const finished = await waitForRecognition();
       msg.destroy('photo-recognition');
@@ -435,7 +492,7 @@ export function ProductionUploadWorkspacePage() {
           dataPath: field.dataPath,
           recordIndex: field.recordIndex,
           reviewStatus: 'CONFIRMED',
-        })));
+        })),record.lockVersion);
       }
       msg.success(`已确认 ${pending.length} 个字段`);
       setRecord(await productionOrderRecordApi.get(record.id));
@@ -454,7 +511,7 @@ export function ProductionUploadWorkspacePage() {
     setRecognitionStage(undefined);
     setFieldTab('recognition');
     try {
-      const started = await productionUploadApi.retry(record.id);
+      const started = await productionUploadApi.retry(record.id,record.lockVersion);
       setRecognitionProgress(started.recognitionProgress ?? 0);
       setRecognitionStage(started.currentStage);
       const settled = await waitForRecognition(160, (current) => {
@@ -550,7 +607,7 @@ export function ProductionUploadWorkspacePage() {
     setSelectedVersion(undefined);
     setView('edit');
     setEditorReady(false);
-    setDirty(true);
+    markDirty();
     msg.info(`已载入版本 V${version.versionNo}，保存草稿后生效`);
   };
 
@@ -733,7 +790,7 @@ export function ProductionUploadWorkspacePage() {
     </>
   );
   return (
-    <section className="workspace-shell template-business-workspace quality-excel-workspace production-upload-workspace">
+    <section ref={workspaceRootRef} className="workspace-shell template-business-workspace quality-excel-workspace production-upload-workspace">
       {holder}
       <header className="workspace-header">
         <div className="workspace-identity">
@@ -820,7 +877,7 @@ export function ProductionUploadWorkspacePage() {
             description="可重新生成字段确认；原工作簿和已发布版本会保留。"
             action={<Button size="small" loading={reviewBusy} onClick={() => {
               setReviewBusy(true);
-              void productionUploadApi.ensureFieldReview(record.id).then(setRecord)
+              void productionUploadApi.ensureFieldReview(record.id,record.lockVersion).then(setRecord)
                 .catch((reason) => msg.error(reason instanceof Error ? reason.message : '生成字段确认失败'))
                 .finally(() => setReviewBusy(false));
             }}>生成字段确认</Button>} />
@@ -935,10 +992,10 @@ export function ProductionUploadWorkspacePage() {
                 value={business}
                 editable={editable}
                 section={view === 'material' ? 'material' : 'attachments'}
-                onAttachmentsChange={(next) => saveDraft(next, true)}
+                onAttachmentsChange={async (next) => Boolean(await saveDraft(next, true))}
                 onChange={(next) => {
                   setBusiness(next);
-                  setDirty(true);
+                  markDirty();
                 }}
               />
             </section>
@@ -982,7 +1039,7 @@ export function ProductionUploadWorkspacePage() {
                       editable={editable}
                       onReady={() => setEditorReady(true)}
                       onDirty={() => {
-                        if (editorReady) setDirty(true);
+                        if (editorReady) markDirty();
                       }}
                       onEditorValue={() => undefined}
                     />
@@ -1007,7 +1064,7 @@ export function ProductionUploadWorkspacePage() {
                   documentStructure={undefined}
                   editable={editable}
                   bindings={[]}
-                  onDirty={() => setDirty(true)}
+                  onDirty={markDirty}
                   onEditorValue={() => undefined}
                   onPatch={(operation) =>
                     setSnapshot((current) => ({
@@ -1036,6 +1093,7 @@ export function ProductionUploadWorkspacePage() {
           <aside className="business-field-panel">
             <ProductionUploadFieldManagerPanel
               uploadId={record.id}
+              lockVersion={record.lockVersion}
               format="XLSX"
               recognitionResult={effectiveRecognitionResult}
               canUpdate={canUpdate && !recognizing}

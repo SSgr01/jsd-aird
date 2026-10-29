@@ -224,7 +224,7 @@ export function TemplatesPage() {
     okText: '删除草稿', okButtonProps: { danger: true }, cancelText: '取消',
     onOk: async () => {
       try {
-        await templateApi.deleteDraft(record.draftVersionId ?? record.versionId);
+        await templateApi.deleteDraft(record.draftVersionId ?? record.versionId,record.revision);
         await refreshCatalog();
       } catch (error) {
         void message.error(error instanceof Error ? error.message : '草稿删除失败');
@@ -238,7 +238,7 @@ export function TemplatesPage() {
     okText: '停用', okButtonProps: { danger: true }, cancelText: '取消',
     onOk: async () => {
       try {
-        await templateApi.retire(record.templateId);
+        await templateApi.retire(record.templateId,record.revision);
         await refreshCatalog();
       } catch (error) {
         void message.error(error instanceof Error ? error.message : '模板停用失败');
@@ -253,7 +253,7 @@ export function TemplatesPage() {
     try {
       const value = { name: formValues.name.trim(), description: formValues.description?.trim() || null };
       if (editor === 'NEW') await templateApi.createCategory(value);
-      else if (editor) await templateApi.renameCategory(editor.id, value);
+      else if (editor) await templateApi.renameCategory(editor.id, { ...value, revision: editor.revision });
       void message.success(editor === 'NEW' ? '分类已创建' : '分类已保存');
       setCategoryEditor(undefined); categoryForm.resetFields(); await refreshCatalog();
     } catch (error) { void message.error(error instanceof Error ? error.message : '分类保存失败'); }
@@ -263,7 +263,7 @@ export function TemplatesPage() {
   const deleteCategory = async () => {
     if (!deletingCategory) return; setSavingCategory(true);
     try {
-      await templateApi.deleteCategory(deletingCategory.id, replacementCategoryId);
+      await templateApi.deleteCategory(deletingCategory.id,deletingCategory.revision, replacementCategoryId);
       if (categoryId === deletingCategory.id) setCategoryId(undefined);
       setDeletingCategory(undefined); setReplacementCategoryId(undefined); setPage(1);
       await refreshCatalog();
@@ -273,7 +273,7 @@ export function TemplatesPage() {
 
   const moveTemplate = async (target?: string) => {
     if (!movingTemplate) return; setSavingCategory(true);
-    try { await templateApi.assignTemplateCategory(movingTemplate.templateId, target); setMovingTemplate(undefined); await refreshCatalog(); }
+    try { await templateApi.assignTemplateCategory(movingTemplate.templateId,movingTemplate.revision, target); setMovingTemplate(undefined); await refreshCatalog(); }
     catch (error) { void message.error(error instanceof Error ? error.message : '模板分类更新失败'); }
     finally { setSavingCategory(false); }
   };
@@ -281,7 +281,7 @@ export function TemplatesPage() {
   const submitOperation = async () => {
     if (!operation || !operationName.trim()) return; setOperating(true);
     try {
-      if (operation.type === 'RENAME') await templateApi.renameTemplate(operation.item.templateId, operationName.trim());
+      if (operation.type === 'RENAME') await templateApi.renameTemplate(operation.item.templateId, operationName.trim(),operation.item.revision);
       else await templateApi.copyTemplate(operation.item.versionId, { name: operationName.trim(), categoryId: operationCategoryId });
       setOperation(undefined); await refreshCatalog(); void message.success(operation.type === 'RENAME' ? '模板已重命名' : '模板副本已创建');
     } catch (error) { void message.error(error instanceof Error ? error.message : '操作失败'); }
@@ -298,7 +298,7 @@ export function TemplatesPage() {
     setBatchOperating(true);
     try {
       const results = await templateApi.batchActions({ action, categoryId: targetCategory,
-        items: eligible.map((item) => ({ templateId: item.templateId, versionId: item.draftVersionId ?? item.versionId })) });
+        items: eligible.map((item) => ({ templateId: item.templateId, revision: item.revision, versionId: item.draftVersionId ?? item.versionId })) });
       const successful = new Set(results.filter((item) => item.success).map((item) => item.templateId));
       setSelectedRecords((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !successful.has(id))));
       const failed = results.filter((item) => !item.success);
@@ -388,7 +388,7 @@ export function TemplatesPage() {
     </CatalogListPanel>
 
     <Modal title="新建模板" open={createOpen} confirmLoading={creating} okText={createMode === 'BLANK' ? '创建并进入工作台' : '前往文件导入'} onOk={() => void create()} onCancel={() => setCreateOpen(false)} destroyOnHidden>
-      <Radio.Group value={createMode} onChange={(event) => setCreateMode(event.target.value as CreateMode)} optionType="button" buttonStyle="solid" options={[{ value: 'BLANK', label: '空白新建' }, { value: 'IMPORT', label: 'Word、Excel 文件导入' }]} style={{ marginBottom: 20 }} />
+      <Radio.Group value={createMode} onChange={(event) => setCreateMode(event.target.value as CreateMode)} optionType="button" buttonStyle="solid" options={[{ value: 'BLANK', label: '空白新建' }, { value: 'IMPORT', label: '文件导入' }]} style={{ marginBottom: 20 }} />
       {createMode === 'BLANK' ? <Form form={form} layout="vertical" initialValues={{ format: 'XLSX' }}>
         <Form.Item name="name" label="模板名称" rules={[{ required: true, whitespace: true, message: '请输入模板名称' }]}><Input autoFocus maxLength={160} /></Form.Item>
         <Form.Item name="format" label="编辑格式" rules={[{ required: true }]}><Select options={[{ value: 'XLSX', label: 'Excel 模板' }, { value: 'DOCX', label: 'Word 模板' }]} /></Form.Item>

@@ -58,7 +58,21 @@ public class DataWorkbookService {
         var definition = templates.getVersion(actor.organizationId(), job.templateVersionId());
         var bindings = templates.getBindings(actor.organizationId(), job.templateVersionId());
         var file = requireFile(actor.organizationId(), job.sourceFileId());
-        var snapshot = sourceSnapshot(file, job.sourceFormat(), sheets);
+        var draft=repository.findWorkbookDraft(actor.organizationId(),importJobId).orElse(null);
+        var snapshot = draft==null?prepareLabSnapshot(actor.organizationId(),job,sourceSnapshot(file, job.sourceFormat(), sheets),definition):draft.snapshot().deepCopy();
+        if(draft!=null)com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot,draft.instance());
+        else if("XLSX".equalsIgnoreCase(job.sourceFormat())) {
+            var execution=templates.prepareImport(actor.organizationId(),job.templateVersionId(),job.sourceFileId());
+            if(execution!=null&&execution.definition()!=null&&execution.definition().schema()!=null) {
+                var resolved=execution.definition().schema().path("x-jsd-workbook-instance");
+                if(resolved.path("version").asInt()==2)com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot,resolved);
+            }
+        }
+        var effectiveInstance=com.jsd.aird.shared.excel.WorkbookStructure.seed(objectMapper,snapshot,definition.schema(),definition.mappings(),importJobId.toString());
+        if(effectiveInstance.isObject()) {
+            var execution=templates.prepareWorkbookImport(actor.organizationId(),job.templateVersionId(),snapshot,effectiveInstance);
+            definition=execution.definition();bindings=execution.bindings();
+        }
         var fields = importFields(rows, mappings, sheets, componentByBinding(definition));
         var fieldDefinitions = fieldDefinitions(definition, bindings, fields);
         applyCorrections(snapshot, fields);
@@ -75,13 +89,30 @@ public class DataWorkbookService {
         var job = repository.findJob(organizationId, importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
         var file = requireFile(organizationId, job.sourceFileId());
-        var snapshot = Set.of("DOCX", "IMAGE").contains(job.sourceFormat())
+        var draft=repository.findWorkbookDraft(organizationId,importJobId).orElse(null);
+        var source = draft!=null?draft.snapshot().deepCopy():Set.of("DOC", "DOCX", "IMAGE").contains(job.sourceFormat())
                 ? templateSnapshotForDocument(organizationId, job)
                 : sourceSnapshot(file, job.sourceFormat(), repository.listSheets(organizationId, importJobId));
+        var definition=templates.getVersion(organizationId,job.templateVersionId());
+        var snapshot=prepareLabSnapshot(organizationId,job,source,definition);
+        if(draft==null&&"XLSX".equalsIgnoreCase(job.sourceFormat())) {
+            var execution=templates.prepareImport(organizationId,job.templateVersionId(),job.sourceFileId());
+            if(execution!=null&&execution.definition()!=null&&execution.definition().schema()!=null) {
+                var resolved=execution.definition().schema().path("x-jsd-workbook-instance");
+                if(resolved.path("version").asInt()==2)com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot,resolved);
+            }
+        }
+        if(com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot))applyCorrections(snapshot,importFields(repository.listRows(organizationId,importJobId),repository.listMappings(organizationId,importJobId),repository.listSheets(organizationId,importJobId),componentByBinding(definition)));
         if (snapshot == null || !snapshot.isObject() || snapshot.isEmpty()) {
             throw new ApiException(ApiErrorCode.FILE_NOT_READY, "导入文件缺少可编辑工作簿快照");
         }
         return snapshot.deepCopy();
+    }
+
+    private JsonNode prepareLabSnapshot(UUID organizationId,DataRepository.Job job,JsonNode source,TemplateDataImportFacade.DataTemplateDefinition definition) {
+        if(definition==null||definition.schema()==null||!definition.schema().path("x-jsd-lab-template").isObject())return source;
+        var baseline=templates.getExperimentTemplateVersion(organizationId,job.templateVersionId()).snapshot();
+        return com.jsd.aird.shared.lab.LabWorkbook.prepare(objectMapper,source,baseline,job.sourceFileId().toString());
     }
 
     private JsonNode templateSnapshotForDocument(UUID organizationId, DataRepository.Job job) {
@@ -120,7 +151,7 @@ public class DataWorkbookService {
                 throw new ApiException(ApiErrorCode.FILE_NOT_READY, "原始 Excel 工作簿读取失败");
             }
         }
-        if (Set.of("CSV", "DOCX", "IMAGE").contains(format)) return csvSnapshot(file.originalName(), sheets);
+        if (Set.of("CSV", "DOC", "DOCX", "IMAGE").contains(format)) return csvSnapshot(file.originalName(), sheets);
         return objectMapper.createObjectNode();
     }
 
@@ -128,7 +159,7 @@ public class DataWorkbookService {
         var root = objectMapper.createObjectNode()
                 .put("id", UUID.randomUUID().toString())
                 .put("name", fileName)
-                .put("appVersion", "univer-0.25.1")
+                .put("appVersion", "univer-1.2.0")
                 .put("snapshotFormatVersion", 3);
         root.set("styles", objectMapper.createObjectNode());
         var order = root.putArray("sheetOrder");
@@ -256,7 +287,7 @@ public class DataWorkbookService {
                 result.add(new FieldValue(row.id().toString(), fieldCode,
                         userFieldName(fieldName, mapping == null ? null : mapping.sourceHeader(), fieldCode),
                         visibleLabelPath,
-                        bindingId, valuePath, valueSource, row.status(),
+                        bindingId, valuePath, valueSource, value.path("valueStatus").asText(row.status()),
                         mapping == null ? "TEXT" : mapping.valueType(), mapping == null ? "" : mapping.standardUnit(),
                         mapping != null && mapping.detail().path("required").asBoolean(false),
                         mapping != null && mapping.detail().path("identity").asBoolean(false),
@@ -534,7 +565,7 @@ public class DataWorkbookService {
         return new WorkbookContext(file.originalName(), file.contentType(), hash, format, snapshot,
                 sheets.stream().map(item -> new WorkbookSheet(item.sheetId(), item.sheetName(), item.sheetOrder(),
                         item.selected(), item.confirmationStatus())).toList(), selectedSheetId, editable,
-                regions, fieldDefinitions, records, fields);
+                regions, fieldDefinitions, records, fields,com.jsd.aird.shared.excel.WorkbookStructure.instance(snapshot));
     }
 
     List<WorkbookRegion> workbookRegions(TemplateDataImportFacade.DataTemplateDefinition definition,
@@ -787,7 +818,7 @@ public class DataWorkbookService {
         if (field != null && "COLUMN".equalsIgnoreCase(region.recordAxis())) {
             var recordKey = field.recordKey() == null ? "" : field.recordKey();
             if (!recordKey.matches(".*:column:[0-9]+$") && !recordKey.isBlank()
-                    && !recordKey.equals(field.recordId())) return recordKey;
+                    && !recordKey.startsWith("INSTANCE:") && !recordKey.equals(field.recordId())) return recordKey;
         }
         if (field != null && "COLUMN".equalsIgnoreCase(region.recordAxis()) && field.address() != null) {
             var match = java.util.regex.Pattern.compile("^([A-Za-z]+)").matcher(field.address());
@@ -831,5 +862,5 @@ public class DataWorkbookService {
                                   String format, JsonNode snapshot, List<WorkbookSheet> sheets,
                                   String selectedSheetId, boolean editable, List<WorkbookRegion> regions,
                                   List<FieldDefinitionView> fieldDefinitions,
-                                  List<WorkbookRecord> records, List<FieldValue> fields) {}
+                                  List<WorkbookRecord> records, List<FieldValue> fields,JsonNode templateInstance) {}
 }

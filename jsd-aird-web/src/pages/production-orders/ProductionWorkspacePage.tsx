@@ -1,8 +1,11 @@
+import { DocsEditor, SheetsEditor } from '@/features/template-workspace/editor-runtime';
+import { ContentLoading } from '@/components/loading/ContentLoading';
+import { editorUnchanged, flushEditorChanges, pauseWorkspaceInputs, snapshotBlob, useSaveSession } from '@/features/template-workspace/editor-save';
+import { trackSnapshot, useWorkspaceLoadGeneration } from '@/features/template-workspace/workspace-loading';
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
   DownOutlined,
-  LoadingOutlined,
   PlusOutlined,
   SaveOutlined,
   SendOutlined,
@@ -19,18 +22,17 @@ import {
   Result,
   Modal,
   Select,
-  Skeleton,
   Space,
-  Spin,
   Steps,
   Table,
   Tag,
   Typography,
 } from 'antd';
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import { readFieldModel, writeFieldModel } from '@/features/template-workspace/field-model';
+import { preloadWorkspaceEditor } from '@/features/template-workspace/preload-editor';
 import { createCustomFieldWorkspace } from '@/features/template-workspace/custom-field-operations';
 import { getAtPath, setAtPath } from '@/features/template-workspace/path-utils';
 import {
@@ -39,7 +41,7 @@ import {
   type RepeatDisplayColumn,
 } from '@/features/template-workspace/repeat-data';
 import { synchronizeStructuredData } from '@/features/template-workspace/structured-data';
-import { migrateWorkspaceStructure } from '@/features/template-workspace/structure-migration';
+import { createWorkbookInstance, type WorkbookTemplateInstance } from '@/features/template-workspace/workbook-instance';
 import {
   resolveBindingSelection,
   selectionCycleKey,
@@ -49,7 +51,6 @@ import type {
   EditorSelection,
   BusinessField,
   TemplateBinding,
-  WorkbookStructureOperation,
 } from '@/features/template-workspace/types';
 import type { ProductionWorkspace } from '@/features/production-orders/types';
 import {
@@ -57,13 +58,7 @@ import {
   type ProductionIngestJob,
 } from '@/services/production-orders/production-order-api';
 
-const DocsEditor = lazy(async () => ({
-  default: (await import('@/features/template-workspace/UniverDocsEditor')).UniverDocsEditor,
-}));
 
-const SheetsEditor = lazy(async () => ({
-  default: (await import('@/features/template-workspace/UniverSheetsEditor')).UniverSheetsEditor,
-}));
 
 export function ProductionWorkspacePage() {
   const { orderId } = useParams<{ orderId: string }>();
@@ -71,6 +66,13 @@ export function ProductionWorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { message, modal } = App.useApp();
   const editorRef = useRef<EditorHandle>(null);
+  const saveSession = useSaveSession(orderId);
+  const workspaceRootRef = useRef<HTMLElement>(null);
+  const savedGenerationRef = useRef(0);
+  const savedEditorRef = useRef<{ editor: EditorHandle; revision: number | undefined }>();
+  const editGenerationRef = useRef(0);
+  const savePromiseRef = useRef<Promise<false | Awaited<ReturnType<typeof productionOrderApi.saveDraft>>>>();
+  const saveOwnerRef = useRef<object>();
   const selectionCycleRef = useRef({ key: '', index: 0 });
   const [workspace, setWorkspace] = useState<ProductionWorkspace>();
   const [snapshot, setSnapshot] = useState<Record<string, unknown>>();
@@ -78,6 +80,10 @@ export function ProductionWorkspacePage() {
   const [selectedId, setSelectedId] = useState<string>();
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const latestSaveRef = useRef({ workspace, data });
+  latestSaveRef.current = { workspace, data };
+  const markDirty = () => { editGenerationRef.current += 1; setDirty(true); };
+  useEffect(() => { setSaving(false); }, [orderId]);
   const [error, setError] = useState<string>();
   const [lastSelection, setLastSelection] = useState<EditorSelection>();
   const [customFieldOpen, setCustomFieldOpen] = useState(false);
@@ -95,19 +101,28 @@ export function ProductionWorkspacePage() {
     valueRange: string;
   }>();
 
+  const beginLoad = useWorkspaceLoadGeneration();
   const loadWorkspace = useCallback(async () => {
+    const isCurrent = beginLoad();
     if (!orderId) return;
+    try {
     const model = await productionOrderApi.getEditModel(orderId);
-    const loaded = model.snapshotFileId
-      ? await productionOrderApi.downloadSnapshot(model.snapshotFileId)
-      : {};
+    if (!isCurrent()) return;
+    preloadWorkspaceEditor(model.format);
+    void productionOrderApi.listRevisions(orderId).then(history=>{if(isCurrent())setRevisions(history)}).catch(()=>undefined);
+    const loaded = await trackSnapshot(model.snapshotFileId ? productionOrderApi.downloadSnapshot(model.snapshotFileId) : Promise.resolve({}));
+    if (!isCurrent()) return;
     setWorkspace(model);
-    setRevisions(await productionOrderApi.listRevisions(orderId).catch(() => []));
     setData(model.data || {});
     setSnapshot(loaded);
-  }, [orderId]);
+    editGenerationRef.current = 0; savedGenerationRef.current = 0; savedEditorRef.current = undefined; setDirty(false);
+    } catch (reason) {
+      if (isCurrent()) throw reason;
+    }
+  }, [orderId, beginLoad]);
 
   useEffect(() => {
+    setWorkspace(undefined); setSnapshot(undefined); setError(undefined);
     void loadWorkspace().catch((reason) =>
       setError(reason instanceof Error ? reason.message : '生产单加载失败'));
   }, [loadWorkspace]);
@@ -211,31 +226,39 @@ export function ProductionWorkspacePage() {
       );
       setWorkspace({ ...workspace, schema: created.schema, mapping: created.mapping });
       setSelectedId(created.binding.bindingId);
-      if (values.labelRange) {
+      if (workspace.format !== 'XLSX' && values.labelRange) {
         await editorRef.current?.writeLabel?.(created.binding, created.field.name);
       }
       setCustomFieldOpen(false);
       customForm.resetFields();
-      setDirty(true);
+      markDirty();
       void message.success('订单自定义字段已添加');
     } catch (reason) {
       void message.error(reason instanceof Error ? reason.message : '字段添加失败');
     }
   };
 
-  const save = async () => {
-    if (!workspace || !orderId || !editorRef.current) return false;
+  const performSave = async () => {
+    const editor = editorRef.current, session = saveSession.current;
+    const isCurrent = () => session.active && saveSession.current === session && editorRef.current === editor;
+    if (!orderId || !editor) return false;
+    flushEditorChanges(editor);
+    const { workspace, data } = latestSaveRef.current;
+    if (!workspace) return false;
     setSaving(true);
     try {
-      const currentSnapshot = editorRef.current.getSnapshot();
+      const currentSnapshot = editor.getSnapshot();
+      const revision = editor.getContentRevision?.(), generation = editGenerationRef.current;
+      const upload = snapshotBlob(currentSnapshot, workspace.format);
       const synchronized = synchronizeStructuredData(
         data,
         workspace.mapping,
-        (binding) => editorRef.current?.readBinding(binding),
+        (binding) => editor.readBinding(binding),
       );
       const synchronizedData = synchronized.data;
       const bindingValues = synchronized.bindingValues;
-      const staged = await productionOrderApi.stageSnapshot(currentSnapshot, workspace.format);
+      const staged = await productionOrderApi.stageSnapshot(upload, workspace.format);
+      if (!isCurrent()) return false;
       const result = await productionOrderApi.saveDraft(orderId, {
         lockVersion: workspace.lockVersion,
         baseWorkspaceHash: workspace.workspaceHash,
@@ -244,38 +267,64 @@ export function ProductionWorkspacePage() {
         data: synchronizedData,
         snapshotFileId: staged.fileId,
         snapshotHash: staged.sha256,
-        editorAppVersion: 'univer-0.25.1',
-        pluginManifest: 'business-editor-v2',
+        editorAppVersion: 'univer-1.2.0',
+        pluginManifest: 'business-editor-1.2.0',
         snapshotFormatVersion: snapshotVersion(currentSnapshot, workspace.snapshotFormatVersion),
         bindingValues,
       });
-      setWorkspace({
-        ...workspace,
+      if (!isCurrent()) return false;
+      savedGenerationRef.current = generation; savedEditorRef.current = { editor, revision };
+      setWorkspace(current => current && ({
+        ...current,
         lockVersion: result.lockVersion,
         workspaceHash: result.workspaceHash,
         snapshotFileId: staged.fileId,
         snapshotHash: staged.sha256,
         reconciliationRequired: result.reconciliationRequired,
-      });
-      setData(synchronizedData);
-      setSnapshot(currentSnapshot);
-      setDirty(false);
+      }));
+      setData(current => current === data ? synchronizedData : current);
+      setDirty(editGenerationRef.current !== generation || !editorUnchanged(editorRef.current, editor, revision));
       void message.success('生产单已保存');
-      return true;
+      return result;
     } catch (reason) {
-      void message.error(reason instanceof Error ? reason.message : '保存失败');
+      if (isCurrent()) void message.error(reason instanceof Error ? reason.message : '保存失败');
       return false;
     } finally {
-      setSaving(false);
+      if (session.active && saveSession.current === session) {
+        setSaving(false);
+        if (editorRef.current !== editor) setDirty(true);
+      }
     }
+  };
+
+  const save = () => {
+    const owner = saveSession.current;
+    if (savePromiseRef.current && saveOwnerRef.current === owner) return savePromiseRef.current;
+    const pending = performSave().finally(() => { if (savePromiseRef.current === pending) savePromiseRef.current = undefined; });
+    saveOwnerRef.current = owner; savePromiseRef.current = pending; return pending;
   };
 
   const submitConfirmed = async () => {
     if (!workspace || !orderId) return;
-    if (dirty && !(await save())) return;
-    await productionOrderApi.submit(orderId);
-    setWorkspace({ ...workspace, status: 'SUBMITTED' });
-    void message.success('生产单已提交');
+    const session = saveSession.current, editor = editorRef.current;
+    const isCurrent = () => session.active && saveSession.current === session && editorRef.current === editor;
+    const resume = pauseWorkspaceInputs(workspaceRootRef.current);
+    try {
+      flushEditorChanges(editor);
+      const baseline = savedEditorRef.current?.editor === editor ? savedEditorRef.current.revision : 0;
+      const needsSave = editGenerationRef.current !== savedGenerationRef.current || Boolean(editor?.getContentRevision && editor.getContentRevision() !== baseline);
+      const generation = editGenerationRef.current, revision = editor?.getContentRevision?.();
+      const saved = needsSave || savePromiseRef.current ? await save() : undefined;
+      if (saved === false || !isCurrent()) return;
+      if (generation !== editGenerationRef.current || !editorUnchanged(editorRef.current, editor, revision)) { setDirty(true); return; }
+      const version = saved ? saved.lockVersion : workspace.lockVersion;
+      await productionOrderApi.submit(orderId, version);
+      if (!isCurrent()) return;
+      setWorkspace(current => current ? { ...current, lockVersion: version + 1, status: 'SUBMITTED' } : current);
+      void message.success('生产单已提交');
+    } catch (error) {
+      if (isCurrent()) void message.error(error instanceof Error ? error.message : '提交失败');
+    } finally { resume(); }
   };
 
   const submit = () => {
@@ -289,16 +338,12 @@ export function ProductionWorkspacePage() {
     });
   };
 
-  const handleStructureChange = useCallback((operation: WorkbookStructureOperation) => {
-    if (!workspace || !fieldModel) return;
-    const migrated = migrateWorkspaceStructure(workspace.mapping, fieldModel, operation);
-    setWorkspace({
-      ...workspace,
-      mapping: migrated.mapping,
-      schema: writeFieldModel(workspace.schema, migrated.model),
-    });
-    setDirty(true);
-  }, [fieldModel, workspace]);
+  const handleInstanceChange = useCallback((instance: WorkbookTemplateInstance) => {
+    const { workspace } = latestSaveRef.current;
+    if (!workspace) return;
+    const next = { ...workspace, mapping: instance.mapping, schema: writeFieldModel(workspace.schema, instance.model) };
+    latestSaveRef.current = { ...latestSaveRef.current, workspace: next }; setWorkspace(next); markDirty();
+  }, []);
 
   const confirmIngest = async () => {
     if (!workspace || !orderId || !ingestJob) return;
@@ -375,11 +420,11 @@ export function ProductionWorkspacePage() {
   if (error) {
     return <Result status="error" title="生产单加载失败" subTitle={error} extra={<Button onClick={() => navigate('/production-orders/list')}>返回列表</Button>} />;
   }
-  if (!workspace || !snapshot || !fieldModel) return <Skeleton active paragraph={{ rows: 14 }} />;
+  if (!workspace || !snapshot || !fieldModel) return <ContentLoading label="下载文档…" />;
 
   return (
     <div className="production-workspace-host">
-    <section className="workspace-shell production-workspace">
+    <section ref={workspaceRootRef} className="workspace-shell production-workspace">
       <header className="workspace-header">
         <Space className="production-workspace-identity" wrap>
           <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/production-orders/list')}>返回</Button>
@@ -475,17 +520,18 @@ export function ProductionWorkspacePage() {
         </aside>
 
         <div className="workspace-canvas">
-          <Suspense fallback={<Spin indicator={<LoadingOutlined spin />} tip="正在打开模板" fullscreen />}>
+          <Suspense fallback={<ContentLoading label="加载编辑器…" />}>
             {workspace.format === 'XLSX' ? (
               <SheetsEditor
                 ref={editorRef}
                 snapshot={snapshot}
                 bindings={workspace.mapping}
                 editable={editable}
-                onDirty={() => setDirty(true)}
+                onDirty={markDirty}
                 onEditorValue={onEditorValue}
                 onSelectionChange={onSelectionChange}
-                onStructureChange={handleStructureChange}
+                instance={createWorkbookInstance(readFieldModel(workspace.schema, workspace.mapping), workspace.mapping)}
+                onInstanceChange={handleInstanceChange}
               />
             ) : (
               <div className={editable ? undefined : 'document-readonly'}>
@@ -494,7 +540,7 @@ export function ProductionWorkspacePage() {
                   snapshot={snapshot}
                   bindings={workspace.mapping}
                   editable={editable}
-                  onDirty={() => setDirty(true)}
+                  onDirty={markDirty}
                   onEditorValue={onEditorValue}
                 />
               </div>
@@ -533,7 +579,7 @@ export function ProductionWorkspacePage() {
                     if (selected.syncDirection === 'EDITOR_TO_DATA') return;
                     const value = event.target.value;
                     setData((current) => setAtPath(current, selected.dataPath, value));
-                    setDirty(true);
+                    markDirty();
                     void editorRef.current?.writeBinding(selected, value).catch((reason) => {
                       void message.error(reason instanceof Error ? reason.message : '内容未能写入模板');
                     });

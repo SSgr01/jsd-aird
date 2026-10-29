@@ -45,7 +45,8 @@ public class KnowledgeIndexJobHandler implements AsyncJobHandler {
             return objectMapper.createObjectNode().put("status", "VECTOR_READY");
         }
         service.buildAndPublish(organizationId, uuid(payload, "actorId"), documentId,
-                uuid(payload, "versionId"), reviewRevisionId, payload.path("lockVersion").asInt());
+                uuid(payload, "versionId"), reviewRevisionId, payload.path("lockVersion").asInt(),
+                payload.path("authorizeAi").asBoolean(false));
         return objectMapper.createObjectNode().put("status", "PUBLISHED");
     }
 

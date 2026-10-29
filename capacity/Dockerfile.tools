@@ -1,0 +1,5 @@
+FROM python:3.12.11-slim-bookworm
+RUN pip install --no-cache-dir psycopg[binary]==3.2.10 httpx==0.28.1 argon2-cffi==25.1.0 openpyxl==3.1.5 python-docx==1.2.0 Pillow==11.3.0 minio==7.2.16
+WORKDIR /tools
+COPY capacity/*.py /tools/
+ENTRYPOINT ["python","/tools/lab.py"]

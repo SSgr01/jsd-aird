@@ -130,7 +130,7 @@ public final class TemplateLocatorNormalizer {
         ObjectNode locator = (ObjectNode) field.path("locator");
         String status = "REGION".equals(fieldType)
                 ? "NOT_APPLICABLE"
-                : hasLabel(locator) ? "RESOLVED" : "UNRESOLVED";
+                : field.path("labelTextMissing").asBoolean() || !hasLabel(locator) ? "UNRESOLVED" : "RESOLVED";
         field.put("labelStatus", status);
         if (field.path("columns").isArray()) {
             for (JsonNode columnNode : field.path("columns")) {
@@ -139,7 +139,7 @@ public final class TemplateLocatorNormalizer {
                         ? column.path("locator") : column);
                 column.set("locator", columnLocator);
                 column.put("fieldType", "TABLE_COLUMN");
-                column.put("labelStatus", hasLabel(columnLocator) ? "RESOLVED" : "UNRESOLVED");
+                column.put("labelStatus", column.path("labelTextMissing").asBoolean() || !hasLabel(columnLocator) ? "UNRESOLVED" : "RESOLVED");
             }
         }
     }

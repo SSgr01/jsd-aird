@@ -1,0 +1,135 @@
+name: ${AIRD_CAPACITY_RUN_ID:?isolated run ID required}
+x-environment: &environment
+  AIRD_CAPACITY_RUN_ID: ${AIRD_CAPACITY_RUN_ID:?}
+  CAPACITY_PASSWORD: ${CAPACITY_PASSWORD:?}
+  PGPASSWORD: ${CAPACITY_DB_PASSWORD:?}
+  PGHOST: postgres
+  PGUSER: capacity
+  PGDATABASE: aird_capacity
+  CAPACITY_STORAGE_PASSWORD: ${CAPACITY_STORAGE_PASSWORD:?}
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg18
+    cpus: 2
+    mem_limit: 1g
+    environment:
+      POSTGRES_USER: capacity
+      POSTGRES_PASSWORD: ${CAPACITY_DB_PASSWORD:?}
+      POSTGRES_DB: aird_capacity
+    command: [postgres, -c, max_connections=40, -c, shared_buffers=256MB]
+    volumes: [database:/var/lib/postgresql]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U capacity -d aird_capacity]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    cpus: 0.5
+    mem_limit: 256m
+    command: [server, /data]
+    environment:
+      MINIO_ROOT_USER: capacity
+      MINIO_ROOT_PASSWORD: ${CAPACITY_STORAGE_PASSWORD:?}
+    volumes: [objects:/data]
+  stub:
+    build: {context: .., dockerfile: capacity/Dockerfile.tools}
+    cpus: 0.25
+    mem_limit: 128m
+    entrypoint: [python, /tools/stub.py]
+    environment: {AIRD_CAPACITY_RUN_ID: '${AIRD_CAPACITY_RUN_ID}'}
+  python:
+    build: {context: ../jsd-aird-ai}
+    cpus: 1
+    mem_limit: 1g
+    environment:
+      JSD_AIRD_AI_HOST: 0.0.0.0
+      JSD_AIRD_AI_PORT: 8090
+      OMP_NUM_THREADS: 2
+      OPENBLAS_NUM_THREADS: 2
+      MKL_NUM_THREADS: 2
+      JSD_AIRD_AI_COMPUTATION_CONCURRENCY: 1
+    volumes: [python-temp:/tmp/jsd-aird-ai]
+  api:
+    build: {context: .., dockerfile: capacity/Dockerfile.api}
+    cpus: 2
+    mem_limit: 2g
+    depends_on:
+      postgres: {condition: service_healthy}
+      bootstrap: {condition: service_completed_successfully}
+      minio: {condition: service_started}
+    ports: ['127.0.0.1:${CAPACITY_API_PORT:-18082}:8080']
+    environment:
+      AIRD_CAPACITY_RUN_ID: ${AIRD_CAPACITY_RUN_ID}
+      JSD_AIRD_DATASOURCE_URL: jdbc:postgresql://postgres:5432/aird_capacity
+      JSD_AIRD_DATASOURCE_USERNAME: capacity_app
+      JSD_AIRD_DATASOURCE_PASSWORD: ${CAPACITY_DB_PASSWORD}
+      JSD_AIRD_MINIO_ENDPOINT: http://minio:9000
+      JSD_AIRD_MINIO_ACCESS_KEY: capacity
+      JSD_AIRD_MINIO_SECRET_KEY: ${CAPACITY_STORAGE_PASSWORD}
+      JSD_AIRD_MINIO_BUCKET: ${AIRD_CAPACITY_RUN_ID}
+      JSD_AIRD_ALLOWED_ORIGINS: http://127.0.0.1:${CAPACITY_API_PORT:-18082}
+      JSD_AIRD_MULTIPART_ROOT: /bounded/aird-multipart
+      APP_CAPACITY_TEMPORARY_ROOT: /bounded
+      JSD_AIRD_IAM_BOOTSTRAP_ENABLED: 'false'
+      SPRING_PROFILES_ACTIVE: worker
+      JSD_AIRD_WORKER_ENABLED: 'true'
+      JSD_AIRD_MODEL_BASE_URL: http://stub:8099/v1
+      JSD_AIRD_MODEL_API_KEY: isolated-stub
+      JSD_AIRD_MODEL_NAME: capacity-stub
+      JSD_AIRD_EMBEDDING_BASE_URL: http://stub:8099/v1
+      JSD_AIRD_EMBEDDING_API_KEY: isolated-stub
+      JSD_AIRD_OCR_BASE_URL: http://stub:8099/v1
+      JSD_AIRD_ASR_BASE_URL: http://stub:8099/v1
+      JSD_AIRD_MINERU_BASE_URL: http://stub:8099
+      JSD_AIRD_TAVILY_BASE_URL: http://stub:8099
+      JSD_AIRD_SPECTRUM_MODEL_BASE_URL: http://stub:8099/v1
+      JSD_AIRD_FORMULA_MODEL_BASE_URL: http://python:8090
+    volumes: [temporary:/bounded]
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:9091/actuator/health]
+      interval: 5s
+      timeout: 3s
+      start_period: 60s
+      retries: 30
+  bootstrap:
+    build: {context: .., dockerfile: capacity/Dockerfile.tools}
+    cpus: 0.5
+    mem_limit: 512m
+    depends_on: {postgres: {condition: service_healthy}}
+    environment: *environment
+    command: [bootstrap]
+    volumes:
+      - ../jsd-aird-api/src/main/resources/db:/db:ro
+      - ${CAPACITY_RUN_ROOT:?}/assets:/assets:ro
+      - ${CAPACITY_RUN_ROOT:?}/results:/results
+  tools:
+    build: {context: .., dockerfile: capacity/Dockerfile.tools}
+    cpus: 0.5
+    mem_limit: 512m
+    environment: *environment
+    profiles: [tools]
+    volumes:
+      - ${CAPACITY_RUN_ROOT}/results:/results
+      - ${CAPACITY_RUN_ROOT}/assets:/assets:ro
+  k6:
+    image: grafana/k6:2.3.0
+    user: '0:0'
+    cpus: 1
+    mem_limit: 512m
+    profiles: [load]
+    environment:
+      AIRD_CAPACITY_RUN_ID: ${AIRD_CAPACITY_RUN_ID}
+      CAPACITY_PASSWORD: ${CAPACITY_PASSWORD}
+      BASE_URL: http://api:8080
+    volumes:
+      - ./workload.js:/scripts/workload.js:ro
+      - ${CAPACITY_RUN_ROOT}/results:/results
+volumes:
+  database:
+  objects:
+  temporary:
+  python-temp:
+networks:
+  default:
+    internal: true

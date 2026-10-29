@@ -21,7 +21,7 @@ import com.jsd.aird.ops.application.port.ObjectStorage;
 import com.jsd.aird.shared.excel.WorkbookInstanceParser;
 import com.jsd.aird.shared.json.JsonCanonicalizer;
 import com.jsd.aird.tpl.api.TemplateOfficeFacade;
-import com.jsd.aird.tpl.api.TemplateOfficeNormalizationFacade;
+import com.jsd.aird.ops.application.port.TemplateOfficeNormalizationFacade;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 

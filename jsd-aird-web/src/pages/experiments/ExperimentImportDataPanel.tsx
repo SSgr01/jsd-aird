@@ -1,5 +1,8 @@
-import { Button, Empty, Tag, Typography } from 'antd';
-import { useMemo, useState } from 'react';
+import { Empty, Tag, Typography } from 'antd';
+import { useId, useMemo, useState } from 'react';
+import { FieldPanelToggle } from '@/components/field-panel/CollapsibleFieldPanel';
+import { useAppStore } from '@/stores/app-store';
+import { DataReviewFooter } from '@/features/data-workbench/DataReviewFooter';
 
 interface SheetSummary {
   id: string;
@@ -49,15 +52,20 @@ export function ExperimentImportDataPanel({ snapshot, confirmed, editable, busy,
   busy: boolean;
   onConfirm: () => void;
 }) {
+  const collapsed = useAppStore((state) => state.fieldPanelCollapsed);
+  const panelId = useId();
   const sheets = useMemo(() => summarize(snapshot), [snapshot]);
   const [selectedId, setSelectedId] = useState<string>();
   const selected = sheets.find((sheet) => sheet.id === selectedId) ?? sheets[0];
   const total = sheets.reduce((sum, sheet) => sum + sheet.count, 0);
-  return <aside className="data-workbench-panel experiment-template-data-panel experiment-import-data-panel">
+  return <aside id={panelId} className="data-workbench-panel experiment-template-data-panel experiment-import-data-panel collapsible-field-panel"
+    aria-label="字段数据核对" data-collapsed={collapsed}>
     <div className="data-workbench-panel-header">
       <div className="data-workbench-panel-title">
+        <FieldPanelToggle controls={panelId} />
+        {collapsed && <span className="field-panel-collapsed-label" aria-hidden="true">字段数据</span>}
         <Typography.Title level={5}>本次实验数据</Typography.Title>
-        <Tag color={confirmed ? 'success' : 'warning'}>{confirmed ? '已确认' : '待确认'}</Tag>
+        <Tag color={confirmed ? 'success' : 'warning'}>{confirmed ? '已核对' : '待核对'}</Tag>
       </div>
       <Typography.Text type="secondary">{sheets.length} 个工作表 · {total} 个非空单元格</Typography.Text>
     </div>
@@ -77,9 +85,14 @@ export function ExperimentImportDataPanel({ snapshot, confirmed, editable, busy,
         </Typography.Text> : null}
       </div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="此工作表没有数据" />}
     </div>
-    <div className="data-workbench-footer">
-      <Button type="primary" disabled={!editable || !total || confirmed} loading={busy}
-        onClick={onConfirm}>确认并提交本次数据</Button>
-    </div>
+    <DataReviewFooter
+      editable={editable}
+      confirmed={confirmed}
+      busy={busy}
+      blocked={!total}
+      idleHint="核对左侧工作簿；全部无误后完成核对"
+      blockedHint="当前工作簿没有可核对的数据"
+      onConfirm={onConfirm}
+    />
   </aside>;
 }

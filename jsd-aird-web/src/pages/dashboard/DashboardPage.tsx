@@ -12,11 +12,12 @@ import {
 import { Button, Tooltip } from 'antd';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useBusinessQuery } from '@/services/query/use-business-query';
 
 import { inventoryApi } from '@/services/inventory/inventory-api';
 import { listExperiments, type ExperimentSummary } from '@/services/experiments/experiment-api';
-import { getProjects, getTasks, type Project, type ProjectTask } from '@/services/project/project-api';
+import { getProjects, getTasks } from '@/services/project/project-api';
 import { DashboardQuickAction } from './DashboardQuickAction';
 import './dashboard-prototype.css';
 
@@ -230,56 +231,19 @@ function ModuleCard({ module }: { module: DashboardModule }) {
 }
 
 export function DashboardPage() {
-  const [inventoryReminders, setInventoryReminders] = useState<DashboardModuleItem[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [projectTotal, setProjectTotal] = useState(0);
-  const [tasks, setTasks] = useState<ProjectTask[]>([]);
-  const [taskTotal, setTaskTotal] = useState(0);
-  const [experiments, setExperiments] = useState<ExperimentSummary[]>([]);
-  const [experimentTotal, setExperimentTotal] = useState(0);
-  const [pendingReviews, setPendingReviews] = useState<ExperimentSummary[]>([]);
-  const [pendingReviewTotal, setPendingReviewTotal] = useState(0);
-  const [returnedExperiments, setReturnedExperiments] = useState<ExperimentSummary[]>([]);
-  const [returnedTotal, setReturnedTotal] = useState(0);
-  const [inventoryAlertTotal, setInventoryAlertTotal] = useState(0);
-
-  useEffect(() => {
-    void Promise.all([
-      getProjects({ page: 1, size: 6 }),
-      getTasks({ page: 1, size: 6 }),
-      listExperiments({ page: 1, size: 6 }),
-      listExperiments({ status: 'PENDING_REVIEW', page: 1, size: 6 }),
-      listExperiments({ status: 'RETURNED', page: 1, size: 6 }),
-      inventoryApi.balances({ page: 1, size: 100 }),
-    ])
-      .then(([projectData, taskData, experimentData, reviewData, returnedData, inventoryData]) => {
-        setProjects(projectData.items);
-        setProjectTotal(projectData.total);
-        setTasks(taskData.items);
-        setTaskTotal(taskData.total);
-        setExperiments(experimentData.items);
-        setExperimentTotal(experimentData.total);
-        setPendingReviews(reviewData.items);
-        setPendingReviewTotal(reviewData.total);
-        setReturnedExperiments(returnedData.items);
-        setReturnedTotal(returnedData.total);
-        setInventoryAlertTotal(inventoryData.summary.lowStockCount + inventoryData.summary.outOfStockCount);
-        const reminders = inventoryData.items
-          .filter((item) => item.alertStatus !== 'NORMAL')
-          .slice(0, 6)
-          .map((item) => ({
-            key: `${item.scope}-${item.productId}`,
-            title: `${item.productName} · ${item.alertStatus === 'LOW_STOCK' ? '低库存' : '无库存'}`,
-            meta: `${item.productCode} / ${item.quantityKg} KG`,
-            badge: '库存提醒',
-            to: '/inventory/query',
-          }));
-        setInventoryReminders(reminders);
-      })
-      .catch(() => {
-        setInventoryReminders([]);
-      });
-  }, []);
+  const projectsQuery = useBusinessQuery('projects', {page:1,size:6}, signal=>getProjects({page:1,size:6},signal));
+  const tasksQuery = useBusinessQuery('tasks', {page:1,size:6}, signal=>getTasks({page:1,size:6},signal));
+  const experimentsQuery = useBusinessQuery('experiments', {page:1,size:6}, signal=>listExperiments({page:1,size:6},signal));
+  const pendingQuery = useBusinessQuery('experiments', {status:'PENDING_REVIEW',page:1,size:6}, signal=>listExperiments({status:'PENDING_REVIEW',page:1,size:6},signal));
+  const returnedQuery = useBusinessQuery('experiments', {status:'RETURNED',page:1,size:6}, signal=>listExperiments({status:'RETURNED',page:1,size:6},signal));
+  const inventoryQuery = useBusinessQuery('inventory', {page:1,size:100}, signal=>inventoryApi.balances({page:1,size:100},signal));
+  const projects = projectsQuery.data?.items ?? []; const projectTotal = projectsQuery.data?.total ?? 0;
+  const tasks = tasksQuery.data?.items ?? []; const taskTotal = tasksQuery.data?.total ?? 0;
+  const experiments = experimentsQuery.data?.items ?? []; const experimentTotal = experimentsQuery.data?.total ?? 0;
+  const pendingReviews = pendingQuery.data?.items ?? []; const pendingReviewTotal = pendingQuery.data?.total ?? 0;
+  const returnedExperiments = returnedQuery.data?.items ?? []; const returnedTotal = returnedQuery.data?.total ?? 0;
+  const inventoryAlertTotal = inventoryQuery.data ? inventoryQuery.data.summary.lowStockCount + inventoryQuery.data.summary.outOfStockCount : 0;
+  const inventoryReminders = useMemo(() => (inventoryQuery.data?.items ?? []).filter(item=>item.alertStatus!=='NORMAL').slice(0,6).map(item=>({key:item.scope+'-'+item.productId,title:item.productName+' · '+(item.alertStatus==='LOW_STOCK'?'低库存':'无库存'),meta:item.productCode+' / '+item.quantityKg+' KG',badge:'库存提醒',to:'/inventory/query'})), [inventoryQuery.data]);
 
   const dashboardStats = useMemo(() => DASHBOARD_STATS.map((metric) => ({
     ...metric,

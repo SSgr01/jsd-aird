@@ -33,6 +33,22 @@ public class JdbcDataRepository implements DataRepository {
     }
 
     @Override
+    public Optional<WorkbookDraft> findWorkbookDraft(UUID organizationId, UUID jobId) {
+        return jdbc.query("SELECT snapshot_jsonb::text,instance_jsonb::text,operations_jsonb::text FROM data.import_workbook_draft WHERE organization_id=? AND import_job_id=?",
+                (rs,n)->new WorkbookDraft(readDraftJson(rs.getString(1)),readDraftJson(rs.getString(2)),readDraftJson(rs.getString(3))),organizationId,jobId).stream().findFirst();
+    }
+    private JsonNode readDraftJson(String text) { try{return objectMapper.readTree(text);}catch(Exception ex){throw new IllegalStateException("Invalid workbook draft",ex);} }
+    @Override
+    public void saveWorkbookDraft(UUID organizationId,UUID jobId,JsonNode snapshot,JsonNode instance,JsonNode operations,UUID actorId) {
+        jdbc.update("""
+                INSERT INTO data.import_workbook_draft(organization_id,import_job_id,snapshot_jsonb,instance_jsonb,operations_jsonb,updated_by)
+                VALUES(?,?,?,?,?,?) ON CONFLICT(organization_id,import_job_id) DO UPDATE SET
+                snapshot_jsonb=excluded.snapshot_jsonb,instance_jsonb=excluded.instance_jsonb,
+                operations_jsonb=excluded.operations_jsonb,updated_by=excluded.updated_by,updated_at=clock_timestamp()
+                """,organizationId,jobId,pgJson(snapshot),pgJson(instance),pgJson(operations),actorId);
+    }
+
+    @Override
     public void insertJob(NewJob job) {
         jdbc.update("""
                 INSERT INTO data.import_job (
@@ -523,6 +539,22 @@ public class JdbcDataRepository implements DataRepository {
                         parse(rs.getString("normalized_values_jsonb")), parse(rs.getString("corrected_values_jsonb")),
                         rs.getString("status"), parse(rs.getString("source_metadata_jsonb")),
                         rs.getBoolean("excluded"), rs.getString("exclusion_reason")), organizationId, importJobId);
+    }
+
+    @Override
+    @Transactional(readOnly=true)
+    public void forEachRow(UUID organizationId,UUID importJobId,java.util.function.Consumer<Row> consumer) {
+        jdbc.query(connection->{
+            var statement=connection.prepareStatement("""
+                SELECT r.id,s.sheet_id,r.source_row_number,r.raw_values_jsonb,r.normalized_values_jsonb,
+                    r.corrected_values_jsonb,r.status,r.source_metadata_jsonb,r.excluded,r.exclusion_reason
+                FROM data.staging_row r JOIN data.import_sheet s ON s.id=r.import_sheet_id
+                JOIN data.import_job j ON j.id=r.import_job_id
+                WHERE j.organization_id=? AND j.id=? AND s.selected=true
+                ORDER BY s.sheet_order,r.source_row_number
+                """);
+            statement.setObject(1,organizationId);statement.setObject(2,importJobId);statement.setFetchSize(256);return statement;
+        },(org.springframework.jdbc.core.RowCallbackHandler)rs->consumer.accept(new Row(rs.getObject("id",UUID.class),rs.getString("sheet_id"),rs.getInt("source_row_number"),parse(rs.getString("raw_values_jsonb")),parse(rs.getString("normalized_values_jsonb")),parse(rs.getString("corrected_values_jsonb")),rs.getString("status"),parse(rs.getString("source_metadata_jsonb")),rs.getBoolean("excluded"),rs.getString("exclusion_reason"))));
     }
 
     @Override

@@ -64,7 +64,7 @@ public class MeetingMinutesService {
                 current.createdAt(),
                 Instant.now()
         );
-        if (!repository.update(value, current.version(), CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
+        if (!repository.update(value, input.version(), CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
     }
 
     @Transactional
@@ -74,15 +74,16 @@ public class MeetingMinutesService {
     }
 
     @Transactional
-    public void archiveToKb(UUID id) {
+    public void archiveToKb(UUID id,long expectedVersion) {
         var current = get(id);
+        if(current.version()!=expectedVersion)CrmServiceSupport.conflict();
         if (current.archivedToKb()) return;
         var value = new MeetingMinutes(
                 current.id(), current.projectId(), current.title(), current.attendees(),
                 current.summary(), current.occurredAt(), true, current.version(),
                 current.createdAt(), Instant.now()
         );
-        if (!repository.update(value, current.version(), CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
+        if (!repository.update(value, expectedVersion, CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
     }
 
     private static int clamp(int value) {

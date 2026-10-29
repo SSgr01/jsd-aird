@@ -240,6 +240,23 @@ class StructuredDataExtractorTest {
     }
 
     @Test
+    void keepsUnlabelledMaterialQuantitiesForEveryComparisonColumn() {
+        var rows=List.of(List.of("实验编号","S1","S2"),List.of("","10","20"));
+        var contract=mapper.createObjectNode().put("templateUsage","EXPERIMENT_DATA");
+        contract.putObject("experimentImport").put("recordMode","BY_IDENTITY");
+        contract.putArray("listProjections").addObject().put("listProjectionId","formula").put("domain","FORMULA")
+                .put("componentId","component-1").put("parentBindingId","component-1")
+                .put("recordAxis","COLUMN").put("itemAxis","ROW").put("labelRange","A2:A2")
+                .put("valueRange","B2:C2").put("labelSemantic","MATERIAL_CODE").put("valueSemantic","ACTUAL_QTY");
+        var result=extractor.extract(sheet("sheet-1",rows),definitions("EXPERIMENT.NO"),
+                List.of(v9IdentityBinding("sheet-1","component-1","identity-1")),1,2,9,contract).orElseThrow();
+        assertThat(result.rows()).hasSize(2);
+        var mapping=result.mappings().stream().filter(m->"FORMULA.ACTUAL_QTY".equals(m.fieldCode())).findFirst().orElseThrow();
+        assertThat(mapping.detail().path("itemLabel").asText()).isEmpty();
+        assertThat(result.rows().get(0).rawValues().path(mapping.sourceColumn()).asText()).isEqualTo("10");
+        assertThat(result.rows().get(1).rawValues().path(mapping.sourceColumn()).asText()).isEqualTo("20");
+    }
+    @Test
     void v9KeepsPhysicalRecordKeysSeparateWhilePreservingSharedSourceIdentity() {
         var rows = List.of(
                 List.of("实验编号", "G-6563", "G-6564"),

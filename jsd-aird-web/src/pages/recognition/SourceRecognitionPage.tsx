@@ -416,12 +416,14 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
     );
   if (!job) return <Empty description="识别任务不存在" />;
 
+  const historicalFreeform = owner === 'DATA_CENTER' && job.recognitionMode === 'FREEFORM';
+
   const meta = (
     <Space wrap size={8}>
       <Tag color={owner === 'EXPERIMENT' ? 'purple' : 'blue'}>
         {owner === 'EXPERIMENT' ? '实验本来源' : '数据中心来源'}
       </Tag>
-      <Tag>{job.recognitionMode === 'FREEFORM' ? '自由识别' : '模板辅助'}</Tag>
+      <Tag>{historicalFreeform ? '历史自由识别（只读）' : job.recognitionMode === 'FREEFORM' ? '自由识别' : '模板辅助'}</Tag>
       <Tag
         color={
           job.status === 'COMPLETED' ? 'success' : job.status === 'FAILED' ? 'error' : 'processing'
@@ -434,7 +436,20 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
       </Typography.Text>
     </Space>
   );
-  const notice = parsing ? (
+  const notice = historicalFreeform ? (
+    <Alert
+      banner
+      showIcon
+      type="info"
+      message="这是历史自由识别记录，当前为只读状态。"
+      description={parsing
+        ? <Space direction="vertical" style={{ width: '100%' }}>
+          <span>系统仍在完成已有识别任务；识别完成后可查看结果并下载原文件。</span>
+          <Progress percent={job.progress} size="small" status="active" />
+        </Space>
+        : '可以查看识别结果、原始文件和审核记录；不能编辑、确认、重试或修改发布状态。'}
+    />
+  ) : parsing ? (
     <Alert
       banner
       showIcon
@@ -489,7 +504,7 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
       meta={meta}
       actions={
         <>
-          {owner === 'DATA_CENTER' && <DataPublicationPanel jobId={job.id} refreshKey={job.updatedAt}
+        {owner === 'DATA_CENTER' && <DataPublicationPanel readOnly={historicalFreeform} jobId={job.id} refreshKey={job.updatedAt}
             onStateChange={setPublication} onChanged={() => void load(false)} />}
           <Button icon={<ReloadOutlined />} onClick={() => void load()}>
             刷新
@@ -497,15 +512,15 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
           <Button icon={<FileSearchOutlined />} onClick={() => setPreviewOpen(true)}>
             预览原文件
           </Button>
-          <Button
+          {!historicalFreeform && <Button
             icon={<SaveOutlined />}
             loading={saving}
             disabled={reviewLocked || parsing || job.status === 'FAILED'}
             onClick={() => void save()}
           >
             保存工作区
-          </Button>
-          <Button
+          </Button>}
+          {!historicalFreeform && <Button
             type="primary"
             icon={<CheckCircleOutlined />}
             loading={finalizing}
@@ -513,7 +528,7 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
             onClick={() => void finalize()}
           >
             {owner === 'EXPERIMENT' ? '确认并创建实验' : '确认数据'}
-          </Button>
+          </Button>}
         </>
       }
       notice={notice}
@@ -539,8 +554,10 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
             items={[
               { key: 'data', label: '字段数据' },
               { key: 'structure', label: '字段结构' },
-              { key: 'mapping', label: reviewCount ? `字段映射 ${reviewCount}` : '字段映射' },
-              { key: 'boundaries', label: '实验边界' },
+              ...(!historicalFreeform ? [
+                { key: 'mapping', label: reviewCount ? `字段映射 ${reviewCount}` : '字段映射' },
+                { key: 'boundaries', label: '实验边界' },
+              ] as const : []),
             ]}
           />
           {activeTab === 'data' ? (
@@ -550,7 +567,7 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
               selectedCell={selectedCell}
               emptyDescription="识别完成后显示实际字段"
               headerExtra={
-                reviewCount ? (
+                !historicalFreeform && reviewCount ? (
                   <Button size="small" type="primary" onClick={() => setActiveTab('mapping')}>
                     去确认字段映射
                   </Button>
@@ -565,11 +582,11 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
                   onClick={() =>
                     selectCandidate(
                       candidates.find((item) => item.candidateId === field.valuePath),
-                      'mapping',
+                      historicalFreeform ? 'data' : 'mapping',
                     )
                   }
                 >
-                  定位并编辑
+                  {historicalFreeform ? '定位原字段' : '定位并编辑'}
                 </Button>
               )}
               renderFieldMeta={(field) => (
@@ -590,7 +607,7 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
               }
             />
           ) : null}
-          {activeTab === 'mapping' ? (
+          {!historicalFreeform && activeTab === 'mapping' ? (
             <RecognitionMappingPanel
               candidates={candidates}
               selectedCandidate={selectedCandidate}
@@ -604,7 +621,7 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
               onFocus={(candidate) => selectCandidate(candidate)}
             />
           ) : null}
-          {activeTab === 'boundaries' ? (
+          {!historicalFreeform && activeTab === 'boundaries' ? (
             <RecognitionBoundaryPanel
               boundaries={boundaries}
               candidates={candidates}

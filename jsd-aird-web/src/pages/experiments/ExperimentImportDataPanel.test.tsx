@@ -23,6 +23,6 @@ it('shows imported cells across sheets and confirms the saved workbook', () => {
   fireEvent.click(screen.getByRole('tab', { name: 'Sheet2' }));
   expect(screen.getByText('C3')).toBeInTheDocument();
   expect(screen.getByText('42')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: '确认并提交本次数据' }));
+  fireEvent.click(screen.getByRole('button', { name: '完成数据核对' }));
   expect(onConfirm).toHaveBeenCalledOnce();
 });

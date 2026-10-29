@@ -1,4 +1,5 @@
 import { httpClient, LARGE_PAYLOAD_TIMEOUT } from '@/services/http/client';
+import { HttpError } from '@/services/http/errors';
 
 interface ApiResponse<T> {
   data: T;
@@ -297,9 +298,9 @@ function cleanParams<T extends object>(query: T) {
   );
 }
 
-export async function getProjects(query: ProjectQuery): Promise<PageData<Project>> {
+export async function getProjects(query: ProjectQuery, signal?: AbortSignal): Promise<PageData<Project>> {
   const { data } = await httpClient.get<ApiResponse<PageData<Project>>>('/api/v1/projects', {
-    params: cleanParams(query),
+    params: cleanParams(query), signal,
   });
   return data.data;
 }
@@ -349,12 +350,20 @@ export async function commitProjectImport(input: ProjectImportCommitInput): Prom
   return data.data;
 }
 
-export async function updateProject(id: string, input: ProjectInput) {
+function requireProjectVersion(version: number) {
+  if (!Number.isSafeInteger(version) || version < 0) throw new HttpError('缺少有效的数据版本，请重新读取后操作', 'VERSION_REQUIRED', 422);
+}
+
+export async function updateProject(id: string, input: ProjectInput & { version: number }) {
+  requireProjectVersion(input.version);
   await httpClient.put(`/api/v1/projects/${id}`, input);
 }
 
-export async function deleteProjects(ids: string[]) {
-  await Promise.all(ids.map((id) => httpClient.delete(`/api/v1/projects/${id}`)));
+export async function deleteProjects(projects: ReadonlyArray<Pick<Project, 'id' | 'version'>>) {
+  projects.forEach(project => requireProjectVersion(project.version));
+  const results = await Promise.allSettled(projects.map(({ id, version }) => httpClient.delete(`/api/v1/projects/${id}`, { params: { version } })));
+  const failed = results.find(result => result.status === 'rejected');
+  if (failed?.status === 'rejected') throw failed.reason;
 }
 
 export async function copyProjects(ids: string[]) {
@@ -366,9 +375,9 @@ export async function getProjectStages(projectId: string): Promise<ProjectStage[
   return data.data;
 }
 
-export async function getStages(query: StageQuery): Promise<PageData<ProjectStage>> {
+export async function getStages(query: StageQuery, signal?: AbortSignal): Promise<PageData<ProjectStage>> {
   const { data } = await httpClient.get<ApiResponse<PageData<ProjectStage>>>('/api/v1/project-stages', {
-    params: cleanParams(query),
+    params: cleanParams(query), signal,
   });
   return data.data;
 }
@@ -394,9 +403,9 @@ export async function reorderStages(projectId: string, stages: ProjectStage[]): 
   return data.data;
 }
 
-export async function getProjectLogs(projectId: string, query: ProjectLogQuery = {}): Promise<PageData<ProjectAuditLog>> {
+export async function getProjectLogs(projectId: string, query: ProjectLogQuery = {}, signal?: AbortSignal): Promise<PageData<ProjectAuditLog>> {
   const { data } = await httpClient.get<ApiResponse<PageData<ProjectAuditLog>>>(`/api/v1/projects/${projectId}/logs`, {
-    params: cleanParams(query),
+    params: cleanParams(query), signal,
   });
   return data.data;
 }
@@ -406,9 +415,9 @@ export async function createProjectTask(projectId:string,input:{stageId:string;n
 export async function getProjectTask(taskId:string):Promise<ProjectTask>{const {data}=await httpClient.get<ApiResponse<ProjectTask>>(`/api/v1/tasks/${taskId}`);return data.data;}
 export async function updateProjectTask(taskId:string,input:{stageId:string;name:string;owner?:string;priority?:ProjectPriority;plannedDate?:string;status?:string;version:number}):Promise<ProjectTask>{const {data}=await httpClient.put<ApiResponse<ProjectTask>>(`/api/v1/tasks/${taskId}`,input);return data.data;}
 export async function deleteProjectTask(taskId:string, version:number):Promise<void>{await httpClient.delete(`/api/v1/tasks/${taskId}`,{params:{version}});}
-export async function getTasks(query: TaskQuery = {}): Promise<PageData<ProjectTask>> {
+export async function getTasks(query: TaskQuery = {}, signal?: AbortSignal): Promise<PageData<ProjectTask>> {
   const { data } = await httpClient.get<ApiResponse<PageData<ProjectTask>>>('/api/v1/tasks', {
-    params: cleanParams(query),
+    params: cleanParams(query), signal,
   });
   return data.data;
 }

@@ -17,6 +17,17 @@ class TemplateRecognitionCompilerTest {
     private final TemplateRecognitionCompiler compiler = new TemplateRecognitionCompiler(objectMapper);
 
     @Test
+    void keepsAnEmptyTitleUnresolvedEvenWhenItsLabelPositionIsKnown() {
+        var field = objectMapper.createObjectNode().put("kind", "SCALAR").put("name", "原字段名").put("labelTextMissing", true);
+        field.putObject("locator").put("sheetId", "s").put("labelRange", "A2").put("valueRange", "B2");
+        TemplateLocatorNormalizer.normalizeField(objectMapper, field);
+        assertThat(field.path("labelStatus").asText()).isEqualTo("UNRESOLVED");
+        field.put("labelTextMissing", false);
+        TemplateLocatorNormalizer.normalizeField(objectMapper, field);
+        assertThat(field.path("labelStatus").asText()).isEqualTo("RESOLVED");
+    }
+
+    @Test
     void compilesOnlyAcceptedSuggestionsIntoTheCanonicalDraft() throws Exception {
         var schema = objectMapper.createObjectNode().put("type", "object");
         schema.set("properties", objectMapper.createObjectNode());

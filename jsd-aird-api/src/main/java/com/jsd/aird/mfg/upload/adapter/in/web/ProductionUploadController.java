@@ -39,7 +39,7 @@ public class ProductionUploadController {
                 request.fileId(), request.productionName(), request.orderNo(), request.productName(),
                 request.category(), request.manufactureDate(), request.projectId(), request.projectName(),
                 request.stageId(), request.stageName(), request.taskId(), request.taskName(), request.visibility(),
-                request.sourceType(), request.templateVersionId(), request.replaceExisting())));
+                request.sourceType(), request.templateVersionId(), request.replaceExisting(), request.replacementId(), request.replacementVersion())));
     }
 
     @GetMapping
@@ -65,8 +65,8 @@ public class ProductionUploadController {
     }
 
     @PostMapping("/{id}/field-review")
-    public ApiResponse<ProductionUploadRepository.UploadView> ensureFieldReview(@PathVariable UUID id) {
-        return success(service.ensureFieldReview(id));
+    public ApiResponse<ProductionUploadRepository.UploadView> ensureFieldReview(@PathVariable UUID id,@Valid @RequestBody VersionRequest request) {
+        return success(service.ensureFieldReview(id,request.lockVersion()));
     }
 
     /** Saves the reviewed recognition fields and writes them into the workbook. */
@@ -77,7 +77,7 @@ public class ProductionUploadController {
                 .map(item -> new ProductionUploadService.FieldConfirmation(
                         item.fieldCode(), item.dataPath(), item.recordIndex(),
                         item.value(), item.reviewStatus()))
-                .toList()));
+                .toList(),request.lockVersion()));
     }
 
     @PutMapping("/{id}/rename")
@@ -91,23 +91,23 @@ public class ProductionUploadController {
     @PostMapping("/{id}/select-template")
     public ApiResponse<ProductionUploadRepository.UploadView> selectTemplate(
             @PathVariable UUID id, @Valid @RequestBody SelectTemplateRequest request) {
-        return success(service.selectTemplate(id, request.templateVersionId()));
+        return success(service.selectTemplate(id, request.templateVersionId(),request.lockVersion()));
     }
 
     @PostMapping("/{id}/retry")
-    public ApiResponse<ProductionUploadRepository.UploadView> retry(@PathVariable UUID id) {
-        return success(service.retry(id));
+    public ApiResponse<ProductionUploadRepository.UploadView> retry(@PathVariable UUID id,@Valid @RequestBody VersionRequest request) {
+        return success(service.retry(id,request.lockVersion()));
     }
 
     /** Builds the Excel workbook for a photo upload from its recognized values. */
     @PostMapping("/{id}/workbook")
-    public ApiResponse<ProductionUploadRepository.UploadView> convertToWorkbook(@PathVariable UUID id) {
-        return success(service.convertToWorkbook(id));
+    public ApiResponse<ProductionUploadRepository.UploadView> convertToWorkbook(@PathVariable UUID id,@Valid @RequestBody VersionRequest request) {
+        return success(service.convertToWorkbook(id,request.lockVersion()));
     }
 
     @DeleteMapping("/{id}")
-    public ApiResponse<Void> delete(@PathVariable UUID id) {
-        service.delete(id);
+    public ApiResponse<Void> delete(@PathVariable UUID id,@org.springframework.web.bind.annotation.RequestParam @jakarta.validation.constraints.PositiveOrZero long lockVersion) {
+        service.delete(id,lockVersion);
         return success(null);
     }
 
@@ -115,6 +115,7 @@ public class ProductionUploadController {
         return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown());
     }
 
+    public record VersionRequest(@NotNull @jakarta.validation.constraints.PositiveOrZero Long lockVersion) {}
     public record CreateRequest(
             @NotNull UUID fileId,
             @Size(max = 200) String productionName,
@@ -131,14 +132,16 @@ public class ProductionUploadController {
             @NotBlank String visibility,
             String sourceType,
             UUID templateVersionId,
-            boolean replaceExisting
+            boolean replaceExisting,
+            UUID replacementId,
+            @jakarta.validation.constraints.PositiveOrZero Long replacementVersion
     ) {
     }
 
-    public record SelectTemplateRequest(@NotNull UUID templateVersionId) {
+    public record SelectTemplateRequest(@NotNull UUID templateVersionId,@NotNull @jakarta.validation.constraints.PositiveOrZero Long lockVersion) {
     }
 
-    public record ConfirmFieldsRequest(@NotNull @Valid java.util.List<FieldDecision> fields) {
+    public record ConfirmFieldsRequest(@NotNull @jakarta.validation.constraints.PositiveOrZero Long lockVersion,@NotNull @Valid java.util.List<FieldDecision> fields) {
     }
 
     /** A reviewed field value: only the fields the workspace edited are sent. */

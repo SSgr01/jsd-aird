@@ -21,6 +21,7 @@ from jsd_aird_ai.contracts_v2 import (
 )
 from jsd_aird_ai.service_v2 import FormulaModelV2Service
 from jsd_aird_ai.settings import Settings
+from jsd_aird_ai.capacity import CapacityMiddleware, computation
 
 
 log = logging.getLogger("jsd_aird_ai")
@@ -36,6 +37,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
         openapi_url="/internal/v2/openapi.json",
     )
+    app.add_middleware(CapacityMiddleware, concurrency=resolved.computation_concurrency,
+                       maximum_json_bytes=resolved.maximum_json_bytes)
 
     def authorize(authorization: Annotated[str | None, Header()] = None) -> None:
         if resolved.internal_token is None:
@@ -135,28 +138,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
     @app.post("/internal/v2/modeling/workbench/train", dependencies=secured)
-    def train_modeling_workbench(payload: dict[str, Any]) -> dict[str, Any]:
-        return service_v2.train_workbench(payload)
+    def train_modeling_workbench(payload: dict[str, Any], request: Request) -> dict[str, Any]:
+        with computation(request):
+            return service_v2.train_workbench(payload)
 
     @app.post(
         "/internal/v2/models/score",
         response_model=ScoreResponseV2,
         dependencies=secured,
     )
-    def score_v2(payload: ScoreRequestV2) -> ScoreResponseV2:
-        return service_v2.score(payload)
+    def score_v2(payload: ScoreRequestV2, request: Request) -> ScoreResponseV2:
+        with computation(request):
+            return service_v2.score(payload)
 
     @app.post(
         "/internal/v2/models/recommend",
         response_model=RecommendResponseV2,
         dependencies=secured,
     )
-    def recommend_v2(payload: RecommendRequestV2) -> RecommendResponseV2:
-        return service_v2.recommend(payload)
+    def recommend_v2(payload: RecommendRequestV2, request: Request) -> RecommendResponseV2:
+        with computation(request):
+            return service_v2.recommend(payload)
 
     @app.post("/internal/v2/optimization/historical", dependencies=secured)
-    def recommend_historical_optimization(payload: dict[str, Any]) -> dict[str, Any]:
-        return service_v2.recommend_from_history(payload)
+    def recommend_historical_optimization(payload: dict[str, Any], request: Request) -> dict[str, Any]:
+        with computation(request):
+            return service_v2.recommend_from_history(payload)
 
     return app
 

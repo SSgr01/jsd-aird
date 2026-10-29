@@ -55,7 +55,7 @@ final class BindingLabelResolver {
                 continue;
             }
             var cells = cells(sheet);
-            var originalMatches = cells.stream().filter(cell -> original.contains(cell.row(), cell.column()))
+            var originalMatches = cells.stream().filter(cell -> atOriginalLabel(cell, original, sheet))
                     .filter(cell -> expected.contains(normalizeLabel(cell.value()))).toList();
             if (!originalMatches.isEmpty()) {
                 results.add(result(binding, locator, "ORIGINAL", labelRange, labelRange, List.of(), "LABEL_AT_ORIGINAL_POSITION"));
@@ -79,6 +79,21 @@ final class BindingLabelResolver {
             }
         }
         return new Resolution(List.copyOf(executable), results);
+    }
+
+    private boolean atOriginalLabel(CellValue cell, Range original, TemplateDataImportFacade.ParsedSheet sheet) {
+        if (original.contains(cell.row(), cell.column())) return true;
+        if (sheet.layoutIr() == null) return false;
+        // Excel stores a merged label's text at its top-left anchor. A locator
+        // inside that same merged label has not moved; translating all result
+        // columns to the anchor would silently drop the final comparison group.
+        for (var value : sheet.layoutIr().path("merges")) {
+            var merge = parseRange(value.asText());
+            if (merge != null && cell.row() == merge.startRow() && cell.column() == merge.startColumn()
+                    && merge.contains(original.startRow(), original.startColumn())
+                    && merge.contains(original.endRow(), original.endColumn())) return true;
+        }
+        return false;
     }
 
     private ObjectNode result(TemplateDataImportFacade.ImportBinding binding, JsonNode locator, String status,

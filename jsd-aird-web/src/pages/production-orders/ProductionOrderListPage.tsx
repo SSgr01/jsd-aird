@@ -1,3 +1,5 @@
+import { selectionSnapshot } from '@/services/query/selection-snapshot';
+import { useRequestGuard } from '@/services/query/use-request-guard';
 import {
   AppstoreOutlined,
   CopyOutlined,
@@ -84,7 +86,12 @@ export function ProductionOrderListPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [page, setPage] = useState({ current: 1, pageSize: 10, total: 0 });
-  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [selectedRecords, setSelectedRecords] = useState<ProductionUpload[]>([]);
+  const selectedKeys = selectedRecords.map(item => item.id);
+  const setSelectedKeys = (next: string[] | ((current: string[]) => string[])) => setSelectedRecords(previous => {
+    const ids = typeof next === 'function' ? next(previous.map(item => item.id)) : next;
+    return selectionSnapshot(previous, ids, items);
+  });
   const [view, setView] = useState<ViewMode>('list');
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -118,7 +125,9 @@ export function ProductionOrderListPage() {
     manufactureDate: string;
   }>();
 
+  const beginListRequest = useRequestGuard(JSON.stringify([keyword,status,projectId,page.current,page.pageSize]));
   const load = useCallback(async () => {
+    const request = beginListRequest();
     setLoading(true);
     try {
       const result = await productionUploadApi.list({
@@ -128,7 +137,8 @@ export function ProductionOrderListPage() {
         viewableOnly: true,
         page: page.current,
         size: page.pageSize,
-      });
+      }, request.signal);
+      if (!request.current()) return;
       setItems(result.items);
       setPage((current) => ({
         ...current,
@@ -137,11 +147,11 @@ export function ProductionOrderListPage() {
         total: result.total,
       }));
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : '生产单列表加载失败');
+      if (request.current()) void message.error(error instanceof Error ? error.message : '生产单列表加载失败');
     } finally {
-      setLoading(false);
+      if (request.current()) setLoading(false);
     }
-  }, [keyword, message, page.current, page.pageSize, projectId, status]);
+  }, [beginListRequest, keyword, message, page.current, page.pageSize, projectId, status]);
 
   useEffect(() => {
     void load();
@@ -175,10 +185,13 @@ export function ProductionOrderListPage() {
       okButtonProps: { danger: true },
       onOk: async () => {
         try {
-          await Promise.all(selectedKeys.map((id) => productionUploadApi.delete(id)));
+          if (selectedRecords.some(item => !Number.isSafeInteger(item.lockVersion) || item.lockVersion < 0)) throw new Error('原数据版本缺失');
+          const results = await Promise.allSettled(selectedRecords.map(item => productionUploadApi.delete(item.id, item.lockVersion)));
           setSelectedKeys([]);
-          void message.success('选中的生产单记录已作废');
           await load();
+          const failure = results.find(result => result.status === 'rejected');
+          if (failure?.status === 'rejected') throw failure.reason;
+          void message.success('选中的生产单记录已作废');
         } catch (error) {
           void message.error(error instanceof Error ? error.message : '批量删除失败');
         }
@@ -322,7 +335,7 @@ export function ProductionOrderListPage() {
       okButtonProps: { danger: true },
       onOk: async () => {
         try {
-          await productionUploadApi.delete(item.id);
+          await productionUploadApi.delete(item.id,item.lockVersion);
           setSelectedKeys((current) => current.filter((id) => id !== item.id));
           void message.success('生产单记录已作废');
           await load();

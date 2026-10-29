@@ -110,7 +110,7 @@ class IamAdminServiceTest {
         var adminId = UUID.randomUUID();
         when(store.user(adminId)).thenReturn(Optional.of(user(adminId, ORGANIZATION_ID, "SYSTEM_ADMIN", "ACTIVE")));
         when(store.activeSystemAdmins(ORGANIZATION_ID)).thenReturn(1L);
-        assertApiError(() -> service.setStatus(actor, adminId, false), ApiErrorCode.OPERATION_FORBIDDEN);
+        assertApiError(() -> service.setStatus(actor, adminId, false,0), ApiErrorCode.OPERATION_FORBIDDEN);
         verify(store).activeSystemAdmins(ORGANIZATION_ID);
     }
 
@@ -119,12 +119,12 @@ class IamAdminServiceTest {
         var builtin = role(UUID.randomUUID(), "SYSTEM_ADMIN", true, 0);
         when(store.role(ORGANIZATION_ID, builtin.id())).thenReturn(Optional.of(builtin));
         doThrow(new IllegalArgumentException("内置角色不可删除")).when(store).deleteRole(ORGANIZATION_ID, builtin.id());
-        assertApiError(() -> service.renameRole(actor, builtin.id(), "新名称"), ApiErrorCode.OPERATION_FORBIDDEN);
-        assertApiError(() -> service.deleteRole(actor, builtin.id()), ApiErrorCode.OPERATION_FORBIDDEN);
+        assertApiError(() -> service.renameRole(actor, builtin.id(), "新名称",0), ApiErrorCode.OPERATION_FORBIDDEN);
+        assertApiError(() -> service.deleteRole(actor, builtin.id(),0), ApiErrorCode.OPERATION_FORBIDDEN);
 
         var custom = role(UUID.randomUUID(), "CUSTOM_ROLE", false, 0);
         when(store.role(ORGANIZATION_ID, custom.id())).thenReturn(Optional.of(custom));
-        service.deleteRole(actor, custom.id());
+        service.deleteRole(actor, custom.id(),0);
         verify(store).deleteRole(ORGANIZATION_ID, custom.id());
     }
 
@@ -135,7 +135,7 @@ class IamAdminServiceTest {
         when(store.permissionDefinitions()).thenReturn(List.of(permission("project.view")));
         assertThat(service.userPermissions(actor, userId).version()).isZero();
 
-        when(store.user(userId)).thenReturn(Optional.of(userWithVersion(userId, ORGANIZATION_ID, "RND_ENGINEER", "ACTIVE", 1)));
+        when(store.user(userId)).thenReturn(Optional.of(user(userId, ORGANIZATION_ID, "RND_ENGINEER", "ACTIVE")),Optional.of(user(userId, ORGANIZATION_ID, "RND_ENGINEER", "ACTIVE")),Optional.of(userWithVersion(userId, ORGANIZATION_ID, "RND_ENGINEER", "ACTIVE", 1)));
         var version = service.saveUserPermissions(actor, userId, 0,
                 List.of(new Binding("project.view", "DENY", "ALL", List.of())));
 
@@ -143,6 +143,22 @@ class IamAdminServiceTest {
         verify(store).replaceUserOverrides(eq(ORGANIZATION_ID), eq(userId), eq(0L), anyList());
         verify(audit).append(eq(ORGANIZATION_ID), eq(ACTOR_ID), eq("IAM_USER_PERMISSIONS_UPDATED"),
                 eq("USER"), eq(userId), any());
+    }
+
+    @Test
+    void rejectsStaleAdministrativeActionsBeforeChangingSessionsPasswordsOrRoles() {
+        var id = UUID.randomUUID();
+        when(store.user(id)).thenReturn(Optional.of(userWithVersion(id, ORGANIZATION_ID, "RND_ENGINEER", "ACTIVE", 3)));
+        var custom = role(UUID.randomUUID(), "CUSTOM", false, 4);
+        when(store.role(ORGANIZATION_ID, custom.id())).thenReturn(Optional.of(custom));
+        assertApiError(() -> service.setStatus(actor,id,false,2),ApiErrorCode.POLICY_VERSION_CONFLICT);
+        assertApiError(() -> service.resetPassword(actor,id,"password",2),ApiErrorCode.POLICY_VERSION_CONFLICT);
+        assertApiError(() -> service.forceLogout(actor,id,2),ApiErrorCode.POLICY_VERSION_CONFLICT);
+        assertApiError(() -> service.renameRole(actor,custom.id(),"new",3),ApiErrorCode.POLICY_VERSION_CONFLICT);
+        assertApiError(() -> service.deleteRole(actor,custom.id(),3),ApiErrorCode.POLICY_VERSION_CONFLICT);
+        verifyNoInteractions(passwordEncoder,audit);
+        verify(store,org.mockito.Mockito.never()).revokeUserSessions(ORGANIZATION_ID,id);
+        verify(store,org.mockito.Mockito.never()).deleteRole(ORGANIZATION_ID,custom.id());
     }
 
     private static PermissionDefinitionContributor.PermissionDefinition permission(String code) {

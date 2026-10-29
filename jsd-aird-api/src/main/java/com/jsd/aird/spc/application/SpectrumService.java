@@ -91,9 +91,11 @@ public class SpectrumService {
     }
 
     @Transactional
-    public CategoryView updateCategory(UUID categoryId, CategoryCommand command) {
+    public CategoryView updateCategory(UUID categoryId, CategoryCommand command, String revision) {
         var actor = ActorContext.required();
+        repository.lockCategory(actor.organizationId(),categoryId);
         var category = requireCategory(actor.organizationId(), categoryId);
+        com.jsd.aird.shared.json.RevisionToken.require(revision,categoryView(category).getRevision());
         if (category.systemCategory()) throw new ApiException(ApiErrorCode.BAD_REQUEST, "内置图谱分类不可修改");
         var name = required(command.name(), "分类名称不能为空");
         repository.lockCategoryName(actor.organizationId(), name);
@@ -108,9 +110,11 @@ public class SpectrumService {
     }
 
     @Transactional
-    public void deleteCategory(UUID categoryId) {
+    public void deleteCategory(UUID categoryId, String revision) {
         var actor = ActorContext.required();
+        repository.lockCategory(actor.organizationId(),categoryId);
         var category = requireCategory(actor.organizationId(), categoryId);
+        com.jsd.aird.shared.json.RevisionToken.require(revision,categoryView(category).getRevision());
         if (category.systemCategory()) throw new ApiException(ApiErrorCode.BAD_REQUEST, "内置图谱分类不可删除");
         if (category.chartCount() > 0) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "分类中仍有图谱，请先移动图谱");
         repository.deleteCategory(actor.organizationId(), categoryId);
@@ -180,10 +184,10 @@ public class SpectrumService {
     }
 
     @Transactional
-    public ChartView updateChart(UUID chartId, UpdateChartCommand command) {
+    public ChartView updateChart(UUID chartId, UpdateChartCommand command, String revision) {
         var actor = ActorContext.required();
-        requireChart(actor.organizationId(), chartId);
-        if (command.categoryId() != null) assignChartCategory(chartId, command.categoryId());
+        requireChartRevision(actor.organizationId(),chartId,revision);
+        if (command.categoryId() != null) assignChartCategory(chartId, command.categoryId(), revision);
         repository.updateChart(actor.organizationId(), chartId, required(command.title(), "图谱名称不能为空"),
                 trim(command.sampleName()), trim(command.batchNo()), trim(command.testConditions()), validJsonObject(command.metadata()));
         audit(actor, "SPECTRUM_CHART_UPDATED", "SPECTRUM_CHART", chartId, command.title());
@@ -191,9 +195,10 @@ public class SpectrumService {
     }
 
     @Transactional
-    public ChartView assignChartCategory(UUID chartId, UUID categoryId) {
+    public ChartView assignChartCategory(UUID chartId, UUID categoryId, String revision) {
         var actor = ActorContext.required();
-        var current = requireChart(actor.organizationId(), chartId);
+        var current = requireChartRevision(actor.organizationId(),chartId,revision);
+        repository.lockCategory(actor.organizationId(),categoryId);
         var category = requireCategory(actor.organizationId(), categoryId);
         if (!current.categoryId().equals(category.id())
                 && repository.assignChartCategory(actor.organizationId(), chartId, category.id()) == 0) {
@@ -204,9 +209,9 @@ public class SpectrumService {
     }
 
     @Transactional
-    public void deleteChart(UUID chartId) {
+    public void deleteChart(UUID chartId, String revision) {
         var actor = ActorContext.required();
-        requireChart(actor.organizationId(), chartId);
+        requireChartRevision(actor.organizationId(),chartId,revision);
         if (repository.hasActiveProjectReference(actor.organizationId(), chartId)
                 || repository.hasAnalysisReportReference(actor.organizationId(), chartId)) {
             throw new ApiException(ApiErrorCode.REFERENCE_IN_USE,
@@ -523,6 +528,7 @@ public class SpectrumService {
 
     public record CategoryView(UUID id, String code, String name, String description, String analysisHint,
                                JsonNode fields, int sortOrder, boolean systemCategory, long chartCount) {
+        public String getRevision(){return com.jsd.aird.shared.json.RevisionToken.of(id,code,name,description,analysisHint,fields,sortOrder,systemCategory);}
         public List<String> getAllowedActions() { return AllowedActions.category(systemCategory); }
     }
 
@@ -530,12 +536,20 @@ public class SpectrumService {
                             String title, String originalName, String contentType, long size, String sha256,
                             String sampleName, String batchNo, String testConditions, JsonNode metadata,
                             int pageCount, String status, Instant createdAt, Instant updatedAt) {
+        public String getRevision(){return com.jsd.aird.shared.json.RevisionToken.of(id,categoryId,title,sampleName,batchNo,testConditions,metadata,status,updatedAt);}
         public List<String> getAllowedActions() {
             return AllowedActions.chart(status);
         }
     }
 
     public record PageView(int pageNo, int pageCount) { }
+
+    private SpectrumRepository.ChartRow requireChartRevision(UUID org,UUID id,String revision){
+        repository.lockChart(org,id);
+        var row=requireChart(org,id);
+        com.jsd.aird.shared.json.RevisionToken.require(revision,chartView(row).getRevision());
+        return row;
+    }
 
     public record StoredChartFile(SpectrumRepository.ChartRow chart, FileStorageFacade.StoredFile file) { }
 

@@ -1,16 +1,17 @@
-import { readFile, stat } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { bundleReport } from './bundle-report.mjs';
 
-const dist = resolve('dist');
-const html = await readFile(resolve(dist, 'index.html'), 'utf8');
-const entry = html.match(/src="\/assets\/([^\"]+\.js)"/);
-if (!entry) throw new Error('未找到 Vite 入口脚本');
-
-const entryPath = resolve(dist, 'assets', entry[1]);
-const entrySize = (await stat(entryPath)).size;
-const maxEntryBytes = 1_200_000;
-if (entrySize > maxEntryBytes) {
-  throw new Error(`首屏入口包超过 1.2 MB: ${entry[1]} (${Math.round(entrySize / 1024)} KB)`);
+const report = await bundleReport();
+const budgets = [
+  ['公共启动资源', report.startup, 900_000, 280_000],
+  ['登录页', report.pages['src/pages/auth/LoginPage.tsx'], 1_200_000, 380_000],
+  ['项目列表', report.pages['src/pages/project/ProjectListPage.tsx'], 1_950_000, 640_000],
+  ['实验列表', report.pages['src/pages/experiments/ExperimentListPage.tsx'], 2_100_000, 680_000],
+  ['知识库列表', report.pages['src/pages/knowledge/KnowledgeViewPage.tsx'], 1_950_000, 640_000],
+];
+for (const [label, size, maxBytes, maxGzipBytes] of budgets) {
+  if (!size) throw new Error(`未找到 ${label} 的构建记录，请检查路由是否仍按页面拆分`);
+  if (size.bytes > maxBytes || size.gzipBytes > maxGzipBytes) {
+    throw new Error(`${label} 超过资源预算: ${size.bytes}/${maxBytes} bytes, gzip ${size.gzipBytes}/${maxGzipBytes} bytes`);
+  }
+  console.log(`Bundle gate passed: ${label}: ${Math.round(size.bytes / 1000)} KB, gzip ${Math.round(size.gzipBytes / 1000)} KB`);
 }
-
-console.log(`Bundle gate passed: ${entry[1]} (${Math.round(entrySize / 1024)} KB) <= 1200 KB`);

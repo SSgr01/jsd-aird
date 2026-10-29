@@ -1,7 +1,10 @@
-import { DownloadOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, CheckOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
 import {
+  Alert,
+  AutoComplete,
   Button,
   Card,
+  Checkbox,
   Col,
   DatePicker,
   Descriptions,
@@ -17,12 +20,15 @@ import {
   Statistic,
   Table,
   Tag,
+  Tooltip,
   Upload,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import {
   inventoryApi,
@@ -33,11 +39,15 @@ import {
   type InventoryTransaction,
   type SampleDispatch,
   type Shipment,
+  type ShipmentHeader,
 } from '@/services/inventory/inventory-api';
 import type { InventoryProductOption } from '@/services/inventory/inventory-api';
-import { getPartners, type BusinessPartner } from '@/services/partners/partner-api';
+import { getPartnerContacts, getPartners, type BusinessPartner } from '@/services/partners/partner-api';
+import { qualityApi, type QualityRecord } from '@/services/quality/quality-api';
 import { errorMessage } from '@/services/http/errors';
 import { useAuthStore } from '@/stores/auth-store';
+import { parseRecipient } from './sample-recipient-parse';
+import { isShipmentWorkbook, parseShipmentWorkbook, shipmentWorkbookTemplate } from './shipment-workbook';
 import './inventory-pages.css';
 import '@/styles/management-list.css';
 
@@ -260,7 +270,7 @@ export function InventoryQueryPage() {
             const updated = await inventoryApi.updatePolicy(
               selected.productId,
               selected.scope,
-              values,
+              { ...values, revision: selected.policyRevision },
             );
             setSelected(updated);
             message.success('库存策略已保存');
@@ -382,7 +392,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
     setSaving(true);
     try {
       if (editing) {
-        await inventoryApi.updateTransaction(editing.id, {
+        await inventoryApi.updateTransaction(editing.id, { revision: editing.revision,
           businessDate: v.businessDate.format('YYYY-MM-DD'),
           documentNo: v.documentNo,
           reason: v.reason,
@@ -510,7 +520,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
             <Popconfirm
               title="确认生成反向冲销流水？"
               onConfirm={async () => {
-                await inventoryApi.reverse(r.id);
+                await inventoryApi.reverse(r.id,r.revision);
                 message.success('已冲销');
                 await load();
               }}
@@ -738,7 +748,196 @@ export function SampleRecordsPage() {
   return <BusinessRecords type="sample" />;
 }
 export function ShipmentRecordsPage() {
-  return <BusinessRecords type="shipment" />;
+  return <ShipmentHeaders />;
+}
+export function ShipmentDetailsPage() {
+  const [searchParams] = useSearchParams();
+  const shipmentNo = searchParams.get('shipmentNo') ?? '';
+  return <BusinessRecords type="shipment" shipmentNo={shipmentNo} />;
+}
+function ShipmentHeaders() {
+  const navigate = useNavigate();
+  const [productsByScope, setProductsByScope] = useState<Record<InventoryScope, InventoryProductOption[]>>({ RND: [], PRODUCTION: [] });
+  const [customers, setCustomers] = useState<BusinessPartner[]>([]);
+  const [data, setData] = useState<{ items: ShipmentHeader[]; page: number; size: number; total: number }>();
+  const [page, setPage] = useState(1);
+  const [size, setSize] = useState(20);
+  const [keyword, setKeyword] = useState('');
+  const [status, setStatus] = useState<'PENDING' | 'COMPLETED'>();
+  const [dateRange, setDateRange] = useState<[string, string]>();
+  const [query, setQuery] = useState<{
+    keyword: string; status?: 'PENDING' | 'COMPLETED'; startDate?: string; endDate?: string;
+  }>({ keyword: '' });
+  const [open, setOpen] = useState(false);
+  const [editingHeader, setEditingHeader] = useState<ShipmentHeader>();
+  const [saving, setSaving] = useState(false);
+  const [selectedHeaderNos, setSelectedHeaderNos] = useState<string[]>([]);
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [deletingNo, setDeletingNo] = useState<string>();
+  const [form] = Form.useForm();
+  const load = useCallback(async () => setData(await inventoryApi.shipmentHeaders({
+    page, size, ...query,
+  })), [page, size, query]);
+  const applyQuery = () => {
+    setPage(1);
+    setQuery({
+      keyword: keyword.trim(), status,
+      startDate: dateRange?.[0], endDate: dateRange?.[1],
+    });
+  };
+  const resetQuery = () => {
+    setKeyword('');
+    setStatus(undefined);
+    setDateRange(undefined);
+    setPage(1);
+    setQuery({ keyword: '' });
+  };
+  useEffect(() => { void load().catch((error: unknown) => message.error(errorMessage(error, '出货单加载失败'))); }, [load]);
+  useEffect(() => {
+    void Promise.all([inventoryApi.productOptions('RND'), inventoryApi.productOptions('PRODUCTION'),
+      getPartners({ status: 'ACTIVE', page: 1, size: 100 })])
+      .then(([rnd, production, partners]) => { setProductsByScope({ RND: rnd, PRODUCTION: production }); setCustomers(partners.items); })
+      .catch((error: unknown) => message.error(errorMessage(error, '导入选项加载失败')));
+  }, []);
+  const saveHeader = async () => {
+    try {
+      const values = await form.validateFields() as { shipmentNo: string; businessDate: Dayjs; note?: string };
+      setSaving(true);
+      const businessDate = values.businessDate.format('YYYY-MM-DD');
+      const note = values.note?.trim() ?? '';
+      if (editingHeader) await inventoryApi.updateShipmentHeader(editingHeader.shipmentNo, { businessDate, note });
+      else await inventoryApi.createShipmentHeader({ shipmentNo: values.shipmentNo.trim(), businessDate, note });
+      setOpen(false); form.resetFields(); await load();
+      if (!editingHeader) navigate(`/inventory/shipment-details?shipmentNo=${encodeURIComponent(values.shipmentNo.trim())}`);
+      setEditingHeader(undefined);
+    } catch (error) { message.error(errorMessage(error, '保存出货单失败')); }
+    finally { setSaving(false); }
+  };
+  const completeSelectedHeaders = async () => {
+    setBulkSaving(true);
+    try {
+      const result = await inventoryApi.completeShipmentHeaders(selectedHeaderNos);
+      message.success(`已完成 ${result.headerCount} 张出货单、${result.detailCount} 条明细`);
+      setSelectedHeaderNos([]);
+      await load();
+    } catch (error) { message.error(errorMessage(error, '批量完成出货单失败')); }
+    finally { setBulkSaving(false); }
+  };
+  const deleteHeader = async (row: ShipmentHeader) => {
+    setDeletingNo(row.shipmentNo);
+    try {
+      await inventoryApi.deleteShipmentHeader(row.shipmentNo);
+      message.success(`已删除出货单 ${row.shipmentNo}`);
+      setSelectedHeaderNos((current) => current.filter((item) => item !== row.shipmentNo));
+      if (data?.items.length === 1 && page > 1) setPage(page - 1);
+      else await load();
+    } catch (error) { message.error(errorMessage(error, '删除出货单失败')); }
+    finally { setDeletingNo(undefined); }
+  };
+  const deleteSelectedHeaders = async () => {
+    if (!selectedHeaderNos.length) return;
+    const completed = (data?.items ?? []).filter((row) =>
+      selectedHeaderNos.includes(row.shipmentNo) && row.completedCount > 0);
+    if (completed.length) {
+      message.warning(`选中的出货单中有 ${completed.length} 张存在已完成明细，不可删除`);
+      return;
+    }
+    setBulkDeleting(true);
+    try {
+      const deleted = await inventoryApi.deleteShipmentHeaders(selectedHeaderNos);
+      message.success(`已删除 ${deleted} 张出货单`);
+      const currentCount = data?.items.length ?? 0;
+      setSelectedHeaderNos([]);
+      if (deleted >= currentCount && page > 1) setPage(page - 1);
+      else await load();
+    } catch (error) { message.error(errorMessage(error, '批量删除出货单失败')); }
+    finally { setBulkDeleting(false); }
+  };
+  const hasUndeletableHeader = selectedHeaderNos.some((number) =>
+    (data?.items ?? []).some((row) => row.shipmentNo === number && row.completedCount > 0));
+  return <InventoryShell title="出货记录表" description="按出货单号查看出货明细。"
+    extra={<Space wrap><BusinessImportExport type="shipment" hideExport productsByScope={productsByScope} customers={customers} onDone={load} disabled={inventoryIsReadOnly()} />
+      <Button type="primary" icon={<PlusOutlined />} disabled={inventoryIsReadOnly()} onClick={() => {
+      setEditingHeader(undefined);
+      form.resetFields();
+      form.setFieldsValue({ shipmentNo: `CH-${dayjs().format('YYYYMMDD-HHmmss')}`, businessDate: dayjs() });
+      setOpen(true);
+    }}>新增出货单</Button></Space>}>
+    <div className="inventory-filters inventory-record-filters">
+      <Input.Search allowClear placeholder="搜索出货单号" value={keyword}
+        onChange={(event) => setKeyword(event.target.value)}
+        onSearch={() => { applyQuery(); }} />
+      <Select allowClear placeholder="全部状态" value={status}
+        onChange={(value) => setStatus(value)}
+        options={[{ value: 'PENDING', label: '未完成' }, { value: 'COMPLETED', label: '已完成' }]} />
+      <DatePicker.RangePicker
+        placeholder={['开始日期', '结束日期']}
+        value={dateRange ? [dayjs(dateRange[0]), dayjs(dateRange[1])] : null}
+        onChange={(values) => {
+          setDateRange(values?.[0] && values?.[1]
+            ? [values[0].format('YYYY-MM-DD'), values[1].format('YYYY-MM-DD')] : undefined);
+        }}
+      />
+      <Button type="primary" icon={<SearchOutlined />} onClick={applyQuery}>查询</Button>
+      <Button icon={<ReloadOutlined />} onClick={resetQuery}>重置</Button>
+      <Popconfirm title="确认删除出货单"
+        description={`将删除选中的 ${selectedHeaderNos.length} 张未完成出货单及其明细，此操作不可撤销。`}
+        onConfirm={() => { void deleteSelectedHeaders(); }} okButtonProps={{ loading: bulkDeleting }}>
+        <Button danger icon={<DeleteOutlined />}
+          disabled={inventoryIsReadOnly() || selectedHeaderNos.length === 0 || bulkDeleting || hasUndeletableHeader}>删除</Button>
+      </Popconfirm>
+      <Popconfirm title="确认批量完成出货" description={`将选中的 ${selectedHeaderNos.length} 张出货单设为已完成并扣减库存？`}
+        onConfirm={() => { void completeSelectedHeaders(); }} okButtonProps={{ loading: bulkSaving }}>
+        <Button icon={<CheckOutlined />} disabled={inventoryIsReadOnly() || selectedHeaderNos.length === 0 || bulkSaving}>
+          设为已完成{selectedHeaderNos.length > 0 ? ` (${selectedHeaderNos.length})` : ''}
+        </Button>
+      </Popconfirm>
+    </div>
+    <Table rowKey="shipmentNo" dataSource={data?.items} rowSelection={{
+      selectedRowKeys: selectedHeaderNos,
+      preserveSelectedRowKeys: true,
+      getCheckboxProps: (row: ShipmentHeader) => ({ disabled: inventoryIsReadOnly() || row.detailCount === 0 || row.completedCount === row.detailCount }),
+      onChange: (keys) => {
+        if (keys.length > 100) { message.warning('最多选择 100 张出货单'); return; }
+        setSelectedHeaderNos(keys.map(String));
+      },
+    }} scroll={{ x: 1120 }} columns={[
+      { title: '日期', dataIndex: 'businessDate', width: 105 },
+      { title: '出货单号', dataIndex: 'shipmentNo', width: 260, render: (value: string) =>
+        <Button type="link" style={{ padding: 0 }} onClick={() => navigate(`/inventory/shipment-details?shipmentNo=${encodeURIComponent(value)}`)}>{value}</Button> },
+      { title: '状态', key: 'status', width: 90, render: (_: unknown, row: ShipmentHeader) =>
+        <Tag color={row.detailCount > 0 && row.completedCount === row.detailCount ? 'success' : 'processing'}>
+          {row.detailCount > 0 && row.completedCount === row.detailCount ? '已完成' : '未完成'}
+        </Tag> },
+      { title: '明细条数', dataIndex: 'detailCount', width: 85 },
+      { title: '总数量 KG', dataIndex: 'totalQuantityKg', width: 120 },
+      { title: '备注', dataIndex: 'note', width: 200, ellipsis: true },
+      { title: '操作', width: 200, render: (_: unknown, row: ShipmentHeader) => <Space>
+        <Button type="link"
+          onClick={() => navigate(`/inventory/shipment-details?shipmentNo=${encodeURIComponent(row.shipmentNo)}`)}>明细</Button>
+        <Button type="link" disabled={inventoryIsReadOnly()}
+          onClick={() => { setEditingHeader(row); form.setFieldsValue({ shipmentNo: row.shipmentNo, businessDate: dayjs(row.businessDate), note: row.note ?? '' }); setOpen(true); }}>编辑</Button>
+        <Popconfirm title="确认删除出货单"
+          description={`将删除出货单 ${row.shipmentNo} 及其全部未完成明细，此操作不可撤销。`}
+          onConfirm={() => { void deleteHeader(row); }}
+          okButtonProps={{ loading: deletingNo === row.shipmentNo }}>
+          <Button type="link" danger disabled={inventoryIsReadOnly() || row.completedCount > 0}>删除</Button>
+        </Popconfirm>
+      </Space> },
+    ]} pagination={{ current: page, pageSize: size, total: data?.total, showSizeChanger: true,
+      onChange: (nextPage, nextSize) => { setPage(nextPage); setSize(nextSize); } }} />
+    <Modal title={editingHeader ? '编辑出货单' : '新增出货单'} open={open} confirmLoading={saving} onCancel={() => { setOpen(false); setEditingHeader(undefined); form.resetFields(); }}
+      onOk={() => { void saveHeader(); }}>
+      <Form form={form} layout="vertical">
+        <Form.Item name="shipmentNo" label="出货单号" rules={[{ required: true, whitespace: true }]}><Input disabled={!!editingHeader} /></Form.Item>
+        <Form.Item name="businessDate" label="日期" rules={[{ required: true }]}>
+          <DatePicker className="inventory-full" disabled={!!editingHeader && editingHeader.completedCount > 0} />
+        </Form.Item>
+        <Form.Item name="note" label="备注"><Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} maxLength={500} showCount /></Form.Item>
+      </Form>
+    </Modal>
+  </InventoryShell>;
 }
 type BusinessFormValues = {
   businessDate: Dayjs;
@@ -747,7 +946,9 @@ type BusinessFormValues = {
   productId: { value: string; label?: string };
   scope: InventoryScope;
   quantityKg: number;
+  packageQuantity?: number;
   customerId: string;
+  newCustomerName?: string;
   recipientName: string;
   recipientPhone: string;
   sampleAddress?: string;
@@ -758,33 +959,299 @@ type BusinessFormValues = {
   clientContactPhone?: string;
   customerRequirement?: string;
   customerFeedback?: string;
+  status?: 'PENDING' | 'COMPLETED';
   batchNo?: string;
+  specification?: string;
+  totalQuantityKg?: number;
+  shippingAddress?: string;
   coaNo?: string;
   note?: string;
 };
 
-function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
+function ShipmentSheet({ date, rows, total, page, pages, readOnly, addDisabled, selectedIds, deleting, statusSaving,
+  statusDisabled, extraActions, onBack, onEdit, onAdd, onPage, onSelect, onDelete, onSetStatus }: {
+  date?: string;
+  rows: Shipment[];
+  total: number;
+  page: number;
+  pages: number;
+  readOnly: boolean;
+  addDisabled: boolean;
+  selectedIds: string[];
+  deleting: boolean;
+  statusSaving: boolean;
+  statusDisabled: boolean;
+  extraActions?: ReactNode;
+  onBack?: () => void;
+  onEdit: (row: Shipment) => void;
+  onAdd: () => void;
+  onPage: (page: number) => void;
+  onSelect: (ids: string[]) => void;
+  onDelete: (ids: string[]) => void;
+  onSetStatus: () => void;
+}) {
+  const pendingIds = rows.filter((row) => row.status === 'PENDING' && !row.transactionId).map((row) => row.id);
+  const selectedOnPage = pendingIds.filter((id) => selectedIds.includes(id));
+  return <div className="shipment-sheet-layout">
+    <div className="shipment-sheet-actions">
+      {onBack && <Button icon={<ArrowLeftOutlined />} onClick={onBack}>返回</Button>}
+      <Button type="primary" icon={<PlusOutlined />} disabled={addDisabled} onClick={onAdd}>添加客户</Button>
+      <Popconfirm title="确认批量删除明细" description={`将删除选中的 ${selectedIds.length} 条未完成明细，此操作不可撤销。`}
+        onConfirm={() => onDelete(selectedIds)} okButtonProps={{ loading: deleting }}>
+        <Button danger icon={<DeleteOutlined />} disabled={readOnly || deleting || selectedIds.length === 0}>
+          删除{selectedIds.length ? ` (${selectedIds.length})` : ''}
+        </Button>
+      </Popconfirm>
+      {extraActions}
+      <Popconfirm title="确认设置状态" description="将该出货单状态设置为已完成并扣减库存？"
+        onConfirm={onSetStatus} okButtonProps={{ loading: statusSaving }}>
+        <Button icon={<CheckOutlined />} disabled={readOnly || statusSaving || statusDisabled}>
+          设置状态
+        </Button>
+      </Popconfirm>
+    </div>
+    <div className="shipment-sheet-scroll">
+      <div className="shipment-sheet-mobile-title">出货记录表</div>
+      <table className="shipment-sheet" aria-label="出货记录表">
+        <colgroup><col className="shipment-sheet-check" /><col className="shipment-sheet-customer" />
+          <col className="shipment-sheet-product" />
+          <col className="shipment-sheet-batch" /><col className="shipment-sheet-number" />
+          <col className="shipment-sheet-number" /><col className="shipment-sheet-number" />
+          <col className="shipment-sheet-courier" /><col className="shipment-sheet-note" />
+          <col className="shipment-sheet-operation" /></colgroup>
+        <thead>
+          <tr className="shipment-sheet-title"><th colSpan={10}>出货记录表</th></tr>
+          <tr className="shipment-sheet-date"><th /><th>日期</th><th>{date ?? ''}</th><th colSpan={7} /></tr>
+          <tr><th>
+            <Checkbox aria-label="选择本页未完成明细" disabled={readOnly || pendingIds.length === 0}
+              checked={pendingIds.length > 0 && selectedOnPage.length === pendingIds.length}
+              indeterminate={selectedOnPage.length > 0 && selectedOnPage.length < pendingIds.length}
+              onChange={(event) => onSelect(event.target.checked
+                ? [...new Set([...selectedIds, ...pendingIds])]
+                : selectedIds.filter((id) => !pendingIds.includes(id)))} />
+          </th><th>客户名</th><th>品名</th><th>批次号</th><th>规格</th><th>数量</th>
+            <th>总数量</th><th>快递公司</th><th>备注</th><th>操作</th></tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.id}>
+              <td>
+                {row.status === 'PENDING' && !row.transactionId && <Checkbox
+                  aria-label={`选择 ${row.productName} 明细`} disabled={readOnly || deleting}
+                  checked={selectedIds.includes(row.id)}
+                  onChange={(event) => onSelect(event.target.checked
+                    ? [...selectedIds, row.id] : selectedIds.filter((id) => id !== row.id))} />}
+              </td>
+              <td><span className="shipment-sheet-select"><span>{row.customerName || ''}</span>
+                {row.status === 'COMPLETED' && <CheckOutlined title="已完成" />}</span></td>
+              <td title={row.productName}>{row.productName}</td>
+              <td>{row.batchNo || ''}</td>
+              <td>{row.specification || ''}</td>
+              <td>{row.packageQuantity ?? ''}</td>
+              <td>{row.totalQuantityKg ?? row.quantityKg}</td>
+              <td>{row.courierCompany || ''}</td>
+              <td>{row.note || ''}</td>
+              <td><Tooltip title="编辑明细"><Button type="text" size="small" icon={<EditOutlined />}
+                aria-label={`编辑 ${row.productName}`}
+                disabled={readOnly || row.status !== 'PENDING' || !!row.transactionId}
+                onClick={() => onEdit(row)} /></Tooltip></td>
+            </tr>
+          ))}
+          {Array.from({ length: Math.max(0, 12 - rows.length) }, (_, index) => (
+            <tr key={`empty-${index}`} className="shipment-sheet-empty"><td /><td /><td /><td /><td /><td /><td /><td /><td /><td /></tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    <div className="shipment-sheet-pagination">
+      <span>共 {total} 条明细</span>
+      <Button disabled={page <= 1} onClick={() => onPage(page - 1)}>上一页</Button>
+      <span>{page} / {pages || 1}</span>
+      <Button disabled={page >= pages} onClick={() => onPage(page + 1)}>下一页</Button>
+    </div>
+  </div>;
+}
+
+function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; shipmentNo?: string }) {
   const sample = type === 'sample';
+  const navigate = useNavigate();
+  const [header, setHeader] = useState<ShipmentHeader>();
   const [data, setData] = useState<PageData>();
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm();
+  const selectedCustomerId = Form.useWatch('customerId', form) as string | undefined;
+  const sampleSpecification = Form.useWatch('specification', form) as number | undefined;
+  const samplePackageQuantity = Form.useWatch('packageQuantity', form) as number | undefined;
+  const sampleTotalKg = sampleSpecification != null && samplePackageQuantity != null
+    ? Math.round(sampleSpecification * samplePackageQuantity * 1_000_000) / 1_000_000 : undefined;
+  const recipientRequest = useRef(0);
   const [productsByScope, setProductsByScope] = useState<
     Record<InventoryScope, InventoryProductOption[]>
   >({ RND: [], PRODUCTION: [] });
   const [formScope, setFormScope] = useState<InventoryScope>(sample ? 'RND' : 'PRODUCTION');
   const [productSearch, setProductSearch] = useState('');
   const [customers, setCustomers] = useState<BusinessPartner[]>([]);
+  const [recipientText, setRecipientText] = useState('');
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<SampleDispatch | Shipment>();
+  const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([]);
+  const [deletingDetails, setDeletingDetails] = useState(false);
+  const [deletingSamples, setDeletingSamples] = useState(false);
+  const [sheetStatusSaving, setSheetStatusSaving] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
+  const [statusSaving, setStatusSaving] = useState(false);
+  const [coaOptions, setCoaOptions] = useState<QualityRecord[]>([]);
+  const [coaSearch, setCoaSearch] = useState('');
+  const [coaPage, setCoaPage] = useState(1);
+  const [coaHasMore, setCoaHasMore] = useState(false);
+  const [coaLoading, setCoaLoading] = useState(false);
+  const [coaOpen, setCoaOpen] = useState(false);
+  const [coaVerified, setCoaVerified] = useState(true);
+  const coaRequest = useRef(0);
   const [readOnly] = useState(() => inventoryIsReadOnly());
   const [searchKeyword, setSearchKeyword] = useState('');
-  const [filters, setFilters] = useState({ keyword: '', page: 1, size: 10 });
+  const [filters, setFilters] = useState<{
+    keyword: string; page: number; size: number;
+    status?: 'PENDING' | 'COMPLETED'; startDate?: string; endDate?: string;
+  }>({ keyword: '', page: 1, size: 10 });
+  const [filterStatus, setFilterStatus] = useState<'PENDING' | 'COMPLETED'>();
+  const [filterDateRange, setFilterDateRange] = useState<[string, string]>();
+  const applyFilters = () => {
+    setFilters((current) => ({
+      ...current,
+      keyword: searchKeyword.trim(),
+      status: filterStatus,
+      startDate: filterDateRange?.[0],
+      endDate: filterDateRange?.[1],
+      page: 1,
+    }));
+  };
+  const resetFilters = () => {
+    setSearchKeyword('');
+    setFilterStatus(undefined);
+    setFilterDateRange(undefined);
+    setFilters((current) => ({
+      ...current, keyword: '', status: undefined, startDate: undefined, endDate: undefined, page: 1,
+    }));
+  };
   const currentUserName = useAuthStore((state) => state.user?.displayName ?? '');
+  const canCreateCustomer = useAuthStore((state) => state.can('customer.create'));
+  const recognizeRecipient = (text: string) => {
+    recipientRequest.current += 1;
+    setRecipientText(text);
+    const parsed = parseRecipient(text);
+    form.setFieldsValue({ recipientName: parsed.name,
+      recipientPhone: parsed.phone, [sample ? 'sampleAddress' : 'shippingAddress']: parsed.address,
+      clientContact: parsed.name, clientContactPhone: parsed.phone });
+  };
+  const searchCustomers = async (keyword: string) => {
+    if (!keyword.trim()) return;
+    try { setCustomers((await getPartners({ keyword, status: 'ACTIVE', page: 1, size: 30 })).items); }
+    catch { message.error('客户搜索失败'); }
+  };
+  const loadCoaOptions = useCallback(async (keyword: string, page: number) => {
+    const request = ++coaRequest.current;
+    setCoaLoading(true);
+    try {
+      const result = await qualityApi.records({ type: 'coa', status: '已签发', keyword: keyword.trim(), page, size: 20 });
+      if (request !== coaRequest.current) return;
+      setCoaOptions((current) => page === 1 ? result.items : [
+        ...current, ...result.items.filter((item) => !current.some((existing) => existing.id === item.id)),
+      ]);
+      setCoaPage(page);
+      setCoaHasMore(page < result.totalPages);
+    } catch (error) {
+      if (request === coaRequest.current) message.error(errorMessage(error, 'COA 列表加载失败'));
+    } finally {
+      if (request === coaRequest.current) setCoaLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    if (!coaOpen) return;
+    const timer = window.setTimeout(() => void loadCoaOptions(coaSearch, 1), 250);
+    return () => window.clearTimeout(timer);
+  }, [coaOpen, coaSearch, loadCoaOptions]);
+  const selectCustomer = async (id?: string) => {
+    const request = ++recipientRequest.current;
+    const customer = customers.find((item) => item.id === id);
+    form.setFieldsValue({ recipientName: undefined, recipientPhone: undefined,
+      [sample ? 'sampleAddress' : 'shippingAddress']: customer?.address,
+      clientContact: undefined, clientContactPhone: undefined });
+    if (!id) return;
+    const [contactsResult, preferenceResult] = await Promise.allSettled([
+      getPartnerContacts(id), inventoryApi.sampleRecipientPreference(id),
+    ]);
+    if (request !== recipientRequest.current || form.getFieldValue('customerId') !== id) return;
+    const active = contactsResult.status === 'fulfilled'
+      ? contactsResult.value.filter((contact) => contact.status === 'ACTIVE') : [];
+    const contact = active.find((item) => item.primaryContact) ?? active[0];
+    const preference = preferenceResult.status === 'fulfilled' ? preferenceResult.value : null;
+    form.setFieldsValue({
+      recipientName: preference?.recipientName ?? contact?.name,
+      recipientPhone: preference?.recipientPhone ?? contact?.phone,
+      [sample ? 'sampleAddress' : 'shippingAddress']: preference?.sampleAddress ?? customer?.address,
+      clientContact: contact?.name, clientContactPhone: contact?.phone,
+    });
+    if (contactsResult.status === 'rejected' || preferenceResult.status === 'rejected')
+      message.warning('部分收件信息加载失败，请核对填写');
+  };
   const load = useCallback(
     async () =>
-      setData(sample ? await inventoryApi.samples(filters) : await inventoryApi.shipments(filters)),
-    [filters, sample],
+      setData(sample ? await inventoryApi.samples(filters) : shipmentNo
+        ? await inventoryApi.shipmentDetails(shipmentNo, filters) : await inventoryApi.shipments(filters)),
+    [filters, sample, shipmentNo],
   );
+  const deleteDetails = async (ids: string[]) => {
+    if (!shipmentNo || !ids.length) return;
+    setDeletingDetails(true);
+    try {
+      const deleted = await inventoryApi.deleteShipmentDetails(shipmentNo, ids);
+      setSelectedRecordIds((current) => current.filter((id) => !ids.includes(id)));
+      const refreshed = await inventoryApi.shipmentDetails(shipmentNo, filters);
+      if (refreshed.items.length === 0 && filters.page > 1)
+        setFilters((current) => ({ ...current, page: current.page - 1 }));
+      else setData(refreshed);
+      message.success(`已删除 ${deleted} 条出货明细`);
+    } catch (error) {
+      message.error(errorMessage(error, '删除出货明细失败'));
+    } finally {
+      setDeletingDetails(false);
+    }
+  };
+  const completeShipmentRecord = async () => {
+    if (!shipmentNo) return;
+    setSheetStatusSaving(true);
+    try {
+      await inventoryApi.completeShipmentHeader(shipmentNo);
+      message.success('出货单状态已设置为已完成');
+      setSelectedRecordIds([]);
+      await load();
+      setHeader(await inventoryApi.shipmentHeader(shipmentNo));
+    } catch (error) {
+      message.error(errorMessage(error, '设置出货单状态失败'));
+    } finally {
+      setSheetStatusSaving(false);
+    }
+  };
+  const removeSamples = async (ids: string[]) => {
+    if (!ids.length) return;
+    setDeletingSamples(true);
+    try {
+      const deleted = await inventoryApi.deleteSamples(ids);
+      setSelectedRecordIds([]);
+      const refreshed = await inventoryApi.samples(filters);
+      if (refreshed.items.length === 0 && filters.page > 1)
+        setFilters((current) => ({ ...current, page: current.page - 1 }));
+      else setData(refreshed);
+      message.success(`已删除 ${deleted} 条发样记录`);
+    } catch (error) {
+      message.error(errorMessage(error, '删除发样记录失败'));
+    } finally {
+      setDeletingSamples(false);
+    }
+  };
+  const hasUndeletableSample = (data?.items ?? []).some((row) =>
+    selectedRecordIds.includes(row.id) && (row.status !== 'PENDING' || !!row.transactionId));
   const productScope: InventoryScope = formScope;
   const loadProducts = useCallback(async () => {
     const scopes: InventoryScope[] = ['RND', 'PRODUCTION'];
@@ -807,7 +1274,18 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
       .then((result) => setCustomers(result.items))
       .catch(() => message.error('客户列表加载失败'));
   }, [load, loadProducts]);
+  useEffect(() => {
+    if (shipmentNo) void inventoryApi.shipmentHeader(shipmentNo).then(setHeader)
+      .catch((error: unknown) => message.error(errorMessage(error, '出货单加载失败')));
+  }, [shipmentNo]);
   const openEdit = (record: SampleDispatch | Shipment) => {
+    if (!sample && (record.status === 'COMPLETED' || record.transactionId)) {
+      message.warning('已完成的出货明细不可修改');
+      return;
+    }
+    coaRequest.current += 1;
+    setCoaOptions([]);
+    setCoaSearch('');
     setEditing(record);
     const values: Record<string, unknown> = {
       businessDate: dayjs(record.businessDate),
@@ -820,6 +1298,10 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
       Object.assign(values, {
         scope: record.scope ?? 'RND',
         dispatchNo: record.dispatchNo,
+        newCustomerName: record.customerName,
+        specification: record.specification && Number.isFinite(Number(record.specification))
+          ? Number(record.specification) : undefined,
+        packageQuantity: record.packageQuantity,
         recipientName: record.recipientName,
         recipientPhone: record.recipientPhone,
         sampleAddress: record.sampleAddress,
@@ -830,14 +1312,40 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
         clientContactPhone: record.clientContactPhone,
         customerRequirement: record.customerRequirement,
         customerFeedback: record.customerFeedback,
+        status: record.status,
       });
     } else {
+      const existingCoa = record.coaNo;
+      setCoaVerified(!existingCoa);
+      if (existingCoa) {
+        void qualityApi.recordByBusinessNo('coa', existingCoa)
+          .then((result) => {
+            if (form.getFieldValue('coaNo') === existingCoa)
+              setCoaVerified(result.data.status === '已签发');
+          })
+          .catch(() => {
+            if (form.getFieldValue('coaNo') === existingCoa) setCoaVerified(false);
+          });
+      }
       setFormScope(record.scope ?? 'PRODUCTION');
       Object.assign(values, {
         scope: record.scope ?? 'PRODUCTION',
         shipmentNo: record.shipmentNo,
+        newCustomerName: record.customerName,
         senderName: record.senderName || record.operator,
+        batchNo: record.batchNo,
+        specification: record.specification && Number.isFinite(Number(record.specification))
+          ? Number(record.specification) : undefined,
+        packageQuantity: record.packageQuantity,
+        totalQuantityKg: record.totalQuantityKg ?? record.quantityKg,
+        recipientName: record.recipientName,
+        recipientPhone: record.recipientPhone,
+        shippingAddress: record.shippingAddress,
+        courierCompany: record.courierCompany,
+        trackingNo: record.trackingNo,
+        coaNo: existingCoa,
         note: record.note,
+        status: record.status,
       });
     }
     form.setFieldsValue(values);
@@ -849,13 +1357,20 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
       message.error(`当前角色为只读用户，不能修改${sample ? '发样' : '出货'}记录`);
       return;
     }
+    if (sample && editing && 'dispatchNo' in editing && editing.status === 'COMPLETED' && sampleTotalKg !== editing.quantityKg) {
+      message.error('已扣库存的总数量不能在编辑时修改');
+      return;
+    }
     setSaving(true);
     try {
       if (editing) {
         if (sample && 'dispatchNo' in editing) {
-          await inventoryApi.updateSample(editing.id, {
+          const updateInput = {
+            revision: editing.revision,
             dispatchNo: v.dispatchNo,
             businessDate: v.businessDate.format('YYYY-MM-DD'),
+            specification: v.specification == null ? undefined : String(v.specification),
+            packageQuantity: v.packageQuantity,
             customerId: v.customerId,
             recipientName: v.recipientName,
             recipientPhone: v.recipientPhone,
@@ -867,15 +1382,27 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             senderName: v.senderName,
             customerRequirement: v.customerRequirement,
             customerFeedback: v.customerFeedback,
-          });
+          };
+          if (v.customerId) await inventoryApi.updateSample(editing.id, updateInput);
+          else await inventoryApi.updateSampleForNewCustomer(editing.id, updateInput, v.newCustomerName?.trim() ?? '');
         } else {
-          await inventoryApi.updateShipment(editing.id, {
+          const updateInput = {
+            revision: editing.revision,
             shipmentNo: v.shipmentNo,
             businessDate: v.businessDate.format('YYYY-MM-DD'),
             customerId: v.customerId,
             senderName: v.senderName,
+            batchNo: v.batchNo,
+            recipientName: v.recipientName,
+            recipientPhone: v.recipientPhone,
+            shippingAddress: v.shippingAddress,
+            courierCompany: v.courierCompany,
+            trackingNo: v.trackingNo,
             note: v.note,
-          });
+            coaNo: v.coaNo,
+          };
+          if (v.customerId) await inventoryApi.updateShipment(editing.id, updateInput);
+          else await inventoryApi.updateShipmentForNewCustomer(editing.id, updateInput, v.newCustomerName?.trim() ?? '');
         }
         message.success(sample ? '发样记录已更新' : '出货记录已更新');
         setOpen(false);
@@ -890,26 +1417,39 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
         ? existingProduct.id
         : await inventoryApi.createCustomProduct(selectedProduct, productScope);
       if (sample) {
-        await inventoryApi.createSample({
-          ...v,
-          productId,
-          businessDate: v.businessDate.format('YYYY-MM-DD'),
-        });
+        const { newCustomerName, ...sampleValues } = v;
+        const sampleInput = { ...sampleValues, specification: String(v.specification),
+          status: 'PENDING', quantityKg: sampleTotalKg, productId, businessDate: v.businessDate.format('YYYY-MM-DD') };
+        if (!v.customerId) {
+          await inventoryApi.createSampleForNewCustomer(sampleInput, newCustomerName?.trim() ?? '');
+        } else {
+          await inventoryApi.createSample(sampleInput);
+        }
       } else {
-        const { batchNo, coaNo, note, ...shipmentValues } = v;
-        const traceNote = [note, batchNo ? `批号=${batchNo}` : '', coaNo ? `COA=${coaNo}` : '']
-          .filter(Boolean)
-          .join('；');
-        await inventoryApi.createShipment({
-          ...shipmentValues,
+        const { batchNo, coaNo, note } = v;
+        const shipmentInput = {
+          shipmentNo: v.shipmentNo,
+          scope: v.scope,
+          packageQuantity: v.packageQuantity,
+          customerId: v.customerId,
+          senderName: v.senderName,
+          recipientName: v.recipientName,
+          recipientPhone: v.recipientPhone,
+          shippingAddress: v.shippingAddress,
+          courierCompany: v.courierCompany,
+          trackingNo: v.trackingNo,
+          specification: v.specification == null ? undefined : String(v.specification),
           productId,
-          note: traceNote,
+          note,
           coaNo,
+          status: 'PENDING',
           batchNo,
           businessDate: v.businessDate.format('YYYY-MM-DD'),
-        });
+        };
+        if (v.customerId) await inventoryApi.createShipment(shipmentInput);
+        else await inventoryApi.createShipmentForNewCustomer(shipmentInput, v.newCustomerName?.trim() ?? '');
       }
-      message.success(sample ? '发样记录已保存并扣减研发库存' : '出货记录已保存并扣减生产库存');
+      message.success(sample ? '发样记录已保存' : '出货记录已保存');
       setOpen(false);
       setProductSearch('');
       form.resetFields();
@@ -941,14 +1481,15 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
       sample
         ? [
             { title: '日期', dataIndex: 'businessDate' },
-            { title: '发样单号', dataIndex: 'dispatchNo' },
-            {
-              title: '库存类型',
-              dataIndex: 'scope',
-              render: (value: InventoryScope | undefined) => scopeLabels[value ?? 'RND'],
-            },
+            { title: '发样单号', dataIndex: 'dispatchNo', render: (value: string, record: SampleDispatch | Shipment) => (
+              <Button type="link" disabled={readOnly} style={{ padding: 0 }} onClick={() => openEdit(record)}>
+                {value}
+              </Button>
+            ) },
+            { title: '状态', dataIndex: 'status', render: (status: string) =>
+              <Tag color={status === 'COMPLETED' ? 'success' : 'processing'}>{status === 'COMPLETED' ? '已完成' : '未完成'}</Tag> },
             { title: '产品名称', dataIndex: 'productName' },
-            { title: '数量 KG', dataIndex: 'quantityKg', align: 'right', render: kg },
+            { title: '总数量 KG', dataIndex: 'quantityKg', align: 'right', render: kg },
             {
               title: '本公司发样人',
               dataIndex: 'senderName',
@@ -956,58 +1497,51 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
                 value || record.operator,
             },
             { title: '客户名称', dataIndex: 'customerName' },
-            { title: '收件人', dataIndex: 'recipientName' },
-            { title: '收件人电话', dataIndex: 'recipientPhone', render: (v: string | undefined) => v || '—' },
-            { title: '发样地址', dataIndex: 'sampleAddress', render: (v: string | undefined) => v || '—' },
-            { title: '快递公司', dataIndex: 'courierCompany', render: (v: string | undefined) => v || '—' },
-            { title: '快递单号', dataIndex: 'trackingNo', render: (v: string | undefined) => v || '—' },
-            {
-              title: '客户端联系人',
-              dataIndex: 'clientContact',
-              render: (v: string | undefined) => v || '—',
-            },
-            {
-              title: '客户端联系人电话',
-              dataIndex: 'clientContactPhone',
-              render: (v: string | undefined) => v || '—',
-            },
-            {
-              title: '客户要求',
-              dataIndex: 'customerRequirement',
-              width: 220,
-              render: (value: string | undefined) =>
-                value ? <span className="inventory-cell-wrap">{value}</span> : '—',
-            },
-            {
-              title: '客户测试反馈',
-              dataIndex: 'customerFeedback',
-              width: 220,
-              render: (value: string | undefined) =>
-                value ? <span className="inventory-cell-wrap">{value}</span> : '—',
-            },
             {
               title: '操作',
-              width: 100,
+              width: 140,
               render: (_: unknown, record: SampleDispatch | Shipment) => (
                 <Space className="management-table-actions">
                   <Button type="link" disabled={readOnly} onClick={() => openEdit(record)}>
                     编辑
                   </Button>
+                  <Popconfirm title="确认删除发样记录" description="该操作不可撤销。"
+                    onConfirm={() => { void removeSamples([record.id]); }}
+                    okButtonProps={{ loading: deletingSamples }}>
+                    <Button type="link" danger
+                      disabled={readOnly || record.status !== 'PENDING' || !!record.transactionId}>
+                      删除
+                    </Button>
+                  </Popconfirm>
                 </Space>
               ),
             },
           ]
         : [
             { title: '日期', dataIndex: 'businessDate' },
-            { title: '出货单号', dataIndex: 'shipmentNo' },
+            { title: '出货单号', dataIndex: 'shipmentNo', render: (value: string, record: SampleDispatch | Shipment) => (
+              <Button type="link" disabled={readOnly} style={{ padding: 0 }} onClick={() => openEdit(record)}>
+                {value}
+              </Button>
+            ) },
+            { title: '状态', dataIndex: 'status', render: (v: string) =>
+              <Tag color={v === 'COMPLETED' ? 'success' : 'processing'}>{v === 'COMPLETED' ? '已完成' : '未完成'}</Tag> },
             {
               title: '库存类型',
               dataIndex: 'scope',
               render: (value: InventoryScope | undefined) => scopeLabels[value ?? 'PRODUCTION'],
             },
             { title: '产品名称', dataIndex: 'productName' },
-            { title: '数量 KG', dataIndex: 'quantityKg', align: 'right', render: kg },
+            { title: '数量', dataIndex: 'packageQuantity', align: 'right', render: (v: number | undefined) => v == null ? '—' : v },
             { title: '客户名称', dataIndex: 'customerName' },
+            { title: '批次号', dataIndex: 'batchNo', render: (v: string | undefined) => v || '—' },
+            { title: '规格', dataIndex: 'specification', render: (v: string | undefined) => v || '—' },
+            { title: '总数量 KG', dataIndex: 'totalQuantityKg', align: 'right', render: (v: number | undefined, row: SampleDispatch | Shipment) => kg(v ?? row.quantityKg) },
+            { title: '收件人', dataIndex: 'recipientName', render: (v: string | undefined) => v || '—' },
+            { title: '收件人电话', dataIndex: 'recipientPhone', render: (v: string | undefined) => v || '—' },
+            { title: '收货地址', dataIndex: 'shippingAddress', render: (v: string | undefined) => v || '—' },
+            { title: '快递公司', dataIndex: 'courierCompany', render: (v: string | undefined) => v || '—' },
+            { title: '快递单号', dataIndex: 'trackingNo', render: (v: string | undefined) => v || '—' },
             {
               title: '出货人',
               dataIndex: 'senderName',
@@ -1039,18 +1573,44 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
           ],
     [openEdit, sample],
   );
+  const openCreate = () => {
+    if (!sample && header && header.detailCount > 0 && header.completedCount === header.detailCount) {
+      message.warning('已完成的出货单不可新增明细');
+      return;
+    }
+    form.resetFields();
+    setEditing(undefined);
+    setRecipientText('');
+    setFormScope(sample ? 'RND' : 'PRODUCTION');
+    setProductSearch('');
+    coaRequest.current += 1;
+    setCoaOptions([]);
+    setCoaSearch('');
+    form.setFieldsValue({
+      businessDate: header ? dayjs(header.businessDate) : dayjs(),
+      status: 'PENDING',
+      coaNo: undefined,
+      scope: sample ? 'RND' : 'PRODUCTION',
+      senderName: currentUserName,
+      [sample ? 'dispatchNo' : 'shipmentNo']: sample
+        ? `FY-${dayjs().format('YYYYMMDD-HHmmss')}` : shipmentNo,
+    });
+    setOpen(true);
+    setCoaVerified(true);
+  };
   return (
     <InventoryShell
-      title={sample ? '发样记录表' : '出货记录表'}
+      title={sample ? '发样记录表' : `出货明细 · ${shipmentNo ?? ''}`}
       description={
         sample
-          ? '新增发样后按所选库存类型扣减研发或生产库存并生成对应库存流水。'
-          : '新增出货后按所选库存类型扣减研发或生产库存并生成对应库存流水。'
+          ? '发样完成后按所选库存类型扣减研发或生产库存并生成对应库存流水。'
+          : '出货记录完成后按所选库存类型扣减库存并生成对应库存流水。'
       }
-      extra={
-        <Space>
+      extra={sample ? (
+        <div className="inventory-record-actions">
           <BusinessImportExport
             type={type}
+            shipmentNo={shipmentNo}
             productsByScope={productsByScope}
             customers={customers}
             onDone={load}
@@ -1060,27 +1620,14 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             type="primary"
             icon={<PlusOutlined />}
             disabled={readOnly}
-            onClick={() => {
-              setEditing(undefined);
-              setFormScope(sample ? 'RND' : 'PRODUCTION');
-              setProductSearch('');
-              form.setFieldsValue({
-                businessDate: dayjs(),
-                scope: 'RND',
-                senderName: currentUserName,
-                [sample ? 'dispatchNo' : 'shipmentNo']: `${sample ? 'FY' : 'CH'}-${dayjs().format(
-                  'YYYYMMDD-HHmmss',
-                )}`,
-              });
-              setOpen(true);
-            }}
+            onClick={openCreate}
           >
-            {sample ? '新增发样' : '新增出货'}
+            新增发样
           </Button>
-        </Space>
-      }
+        </div>
+      ) : undefined}
     >
-      <Card className="inventory-table-card">
+      {sample ? <Card className="inventory-table-card">
         <div className="inventory-filters inventory-record-filters">
           <Input.Search
             allowClear
@@ -1088,27 +1635,47 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             placeholder={
               sample
                 ? '搜索发样单号、产品、客户、收件人、电话、快递单号'
-                : '搜索出货单号、产品、客户、出货人、备注'
+                : '搜索出货单号、产品、客户、批次号、收件人、快递公司'
             }
-            onChange={(event) => {
-              const value = event.target.value;
-              setSearchKeyword(value);
-              if (!value) setFilters((current) => ({ ...current, keyword: '', page: 1 }));
-            }}
-            onSearch={(value) => setFilters((current) => ({ ...current, keyword: value, page: 1 }))}
+            onChange={(event) => setSearchKeyword(event.target.value)}
+            onSearch={() => { applyFilters(); }}
           />
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => {
-              setSearchKeyword('');
-              setFilters((current) => ({ ...current, keyword: '', page: 1 }));
-            }}
-          >
-            重置
+          <Select allowClear placeholder="全部状态" value={filterStatus}
+            onChange={(value) => setFilterStatus(value)}
+            options={[{ value: 'PENDING', label: '未完成' }, { value: 'COMPLETED', label: '已完成' }]} />
+          <DatePicker.RangePicker
+            placeholder={['开始日期', '结束日期']}
+            value={filterDateRange ? [dayjs(filterDateRange[0]), dayjs(filterDateRange[1])] : null}
+            onChange={(values) => setFilterDateRange(values?.[0] && values?.[1]
+              ? [values[0].format('YYYY-MM-DD'), values[1].format('YYYY-MM-DD')] : undefined)}
+          />
+          <Button type="primary" icon={<SearchOutlined />} onClick={applyFilters}>查询</Button>
+          <Button icon={<ReloadOutlined />} onClick={resetFilters}>重置</Button>
+          <Popconfirm title="确认删除发样记录"
+            description={`将删除选中的 ${selectedRecordIds.length} 条未完成发样记录，此操作不可撤销。`}
+            onConfirm={() => { void removeSamples(selectedRecordIds); }}
+            okButtonProps={{ loading: deletingSamples }}>
+            <Button danger icon={<DeleteOutlined />}
+              disabled={readOnly || deletingSamples || selectedRecordIds.length === 0 || hasUndeletableSample}>删除</Button>
+          </Popconfirm>
+          <Button icon={<CheckOutlined />} disabled={readOnly || selectedRecordIds.length === 0}
+            onClick={() => setStatusOpen(true)}>
+            设为已完成{selectedRecordIds.length > 0 ? ` (${selectedRecordIds.length})` : ''}
           </Button>
         </div>
         <Table
           rowKey="id"
+          rowSelection={{
+            selectedRowKeys: selectedRecordIds,
+            preserveSelectedRowKeys: true,
+            getCheckboxProps: (record: SampleDispatch | Shipment) => ({
+              disabled: readOnly || record.status !== 'PENDING' || !!record.transactionId,
+            }),
+            onChange: (keys) => {
+              if (keys.length > 100) { message.warning(`最多选择 100 条${sample ? '发样' : '出货'}记录`); return; }
+              setSelectedRecordIds(keys.map(String));
+            },
+          }}
           columns={columns}
           dataSource={data?.items}
           scroll={{ x: 'max-content' }}
@@ -1121,29 +1688,79 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
             onChange: (page, size) => setFilters((current) => ({ ...current, page, size })),
           }}
         />
-      </Card>
+      </Card> : <ShipmentSheet date={header?.businessDate}
+        rows={data?.items.filter((row): row is Shipment => 'shipmentNo' in row) ?? []}
+        total={data?.total ?? 0} page={data?.page ?? 1} pages={data?.totalPages ?? 0}
+        readOnly={readOnly}
+        addDisabled={readOnly || !header || (header.detailCount > 0 && header.completedCount === header.detailCount)}
+        selectedIds={selectedRecordIds} deleting={deletingDetails} statusSaving={sheetStatusSaving}
+        statusDisabled={!header || header.detailCount === 0 || header.completedCount === header.detailCount}
+        extraActions={<BusinessImportExport
+          type={type}
+          shipmentNo={shipmentNo}
+          hideImport
+          productsByScope={productsByScope}
+          customers={customers}
+          onDone={load}
+          disabled={readOnly}
+        />}
+        onBack={() => navigate('/inventory/shipments')}
+        onEdit={openEdit} onAdd={openCreate}
+        onSelect={setSelectedRecordIds} onDelete={(ids) => { void deleteDetails(ids); }}
+        onSetStatus={() => { void completeShipmentRecord(); }}
+        onPage={(page) => setFilters((current) => ({ ...current, page }))} />}
+      {sample && <Modal title="确认发样完成" open={statusOpen} okText="设为已完成" cancelText="取消"
+        confirmLoading={statusSaving} okButtonProps={{ disabled: !selectedRecordIds.length }}
+        onCancel={() => setStatusOpen(false)}
+        onOk={async () => {
+          setStatusSaving(true);
+          try {
+            const changed = await inventoryApi.updateSampleStatuses(selectedRecordIds);
+            message.success(`已完成 ${changed} 条发样记录`);
+            setStatusOpen(false);
+            setSelectedRecordIds([]);
+            await load();
+          } catch (error) {
+            message.error(errorMessage(error, '修改状态失败'));
+          } finally {
+            setStatusSaving(false);
+          }
+        }}>
+        确认将选中的 {selectedRecordIds.length} 条发样记录设为已完成？
+      </Modal>}
       <Modal
         width={650}
         className="inventory-entry-modal"
-        title={`${editing ? '编辑' : '新增'}${sample ? '发样' : '出货'}`}
+        title={`${editing ? '编辑' : '新增'}${sample ? '发样' : '出货明细'}`}
         open={open}
         okText="保存"
         cancelText="取消"
         confirmLoading={saving}
-        okButtonProps={{ disabled: readOnly }}
+        okButtonProps={{ disabled: readOnly || (!selectedCustomerId && !canCreateCustomer) }}
         onCancel={() => {
           setOpen(false);
           setEditing(undefined);
           setProductSearch('');
+          setRecipientText('');
           form.resetFields();
         }}
         onOk={save}
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" onValuesChange={(changed) => {
+          if (['recipientName', 'recipientPhone', 'sampleAddress', 'shippingAddress'].some((field) => field in changed))
+            recipientRequest.current += 1;
+          if (!sample && ('specification' in changed || 'packageQuantity' in changed)) {
+            const specification = Number(form.getFieldValue('specification'));
+            const quantity = Number(form.getFieldValue('packageQuantity'));
+            form.setFieldValue('totalQuantityKg', specification > 0 && quantity > 0
+              ? Number((specification * quantity).toFixed(6)) : undefined);
+          }
+        }}>
+          <Form.Item name="customerId" hidden><Input /></Form.Item>
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="businessDate" label="日期" rules={[{ required: true }]}>
-                <DatePicker className="inventory-full" />
+                <DatePicker className="inventory-full" disabled={!sample && !!shipmentNo} />
               </Form.Item>
             </Col>
             <Col span={12}>
@@ -1152,7 +1769,7 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
                 label={sample ? '发样单号' : '出货单号'}
                 rules={[{ required: true }]}
               >
-                <Input />
+                <Input disabled={!sample && !!shipmentNo} />
               </Form.Item>
             </Col>
           </Row>
@@ -1197,54 +1814,76 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
               </Row>
               <Row gutter={16}>
                 <Col span={12}>
-                  <Form.Item name="quantityKg" label="数量 KG" rules={[{ required: true }]}>
-                    <InputNumber
-                      min={0.000001}
-                      precision={6}
-                      className="inventory-full"
-                      disabled={!!editing}
-                    />
+                  <Form.Item name="specification" label="规格 KG" rules={[{ required: true, type: 'number', min: 0.000001 }]}>
+                    <InputNumber min={0.000001} precision={6} className="inventory-full" />
                   </Form.Item>
                 </Col>
                 <Col span={12}>
-                  <Form.Item name="senderName" label="本公司发样人">
-                    <Input />
+                  <Form.Item name="packageQuantity" label="数量" rules={[{ required: true, type: 'number', min: 0.000001 }]}>
+                    <InputNumber min={0.000001} precision={6} className="inventory-full" />
                   </Form.Item>
                 </Col>
               </Row>
+              {!canCreateCustomer && !selectedCustomerId && <Alert type="warning" showIcon style={{ marginBottom: 16 }} message="自定义客户名称需要新建客户权限" />}
               <Row gutter={16}>
                 <Col span={12}>
-                  <Form.Item name="customerId" label="客户名称" rules={[{ required: true }]}>
-                    <Select
-                      showSearch
-                      allowClear
-                      optionFilterProp="label"
-                      placeholder="请选择客户"
-                      options={customers.map((customer) => ({
-                        value: customer.id,
-                        label: `${customer.partnerCode} · ${customer.name}`,
-                      }))}
-                    />
+                  <Form.Item label="总数量 KG">
+                    <InputNumber value={sampleTotalKg} precision={6} className="inventory-full" disabled />
                   </Form.Item>
                 </Col>
+                <Col span={12}>
+                  <Form.Item name="newCustomerName" label="客户名称" rules={[{ required: true }]}>
+                    <AutoComplete filterOption={false} maxLength={20}
+                      placeholder="搜索客户或输入新客户名称"
+                      onSearch={(value) => void searchCustomers(value)}
+                      onChange={(value) => {
+                        const id = form.getFieldValue('customerId');
+                        const selectedName = customers.find((item) => item.id === id)?.name
+                          ?? (editing && editing.customerId === id ? editing.customerName : undefined);
+                        if (value !== selectedName) form.setFieldValue('customerId', undefined);
+                      }}
+                      onSelect={(_name, option) => {
+                        form.setFieldValue('customerId', option.customerId);
+                        void selectCustomer(option.customerId);
+                      }}
+                      options={[
+                        ...(editing?.customerId && !customers.some((customer) => customer.id === editing.customerId)
+                          ? [{ value: editing.customerName, label: editing.customerName, customerId: editing.customerId }]
+                          : []),
+                        ...customers.map((customer) => ({
+                          value: customer.name, label: `${customer.partnerCode} · ${customer.name}`,
+                          customerId: customer.id,
+                        })),
+                      ]} />
+                  </Form.Item>
+                </Col>
+              </Row>
+              {!editing && <Form.Item label="收件信息">
+                <Input.TextArea rows={3} value={recipientText} onChange={(event) => setRecipientText(event.target.value)}
+                  onPaste={(event) => {
+                    const text = event.clipboardData.getData('text');
+                    if (!text) return;
+                    event.preventDefault();
+                    const { value, selectionStart, selectionEnd } = event.currentTarget;
+                    recognizeRecipient(value.slice(0, selectionStart) + text + value.slice(selectionEnd));
+                  }}
+                  placeholder="粘贴收件人、手机号和地址，自动识别并填入" />
+              </Form.Item>}
+              <Row gutter={16}>
                 <Col span={12}>
                   <Form.Item name="recipientName" label="收件人" rules={[{ required: true }]}>
                     <Input />
                   </Form.Item>
                 </Col>
-              </Row>
-              <Row gutter={16}>
                 <Col span={12}>
                   <Form.Item name="recipientPhone" label="收件人电话" rules={[{ required: true }]}>
                     <Input />
                   </Form.Item>
                 </Col>
-                <Col span={12}>
-                  <Form.Item name="sampleAddress" label="发样地址">
-                    <Input />
-                  </Form.Item>
-                </Col>
               </Row>
+              <Form.Item name="sampleAddress" label="发样地址" rules={[{ required: true, whitespace: true }]}>
+                <Input />
+              </Form.Item>
               <Row gutter={16}>
                 <Col span={12}>
                   <Form.Item name="courierCompany" label="快递公司">
@@ -1259,16 +1898,19 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
               </Row>
               <Row gutter={16}>
                 <Col span={12}>
-                  <Form.Item name="clientContact" label="客户端联系人">
+                  <Form.Item name="clientContact" label="客户联系人">
                     <Input />
                   </Form.Item>
                 </Col>
                 <Col span={12}>
-                  <Form.Item name="clientContactPhone" label="客户端联系人电话">
+                  <Form.Item name="clientContactPhone" label="客户联系人电话">
                     <Input />
                   </Form.Item>
                 </Col>
               </Row>
+              <Form.Item name="senderName" label="本公司发样人">
+                <Input />
+              </Form.Item>
               <Row gutter={16}>
                 <Col span={12}>
                   <Form.Item name="customerRequirement" label="客户要求">
@@ -1322,7 +1964,12 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
               </Row>
               <Row gutter={16}>
                 <Col span={12}>
-                  <Form.Item name="quantityKg" label="数量 KG" rules={[{ required: true }]}>
+                  <Form.Item name="specification" label="规格 KG" rules={[{ required: !editing }, { type: 'number', min: 0.000001 }]}>
+                    <InputNumber min={0.000001} precision={6} className="inventory-full" disabled={!!editing} />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="packageQuantity" label="数量" rules={[{ required: !editing }, { type: 'number', min: 0.000001 }]}>
                     <InputNumber
                       min={0.000001}
                       precision={6}
@@ -1331,20 +1978,62 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
                     />
                   </Form.Item>
                 </Col>
+              </Row>
+              <Row gutter={16}>
                 <Col span={12}>
-                  <Form.Item name="customerId" label="客户名称" rules={[{ required: true }]}>
-                    <Select
-                      showSearch
-                      allowClear
-                      optionFilterProp="label"
-                      placeholder="请选择客户"
-                      options={customers.map((customer) => ({
-                        value: customer.id,
-                        label: `${customer.partnerCode} · ${customer.name}`,
-                      }))}
-                    />
+                  <Form.Item name="totalQuantityKg" label="总数量 KG">
+                    <InputNumber disabled precision={6} className="inventory-full" />
                   </Form.Item>
                 </Col>
+                <Col span={12}>
+                  <Form.Item name="newCustomerName" label="客户名称" rules={[{ required: true }]}>
+                    <AutoComplete filterOption={false} maxLength={20}
+                      placeholder="搜索客户或输入新客户名称"
+                      onSearch={(value) => void searchCustomers(value)}
+                      onChange={(value) => {
+                        const id = form.getFieldValue('customerId');
+                        const selectedName = customers.find((item) => item.id === id)?.name
+                          ?? (editing && editing.customerId === id ? editing.customerName : undefined);
+                        if (value !== selectedName) form.setFieldValue('customerId', undefined);
+                      }}
+                      onSelect={(_name, option) => {
+                        form.setFieldValue('customerId', option.customerId);
+                        void selectCustomer(option.customerId);
+                      }}
+                      options={[
+                        ...(editing?.customerId && !customers.some((customer) => customer.id === editing.customerId)
+                          ? [{ value: editing.customerName, label: editing.customerName, customerId: editing.customerId }]
+                          : []),
+                        ...customers.map((customer) => ({
+                          value: customer.name, label: `${customer.partnerCode} · ${customer.name}`,
+                          customerId: customer.id,
+                        })),
+                      ]} />
+                  </Form.Item>
+                </Col>
+              </Row>
+              {!canCreateCustomer && !selectedCustomerId && <Alert type="warning" showIcon style={{ marginBottom: 16 }} message="自定义客户名称需要新建客户权限" />}
+              {!editing && <Form.Item label="收件信息">
+                <Input.TextArea rows={3} value={recipientText} onChange={(event) => setRecipientText(event.target.value)}
+                  onPaste={(event) => {
+                    const text = event.clipboardData.getData('text');
+                    if (!text) return;
+                    event.preventDefault();
+                    const { value, selectionStart, selectionEnd } = event.currentTarget;
+                    recognizeRecipient(value.slice(0, selectionStart) + text + value.slice(selectionEnd));
+                  }}
+                  placeholder="粘贴收件人、手机号和地址，自动识别并填入" />
+              </Form.Item>}
+              <Row gutter={16}>
+                <Col span={12}><Form.Item name="recipientName" label="收件人" rules={[{ required: true }]}><Input /></Form.Item></Col>
+                <Col span={12}><Form.Item name="recipientPhone" label="收件人电话" rules={[{ required: true }]}><Input /></Form.Item></Col>
+              </Row>
+              <Row gutter={16}>
+                <Col span={24}><Form.Item name="shippingAddress" label="收货地址" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item></Col>
+              </Row>
+              <Row gutter={16}>
+                <Col span={12}><Form.Item name="courierCompany" label="快递公司"><Input /></Form.Item></Col>
+                <Col span={12}><Form.Item name="trackingNo" label="快递单号"><Input /></Form.Item></Col>
               </Row>
               <Row gutter={16}>
                 <Col span={12}>
@@ -1353,7 +2042,7 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
                   </Form.Item>
                 </Col>
                 <Col span={12}>
-                  <Form.Item name="batchNo" label="批号">
+                  <Form.Item name="batchNo" label="批次号">
                     <Input placeholder="可选，用于批次追溯" />
                   </Form.Item>
                 </Col>
@@ -1365,7 +2054,30 @@ function BusinessRecords({ type }: { type: 'sample' | 'shipment' }) {
               <Row gutter={16}>
                 <Col span={12}>
                   <Form.Item name="coaNo" label="已签发 COA 编号">
-                    <Input placeholder="填写后仅允许已签发 COA 放行" />
+                    <Select
+                      allowClear showSearch filterOption={false} loading={coaLoading}
+                      placeholder="搜索已签发 COA 编号或名称"
+                      notFoundContent={coaLoading ? '加载中' : '暂无可选 COA'}
+                      onOpenChange={(visible) => { setCoaOpen(visible); if (visible) setCoaSearch(''); }}
+                      onSearch={(value) => {
+                        coaRequest.current += 1;
+                        setCoaOptions([]);
+                        setCoaHasMore(false);
+                        setCoaSearch(value);
+                      }}
+                      onChange={(value) => setCoaVerified(!value || coaOptions.some((item) => item.businessNo === value))}
+                      onPopupScroll={(event) => {
+                        const target = event.currentTarget;
+                        if (coaHasMore && !coaLoading && target.scrollTop + target.clientHeight >= target.scrollHeight - 24)
+                          void loadCoaOptions(coaSearch, coaPage + 1);
+                      }}
+                      options={[
+                        ...(form.getFieldValue('coaNo') && !coaOptions.some((item) => item.businessNo === form.getFieldValue('coaNo'))
+                          ? [{ value: form.getFieldValue('coaNo') as string, label: coaVerified ? form.getFieldValue('coaNo') as string : `${form.getFieldValue('coaNo')}（已不可选）`, disabled: !coaVerified }]
+                          : []),
+                        ...coaOptions.map((item) => ({ value: item.businessNo, label: item.displayName ? `${item.businessNo} · ${item.displayName}` : item.businessNo })),
+                      ]}
+                    />
                   </Form.Item>
                 </Col>
                 <Col span={12}>
@@ -1433,63 +2145,66 @@ async function exportTransactions(scope: InventoryScope) {
 
 function BusinessImportExport({
   type,
+  shipmentNo,
+  hideImport = false,
+  hideExport = false,
   productsByScope,
   customers,
   onDone,
   disabled = false,
 }: {
   type: 'sample' | 'shipment';
+  shipmentNo?: string;
+  hideImport?: boolean;
+  hideExport?: boolean;
   productsByScope: Record<InventoryScope, InventoryProductOption[]>;
   customers: BusinessPartner[];
   onDone: () => void | Promise<void>;
   disabled?: boolean;
 }) {
   const sample = type === 'sample';
+  const [importing, setImporting] = useState(false);
+  const importQueue = useRef<Promise<void>>(Promise.resolve());
+  const queuedImports = useRef(0);
   const template = () => {
-    const header = sample
-      ? [
-          '日期',
-          '发样单号',
-          '库存类型',
-          '产品名称',
-          '数量 KG',
-          '本公司发样人',
-          '客户名称',
-          '收件人',
-          '收件人电话',
-          '发样地址',
-          '快递公司',
-          '快递单号',
-          '客户端联系人',
-          '客户端联系人电话',
-          '客户要求',
-          '客户测试反馈',
-        ]
-      : [
-          '日期',
-          '出货单号',
-          '库存类型',
-          '产品名称',
-          '数量 KG',
-          '客户名称',
-          '出货人',
-          '批号',
-          '已签发 COA 编号',
-          '备注',
-        ];
-    writeWorkbook(`${sample ? '发样' : '出货'}导入模板.xlsx`, sample ? '发样记录' : '出货记录', [
-      header,
-    ]);
+    if (sample) {
+      const workbook = XLSX.utils.book_new();
+      const sheet = XLSX.utils.aoa_to_sheet([[
+        '日期', '发样单号', '状态', '库存类型', '产品名称', '规格 KG', '数量', '总数量 KG',
+        '本公司发样人', '客户名称', '收件人', '收件人电话', '发样地址',
+        '快递公司', '快递单号', '客户联系人', '客户联系人电话', '客户要求', '客户测试反馈',
+      ]]);
+      sheet['!cols'] = Array.from({ length: 19 }, (_, index) => ({ wch: [14, 24, 12, 14, 24, 14, 14, 16, 18, 28, 16, 18, 42][index] ?? 22 }));
+      XLSX.utils.book_append_sheet(workbook, sheet, '发样记录');
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+        ['字段', '填写要求'],
+        ['日期', '必填，格式 YYYY-MM-DD'],
+        ['发样单号', '必填，不可与已有发样单号重复'],
+        ['状态', '未完成或已完成；不填默认为未完成'],
+        ['库存类型', '研发库存或生产库存；不填默认为研发库存'],
+        ['产品名称', '必填，填写所选库存类型中已有的产品名称或编码'],
+        ['规格 KG', '必填，大于 0'],
+        ['数量', '必填，大于 0'],
+        ['总数量 KG', '选填，必须等于规格 KG × 数量；实际由系统计算'],
+        ['客户名称', '必填，填写客户管理中的名称或编码；新名称会创建客户'],
+        ['收件人、收件人电话、发样地址', '必填'],
+      ]), '填写说明');
+      XLSX.writeFile(workbook, '发样记录导入模板.xlsx');
+      return;
+    }
+    XLSX.writeFile(shipmentWorkbookTemplate(), '出货记录表导入模板.xlsx');
   };
   const exportRows = async () => {
     const first = sample
       ? await inventoryApi.samples({ page: 1, size: 100 })
-      : await inventoryApi.shipments({ page: 1, size: 100 });
+      : shipmentNo ? await inventoryApi.shipmentDetails(shipmentNo, { page: 1, size: 100 })
+        : await inventoryApi.shipments({ page: 1, size: 100 });
     const rows: Array<SampleDispatch | Shipment> = [...first.items];
     for (let page = 2; page <= first.totalPages; page += 1) {
       const next = sample
         ? await inventoryApi.samples({ page, size: 100 })
-        : await inventoryApi.shipments({ page, size: 100 });
+        : shipmentNo ? await inventoryApi.shipmentDetails(shipmentNo, { page, size: 100 })
+          : await inventoryApi.shipments({ page, size: 100 });
       rows.push(...next.items);
     }
     if (sample) {
@@ -1497,9 +2212,12 @@ function BusinessImportExport({
         [
           '日期',
           '发样单号',
+          '状态',
           '库存类型',
           '产品名称',
-          '数量 KG',
+          '规格 KG',
+          '数量',
+          '总数量 KG',
           '本公司发样人',
           '客户名称',
           '收件人',
@@ -1507,60 +2225,37 @@ function BusinessImportExport({
           '发样地址',
           '快递公司',
           '快递单号',
-          '客户端联系人',
-          '客户端联系人电话',
+          '客户联系人',
+          '客户联系人电话',
           '客户要求',
           '客户测试反馈',
         ],
         ...(rows as SampleDispatch[]).map((row) => [
           row.businessDate,
           row.dispatchNo,
+          row.status === 'COMPLETED' ? '已完成' : '未完成',
+          scopeLabels[row.scope ?? 'RND'],
+          row.productName,
+          row.specification || '',
+          row.packageQuantity ?? '',
+          row.quantityKg,
+          row.senderName || row.operator,
           row.customerName,
           row.recipientName,
           row.recipientPhone || '',
-          scopeLabels[row.scope ?? 'RND'],
-          row.productName,
-          row.quantityKg,
           row.sampleAddress || '',
           row.courierCompany || '',
           row.trackingNo || '',
-          row.senderName || row.operator,
           row.clientContact || '',
           row.clientContactPhone || '',
           row.customerRequirement || '',
           row.customerFeedback || '',
         ]),
       ]);
-    } else {
-      writeWorkbook('出货记录.xlsx', '出货记录', [
-        [
-          '日期',
-          '出货单号',
-          '库存类型',
-          '产品名称',
-          '数量 KG',
-          '客户名称',
-          '出货人',
-          '批号',
-          '已签发 COA 编号',
-          '备注',
-        ],
-        ...(rows as Shipment[]).map((row) => [
-          row.businessDate,
-          row.shipmentNo,
-          scopeLabels[row.scope ?? 'PRODUCTION'],
-          row.productName,
-          row.quantityKg,
-          row.customerName,
-          row.senderName || row.operator,
-          row.note?.match(/(?:^|[；;])批号=([^；;]*)/)?.[1] || '',
-          row.note?.match(/(?:^|[；;])COA=([^；;]*)/)?.[1] || '',
-          row.note
-            ?.replace(/(?:^|[；;])批号=[^；;]*/g, '')
-            .replace(/(?:^|[；;])COA=[^；;]*/g, '')
-            .replace(/^[；;]+|[；;]+$/g, '') || '',
-        ]),
-      ]);
+    } else if (shipmentNo) {
+      const header = await inventoryApi.shipmentHeader(shipmentNo);
+      const { exportShipmentSheet } = await import('./shipment-sheet-export');
+      await exportShipmentSheet(shipmentNo, header.businessDate, rows as Shipment[]);
     }
   };
   const importFile = async (file: File) => {
@@ -1569,10 +2264,108 @@ function BusinessImportExport({
     if (!firstSheetName) throw new Error('导入文件没有工作表');
     const sheet = workbook.Sheets[firstSheetName];
     if (!sheet) throw new Error('无法读取导入工作表');
+    if (!sample && isShipmentWorkbook(sheet)) {
+      const { shipmentNo: number, details } = parseShipmentWorkbook(
+        sheet, shipmentNo,
+      );
+      if (shipmentNo && shipmentNo !== number) throw new Error(`文件包含其他出货单号：${number}`);
+      await inventoryApi.importShipment(number, details);
+      message.success(`成功导入出货单 ${number}，共 ${details.length} 条明细`);
+      await onDone();
+      return;
+    }
     const records = XLSX.utils.sheet_to_json<Record<string, string | number>>(sheet, {
       defval: '',
     });
     if (!records.length) throw new Error('导入文件没有数据');
+    if (sample) {
+      const requiredColumns = ['日期', '发样单号', '产品名称', '规格 KG', '数量', '客户名称', '收件人', '收件人电话', '发样地址'];
+      const columns = Object.keys(records[0] ?? {});
+      const missing = requiredColumns.filter((column) => !columns.includes(column));
+      if (missing.length) throw new Error(`缺少必填列：${missing.join('、')}`);
+      const firstCustomers = await getPartners({ status: 'ACTIVE', page: 1, size: 100 });
+      const availableCustomers = [...firstCustomers.items];
+      for (let page = 2; page <= firstCustomers.totalPages; page += 1) {
+        availableCustomers.push(...(await getPartners({ status: 'ACTIVE', page, size: 100 })).items);
+      }
+      const documentNumbers = new Set<string>();
+      const entries = records.map((row, index) => {
+        const rowNo = index + 2;
+        const required = (column: string) => {
+          const value = String(row[column] ?? '').trim();
+          if (!value) throw new Error(`第 ${rowNo} 行：${column}不能为空`);
+          return value;
+        };
+        const rawDate = row['日期'];
+        const businessDate = typeof rawDate === 'number'
+          ? dayjs('1899-12-30').add(Math.floor(rawDate), 'day').format('YYYY-MM-DD')
+          : required('日期');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(businessDate) || dayjs(businessDate).format('YYYY-MM-DD') !== businessDate)
+          throw new Error(`第 ${rowNo} 行：日期格式应为 YYYY-MM-DD`);
+        const dispatchNo = required('发样单号');
+        if (documentNumbers.has(dispatchNo)) throw new Error(`第 ${rowNo} 行：发样单号在文件中重复`);
+        documentNumbers.add(dispatchNo);
+        const rawScope = String(row['库存类型'] ?? '').trim();
+        const normalizedScope = rawScope.toUpperCase();
+        if (rawScope && !['研发库存', '生产库存'].includes(rawScope) && !['RND', 'PRODUCTION'].includes(normalizedScope))
+          throw new Error(`第 ${rowNo} 行：库存类型只能填写研发库存或生产库存`);
+        const scope: InventoryScope = rawScope === '生产库存' || normalizedScope === 'PRODUCTION' ? 'PRODUCTION' : 'RND';
+        const rawProduct = required('产品名称');
+        const product = productsByScope[scope].find((item) => item.name === rawProduct || item.code === rawProduct || item.id === rawProduct);
+        if (!product) throw new Error(`第 ${rowNo} 行：${scopeLabels[scope]}中不存在产品“${rawProduct}”`);
+        const specification = Number(required('规格 KG'));
+        const packageQuantity = Number(required('数量'));
+        if (!Number.isFinite(specification) || specification <= 0 || !Number.isFinite(packageQuantity) || packageQuantity <= 0)
+          throw new Error(`第 ${rowNo} 行：规格 KG 和数量必须大于 0`);
+        const totalKg = Math.round(specification * packageQuantity * 1_000_000) / 1_000_000;
+        if (totalKg <= 0) throw new Error(`第 ${rowNo} 行：总数量 KG 必须大于 0`);
+        const importedTotal = String(row['总数量 KG'] ?? '').trim();
+        if (importedTotal && (!Number.isFinite(Number(importedTotal)) || Math.abs(Number(importedTotal) - totalKg) > 0.000001))
+          throw new Error(`第 ${rowNo} 行：总数量 KG 与规格 KG × 数量不一致`);
+        const customerName = required('客户名称');
+        const byCode = availableCustomers.find((item) => item.partnerCode === customerName || item.id === customerName);
+        const byName = availableCustomers.filter((item) => item.name === customerName);
+        if (!byCode && byName.length > 1) throw new Error(`第 ${rowNo} 行：客户名称重复，请填写客户编码`);
+        const customer = byCode ?? byName[0];
+        const rawStatus = String(row['状态'] ?? '').trim();
+        if (rawStatus && !['未完成', '已完成'].includes(rawStatus)) throw new Error(`第 ${rowNo} 行：状态只能填写未完成或已完成`);
+        return {
+          customerName,
+          customerId: customer?.id,
+          input: {
+            businessDate, dispatchNo, status: rawStatus === '已完成' ? 'COMPLETED' : 'PENDING',
+            productId: product.id, scope, packageQuantity, specification: String(specification),
+            recipientName: required('收件人'), recipientPhone: required('收件人电话'),
+            sampleAddress: required('发样地址'), customerId: customer?.id,
+            courierCompany: String(row['快递公司'] ?? '').trim(),
+            trackingNo: String(row['快递单号'] ?? '').trim(),
+            senderName: String(row['本公司发样人'] ?? '').trim(),
+            clientContact: String(row['客户联系人'] ?? row['客户端联系人'] ?? '').trim(),
+            clientContactPhone: String(row['客户联系人电话'] ?? row['客户端联系人电话'] ?? '').trim(),
+            customerRequirement: String(row['客户要求'] ?? '').trim(),
+            customerFeedback: String(row['客户测试反馈'] ?? '').trim(),
+          },
+        };
+      });
+      const createdCustomers = new Map<string, string>();
+      let completed = 0;
+      for (const entry of entries) {
+        try {
+          const customerId = entry.customerId ?? createdCustomers.get(entry.customerName);
+          const result = customerId
+            ? await inventoryApi.createSample({ ...entry.input, customerId })
+            : await inventoryApi.createSampleForNewCustomer(entry.input, entry.customerName);
+          if (!customerId && result.customerId) createdCustomers.set(entry.customerName, result.customerId);
+          completed += 1;
+        } catch (error) {
+          if (completed) await onDone();
+          throw new Error(`第 ${completed + 2} 行导入失败，前 ${completed} 行已保存：${errorMessage(error, '保存失败')}`, { cause: error });
+        }
+      }
+      message.success(`成功导入 ${completed} 条发样记录`);
+      await onDone();
+      return;
+    }
     const inputs = records.map((row, index) => {
       const rawProduct = String(row['产品名称'] ?? row['产品'] ?? row['产品编码'] ?? '').trim();
       const rawCustomer = String(row['客户名称'] ?? row['客户'] ?? row['客户编码'] ?? '').trim();
@@ -1600,7 +2393,7 @@ function BusinessImportExport({
           item.id === rawCustomer ||
           rawCustomer.startsWith(`${item.partnerCode} · `),
       );
-      const quantityKg = Number(row['数量 KG'] ?? row['数量KG']);
+      const quantityKg = Number(row[sample ? '数量 KG' : '数量'] ?? row['数量KG']);
       const rawDate = row['日期'];
       const parsedDate =
         typeof rawDate === 'number' ? XLSX.SSF.parse_date_code(rawDate) : undefined;
@@ -1619,12 +2412,32 @@ function BusinessImportExport({
         throw new Error(`第 ${index + 2} 行：收件人不能为空`);
       if (sample && !String(row['收件人电话'] ?? '').trim())
         throw new Error(`第 ${index + 2} 行：收件人电话不能为空`);
-      const batchNo = String(row['批号'] ?? '').trim();
+      if (sample && !String(row['发样地址'] ?? '').trim())
+        throw new Error(`第 ${index + 2} 行：发样地址不能为空`);
+      if (!sample && !String(row['收件人'] ?? '').trim())
+        throw new Error(`第 ${index + 2} 行：收件人不能为空`);
+      if (!sample && !String(row['收件人电话'] ?? '').trim())
+        throw new Error(`第 ${index + 2} 行：收件人电话不能为空`);
+      if (!sample && !String(row['收货地址'] ?? '').trim())
+        throw new Error(`第 ${index + 2} 行：收货地址不能为空`);
+      const rawStatus = String(row['状态'] ?? '').trim();
+      if (rawStatus && !['未完成', '已完成'].includes(rawStatus))
+        throw new Error(`第 ${index + 2} 行：状态只能填写未完成或已完成`);
+      const batchNo = String(row['批次号'] ?? row['批号'] ?? '').trim();
       const coaNo = String(row['已签发 COA 编号'] ?? '').trim();
+      const specification = String(row['规格 KG'] ?? row['规格'] ?? '').trim();
+      if (!sample && (!Number.isFinite(Number(specification)) || Number(specification) <= 0))
+        throw new Error(`第 ${index + 2} 行：规格必须大于 0`);
+      const rawTotalQuantity = row['总数量 KG'];
+      if (!sample && rawTotalQuantity != null && rawTotalQuantity !== '' &&
+          (!Number.isFinite(Number(rawTotalQuantity)) ||
+          Math.abs(Number(rawTotalQuantity) - Number((Number(specification) * quantityKg).toFixed(6))) > 0.000001))
+        throw new Error(`第 ${index + 2} 行：总数量 KG 与规格乘数量不一致`);
       return sample
         ? {
             businessDate,
             dispatchNo: documentNo,
+            status: rawStatus === '已完成' ? 'COMPLETED' : 'PENDING',
             productId: product.id,
             scope,
             quantityKg,
@@ -1635,59 +2448,84 @@ function BusinessImportExport({
             courierCompany: String(row['快递公司'] ?? '').trim(),
             trackingNo: String(row['快递单号'] ?? '').trim(),
             senderName: String(row['本公司发样人'] ?? '').trim(),
-            clientContact: String(row['客户端联系人'] ?? '').trim(),
-            clientContactPhone: String(row['客户端联系人电话'] ?? '').trim(),
+            clientContact: String(row['客户联系人'] ?? row['客户端联系人'] ?? '').trim(),
+            clientContactPhone: String(row['客户联系人电话'] ?? row['客户端联系人电话'] ?? '').trim(),
             customerRequirement: String(row['客户要求'] ?? '').trim(),
             customerFeedback: String(row['客户测试反馈'] ?? '').trim(),
           }
         : {
             businessDate,
             shipmentNo: documentNo,
+            status: rawStatus === '已完成' ? 'COMPLETED' : 'PENDING',
             productId: product.id,
             scope,
-            quantityKg,
+            packageQuantity: quantityKg,
             customerId: customer.id,
             senderName: String(row['出货人'] ?? '').trim(),
-            note: [
-              String(row['备注'] ?? '').trim(),
-              batchNo ? `批号=${batchNo}` : '',
-              coaNo ? `COA=${coaNo}` : '',
-            ]
-              .filter(Boolean)
-              .join('；'),
+            specification,
+            recipientName: String(row['收件人'] ?? '').trim(),
+            recipientPhone: String(row['收件人电话'] ?? '').trim(),
+            shippingAddress: String(row['收货地址'] ?? '').trim(),
+            courierCompany: String(row['快递公司'] ?? '').trim(),
+            trackingNo: String(row['快递单号'] ?? '').trim(),
+            note: String(row['备注'] ?? '').trim(),
             batchNo: batchNo || undefined,
             coaNo: coaNo || undefined,
           };
     });
-    for (const input of inputs) {
-      if (sample) await inventoryApi.createSample(input);
-      else await inventoryApi.createShipment(input);
+    if (sample) {
+      for (const input of inputs) await inventoryApi.createSample(input);
+    } else {
+      const groups = new Map<string, typeof inputs>();
+      for (const input of inputs) {
+        const row = input as Record<string, unknown>;
+        const number = String(row.shipmentNo);
+        if (shipmentNo && number !== shipmentNo) throw new Error(`文件包含其他出货单号：${number}`);
+        const group = groups.get(number) ?? [];
+        if (group.length && (group[0] as Record<string, unknown>).businessDate !== row.businessDate)
+          throw new Error(`出货单号 ${number} 的日期不一致`);
+        group.push(input);
+        groups.set(number, group);
+      }
+      for (const [number, group] of groups)
+        await inventoryApi.createShipmentBatch(number, group);
     }
     message.success(`成功导入 ${inputs.length} 条${sample ? '发样' : '出货'}记录`);
     await onDone();
   };
   return (
-    <Space>
-      <Button icon={<DownloadOutlined />} onClick={template}>
-        模板下载
-      </Button>
-      <Upload
-        showUploadList={false}
-        accept=".xlsx"
-        beforeUpload={(file) => {
-          void importFile(file).catch((error: unknown) =>
-            message.error(error instanceof Error ? error.message : '导入失败'),
-          );
-          return false;
-        }}
-      >
-        <Button icon={<UploadOutlined />} disabled={disabled}>
-          导入
-        </Button>
-      </Upload>
-      <Button icon={<DownloadOutlined />} onClick={() => void exportRows()}>
+    <Space wrap>
+      {!hideImport && (
+        <>
+          <Button icon={<DownloadOutlined />} onClick={template}>模板下载</Button>
+          <Upload
+            showUploadList={false}
+            accept=".xlsx"
+            multiple={!sample}
+            beforeUpload={(file) => {
+              queuedImports.current += 1;
+              setImporting(true);
+              importQueue.current = importQueue.current
+                .then(() => importFile(file))
+                .catch((error: unknown) => {
+                  message.error(`${file.name}：${error instanceof Error ? error.message : '导入失败'}`);
+                })
+                .finally(() => {
+                  queuedImports.current -= 1;
+                  if (queuedImports.current === 0) setImporting(false);
+                });
+              return false;
+            }}
+          >
+            <Button icon={<UploadOutlined />} disabled={disabled || importing} loading={importing}>导入</Button>
+          </Upload>
+        </>
+      )}
+      {!hideExport && <Button icon={<DownloadOutlined />} onClick={() => {
+        void exportRows().catch((error: unknown) => message.error(errorMessage(error, '导出失败')));
+      }}>
         导出
-      </Button>
+      </Button>}
     </Space>
   );
 }
@@ -1823,20 +2661,25 @@ function LedgerImportExport({
 function InventoryShell({
   title,
   description = '库存流水为唯一事实，所有修正均通过冲销或补偿记录完成。',
+  leading,
   extra,
   children,
 }: {
   title: string;
   description?: string;
+  leading?: React.ReactNode;
   extra?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="inventory-page pm-unified-list-page">
       <div className="page-heading inventory-heading">
-        <div>
-          <h1>{title}</h1>
-          <p>{description}</p>
+        <div className="inventory-heading-copy">
+          {leading}
+          <div className="inventory-heading-text">
+            <h1>{title}</h1>
+            <p>{description}</p>
+          </div>
         </div>
         <div className="pm-page-actions">{extra}</div>
       </div>

@@ -1,0 +1,17 @@
+FROM maven:3.9.9-eclipse-temurin-21 AS build
+WORKDIR /workspace
+COPY jsd-aird-api/pom.xml jsd-aird-api/pom.xml
+RUN mvn -f jsd-aird-api/pom.xml dependency:go-offline -q
+COPY jsd-aird-api jsd-aird-api
+COPY docs/operation-assistant docs/operation-assistant
+RUN mkdir -p jsd-aird-ai/src/jsd_aird_ai/task_profiles
+RUN mvn -f jsd-aird-api/pom.xml -DskipTests package -q
+
+FROM eclipse-temurin:21-jre-jammy
+RUN apt-get update && apt-get install -y --no-install-recommends libreoffice-writer libreoffice-calc fonts-noto-cjk curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -r -u 10001 aird && mkdir -p /app /bounded/aird-multipart && chown -R aird:aird /app /bounded
+WORKDIR /app
+COPY --from=build /workspace/jsd-aird-api/target/jsd-aird-api-0.1.0-SNAPSHOT.jar /app/app.jar
+USER 10001
+ENTRYPOINT ["java","-Xmx768m","-XX:MaxDirectMemorySize=128m","-XX:MaxMetaspaceSize=256m","-XX:ActiveProcessorCount=2","-jar","/app/app.jar"]

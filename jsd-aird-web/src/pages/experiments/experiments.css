@@ -714,3 +714,12 @@
 .eln-prototype-page .eln-card-info-value {
   max-width: 100%;
 }
+
+.experiment-data-issue-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.experiment-data-issue-list li + li {
+  margin-top: 4px;
+}

@@ -17,7 +17,7 @@ export function KnowledgeBatchTagsModal({ documents, tagOptions, onCancel, onSav
   const save = async () => {
     setSaving(true);
     try {
-      const results = await knowledgeApi.batchTags(documents.map((item) => item.id), add, remove);
+      const results = await knowledgeApi.batchTags(documents.map(({id,revision}) => ({id,revision})), add, remove);
       const failures = results.filter((item) => !item.success);
       if (failures.length) {
         void message.warning(`已更新 ${results.length - failures.length} 个文档，${failures.length} 个失败：${failures[0]?.message || '请检查权限'}`);

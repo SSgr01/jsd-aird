@@ -139,7 +139,7 @@ export function detectPreviewMode(fileName: string, contentType = ''): FilePrevi
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'tif', 'tiff'].includes(extension)) return 'image';
   if (normalizedType.startsWith('audio/') || ['wav', 'mp3', 'm4a', 'aac', 'flac', 'ogg', 'opus'].includes(extension)) return 'audio';
   if (normalizedType.startsWith('video/') || ['mp4', 'm4v', 'mov', 'webm'].includes(extension)) return 'video';
-  if (normalizedType.includes('wordprocessingml.document') || extension === 'docx') return 'docx';
+  if (normalizedType.includes('wordprocessingml.document') || ['doc', 'docx'].includes(extension)) return 'docx';
   if (normalizedType.includes('spreadsheetml.sheet') || normalizedType.includes('ms-excel') || ['xls', 'xlsx', 'csv'].includes(extension)) return 'spreadsheet';
   if (normalizedType.startsWith('text/') || ['txt', 'md', 'json', 'xml', 'log'].includes(extension)) return 'text';
   return 'unsupported';

@@ -8,6 +8,17 @@ class WorkbenchFormulaSupportTest {
     private final ObjectMapper json = new ObjectMapper();
     private static final String A="f44a3459-05c1-4958-a246-b5736c0aa682", B="fa09039b-f0a2-48bd-9acc-71ed839ce94d";
 
+    @Test void absoluteMassInputsDoNotRequireOneHundredTotal() {
+        var scheme=json.createObjectNode().put("id","mass"); var fields=scheme.putArray("fields");
+        for(var id : java.util.List.of(A,B)) fields.add(json.createObjectNode().put("code","formula:"+id+"|g|mass_amount")
+                .put("name","物料用量").put("valueType","NUMBER").put("unit","g").put("semanticType","MATERIAL_AMOUNT")
+                .put("mappingStatus","MAPPED").put("materialId",id).put("compositionBasis","MASS_AMOUNT"));
+        var rows=json.createArrayNode(); rows.addObject().putObject("values").put("formula:"+A+"|g|mass_amount",250).put("formula:"+B+"|g|mass_amount",40);
+        var result=WorkbenchFormulaSupport.dictionary(json,scheme,rows);
+        assertThat(result.path("compositionStatus").asText()).isEqualTo("COMPLETE");
+        assertThat(result.path("materials")).hasSize(2);
+    }
+
     private com.fasterxml.jackson.databind.node.ObjectNode material(String id,String name) {
         return json.createObjectNode().put("code","formula:"+id).put("name",name).put("valueType","NUMBER")
                 .put("unit","%").put("semanticType","MATERIAL_RATIO").put("mappingStatus","MAPPED")

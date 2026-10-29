@@ -15,7 +15,7 @@ import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.Actor;
 import com.jsd.aird.shared.security.ActorContext;
 import com.jsd.aird.tpl.application.port.OfficeStructureParser;
-import com.jsd.aird.tpl.api.TemplateOfficeNormalizationFacade;
+import com.jsd.aird.ops.application.port.TemplateOfficeNormalizationFacade;
 import com.jsd.aird.tpl.api.TemplateOfficeFacade;
 import com.jsd.aird.tpl.domain.TemplateFormat;
 import org.springframework.stereotype.Service;
@@ -36,6 +36,11 @@ import java.util.UUID;
 
 @Service
 public class ExperimentImportService {
+    private org.springframework.transaction.support.TransactionTemplate commitTransaction;
+    @org.springframework.beans.factory.annotation.Autowired
+    void configureTransactions(org.springframework.transaction.PlatformTransactionManager manager){commitTransaction=new org.springframework.transaction.support.TransactionTemplate(manager);}
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.jsd.aird.iam.api.AuthorizationService authorization;
     private final ExperimentImportRepository imports;
     private final ExperimentService experiments;
     private final FileStorageFacade files;
@@ -146,7 +151,7 @@ public class ExperimentImportService {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "文件解析参数不完整");
         }
         try (var stored = files.open(organizationId, fileId)) {
-            var bytes = stored.stream().readAllBytes();
+            var bytes = com.jsd.aird.shared.resource.BoundedStreams.readBytes(stored.stream(),200L*1024*1024);
             var command = new Command(fileId, fileName, sha256, format,
                     null, null, null, null, null, LocalDate.now(), "ALL");
             var parser = parserFor(format);
@@ -162,13 +167,13 @@ public class ExperimentImportService {
     }
 
     /** Runs in the worker process. The request thread only creates/enqueues the job. */
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public Summary processQueued(UUID jobId, Command command, Actor actor) {
         return processQueuedInternal(jobId, command, actor, null);
     }
 
     /** Worker entry point that also carries the generic async job key for progress updates. */
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public Summary processQueued(UUID jobId, Command command, Actor actor, String asyncIdempotencyKey) {
         return processQueuedInternal(jobId, command, actor, asyncIdempotencyKey);
     }
@@ -179,7 +184,7 @@ public class ExperimentImportService {
             updateProgress(actor.organizationId(), asyncIdempotencyKey, 15, "LOADING_FILE");
             try (var stored = files.open(actor.organizationId(), command.fileId())) {
                 updateProgress(actor.organizationId(), asyncIdempotencyKey, 25, "READING_STRUCTURE");
-                var bytes = stored.stream().readAllBytes();
+                var bytes = com.jsd.aird.shared.resource.BoundedStreams.readBytes(stored.stream(),200L*1024*1024);
                 var parseBytes = normalizedOfficeBytes(command.fileName(), stored.contentType(), command.format(), bytes);
                 var parser = parserFor(command.format());
                 var parsed = parser == null
@@ -379,13 +384,6 @@ public class ExperimentImportService {
                 // A retry keeps the import job's existing experiment_id. Reuse
                 // that draft in place so the experiment list does not grow by
                 // one row for every retry attempt.
-                var existingJob = imports.find(actor.organizationId(), jobId).orElse(null);
-                var summary = existingJob == null || existingJob.experimentId() == null
-                        ? experiments.create(importedDraft)
-                        : experiments.replaceImportedDraft(existingJob.experimentId(), importedDraft);
-                // The RND import job owns source provenance for this experiment.
-                // Excel recognition uses the template pipeline for candidates,
-                // while the experiment remains the editable aggregate.
                 var sourceCoordinates = objectMapper.createObjectNode()
                         .put("kind", "WHOLE_FILE")
                         .put("sourceFileId", command.fileId().toString())
@@ -403,14 +401,29 @@ public class ExperimentImportService {
                     recognitionSnapshot.set("recognizedRegions", recognizedRegions.deepCopy());
                     if (recognitionResult != null) recognitionSnapshot.set("recognitionSummary", recognitionResult.deepCopy());
                 }
+                final var preparedSnapshot=editorSnapshot;
+                java.util.function.Supplier<Summary> commit=()->{
+                    asyncJobs.requireExecution(com.jsd.aird.ops.application.port.AsyncExecutionScope.current(),false);
+                    if(!imports.isParsing(actor.organizationId(),jobId))return null;
+                var existingJob = imports.find(actor.organizationId(), jobId).orElse(null);
+                var existingId=existingJob==null?null:existingJob.experimentId();
+                if(authorization!=null)authorization.require(new com.jsd.aird.iam.api.PermissionCheck(actor.organizationId(),actor.userId(),existingId==null?"experiment.create":"experiment.update","EXPERIMENT",existingId,"WRITE"));
+                var summary = existingJob == null || existingJob.experimentId() == null
+                        ? experiments.create(importedDraft)
+                        : experiments.replaceImportedDraft(existingJob.experimentId(), importedDraft);
+                // The RND import job owns source provenance for this experiment.
+                // Excel recognition uses the template pipeline for candidates,
+                // while the experiment remains the editable aggregate.
                 imports.linkSourceReference(actor.organizationId(), jobId, summary.id(),
                         experiments.detail(summary.id()).currentVersionId(),
                         "experiment-1", "sample-1", "EXPERIMENT:" + jobId + ":sample-1",
                         List.of("file:" + command.sha256()), sourceCoordinates, recognitionSnapshot,
                         command.sha256(), actor.userId());
                 updateProgress(actor.organizationId(), asyncIdempotencyKey, 95, "PERSISTING_RESULT");
-                imports.complete(jobId, summary.id(), editorSnapshot);
+                imports.complete(jobId, summary.id(), preparedSnapshot);
                 return summary;
+                };
+                return commitTransaction==null?commit.get():commitTransaction.execute(status->commit.get());
             }
         } catch (Exception exception) {
             if (exception instanceof ApiException apiException) throw apiException;
@@ -421,6 +434,7 @@ public class ExperimentImportService {
 
     @Transactional
     public void failQueued(UUID jobId, String errorMessage) {
+        asyncJobs.requireExecution(com.jsd.aird.ops.application.port.AsyncExecutionScope.current(),true);
         imports.fail(jobId, errorMessage);
     }
 
@@ -827,7 +841,7 @@ public class ExperimentImportService {
                 .put("id", UUID.randomUUID().toString())
                 .put("snapshotFormatVersion", 3)
                 .put("name", fileName + " · OCR结果")
-                .put("appVersion", "univer-0.25.1");
+                .put("appVersion", "univer-1.2.0");
         var styles = objectMapper.createObjectNode();
         var sheetId = "sheet-ocr-result";
         snapshot.putArray("sheetOrder").add(sheetId);

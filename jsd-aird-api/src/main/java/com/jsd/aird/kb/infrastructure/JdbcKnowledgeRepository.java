@@ -19,6 +19,16 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         this.jdbc = jdbc;
     }
 
+    @Override public void lockCategory(UUID organizationId,UUID categoryId){
+        if(jdbc.query("SELECT id FROM kb.document_category WHERE organization_id=? AND id=? FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),organizationId,categoryId).isEmpty())
+            throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,"分类不存在");
+    }
+
+    @Override public void lockDocument(UUID organizationId, UUID documentId) {
+        if(jdbc.query("SELECT id FROM kb.document WHERE organization_id=? AND id=? FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),organizationId,documentId).isEmpty())
+            throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,"知识文档不存在");
+    }
+
     @Override
     public void insertDocument(NewDocument document) {
         jdbc.update("""

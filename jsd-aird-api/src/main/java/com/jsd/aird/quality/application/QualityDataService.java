@@ -35,11 +35,12 @@ public class QualityDataService {
     private final WorkbookInstanceParser workbookParser;
     private final MineruImageDocumentParser imageParser;
     private final AuditLogFacade audit;
+    private final com.jsd.aird.iam.api.AuthorizationService authorization;
     public QualityDataService(QualityDataStore repository, ObjectMapper objectMapper,
                               FileStorageFacade storage, QualitySourceParser sourceParser,
                               WorkbookInstanceParser workbookParser,
                               MineruImageDocumentParser imageParser,
-                              AuditLogFacade audit) {
+                              AuditLogFacade audit,com.jsd.aird.iam.api.AuthorizationService authorization) {
         this.repository = repository;
         this.objectMapper = objectMapper;
         this.storage = storage;
@@ -47,14 +48,17 @@ public class QualityDataService {
         this.workbookParser = workbookParser;
         this.imageParser = imageParser;
         this.audit = audit;
+        this.authorization=authorization;
     }
 
     public List<QualityDataDefinitions.Type> definitions() { return QualityDataDefinitions.TYPES; }
     public List<QualityDataStore.Category> categories(String type) { var a=ActorContext.required(); requireType(type); return repository.categories(a.organizationId(),type); }
     public QualityDataStore.Category createCategory(String type,String name,String description) { var a=ActorContext.required(); requireType(type); var result=repository.createCategory(a.organizationId(),a.userId(),type,name.trim(),description.trim()); audit(a,"QUALITY_CATEGORY_CREATED","QUALITY_CATEGORY",result.id(),result.name()); return result; }
-    public QualityDataStore.Category updateCategory(UUID id,String name,String description) { var a=ActorContext.required(); var result=repository.updateCategory(a.organizationId(),id,name.trim(),description.trim()); audit(a,"QUALITY_CATEGORY_UPDATED","QUALITY_CATEGORY",id,result.name()); return result; }
-    public void deleteCategory(UUID id) { var a=ActorContext.required(); repository.deleteCategory(a.organizationId(),id); audit(a,"QUALITY_CATEGORY_DELETED","QUALITY_CATEGORY",id,null); }
-    public PageResponse<QualityDataStore.RecordView> records(String type,UUID categoryId,String keyword,UUID projectId,int page,int size) { var a=ActorContext.required(); requireType(type); return repository.records(a.organizationId(),a.role(),type,categoryId,keyword,projectId,Math.max(1,page),Math.min(100,Math.max(1,size))); }
+    @Transactional public QualityDataStore.Category updateCategory(UUID id,String name,String description,String revision) { var a=ActorContext.required(); repository.lockCategory(a.organizationId(),id);com.jsd.aird.shared.json.RevisionToken.require(revision,repository.category(a.organizationId(),id).getRevision()); var result=repository.updateCategory(a.organizationId(),id,name.trim(),description.trim()); audit(a,"QUALITY_CATEGORY_UPDATED","QUALITY_CATEGORY",id,result.name()); return result; }
+    @Transactional public void deleteCategory(UUID id,String revision) { var a=ActorContext.required(); repository.lockCategory(a.organizationId(),id);com.jsd.aird.shared.json.RevisionToken.require(revision,repository.category(a.organizationId(),id).getRevision()); repository.deleteCategory(a.organizationId(),id); audit(a,"QUALITY_CATEGORY_DELETED","QUALITY_CATEGORY",id,null); }
+    public PageResponse<QualityDataStore.RecordView> records(String type,UUID categoryId,String keyword,UUID projectId,int page,int size) { return records(type,categoryId,keyword,projectId,null,page,size); }
+    public PageResponse<QualityDataStore.RecordView> records(String type,UUID categoryId,String keyword,UUID projectId,String status,int page,int size) { var a=ActorContext.required(); requireType(type); if(status!=null&&!status.isBlank()&&!"coa".equals(type))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"仅 COA 支持状态筛选"); return repository.records(a.organizationId(),a.role(),type,categoryId,keyword,projectId,status==null||status.isBlank()?null:status,Math.max(1,page),Math.min(100,Math.max(1,size))); }
+    public QualityDataStore.RecordView recordByBusinessNo(String type,String businessNo) { var a=ActorContext.required(); requireType(type); return repository.recordByBusinessNo(a.organizationId(),a.role(),type,businessNo).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"品管数据不存在或不可见")); }
     public QualityDataStore.RecordView record(UUID id) { var a=ActorContext.required(); return repository.record(a.organizationId(), a.role(), id); }
     public QualityDataStore.RecordView rename(UUID id, RenameCommand command) {
         var actor = ActorContext.required();
@@ -68,26 +72,36 @@ public class QualityDataService {
         return result;
     }
     public List<QualityDataStore.VersionView> versions(UUID id) { var a=ActorContext.required(); repository.record(a.organizationId(), a.role(), id); return repository.versions(a.organizationId(), id); }
-    @Transactional public QualityDataStore.VersionView publishRecord(UUID id) {
+    @Transactional public QualityDataStore.VersionView publishRecord(UUID id, long expectedVersion) {
         var actor = ActorContext.required();
-        var current = repository.record(actor.organizationId(), actor.role(), id);
+        var current = lockVersion(id,expectedVersion);
         // 发布只生成版本快照，不阻止尚未补齐的业务字段；字段格式仍由草稿校验保证。
         validateDraft(requireType(current.businessType()), current.data());
-        var result = repository.publish(actor.organizationId(), actor.userId(), id);
+        var result = repository.publish(actor.organizationId(), actor.userId(), id, expectedVersion);
         audit(actor, "QUALITY_RECORD_PUBLISHED", "QUALITY_RECORD", id, result.businessNo());
         return result;
     }
-    public void deleteRecord(UUID id) {
+    @Transactional public void deleteRecord(UUID id, long expectedVersion) {
         var actor = ActorContext.required();
-        var current = repository.record(actor.organizationId(), actor.role(), id);
+        authorization.require(new com.jsd.aird.iam.api.PermissionCheck(actor.organizationId(),actor.userId(),"quality.delete","QUALITY",id,"WRITE"));
+        var current = lockVersion(id,expectedVersion);
         if (isFinalized(current.data()))
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"正式质量记录不可物理删除，请先归档或走受控作废流程");
-        repository.softDeleteOne(actor.organizationId(), id);
+        repository.softDeleteOne(actor.organizationId(), id, expectedVersion);
         audit(actor, "QUALITY_RECORD_DELETED", "QUALITY_RECORD", id, current.businessNo());
     }
 
-    @Transactional public void saveBatch(String type, UUID categoryId, List<RecordInput> records, List<UUID> deleteIds) {
+    @Transactional public void deleteBatch(List<RecordVersion> targets){
+        lockVersions(targets);
+        for(var target:targets)deleteRecord(target.id(),target.lockVersion());
+    }
+
+    @Transactional public void saveBatch(String type, UUID categoryId, List<RecordInput> records, List<RecordVersion> deletes) {
         var a=ActorContext.required(); var def=requireType(type);
+        var targets = new java.util.ArrayList<RecordVersion>();
+        records.stream().filter(row->row.id()!=null).forEach(row->targets.add(new RecordVersion(row.id(),row.lockVersion())));
+        if(deletes!=null)targets.addAll(deletes);
+        lockVersions(targets);
         for (var row: records) {
             var current = row.id() == null ? null : repository.record(a.organizationId(), a.role(), row.id());
             if (current != null && !current.businessNo().equals(row.businessNo()))
@@ -98,18 +112,28 @@ public class QualityDataService {
             repository.upsert(a.organizationId(),a.userId(),type,categoryId,row.id(),row.businessNo(),row.data(),row.workbookSnapshot(),
                     row.projectId(),row.projectName(),row.stageId(),row.stageName(),row.taskId(),row.taskName(),row.lockVersion());
         }
-        repository.softDelete(a.organizationId(),deleteIds==null?List.of():deleteIds);
+        if(deletes!=null)for(var target:deletes){
+            authorization.require(new com.jsd.aird.iam.api.PermissionCheck(a.organizationId(),a.userId(),"quality.delete","QUALITY",target.id(),"WRITE"));
+            var current=repository.record(a.organizationId(),a.role(),target.id());
+            if(isFinalized(current.data()))throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"正式质量记录不可删除");
+            repository.softDeleteOne(a.organizationId(),target.id(),target.lockVersion());
+        }
         var detail = JsonNodeFactory.instance.objectNode().put("recordCount", records == null ? 0 : records.size());
         var auditId = records == null ? categoryId : records.stream().map(RecordInput::id).filter(java.util.Objects::nonNull).findFirst().orElse(categoryId);
         if (auditId != null) audit(a, "QUALITY_RECORD_SAVED", "QUALITY_RECORD", auditId, type, detail);
     }
 
-    @Transactional public void move(List<UUID> ids,UUID categoryId) {
+    @Transactional public void move(List<RecordVersion> records,UUID categoryId) {
         var actor = ActorContext.required();
-        repository.category(actor.organizationId(), categoryId);
-        repository.move(actor.organizationId(),ids,categoryId);
+        var category=repository.category(actor.organizationId(), categoryId);
+        lockVersions(records);
+        for(var target:records){
+            var current=repository.record(actor.organizationId(),actor.role(),target.id());
+            if(!category.businessType().equals(current.businessType()))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"目标分类与数据类型不匹配");
+            repository.moveOne(actor.organizationId(),target.id(),target.lockVersion(),categoryId);
+        }
         if (categoryId != null) audit(actor, "QUALITY_RECORD_MOVED", "QUALITY_RECORD", categoryId, "批量移动",
-                JsonNodeFactory.instance.objectNode().put("recordCount", ids == null ? 0 : ids.size()));
+                JsonNodeFactory.instance.objectNode().put("recordCount", records == null ? 0 : records.size()));
     }
 
     @Transactional public QualityDataStore.RecordView createDefectFromRecord(UUID recordId) {
@@ -390,6 +414,21 @@ public class QualityDataService {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST,"关闭不良单前必须填写纠正措施");
         }
     }
+    private QualityDataStore.RecordView lockVersion(UUID id,long expected){
+        var actor=ActorContext.required();
+        if(expected<0)throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"数据版本不能为空或负数");
+        repository.lockRecord(actor.organizationId(),id);
+        var current=repository.record(actor.organizationId(),actor.role(),id);
+        if(current.lockVersion()!=expected)throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"品管数据已被其他用户修改");
+        return current;
+    }
+    private void lockVersions(List<RecordVersion> targets){
+        if(targets==null)return;
+        if(targets.stream().map(RecordVersion::id).distinct().count()!=targets.size())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"批量数据重复");
+        targets.stream().sorted(java.util.Comparator.comparing(RecordVersion::id)).forEach(target->lockVersion(target.id(),target.lockVersion()));
+    }
+    public record RecordVersion(@jakarta.validation.constraints.NotNull UUID id,
+            @jakarta.validation.constraints.NotNull @jakarta.validation.constraints.PositiveOrZero Long lockVersion) {}
     private boolean isFinalized(JsonNode data) {
         var status = data == null ? "" : data.path("status").asText("").trim();
         return Set.of("已签发", "有效", "已关闭", "已归档").contains(status);

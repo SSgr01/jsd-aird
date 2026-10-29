@@ -53,45 +53,45 @@ class DataPublicationIntegrationTest {
                 var guard=new DataReviewGuard(jdbc); imports.setReviewGuard(guard);
                 AuthorizationService auth=check -> new PermissionDecision(true,check.permissionCode(),"ALLOW","ALL","ROLE");
                 var service=new DataPublicationService(jdbc,json,repo,imports,auth,audit);
-                var confirmed=service.confirm(job);
+                var confirmed=service.confirm(job,service.get(job).revision());
                 assertThat(confirmed.status()).isEqualTo("CONFIRMED");
                 assertThat(service.records(job)).isEmpty();
-                service.submit(job,user);
-                assertThatThrownBy(() -> service.submit(job,user)).isInstanceOf(ApiException.class);
+                service.submit(job,user,service.get(job).revision());
+                assertThatThrownBy(() -> service.submit(job,user,service.get(job).revision())).isInstanceOf(ApiException.class);
                 jdbc.update("UPDATE data.staging_row SET raw_values_jsonb='{\"A\":\"101\"}'::jsonb WHERE id=?",rowId);
-                assertThatThrownBy(() -> service.review(job,confirmed.confirmedSnapshot().id(),true,""))
+                assertThatThrownBy(() -> service.review(job,confirmed.confirmedSnapshot().id(),true,"",service.get(job).revision()))
                         .isInstanceOf(ApiException.class).hasMessageContaining("已变化");
                 jdbc.update("UPDATE data.staging_row SET raw_values_jsonb='{\"A\":\"100\"}'::jsonb WHERE id=?",rowId);
                 assertThatThrownBy(() -> imports.correctValue(job,rowId,"viscosity","/viscosity",json.getNodeFactory().textNode("200"),"原始记录核对"))
                         .isInstanceOf(ApiException.class).hasMessageContaining("审核期间不能修改");
-                assertThatThrownBy(() -> service.review(job,UUID.randomUUID(),true,""))
+                assertThatThrownBy(() -> service.review(job,UUID.randomUUID(),true,"",service.get(job).revision()))
                         .isInstanceOf(ApiException.class).hasMessageContaining("快照已变化");
-                service.review(job,confirmed.confirmedSnapshot().id(),true,"原始记录一致");
+                service.review(job,confirmed.confirmedSnapshot().id(),true,"原始记录一致",service.get(job).revision());
                 assertThat(service.get(job).status()).isEqualTo("APPROVED");
                 assertThat(service.records(job)).isEmpty();
                 assertThatThrownBy(() -> imports.correctValue(job,rowId,"viscosity","/viscosity",json.getNodeFactory().textNode("200"),"读数复核")).isInstanceOf(ApiException.class);
-                service.publish(job);
-                assertThatThrownBy(() -> service.review(job,confirmed.confirmedSnapshot().id(),true,"重复点击"))
+                service.publish(job,service.get(job).revision());
+                assertThatThrownBy(() -> service.review(job,confirmed.confirmedSnapshot().id(),true,"重复点击",service.get(job).revision()))
                         .isInstanceOf(ApiException.class).hasMessageContaining("不在审核中");
                 var record=service.records(job).getFirst(); var recordId=record.id();
                 assertThat(record.values().path("VISCOSITY").path("normalizedValue").asText()).isEqualTo("100");
                 assertThat(jdbc.queryForObject("SELECT count(*) FROM ai.structured_retrieval_projection WHERE import_job_id=?",Integer.class,job)).isEqualTo(1);
-                service.govern(job,recordId,"树脂黏度", "DISABLED","仪器校准期间暂停使用");
+                service.govern(job,recordId,"树脂黏度", "DISABLED","仪器校准期间暂停使用",service.records(job).stream().filter(currentRecord->currentRecord.id().equals(recordId)).findFirst().orElseThrow().getRevision());
                 assertThat(jdbc.queryForObject("SELECT count(*) FROM ai.structured_retrieval_projection WHERE import_job_id=?",Integer.class,job)).isZero();
-                service.govern(job,recordId,"树脂黏度", "ACTIVE","校准已完成");
-                service.revise(job);
+                service.govern(job,recordId,"树脂黏度", "ACTIVE","校准已完成",service.records(job).stream().filter(currentRecord->currentRecord.id().equals(recordId)).findFirst().orElseThrow().getRevision());
+                service.revise(job,service.get(job).revision());
                 imports.correctValue(job,rowId,"viscosity","/viscosity",json.getNodeFactory().textNode("200"),"读数复核");
                 assertThat(service.records(job).getFirst().values().path("VISCOSITY").path("normalizedValue").asText()).isEqualTo("100");
-                var revision=service.confirm(job); service.submit(job,user);
-                assertThatThrownBy(() -> service.review(job,revision.confirmedSnapshot().id(),false," ")).isInstanceOf(ApiException.class);
-                service.review(job,revision.confirmedSnapshot().id(),false,"请核对仪器读数");
+                var revision=service.confirm(job,service.get(job).revision()); service.submit(job,user,service.get(job).revision());
+                assertThatThrownBy(() -> service.review(job,revision.confirmedSnapshot().id(),false," ",service.get(job).revision())).isInstanceOf(ApiException.class);
+                service.review(job,revision.confirmedSnapshot().id(),false,"请核对仪器读数",service.get(job).revision());
                 imports.correctValue(job,rowId,"viscosity","/viscosity",json.getNodeFactory().textNode("250"),"按仪器原始读数更正");
-                var finalVersion=service.submit(job,user);
+                var finalVersion=service.submit(job,user,service.get(job).revision());
                 assertThat(finalVersion.status()).isEqualTo("PENDING_REVIEW");
                 assertThat(finalVersion.events()).filteredOn(event -> event.action().equals("CONFIRMED")).hasSize(3);
-                service.review(job,finalVersion.confirmedSnapshot().id(),true,"已核对");
+                service.review(job,finalVersion.confirmedSnapshot().id(),true,"已核对",service.get(job).revision());
                 assertThat(service.records(job).getFirst().values().path("VISCOSITY").path("normalizedValue").asText()).isEqualTo("100");
-                service.publish(job);
+                service.publish(job,service.get(job).revision());
                 assertThat(service.records(job).getFirst().id()).isEqualTo(recordId);
                 assertThat(service.records(job).getFirst().name()).isEqualTo("树脂黏度");
                 assertThat(service.records(job).getFirst().values().path("VISCOSITY").path("normalizedValue").asText()).isEqualTo("250");
@@ -101,28 +101,28 @@ class DataPublicationIntegrationTest {
                 var savepoint=transaction.createSavepoint();
                 assertThatThrownBy(() -> jdbc.update("UPDATE data.publication_snapshot SET payload_jsonb='{}'::jsonb WHERE id=?",confirmed.confirmedSnapshot().id())).isInstanceOf(RuntimeException.class);
                 transaction.rollbackToSavepoint(savepoint); transaction.releaseSavepoint(savepoint);
-                service.revise(job);
+                service.revise(job,service.get(job).revision());
                 var reparsed=new DataRepository.Row(UUID.randomUUID(),"resin",2,json.createObjectNode().put("A","300"),json.createObjectNode(),json.createObjectNode(),"STAGED");
                 repo.saveParsed(job,"workbook",List.of(sheet),List.of(mapping),List.of(reparsed),null);
-                var reparsedConfirmation=service.submit(job,user);
-                service.review(job,reparsedConfirmation.confirmedSnapshot().id(),true,"工作表重新读取后核对一致");
-                service.publish(job);
+                var reparsedConfirmation=service.submit(job,user,service.get(job).revision());
+                service.review(job,reparsedConfirmation.confirmedSnapshot().id(),true,"工作表重新读取后核对一致",service.get(job).revision());
+                service.publish(job,service.get(job).revision());
                 assertThat(service.records(job).getFirst().id()).isEqualTo(recordId);
-                service.govern(job,recordId,"树脂黏度","DISABLED","该批次记录暂停使用");
-                service.govern(job,recordId,"树脂黏度","ACTIVE","恢复使用");
-                service.setPublishedEnabled(job,false);
+                service.govern(job,recordId,"树脂黏度","DISABLED","该批次记录暂停使用",service.records(job).stream().filter(currentRecord->currentRecord.id().equals(recordId)).findFirst().orElseThrow().getRevision());
+                service.govern(job,recordId,"树脂黏度","ACTIVE","恢复使用",service.records(job).stream().filter(currentRecord->currentRecord.id().equals(recordId)).findFirst().orElseThrow().getRevision());
+                service.setPublishedEnabled(job,false,service.get(job).revision());
                 assertThat(jdbc.queryForObject("SELECT count(*) FROM ai.structured_retrieval_projection WHERE import_job_id=?",Integer.class,job)).isZero();
-                service.revise(job);
+                service.revise(job,service.get(job).revision());
                 assertThat(service.get(job).publishedEnabled()).isFalse();
                 assertThat(jdbc.queryForObject("SELECT count(*) FROM ai.structured_retrieval_projection WHERE import_job_id=?",Integer.class,job)).isZero();
-                var restarted=service.submit(job,user);
-                assertThatThrownBy(() -> service.publish(job)).isInstanceOf(ApiException.class).hasMessageContaining("先完成审核");
-                service.review(job,restarted.confirmedSnapshot().id(),true,"修订内容一致");
-                service.publish(job);
+                var restarted=service.submit(job,user,service.get(job).revision());
+                assertThatThrownBy(() -> service.publish(job,service.get(job).revision())).isInstanceOf(ApiException.class).hasMessageContaining("先完成审核");
+                service.review(job,restarted.confirmedSnapshot().id(),true,"修订内容一致",service.get(job).revision());
+                service.publish(job,service.get(job).revision());
                 assertThat(service.get(job).publishedEnabled()).isTrue();
-                service.setPublishedEnabled(job,false); service.setPublishedEnabled(job,true);
+                service.setPublishedEnabled(job,false,service.get(job).revision()); service.setPublishedEnabled(job,true,service.get(job).revision());
                 assertThat(service.records(job).getFirst().status()).isEqualTo("ACTIVE");
-                assertThatThrownBy(() -> service.govern(job,recordId,"树脂黏度","VOIDED",""))
+                assertThatThrownBy(() -> service.govern(job,recordId,"树脂黏度","VOIDED","",service.records(job).stream().filter(currentRecord->currentRecord.id().equals(recordId)).findFirst().orElseThrow().getRevision()))
                         .isInstanceOf(ApiException.class).hasMessageContaining("仅支持有效、停用");
                 assertThat(service.get(job).events()).anyMatch(event -> event.action().equals("RETURNED") && "请核对仪器读数".equals(event.comment()));
             } finally { ActorContext.clear(); }
@@ -187,7 +187,7 @@ class DataPublicationIntegrationTest {
                 var service=new DataPublicationService(jdbc,json,repo,imports,auth,mock(AuditLogFacade.class));
                 UUID firstSubmission=null;UUID stableRecord=null;
                 for(var value:List.of("100","200")) {
-                    if(firstSubmission!=null) service.revise(job);
+                    if(firstSubmission!=null) service.revise(job,service.get(job).revision());
                     var workspace=json.createObjectNode().put("value",value);
                     jdbc.update("UPDATE data.import_job SET recognition_workspace_jsonb=?::jsonb,status='WAITING_MAPPING' WHERE id=?",workspace.toString(),job);
                     var current=recognition.find(org,job,"DATA_CENTER").orElseThrow();
@@ -201,8 +201,8 @@ class DataPublicationIntegrationTest {
                         assertThat(jdbc.queryForObject("SELECT confirmed_submission_id FROM data.confirmed_submission_head WHERE import_job_id=?",UUID.class,job)).isEqualTo(firstSubmission);
                         assertThat(service.records(job).getFirst().values().path("recognizedItems").get(0).path("effectiveValue").asText()).isEqualTo("100");
                     }
-                    var confirmed=service.get(job);service.submit(job,user);service.review(job,confirmed.confirmedSnapshot().id(),true,"已核对原文");
-                    service.publish(job);
+                    var confirmed=service.get(job);service.submit(job,user,service.get(job).revision());service.review(job,confirmed.confirmedSnapshot().id(),true,"已核对原文",service.get(job).revision());
+                    service.publish(job,service.get(job).revision());
                     if(stableRecord==null) stableRecord=service.records(job).getFirst().id();
                     assertThat(service.records(job).getFirst().id()).isEqualTo(stableRecord);
                     firstSubmission=finalized.submissionId();

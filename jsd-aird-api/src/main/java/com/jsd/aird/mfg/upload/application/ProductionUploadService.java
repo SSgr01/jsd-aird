@@ -76,6 +76,10 @@ public class ProductionUploadService {
         var existing = repository.findActiveBySha256(actor.organizationId(), file.sha256());
         if (existing.isPresent()) {
             if (!command.replaceExisting()) return existing.get();
+            if (!existing.get().id().equals(command.replacementId()) || command.replacementVersion() == null) {
+                throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "替换必须提供原生产单及版本");
+            }
+            claimVersion(existing.get().id(), command.replacementVersion());
             if ("PUBLISHED".equals(existing.get().status())) {
                 throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
                         "该文件已有已发布生产单，不能覆盖，请先创建新版本");
@@ -125,8 +129,9 @@ public class ProductionUploadService {
     }
 
     @Transactional
-    public ProductionUploadRepository.UploadView selectTemplate(UUID id, UUID templateVersionId) {
+    public ProductionUploadRepository.UploadView selectTemplate(UUID id, UUID templateVersionId,long expectedVersion) {
         var actor = ActorContext.required();
+        claimVersion(id,expectedVersion);
         var current = get(id);
         if (!Set.of("REVIEW_REQUIRED", "SAVED").contains(current.status())) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "当前生产单不支持重新选择模板");
@@ -159,8 +164,10 @@ public class ProductionUploadService {
                 viewableOnly, safePage, safeSize);
     }
 
-    public ProductionUploadRepository.UploadView retry(UUID id) {
+    @Transactional
+    public ProductionUploadRepository.UploadView retry(UUID id,long expectedVersion) {
         var actor = ActorContext.required();
+        claimVersion(id,expectedVersion);
         var current = get(id);
         if (Set.of("QUEUED", "PARSING", "MATCHING_TEMPLATE", "EXTRACTING").contains(current.status())) {
             // Commit cancellation before queueing the replacement job. This
@@ -184,8 +191,9 @@ public class ProductionUploadService {
      * whose automatic generation failed.
      */
     @Transactional
-    public ProductionUploadRepository.UploadView convertToWorkbook(UUID id) {
+    public ProductionUploadRepository.UploadView convertToWorkbook(UUID id,long expectedVersion) {
         var actor = ActorContext.required();
+        claimVersion(id,expectedVersion);
         var current = getViewable(id);
         if ("XLSX".equalsIgnoreCase(current.sourceType())) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "Excel 生产单本身已包含工作簿，无需转换");
@@ -210,8 +218,9 @@ public class ProductionUploadService {
     /** Adds the review projection to uploads parsed before field review existed.
      * Published workbook versions and edited cell contents are preserved. */
     @Transactional
-    public ProductionUploadRepository.UploadView ensureFieldReview(UUID id) {
+    public ProductionUploadRepository.UploadView ensureFieldReview(UUID id,long expectedVersion) {
         var actor = ActorContext.required();
+        claimVersion(id,expectedVersion);
         var current = getViewable(id);
         if (!("XLSX".equalsIgnoreCase(current.sourceType())
                 || ("PHOTO".equalsIgnoreCase(current.sourceType())
@@ -255,8 +264,9 @@ public class ProductionUploadService {
      * product name, ...) is refreshed from the reviewed values.
      */
     @Transactional
-    public ProductionUploadRepository.UploadView confirmFields(UUID id, List<FieldConfirmation> confirmations) {
+    public ProductionUploadRepository.UploadView confirmFields(UUID id, List<FieldConfirmation> confirmations,long expectedVersion) {
         var actor = ActorContext.required();
+        claimVersion(id,expectedVersion);
         var current = getViewable(id);
         var stored = repository.listRecognitionFields(actor.organizationId(), id);
         if (stored.isEmpty()) {
@@ -544,15 +554,17 @@ public class ProductionUploadService {
     }
 
     @Transactional
-    public ProductionUploadRepository.VersionView publish(UUID id) {
+    public ProductionUploadRepository.VersionView publish(UUID id,long expectedVersion) {
         var actor = ActorContext.required();
+        claimVersion(id,expectedVersion);
         get(id);
         return repository.publish(actor.organizationId(), actor.userId(), id);
     }
 
     @Transactional
-    public void delete(UUID id) {
+    public void delete(UUID id,long expectedVersion) {
         var actor = ActorContext.required();
+        claimVersion(id,expectedVersion);
         var current = repository.find(actor.organizationId(), id)
                 .filter(item -> !"DELETED".equals(item.status()))
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "生产单上传记录不存在"));
@@ -560,6 +572,12 @@ public class ProductionUploadService {
         if (repository.delete(actor.organizationId(), id) == 0) {
             throw new ApiException(ApiErrorCode.NOT_FOUND, "生产单上传记录不存在");
         }
+    }
+
+    private void claimVersion(UUID id,long expected){
+        var actor=ActorContext.required();
+        if(expected<0)throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"数据版本不能为负数");
+        repository.claimVersion(actor.organizationId(),id,expected);
     }
 
     private void cancelAsyncJob(UUID organizationId, UUID uploadId) {
@@ -600,7 +618,9 @@ public class ProductionUploadService {
             String visibility,
             String sourceType,
             UUID templateVersionId,
-            boolean replaceExisting
+            boolean replaceExisting,
+            UUID replacementId,
+            Long replacementVersion
     ) {
     }
 

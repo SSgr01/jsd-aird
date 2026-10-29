@@ -30,6 +30,9 @@ public class ExperimentImportJobHandler implements AsyncJobHandler {
     }
 
     @Override
+    public JsonNode handle(JsonNode payload,ExecutionContext context){return com.jsd.aird.ops.application.port.AsyncExecutionScope.run(context,()->handle(payload));}
+
+    @Override
     public JsonNode handle(JsonNode payload) {
         var actor = new Actor(
                 uuid(payload, "organizationId"),
@@ -71,6 +74,9 @@ public class ExperimentImportJobHandler implements AsyncJobHandler {
         return !(exception instanceof ApiException apiException)
                 || apiException.errorCode() == ApiErrorCode.FILE_NOT_READY;
     }
+
+    @Override
+    public void handleTerminalFailure(JsonNode payload,Exception exception,ExecutionContext context){com.jsd.aird.ops.application.port.AsyncExecutionScope.run(context,()->{handleTerminalFailure(payload,exception);return null;});}
 
     @Override
     public void handleTerminalFailure(JsonNode payload, Exception exception) {

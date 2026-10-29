@@ -112,7 +112,7 @@ public class BusinessPartnerService {
     }
 
     static void requireVersion(Long value) {
-        if (value == null) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "编辑操作必须提供version");
+        if (value == null || value < 0) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "编辑操作必须提供version");
     }
 
     static void duplicate() {

@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -52,7 +53,7 @@ class ExperimentImportJobLifecycleTest {
         when(repository.findSourceOwner(ORGANIZATION_ID, JOB_ID)).thenReturn(Optional.of("EXPERIMENT"));
         when(repository.findJob(ORGANIZATION_ID, JOB_ID)).thenReturn(Optional.of(queued));
 
-        var result = service.retryExperimentImport(JOB_ID);
+        var result = service.retryExperimentImport(JOB_ID, repository.findJobForUpdate(ORGANIZATION_ID, JOB_ID).orElseThrow().getRevision());
 
         assertThat(result.status()).isEqualTo("QUEUED");
         verify(repository).clearParsed(ORGANIZATION_ID, JOB_ID);
@@ -65,7 +66,7 @@ class ExperimentImportJobLifecycleTest {
         when(repository.findJobForUpdate(ORGANIZATION_ID, JOB_ID)).thenReturn(Optional.of(job("COMPLETED")));
         when(repository.findSourceOwner(ORGANIZATION_ID, JOB_ID)).thenReturn(Optional.of("EXPERIMENT"));
 
-        assertThatThrownBy(() -> service.retryExperimentImport(JOB_ID))
+        assertThatThrownBy(() -> service.retryExperimentImport(JOB_ID, repository.findJobForUpdate(ORGANIZATION_ID, JOB_ID).orElseThrow().getRevision()))
                 .isInstanceOf(ApiException.class)
                 .hasMessage("仅失败或已取消的实验导入任务可以重试");
         verify(repository, never()).enqueueParse(org.mockito.ArgumentMatchers.any(),
@@ -78,7 +79,7 @@ class ExperimentImportJobLifecycleTest {
         when(repository.findJobForUpdate(ORGANIZATION_ID, JOB_ID)).thenReturn(Optional.of(job("FAILED")));
         when(repository.findSourceOwner(ORGANIZATION_ID, JOB_ID)).thenReturn(Optional.of("DATA_CENTER"));
 
-        assertThatThrownBy(() -> service.retryExperimentImport(JOB_ID))
+        assertThatThrownBy(() -> service.retryExperimentImport(JOB_ID, repository.findJobForUpdate(ORGANIZATION_ID, JOB_ID).orElseThrow().getRevision()))
                 .isInstanceOf(ApiException.class)
                 .hasMessage("仅实验记录本导入任务可执行此操作");
         verify(repository, never()).clearParsed(ORGANIZATION_ID, JOB_ID);
@@ -89,7 +90,7 @@ class ExperimentImportJobLifecycleTest {
         when(repository.findJobForUpdate(ORGANIZATION_ID, JOB_ID)).thenReturn(Optional.of(job("PARSING")));
         when(repository.findSourceOwner(ORGANIZATION_ID, JOB_ID)).thenReturn(Optional.of("EXPERIMENT"));
 
-        assertThatThrownBy(() -> service.hideExperimentImport(JOB_ID))
+        assertThatThrownBy(() -> service.hideExperimentImport(JOB_ID, repository.findJobForUpdate(ORGANIZATION_ID, JOB_ID).orElseThrow().getRevision()))
                 .isInstanceOf(ApiException.class)
                 .hasMessage("处理中任务不可删除，请等待处理结束");
         verify(repository, never()).hideExperimentJob(ORGANIZATION_ID, JOB_ID);
@@ -101,13 +102,26 @@ class ExperimentImportJobLifecycleTest {
         when(repository.findSourceOwner(ORGANIZATION_ID, JOB_ID)).thenReturn(Optional.of("EXPERIMENT"));
         when(repository.hideExperimentJob(ORGANIZATION_ID, JOB_ID)).thenReturn(1);
 
-        service.hideExperimentImport(JOB_ID);
+        service.hideExperimentImport(JOB_ID, repository.findJobForUpdate(ORGANIZATION_ID, JOB_ID).orElseThrow().getRevision());
 
         verify(repository).hideExperimentJob(ORGANIZATION_ID, JOB_ID);
     }
 
+    @Test
+    void staleImportRevisionCannotDeleteRetryOrOverwriteMappedValues() {
+        when(repository.findJobForUpdate(ORGANIZATION_ID, JOB_ID)).thenReturn(Optional.of(job("COMPLETED")));
+        when(repository.findSourceOwner(ORGANIZATION_ID, JOB_ID)).thenReturn(Optional.of("EXPERIMENT"));
+        var stale=job("FAILED").getRevision();
+        assertThatThrownBy(()->service.hideExperimentImport(JOB_ID,stale)).isInstanceOf(ApiException.class);
+        assertThatThrownBy(()->service.retryExperimentImport(JOB_ID,stale)).isInstanceOf(ApiException.class);
+        assertThatThrownBy(()->service.saveMappingsAtRevision(JOB_ID,stale,List.of())).isInstanceOf(ApiException.class);
+        assertThatThrownBy(()->service.correctValueAtRevision(JOB_ID,stale,UUID.randomUUID(),"field","",null,"reason")).isInstanceOf(ApiException.class);
+        verify(repository,never()).hideExperimentJob(ORGANIZATION_ID,JOB_ID);
+        verify(repository,never()).clearParsed(ORGANIZATION_ID,JOB_ID);
+    }
+
     private DataRepository.Job job(String status) {
-        var now = Instant.now();
+        var now = Instant.parse("2026-10-23T01:00:00Z");
         return new DataRepository.Job(JOB_ID, UUID.randomUUID(), "source-hash", "sample.xlsx", "XLSX",
                 UUID.randomUUID(), null, status, 100, status, "parser", null, now, now);
     }

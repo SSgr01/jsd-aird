@@ -54,10 +54,10 @@ export const projectResourceApi = {
     });
     return response.data.data;
   },
-  async replaceLinks(resourceType: ProjectResourceType, resourceId: string, targets: ProjectRelationTarget[]) {
+  async replaceLinks(resourceType: ProjectResourceType, resourceId: string, targets: ProjectRelationTarget[], expectedTargets: ProjectRelationTarget[]) {
     const response = await httpClient.put<ApiResponse<RelatedProjectView[]>>(
       `/api/v1/project-resource-links/${resourceType}/${resourceId}`,
-      { targets: targets.map(toTarget) },
+      { targets: targets.map(toTarget), expectedTargets: expectedTargets.map(toTarget) },
     );
     return response.data.data;
   },

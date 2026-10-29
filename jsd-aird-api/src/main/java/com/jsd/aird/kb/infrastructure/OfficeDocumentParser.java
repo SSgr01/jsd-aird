@@ -23,6 +23,8 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class OfficeDocumentParser implements DocumentParser {
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated;
 
     private static final int INLINE_MAX_ROWS = 500;
     private static final int INLINE_MAX_COLUMNS = 50;
@@ -40,6 +42,7 @@ public class OfficeDocumentParser implements DocumentParser {
 
     @Override
     public ParsedDocument parse(InputStream source, String fileName) {
+        if(isolated!=null)return isolated.execute("knowledge-office",source,com.fasterxml.jackson.databind.node.TextNode.valueOf(fileName),ParsedDocument.class);
         var name = fileName.toLowerCase(Locale.ROOT);
         try {
             if (name.endsWith(".docx")) return parseDocx(source);

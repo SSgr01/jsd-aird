@@ -23,9 +23,10 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import com.jsd.aird.ops.application.port.FileStorageFacade;
+import com.jsd.aird.ops.application.port.TemplateOfficeNormalizationFacade;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
-import com.jsd.aird.tpl.api.TemplateOfficeNormalizationFacade.NormalizedOfficeFile;
+import com.jsd.aird.ops.application.port.TemplateOfficeNormalizationFacade.NormalizedOfficeFile;
 import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.usermodel.Table;
 import org.apache.poi.hwpf.usermodel.TableCell;
@@ -54,7 +55,9 @@ import org.springframework.stereotype.Service;
  * discarded; the returned normalized file is the one used by recognition.
  */
 @Service
-public class TemplateFileNormalizationService implements com.jsd.aird.tpl.api.TemplateOfficeNormalizationFacade {
+public class TemplateFileNormalizationService implements TemplateOfficeNormalizationFacade {
+    @Autowired(required=false)
+    private com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated;
 
     private static final String XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     private static final String DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -83,6 +86,10 @@ public class TemplateFileNormalizationService implements com.jsd.aird.tpl.api.Te
     public Result normalize(String originalName, String contentType, byte[] source, boolean lenientPreview) {
         String name = originalName == null || originalName.isBlank() ? "template.bin" : originalName;
         String extension = extension(name);
+        if(isolated!=null && java.util.Set.of("xls","csv","doc").contains(extension)){
+            var argument=com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode().put("name",name).put("contentType",contentType).put("lenient",lenientPreview).put("executable",libreOfficeExecutable).put("timeout",libreOfficeTimeout.toMillis());
+            return isolated.execute("normalize",new ByteArrayInputStream(source),argument,Result.class);
+        }
         return switch (extension) {
             case "xlsx" -> passthrough(name, contentType, source, "XLSX");
             case "docx" -> passthrough(name, contentType, source, "DOCX");

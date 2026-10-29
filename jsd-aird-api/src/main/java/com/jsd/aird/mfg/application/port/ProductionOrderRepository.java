@@ -46,9 +46,9 @@ public interface ProductionOrderRepository {
 
     void attachConfirmedIngestSources(UUID organizationId, UUID orderId, UUID revisionId, UUID actorId);
 
-    int cancel(UUID organizationId, UUID orderId, UUID actorId);
+    int cancel(UUID organizationId, UUID orderId, long expectedVersion, UUID actorId);
 
-    int delete(UUID organizationId, UUID orderId);
+    int delete(UUID organizationId, UUID orderId, long expectedVersion);
 
     void appendOutbox(String aggregateType, UUID aggregateId, String eventType, JsonNode payload);
 
@@ -216,6 +216,7 @@ public interface ProductionOrderRepository {
     record LookupOption(UUID id, String code, String name, String defaultUnit) {}
 
     record SubmitRevision(
+            long expectedLockVersion,
             UUID id,
             UUID organizationId,
             UUID orderId,

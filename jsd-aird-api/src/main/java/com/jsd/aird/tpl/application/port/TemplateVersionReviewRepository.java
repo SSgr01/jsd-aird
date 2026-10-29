@@ -11,7 +11,7 @@ public interface TemplateVersionReviewRepository {
 
     Review ensure(UUID organizationId, UUID versionId);
 
-    Review transition(UUID organizationId, UUID versionId, String expectedStatus, String nextStatus,
+    Review transition(UUID organizationId, UUID versionId, long expectedVersion, String expectedStatus, String nextStatus,
                       UUID actorId, String comment);
 
     List<ReviewEvent> events(UUID organizationId, UUID versionId);

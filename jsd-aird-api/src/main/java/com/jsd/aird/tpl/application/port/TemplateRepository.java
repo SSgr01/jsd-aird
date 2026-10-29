@@ -13,6 +13,16 @@ import com.jsd.aird.tpl.domain.TemplateStatus;
 import com.jsd.aird.shared.api.AllowedActions;
 
 public interface TemplateRepository {
+    void lockTemplate(UUID organizationId,UUID templateId);
+    default Optional<TemplateListItem> findCatalogItem(UUID org,UUID id){
+        return findTemplates(new TemplateQuery(org,null,null,false,null,null,null,null,null,"UPDATED_AT","DESC",1,1,new DataScopeFilter("SELECTED",null,Set.of(id)))).items().stream().findFirst();
+    }
+
+    void lockCategory(UUID organizationId,UUID categoryId);
+
+
+    /** Serializes draft writes, review transitions and publication of one version. */
+    void lockWorkspace(UUID organizationId, UUID versionId);
 
     List<TemplateListItem> findTemplates(
             UUID organizationId,
@@ -149,6 +159,7 @@ public interface TemplateRepository {
             String createdByName,
             Instant createdAt
     ) {
+        public String getRevision(){return com.jsd.aird.shared.json.RevisionToken.of(templateId,versionId,name,categoryId,category,status,versionNo,lockVersion,updatedAt,currentPublishedVersionId,draftVersionId,hasDraft);}
         public List<String> getAllowedActions() {
             return AllowedActions.template(status == null ? null : status.name(), hasDraft,
                     currentPublishedVersionId != null);
@@ -221,6 +232,7 @@ public interface TemplateRepository {
     record TemplateSummary(UUID id, String name, UUID categoryId, String category) {}
 
     record TemplateCategoryItem(UUID id, String name, String description, int sortOrder, int templateCount) {
+        public String getRevision(){return com.jsd.aird.shared.json.RevisionToken.of(id,name,description,sortOrder);}
         public List<String> getAllowedActions() { return AllowedActions.category(false); }
     }
 

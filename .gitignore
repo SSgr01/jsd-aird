@@ -42,6 +42,7 @@ Thumbs.db
 !/docs/图谱分析当前逻辑、性能与输出质量诊断.md
 /tmp/
 /outputs/
+*/.venv/
 
 # Local AI/demo runtime output
 /catboost_info/
@@ -54,7 +55,6 @@ Thumbs.db
 
 # Local one-off scripts and alternate package-manager metadata. The committed
 # demo entry points above are explicitly re-included for cross-computer setup.
-/jsd-aird-web/pnpm-lock.yaml
 /jsd-aird-web/pnpm-workspace.yaml
 /scripts/sql/
 /scripts/testdata/*
@@ -64,3 +64,4 @@ Thumbs.db
 !/scripts/testdata/r10_bulk_client_template_import.py
 !/scripts/testdata/r10_noformula_bundle.py
 !/scripts/testdata/r10_register_noformula_model.sql
+/jsd-aird-agents/.coverage

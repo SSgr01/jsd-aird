@@ -293,7 +293,7 @@ export function QualityRecordWorkspacePage() {
     setDraft((current) => ({ ...current, [key]: value }));
     setDirty(true);
   };
-  const save = async (): Promise<boolean> => {
+  const save = async (): Promise<false | {lockVersion: number}> => {
     if (!record || !type) return false;
     setSaving(true);
     try {
@@ -337,12 +337,12 @@ export function QualityRecordWorkspacePage() {
             lockVersion: record.lockVersion,
           },
         ],
-        deleteIds: [],
+        deletes: [],
       });
       msg.success('品管数据草稿已保存');
       setDirty(false);
       await load();
-      return true;
+      return { lockVersion: record.lockVersion + 1 };
     } catch (e) {
       msg.error(e instanceof Error ? e.message : '保存失败');
       return false;
@@ -361,11 +361,13 @@ export function QualityRecordWorkspacePage() {
       // Uploaded/new records may not have a stored workbook snapshot yet. Persist
       // the current workbook before creating the publish version so the version
       // always contains the exact Excel snapshot that was published.
+      let expectedVersion=record.lockVersion;
       if (!record.workbookSnapshot && workbook) {
         const saved = await save();
         if (!saved) return;
+        expectedVersion=saved.lockVersion;
       }
-      await qualityApi.publishRecord(record.id);
+      await qualityApi.publishRecord(record.id,expectedVersion);
       msg.success('品管数据已发布，并生成新版本');
       await load();
     } catch (e) {

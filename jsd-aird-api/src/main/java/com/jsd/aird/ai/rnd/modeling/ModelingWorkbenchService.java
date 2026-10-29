@@ -269,7 +269,7 @@ public class ModelingWorkbenchService {
         request.set("selectedRows", selectedRows);
         request.set("datasetSnapshot",dataset.deepCopy());
         var materials=request.putArray("materialColumns");
-        dataset.path("columns").forEach(column->{if("MATERIAL_RATIO".equals(column.path("semanticType").asText()))materials.add(selectedColumn(column));});
+        dataset.path("columns").forEach(column->{if(Set.of("MATERIAL_RATIO","MATERIAL_AMOUNT").contains(column.path("semanticType").asText()))materials.add(selectedColumn(column));});
         request.set("projectionVersion",dataset.path("projectionVersion"));
         request.set("dataIssues",dataset.path("issues"));
         return request;

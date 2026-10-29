@@ -70,6 +70,15 @@ public class JdbcFileObjectRepository implements FileObjectRepository {
     }
 
     @Override
+    public int discardUnreferencedStaged(UUID organizationId,UUID fileId){
+        return jdbcTemplate.update("""
+            UPDATE ops.file_object f SET status='DELETED'
+            WHERE f.organization_id=? AND f.id=? AND f.status='STAGED'
+              AND NOT EXISTS(SELECT 1 FROM ops.outbox_event e WHERE e.aggregate_id=f.id)
+            """,organizationId,fileId);
+    }
+
+    @Override
     public int markExpiredStagedDeleted(Instant olderThan) {
         return jdbcTemplate.update("""
                 UPDATE ops.file_object

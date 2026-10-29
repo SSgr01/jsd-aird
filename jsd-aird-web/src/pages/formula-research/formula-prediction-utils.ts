@@ -31,7 +31,7 @@ export function syncFormulaForm(form: FormulaForm, context: FormulaContext) {
   context.materialIntersection.forEach(material => {
     const range = learnedRange(material.supportedRanges)
     if (typeof material.fixedValue === 'number') materials[material.materialId] = { mode: 'FIXED', ratio: material.fixedValue }
-    else materials[material.materialId] ??= range?.minimum === range?.maximum && range ? { mode: 'FIXED', ratio: range.minimum } : { mode: 'VARIABLE', ...(range ? { minimum: Math.max(0, range.minimum), maximum: Math.min(100, range.maximum) } : {}) }
+    else materials[material.materialId] ??= range?.minimum === range?.maximum && range ? { mode: 'FIXED', ratio: range.minimum } : { mode: 'VARIABLE', ...(range ? { minimum: Math.max(0, range.minimum), maximum: range.maximum } : {}) }
   })
   context.requiredInputs.forEach(field => {
     if (inputs[field.code]) return
@@ -52,9 +52,9 @@ export function formulaUnavailable(target: FormulaTarget) {
   if (target.unavailableReasons.includes('FORMULA_TARGET_IS_RATIO')) return '此模型预测单项比例；反推配方请选择以性能为 Y 的模型'
   if (target.unavailableReasons.includes('MODEL_FORMULA_INPUTS_INCOMPLETE')) return target.missingFormulaMaterials?.length
     ? `X 中缺少材料：${target.missingFormulaMaterials.join('、')}，请加入后重新训练`
-    : target.formulaIssues?.length ? `配方记录需检查：${target.formulaIssues.slice(0, 3).join('；')}` : 'X 中的材料比例不完整，请选择完整配方比例列后训练'
+    : target.formulaIssues?.length ? `配方记录需检查：${target.formulaIssues.slice(0, 3).join('；')}` : 'X 中的材料用量不完整，请选择完整配方用量列后训练'
   if (target.unavailableReasons.includes('MODEL_MATERIALS_INCONSISTENT')) return '模型材料与训练记录不一致，请重新训练'
-  if (target.unavailableReasons.includes('MODEL_NOT_FORMULA_ENABLED')) return '训练时未选择材料比例作为 X，请加入比例列后训练'
+  if (target.unavailableReasons.includes('MODEL_NOT_FORMULA_ENABLED')) return '训练时未选择材料用量作为 X，请加入用量列后训练'
   return unavailableReason(target)
 }
 export function goalError(target: FormulaTarget, goal?: FormulaForm['goals'][string]) {
@@ -76,23 +76,17 @@ export function goalError(target: FormulaTarget, goal?: FormulaForm['goals'][str
   return finite(goal.value) ? '' : '请填写目标值'
 }
 export function materialSettingError(setting?: MaterialSetting) {
-  if (!setting) return '请填写材料范围'
-  if (setting.mode === 'FIXED') return finite(setting.ratio) ? setting.ratio < 0 || setting.ratio > 100 ? '固定比例需在 0～100% 内' : '' : '请填写固定比例'
-  if (!finite(setting.minimum) || !finite(setting.maximum)) return '请补齐最小、最大比例'
-  if (setting.minimum < 0 || setting.maximum > 100) return '比例范围需在 0～100% 内'
-  return setting.minimum > setting.maximum ? '最小比例不能大于最大比例' : ''
+  if (!setting) return '请填写材料用量'
+  if (setting.mode === 'FIXED') return finite(setting.ratio) ? setting.ratio < 0 ? '固定用量不能为负数' : '' : '请填写固定用量'
+  if (!finite(setting.minimum) || !finite(setting.maximum)) return '请补齐最小、最大用量'
+  if (setting.minimum < 0) return '材料用量不能为负数'
+  return setting.minimum > setting.maximum ? '最小用量不能大于最大用量' : ''
 }
 export function formulaSpaceError(form: FormulaForm, context: FormulaContext) {
   if (!context.materialIntersection.length) return '所选指标没有共同可用材料，请分别生成方案。'
   if (context.materialIntersection.some(material => materialSettingError(form.materials[material.materialId]))) return ''
   const settings = context.materialIntersection.map(material => form.materials[material.materialId]!)
-  const fixed = settings.filter(setting => setting.mode === 'FIXED').reduce((sum, setting) => sum + setting.ratio!, 0)
-  if (fixed > 100 + 1e-6) return `固定比例合计 ${formatPredictionNumber(fixed)}%，超出 ${formatPredictionNumber(fixed - 100)}%，请减少固定比例。`
-  const minimum = settings.reduce((sum, setting) => sum + (setting.mode === 'FIXED' ? setting.ratio! : setting.minimum!), 0)
-  const maximum = settings.reduce((sum, setting) => sum + (setting.mode === 'FIXED' ? setting.ratio! : setting.maximum!), 0)
-  if (minimum > 100 + 1e-6) return `比例下限合计 ${formatPredictionNumber(minimum)}%，超出 ${formatPredictionNumber(minimum - 100)}%，请降低下限或固定比例。`
-  if (maximum < 100 - 1e-6) return `比例上限合计 ${formatPredictionNumber(maximum)}%，还差 ${formatPredictionNumber(100 - maximum)}%，请提高上限或调整固定比例。`
-  if (!settings.some(setting => setting.mode === 'VARIABLE' && setting.maximum! > setting.minimum!)) return '请至少让一种材料比例可以变化。'
+  if (!settings.some(setting => setting.mode === 'VARIABLE' && setting.maximum! > setting.minimum!)) return '请至少让一种材料用量可以变化。'
   return ''
 }
 export function formulaInputError(field: FormulaContext['requiredInputs'][number], setting?: InputSetting) {
@@ -115,7 +109,7 @@ export function buildFormulaRequest(form: FormulaForm, context: FormulaContext):
     if (setting?.mode === 'VARIABLE') variableInputs[field.code] = { minimum: setting.minimum!, maximum: setting.maximum!, ...(setting.step == null ? {} : { step: setting.step }) }
     else if (setting?.value != null && setting.value !== '') fixedInputs[field.code] = setting.value
   })
-  return { typedGoals: context.selected.map(target => ({ ...form.goals[target.targetId]!, targetId: target.targetId, valueType: target.valueType, expectedModelVersionId: target.modelVersionId })), targetTotal: 100, formulaBasis: 'MASS_PERCENT', baselineFormula: { basis: 'MASS_PERCENT', compositionComplete: true, recordedTotal: 100, components }, fixedInputs, searchSpace: { allowedMaterialIds: context.materialIntersection.map(material => material.materialId), variableMaterials: context.materialIntersection.filter(material => form.materials[material.materialId]?.mode === 'VARIABLE').map(material => ({ materialId: material.materialId, minimum: form.materials[material.materialId]!.minimum!, maximum: form.materials[material.materialId]!.maximum! })), variableInputs }, constraints: {}, candidateCount: context.candidateCountDefault || 4 }
+  return { typedGoals: context.selected.map(target => ({ ...form.goals[target.targetId]!, targetId: target.targetId, valueType: target.valueType, expectedModelVersionId: target.modelVersionId })), targetTotal: components.reduce((sum, component) => sum + component.ratio, 0), formulaBasis: 'ABSOLUTE_MASS', baselineFormula: { basis: 'ABSOLUTE_MASS', compositionComplete: true, recordedTotal: components.reduce((sum, component) => sum + component.ratio, 0), components }, fixedInputs, searchSpace: { allowedMaterialIds: context.materialIntersection.map(material => material.materialId), variableMaterials: context.materialIntersection.filter(material => form.materials[material.materialId]?.mode === 'VARIABLE').map(material => ({ materialId: material.materialId, minimum: form.materials[material.materialId]!.minimum!, maximum: form.materials[material.materialId]!.maximum! })), variableInputs }, constraints: {}, candidateCount: context.candidateCountDefault || 4 }
 }
 export function restoreFormulaForm(request: Partial<FormulaRequest>): FormulaForm {
   const form = emptyFormulaForm()
@@ -137,7 +131,7 @@ export function contextForRun(run: ResearchRun, fallback?: FormulaContext) {
   return context && Array.isArray(context.selected) && Array.isArray(context.requiredInputs) && Array.isArray(context.materialIntersection) ? context : undefined
 }
 export function formulaFailure(code?: string) {
-  return ({ MATERIAL_SPACE_CONFLICT: '所选指标或材料不兼容，请调整指标组合与材料。', INPUT_SPACE_CONFLICT: '实验条件有冲突，请核对条件类型、单位和范围。', FIXED_CONSTRAINT_CONFLICT: '材料比例不能组成 100% 的配方，请调整固定比例和范围。', GOAL_VALUE_INVALID: '目标条件无效，请核对目标值、类别或等级。', MINIMUM_PROBABILITY_REQUIRED: '请填写目标类别或等级的最低概率。', INVALID_SNAPSHOT: '模型文件未能读取，请在模型中心检查或重新训练。', FILE_NOT_READY: '模型文件未能读取，请在模型中心检查或重新训练。', HASH_MISMATCH: '模型文件与已登记版本不一致，请在模型中心检查或重新训练。', INTERNAL_COMPUTE_ERROR: '配方计算未完成，请重试；若再次失败，请检查模型和输入设置。' } as Record<string, string>)[code ?? ''] ?? predictionFailure(code, '配方方案未能生成，请稍后重试。')
+  return ({ MATERIAL_SPACE_CONFLICT: '所选指标或材料不兼容，请调整指标组合与材料。', INPUT_SPACE_CONFLICT: '实验条件有冲突，请核对条件类型、单位和范围。', FIXED_CONSTRAINT_CONFLICT: '材料用量范围存在冲突，请调整固定用量和范围。', GOAL_VALUE_INVALID: '目标条件无效，请核对目标值、类别或等级。', MINIMUM_PROBABILITY_REQUIRED: '请填写目标类别或等级的最低概率。', INVALID_SNAPSHOT: '模型文件未能读取，请在模型中心检查或重新训练。', FILE_NOT_READY: '模型文件未能读取，请在模型中心检查或重新训练。', HASH_MISMATCH: '模型文件与已登记版本不一致，请在模型中心检查或重新训练。', INTERNAL_COMPUTE_ERROR: '配方计算未完成，请重试；若再次失败，请检查模型和输入设置。' } as Record<string, string>)[code ?? ''] ?? predictionFailure(code, '配方方案未能生成，请稍后重试。')
 }
 export function formulaRunNotice(run: ResearchRun) {
   if (run.executionStatus === 'FAILED') return formulaFailure(typeof run.shortfallReason === 'object' && run.shortfallReason ? run.shortfallReason.code : undefined)
@@ -147,7 +141,7 @@ export function formulaRunNotice(run: ResearchRun) {
   if ((reasons.OUT_OF_DOMAIN ?? 0) > 0) return '部分条件未能得到预测值，请核对数值和单位，或补充相近实验记录后重新训练。'
   if ((reasons.INVALID_PREDICTION ?? 0) > 0) return '部分模型结果不合理，已排除相关方案。请核对输入和单位，并补充相近实验后重新训练。'
   if ((reasons.MATERIAL_MISMATCH ?? 0) > 0) return '部分材料不在模型中，请调整材料或更换指标。'
-  return run.actualCandidateCount ? `本次生成 ${run.actualCandidateCount} 个不同方案，当前条件下没有更多可行方案。` : '当前条件下没有可行方案，请调整目标值、材料比例范围或实验条件。'
+  return run.actualCandidateCount ? `本次生成 ${run.actualCandidateCount} 个不同方案，当前条件下没有更多可行方案。` : '当前条件下没有可行方案，请调整目标值、材料用量范围或实验条件。'
 }
 export function resultPrediction(result?: FormulaTargetResult) { return result?.result ?? result?.prediction }
 export function resultText(result?: FormulaTargetResult) {

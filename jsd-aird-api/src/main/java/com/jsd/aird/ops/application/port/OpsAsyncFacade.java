@@ -8,6 +8,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 /** Public submission boundary for the Postgres-backed worker. */
 public interface OpsAsyncFacade {
+    default void requireExecution(AsyncJobHandler.ExecutionContext context,boolean terminal){
+        if(context!=null && context.cancelled())throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
+    }
 
     UUID enqueue(UUID organizationId, String jobType, JsonNode payload, String idempotencyKey, int priority);
 
@@ -43,6 +46,10 @@ public interface OpsAsyncFacade {
         return Optional.empty();
     }
 
+    default QueueCapacityView queueCapacity(UUID organizationId) {
+        return new QueueCapacityView(0, 20, 0, 100, 20, 2);
+    }
+
     /**
      * Cancels queued/running jobs whose idempotency key belongs to the supplied
      * aggregate. Implementations that do not persist async jobs may no-op.
@@ -56,4 +63,8 @@ public interface OpsAsyncFacade {
                         Instant finishedAt) {
         public boolean terminal() { return "FAILED".equals(status) || "SUCCEEDED".equals(status) || "CANCELLED".equals(status); }
     }
+
+    record QueueCapacityView(int organizationActiveJobs, int organizationJobLimit,
+                             int totalActiveJobs, int totalJobLimit,
+                             int availableSlots, int retryAfterSeconds) { }
 }

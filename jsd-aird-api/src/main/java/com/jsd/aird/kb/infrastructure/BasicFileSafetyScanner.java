@@ -13,9 +13,12 @@ import org.springframework.stereotype.Component;
 @Component
 public class BasicFileSafetyScanner implements FileSafetyScanner {
 
+    private static final long MAX_FILE_BYTES = 512L * 1024 * 1024;
     private static final Set<String> SUPPORTED = Set.of(
-            "pdf", "doc", "docx", "xlsx", "xls", "pptx", "ppt", "csv", "txt", "md",
-            "png", "jpg", "jpeg", "gif", "wav", "mp3", "m4a", "mp4", "m4v", "mov", "webm"
+            "pdf", "doc", "docx", "xlsx", "xls", "pptx", "ppt", "csv", "txt", "md", "markdown",
+            "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff",
+            "wav", "mp3", "m4a", "aac", "flac", "ogg", "opus",
+            "mp4", "m4v", "mov", "webm"
     );
     private static final int MAX_ZIP_ENTRIES = 20_000;
     private static final long MAX_UNCOMPRESSED_BYTES = 512L * 1024 * 1024;
@@ -25,12 +28,22 @@ public class BasicFileSafetyScanner implements FileSafetyScanner {
     private static final int[] EICAR_PREFIX = prefixTable(EICAR_SIGNATURE);
 
     @Override
+    public Set<String> supportedExtensions() {
+        return SUPPORTED;
+    }
+
+    @Override
+    public long maxFileBytes() {
+        return MAX_FILE_BYTES;
+    }
+
+    @Override
     public ScanResult scan(InputStream source, String fileName, String contentType, long size) {
         var extension = extension(fileName);
         if (!SUPPORTED.contains(extension)) {
             return new ScanResult(ScanResult.Status.REJECTED, "文件类型暂不支持: " + extension);
         }
-        if (size < 0 || size > 512L * 1024 * 1024) {
+        if (size < 0 || size > MAX_FILE_BYTES) {
             return new ScanResult(ScanResult.Status.REJECTED, "文件超过 512MB 限制");
         }
         if (!mimeMatches(extension, contentType)) {
@@ -65,20 +78,21 @@ public class BasicFileSafetyScanner implements FileSafetyScanner {
             return true;
         }
         var type = contentType.toLowerCase(Locale.ROOT);
-        if (Set.of("txt", "csv", "md").contains(extension)) {
+        if (Set.of("txt", "csv", "md", "markdown").contains(extension)) {
             return type.startsWith("text/") || type.contains("csv") || ("csv".equals(extension) && type.contains("ms-excel"));
         }
         if ("pdf".equals(extension)) return "application/pdf".equals(type);
         if (Set.of("docx", "xlsx", "pptx").contains(extension)) return type.contains("openxmlformats") || type.contains("zip");
+        if ("doc".equals(extension)) return type.contains("msword") || type.contains("ole");
         if ("xls".equals(extension)) return type.contains("ms-excel") || type.contains("ole");
         if ("ppt".equals(extension)) return type.contains("ms-powerpoint") || type.contains("ole");
-        if (Set.of("png", "jpg", "jpeg", "gif").contains(extension)) return type.startsWith("image/");
+        if (Set.of("png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff").contains(extension)) return type.startsWith("image/");
         if (Set.of("mp4", "m4v", "mov", "webm").contains(extension)) return type.startsWith("video/");
-        return type.startsWith("audio/") || type.startsWith("application/");
+        return type.startsWith("audio/") || ("m4a".equals(extension) && type.startsWith("application/"));
     }
 
     private boolean magicMatches(String extension, byte[] bytes) {
-        if (Set.of("txt", "csv", "md").contains(extension)) {
+        if (Set.of("txt", "csv", "md", "markdown").contains(extension)) {
             for (byte value : bytes) if (value == 0) return false;
             return true;
         }
@@ -90,15 +104,24 @@ public class BasicFileSafetyScanner implements FileSafetyScanner {
         if ("png".equals(extension)) return startsWith(bytes, new byte[]{(byte) 0x89, 'P', 'N', 'G'});
         if (Set.of("jpg", "jpeg").contains(extension)) return startsWith(bytes, new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF});
         if ("gif".equals(extension)) return startsWith(bytes, new byte[]{'G', 'I', 'F', '8'});
+        if ("webp".equals(extension)) return startsWith(bytes, new byte[]{'R', 'I', 'F', 'F'})
+                && bytes.length >= 12 && bytes[8] == 'W' && bytes[9] == 'E' && bytes[10] == 'B' && bytes[11] == 'P';
+        if ("bmp".equals(extension)) return startsWith(bytes, new byte[]{'B', 'M'});
+        if (Set.of("tif", "tiff").contains(extension)) return startsWith(bytes, new byte[]{'I', 'I', 0x2A, 0})
+                || startsWith(bytes, new byte[]{'M', 'M', 0, 0x2A});
         if ("wav".equals(extension)) return startsWith(bytes, new byte[]{'R', 'I', 'F', 'F'})
                 && bytes.length >= 12 && bytes[8] == 'W' && bytes[9] == 'A' && bytes[10] == 'V' && bytes[11] == 'E';
         if ("mp3".equals(extension)) return startsWith(bytes, new byte[]{'I', 'D', '3'})
                 || (bytes.length >= 2 && (bytes[0] & 0xFF) == 0xFF && (bytes[1] & 0xE0) == 0xE0);
-        if (Set.of("mp4", "m4v", "mov").contains(extension)) {
+        if ("aac".equals(extension)) return startsWith(bytes, new byte[]{'A', 'D', 'I', 'F'})
+                || (bytes.length >= 2 && (bytes[0] & 0xFF) == 0xFF && (bytes[1] & 0xF6) == 0xF0);
+        if ("flac".equals(extension)) return startsWith(bytes, new byte[]{'f', 'L', 'a', 'C'});
+        if (Set.of("ogg", "opus").contains(extension)) return startsWith(bytes, new byte[]{'O', 'g', 'g', 'S'});
+        if (Set.of("m4a", "mp4", "m4v", "mov").contains(extension)) {
             return bytes.length >= 8 && bytes[4] == 'f' && bytes[5] == 't' && bytes[6] == 'y' && bytes[7] == 'p';
         }
         if ("webm".equals(extension)) return startsWith(bytes, new byte[]{0x1A, 0x45, (byte) 0xDF, (byte) 0xA3});
-        return bytes.length >= 8 && bytes[4] == 'f' && bytes[5] == 't' && bytes[6] == 'y' && bytes[7] == 'p';
+        return false;
     }
 
     private boolean zipMagic(byte[] bytes) {

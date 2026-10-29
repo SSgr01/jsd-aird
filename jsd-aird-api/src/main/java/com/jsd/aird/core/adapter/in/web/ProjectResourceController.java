@@ -67,7 +67,7 @@ public class ProjectResourceController {
         };
         authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), sourcePermission,
                 sourceResource, resourceId, "WRITE"));
-        return success(service.replaceLinks(actor, resourceType, resourceId, targets(request.targets())));
+        return success(service.replaceLinksChecked(actor, resourceType, resourceId, targets(request.targets()), targets(request.expectedTargets())));
     }
 
     @PostMapping("/project-references")
@@ -124,9 +124,10 @@ public class ProjectResourceController {
         return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown());
     }
 
-    public record LinkRequest(@NotNull List<@Valid TargetRequest> targets) { }
+    public record LinkRequest(@NotNull List<@NotNull @Valid TargetRequest> targets,
+                              @NotNull List<@NotNull @Valid TargetRequest> expectedTargets) { }
     public record TargetRequest(@NotNull UUID projectId, UUID stageId, UUID taskId) { }
     public record AddReferenceRequest(@NotNull ResourceType resourceType, @NotNull UUID resourceId,
                                       @Size(max = 2000) String summary,
-                                      @NotEmpty List<@Valid TargetRequest> targets) { }
+                                      @NotEmpty List<@NotNull @Valid TargetRequest> targets) { }
 }

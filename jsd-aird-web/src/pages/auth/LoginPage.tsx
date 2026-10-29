@@ -1,6 +1,8 @@
 import { LockOutlined, SafetyCertificateOutlined, UserOutlined } from '@ant-design/icons';
 import { App, Button, Card, Checkbox, Form, Input, Typography } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useEffect } from 'react';
+import { markPerformance, measurePerformance } from '@/services/performance/metrics';
 
 import { useAuthStore } from '@/stores/auth-store';
 import { HttpError } from '@/services/http/errors';
@@ -13,6 +15,7 @@ interface LoginForm {
 }
 
 export function LoginPage() {
+  useEffect(() => { markPerformance('login-ready'); measurePerformance('login', 'boot-start', 'login-ready'); }, []);
   const navigate = useNavigate();
   const location = useLocation();
   const { message } = App.useApp();

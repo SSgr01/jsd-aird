@@ -8,7 +8,7 @@ spring:
     hikari:
       maximum-pool-size: 10
       minimum-idle: 1
-      connection-timeout: 30000
+      connection-timeout: ${JSD_AIRD_DB_CONNECTION_TIMEOUT:1000}
   flyway:
     enabled: false
     locations: classpath:db/migration
@@ -20,8 +20,10 @@ spring:
     detection-strategy: explicitly-annotated
   servlet:
     multipart:
-      max-file-size: -1
-      max-request-size: -1
+      max-file-size: 512MB
+      max-request-size: 520MB
+      resolve-lazily: true
+      location: ${JSD_AIRD_MULTIPART_ROOT:${java.io.tmpdir}/jsd-aird-bounded/aird-multipart}
   ai:
     model:
       # Keep optional Spring AI models disabled until their connection is
@@ -64,10 +66,13 @@ server:
     mime-types: application/json,application/xml,text/html,text/plain,text/css,application/javascript
 
 management:
+  server:
+    address: ${JSD_AIRD_MANAGEMENT_ADDRESS:127.0.0.1}
+    port: ${JSD_AIRD_MANAGEMENT_PORT:9091}
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,metrics
   endpoint:
     health:
       show-details: never

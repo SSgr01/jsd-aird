@@ -9,7 +9,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('@/services/data/data-api', () => ({ dataApi: api }));
 
-const draft: DataPublication = { status: 'DRAFT', legacyPublished: false, publishedEnabled: true, versions: [], events: [] };
+const draft: DataPublication = { revision: 'a'.repeat(64), status: 'DRAFT', legacyPublished: false, publishedEnabled: true, versions: [], events: [] };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -30,7 +30,7 @@ it('submits a ready draft from the workbench without a separate confirmation ste
   const confirm = within(dialog).getByRole('button', { name: '提交审核' });
   await waitFor(() => expect(confirm).toBeEnabled());
   fireEvent.click(confirm);
-  await waitFor(() => expect(api.publicationAction).toHaveBeenCalledWith('job', 'submit', 'reviewer'));
+  await waitFor(() => expect(api.publicationAction).toHaveBeenCalledWith('job', 'submit', draft.revision, 'reviewer'));
   expect(api.publicationAction).toHaveBeenCalledTimes(1);
 });
 
@@ -40,7 +40,7 @@ it('opens a revision directly from published data', async () => {
   render(<App><DataPublicationPanel jobId="job" onEdit={onEdit} /></App>);
   fireEvent.click(await screen.findByRole('button', { name: '创建修订' }));
   await waitFor(() => expect(onEdit).toHaveBeenCalledOnce());
-  expect(api.publicationAction).toHaveBeenCalledWith('job', 'revise');
+  expect(api.publicationAction).toHaveBeenCalledWith('job', 'revise',draft.revision);
 });
 
 it('allows a historical source to submit after opening its first revision', async () => {
@@ -59,7 +59,7 @@ it('offers a separate publish action after approval', async () => {
   expect(api.publicationAction).not.toHaveBeenCalled();
   expect(screen.queryByRole('button', { name: '审核通过并发布' })).not.toBeInTheDocument();
   fireEvent.click(publish);
-  await waitFor(() => expect(api.publicationAction).toHaveBeenCalledWith('job', 'publish'));
+  await waitFor(() => expect(api.publicationAction).toHaveBeenCalledWith('job', 'publish',draft.revision));
 });
 
 it('approves a submission without publishing it', async () => {
@@ -68,7 +68,7 @@ it('approves a submission without publishing it', async () => {
   } });
   render(<App><DataPublicationPanel jobId="job" /></App>);
   fireEvent.click(await screen.findByRole('button', { name: '审核通过' }));
-  await waitFor(() => expect(api.review).toHaveBeenCalledWith('job', 'snapshot', true));
+  await waitFor(() => expect(api.review).toHaveBeenCalledWith('job', 'snapshot', true,draft.revision));
   expect(api.publicationAction).not.toHaveBeenCalled();
 });
 

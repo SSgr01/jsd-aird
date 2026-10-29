@@ -17,10 +17,26 @@ public class DataReviewGuard {
                 Boolean.class, organizationId, jobId));
     }
 
+    public void assertNotFreeform(UUID organizationId, UUID jobId) {
+        var modes = jdbc.query("SELECT source_owner,recognition_mode FROM data.import_job WHERE organization_id=? AND id=?",
+                (rs, n) -> new String[]{rs.getString(1), rs.getString(2)}, organizationId, jobId);
+        if (!modes.isEmpty() && "DATA_CENTER".equals(modes.getFirst()[0])
+                && "FREEFORM".equals(modes.getFirst()[1])) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                    "历史自由识别记录已设为只读，只能查看和下载原文件");
+        }
+    }
+
     public void beforeEdit(UUID organizationId, UUID jobId) {
-        var jobs = jdbc.query("SELECT source_owner,status FROM data.import_job WHERE organization_id=? AND id=? FOR UPDATE",
-                (rs, n) -> new String[]{rs.getString(1),rs.getString(2)}, organizationId, jobId);
-        if (jobs.isEmpty() || !"DATA_CENTER".equals(jobs.getFirst()[0])) return;
+        var jobs = jdbc.query("SELECT source_owner,status,recognition_mode FROM data.import_job WHERE organization_id=? AND id=? FOR UPDATE",
+                (rs, n) -> new String[]{rs.getString(1),rs.getString(2),rs.getString(3)}, organizationId, jobId);
+        if (jobs.isEmpty()) return;
+        jdbc.update("UPDATE data.import_job SET updated_at=clock_timestamp() WHERE organization_id=? AND id=?",organizationId,jobId);
+        if (!"DATA_CENTER".equals(jobs.getFirst()[0])) return;
+        if ("FREEFORM".equals(jobs.getFirst()[2])) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
+                    "历史自由识别记录已设为只读，只能查看和下载原文件");
+        }
         var states = jdbc.query("SELECT status FROM data.publication WHERE organization_id=? AND import_job_id=?",
                 (rs, n) -> rs.getString(1), organizationId, jobId);
         if (states.contains("PENDING_REVIEW")) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,

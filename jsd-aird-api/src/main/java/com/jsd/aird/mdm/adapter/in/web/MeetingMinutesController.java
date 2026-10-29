@@ -65,9 +65,10 @@ public class MeetingMinutesController {
     ApiResponse<Void> update(@Parameter(description = "会议纪要 ID") @PathVariable UUID id,
                              @Valid @RequestBody MeetingMinutesRequest r) {
         var now = Instant.now();
+        if(r.version()==null)throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.VALIDATION_ERROR,"必须提交读取时的数据版本");
         var domain = new MeetingMinutes(id, null, r.title(), r.attendees(),
                 r.summary(), r.occurredAt() == null ? now : r.occurredAt(), false,
-                r.version() == null ? 0 : r.version(), null, now);
+                r.version(), null, now);
         service.update(id, domain);
         return ok(null);
     }
@@ -82,8 +83,8 @@ public class MeetingMinutesController {
 
     @PostMapping("/{id}/archive-to-kb")
     @Operation(summary = "归档到知识库", description = "将会议纪要标记为已归档到知识库")
-    ApiResponse<Void> archiveToKb(@Parameter(description = "会议纪要 ID") @PathVariable UUID id) {
-        service.archiveToKb(id);
+    ApiResponse<Void> archiveToKb(@Parameter(description = "会议纪要 ID") @PathVariable UUID id,@RequestParam @PositiveOrZero long version) {
+        service.archiveToKb(id,version);
         return ok(null);
     }
 

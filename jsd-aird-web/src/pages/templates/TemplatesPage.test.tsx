@@ -30,7 +30,7 @@ const exportFilesMock = vi.mocked(templateApi.exportFiles);
 const testRouterFuture = { v7_startTransition: true, v7_relativeSplatPath: true } as const;
 
 const publishedWithDraft: TemplateListItem = {
-  templateId: 'template-published',
+  revision: 'a'.repeat(64), templateId: 'template-published',
   versionId: 'draft-version',
   templateCode: 'TPL-PUBLISHED',
   name: '已发布模板',
@@ -53,7 +53,7 @@ const publishedWithDraft: TemplateListItem = {
 
 const retiredWithDraft: TemplateListItem = {
   ...publishedWithDraft,
-  templateId: 'template-retired',
+  revision: 'a'.repeat(64), templateId: 'template-retired',
   versionId: 'retired-draft-version',
   templateCode: 'TPL-RETIRED',
   name: '已停用模板',
@@ -83,8 +83,8 @@ describe('TemplatesPage catalog presentation', () => {
       categoryCounts: [{ categoryId: 'category-lifecycle', count: 5 }],
     });
     listCategoriesMock.mockResolvedValue([
-      { id: 'category-lifecycle', name: '生命周期', description: '生命周期模板', sortOrder: 1, templateCount: 5 },
-      { id: 'category-empty', name: '空分类', description: '暂无模板', sortOrder: 2, templateCount: 0 },
+      { id: 'category-lifecycle', revision: 'a'.repeat(64), name: '生命周期', description: '生命周期模板', sortOrder: 1, templateCount: 5 },
+      { id: 'category-empty', revision: 'b'.repeat(64), name: '空分类', description: '暂无模板', sortOrder: 2, templateCount: 0 },
     ]);
     filterOptionsMock.mockResolvedValue([{ id: 'creator-1', displayName: '本地开发用户' }]);
     exportFilesMock.mockResolvedValue(undefined);

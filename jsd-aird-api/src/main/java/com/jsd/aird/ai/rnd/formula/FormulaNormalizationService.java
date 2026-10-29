@@ -67,6 +67,14 @@ public class FormulaNormalizationService {
             return invalid("FORMULA_TOTAL_NON_POSITIVE", "配方合计必须大于0，当前无法归一化");
         }
 
+        if ("ABSOLUTE_MASS".equals(input.path("basis").asText())) {
+            var mass = (ObjectNode) input.deepCopy();
+            mass.put("recordedTotal", rawTotal);
+            mass.put("normalizationApplied", false);
+            mass.put("normalizationFactor", BigDecimal.ONE);
+            return new Result(mass, rawTotal, rawTotal, false, BigDecimal.ONE, List.of());
+        }
+
         var factor = HUNDRED.divide(rawTotal, MathContext.DECIMAL128);
         var normalized = (ObjectNode) input.deepCopy();
         var normalizedComponents = normalized.withArray("components");

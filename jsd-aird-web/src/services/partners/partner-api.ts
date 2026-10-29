@@ -94,10 +94,10 @@ interface PageData<T> {
   total: number;
   totalPages: number;
 }
-export async function getPartners(params: Record<string, unknown>) {
+export async function getPartners(params: Record<string, unknown>, signal?: AbortSignal) {
   const { data } = await httpClient.get<ApiResponse<PageData<BusinessPartner>>>(
     '/api/v1/business-partners',
-    { params },
+    { params, signal },
   );
   return data.data;
 }

@@ -30,6 +30,7 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
     private final StandardFieldService standardFieldService;
     private final SnapshotWorkbookExporter workbookExporter;
     private final ObjectMapper objectMapper;
+    private final com.jsd.aird.shared.excel.WorkbookInstanceParser workbookInstanceParser;
 
     public TemplateDataImportFacadeImpl(
             TemplateRepository repository,
@@ -40,6 +41,13 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
             SnapshotWorkbookExporter workbookExporter,
             ObjectMapper objectMapper
     ) {
+        this(repository,files,storage,parser,standardFieldService,workbookExporter,objectMapper,null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public TemplateDataImportFacadeImpl(TemplateRepository repository,FileObjectRepository files,ObjectStorage storage,
+            TabularStructureParser parser,StandardFieldService standardFieldService,SnapshotWorkbookExporter workbookExporter,
+            ObjectMapper objectMapper,com.jsd.aird.shared.excel.WorkbookInstanceParser workbookInstanceParser) {
         this.repository = repository;
         this.files = files;
         this.storage = storage;
@@ -47,6 +55,7 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
         this.standardFieldService = standardFieldService;
         this.workbookExporter = workbookExporter;
         this.objectMapper = objectMapper;
+        this.workbookInstanceParser=workbookInstanceParser;
     }
 
     @Override
@@ -56,6 +65,7 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
                 items.stream().map(TemplateRepository.TemplateListItem::versionId).toList());
         return items.stream()
                 .map(item -> option(item, contracts.get(item.versionId())))
+                .filter(item->!"EXPERIMENT_DATA".equals(item.templateUsage())||com.jsd.aird.shared.lab.UnifiedLabTemplateCodes.contains(item.templateCode()))
                 .toList();
     }
 
@@ -107,7 +117,16 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
     public DataTemplateDefinition getPublished(UUID organizationId, UUID templateVersionId) {
         var workspace = repository.findPublishedDataTemplate(organizationId, templateVersionId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "数据中心模板不存在或未发布"));
-        return definition(organizationId, workspace);
+        var definition=definition(organizationId, workspace);
+        // Keep the import gate consistent with the published-template list: historical
+        // contracts that only describe batches are ordinary data, even if their raw
+        // templateUsage was once marked EXPERIMENT_DATA.
+        if (definition.importContractVersion() >= TemplateImportContractCompiler.EXPERIMENT_IMPORT_CONTRACT_VERSION
+                && definition.importContract() != null
+                && "EXPERIMENT_DATA".equals(definition.importContract().path("templateUsage").asText())) {
+            requireCurrentLabTemplate(workspace.templateCode());
+        }
+        return definition;
     }
 
     @Override
@@ -115,6 +134,7 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
         if (templateCode == null || templateCode.isBlank()) {
             throw new ApiException(ApiErrorCode.EXPERIMENT_TEMPLATE_REQUIRED, "AI任务未配置实验模板编码");
         }
+        requireCurrentLabTemplate(templateCode.strip());
         var item = repository.findPublishedDataTemplates(organizationId).stream()
                 .filter(candidate -> templateCode.strip().equals(candidate.templateCode()))
                 .findFirst()
@@ -177,11 +197,14 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
     }
 
     private List<ImportBinding> bindings(UUID organizationId, TemplateRepository.TemplateWorkspace workspace) {
-        var result = new ArrayList<ImportBinding>();
         var storedContract = repository.findImportContract(organizationId, workspace.versionId()).orElse(null);
         var contract = storedContract == null ? null : storedContract.contract();
         var sourceBindings = isExperimentContract(storedContract)
                 ? contractBindings(contract) : workspace.mapping();
+        return bindings(sourceBindings,contract);
+    }
+    private List<ImportBinding> bindings(JsonNode sourceBindings,JsonNode contract) {
+        var result = new ArrayList<ImportBinding>();
         if (sourceBindings == null || !sourceBindings.isArray()) return result;
         var componentByBinding = componentByBinding(contract);
         for (JsonNode item : sourceBindings) {
@@ -347,12 +370,135 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
     }
 
     @Override
+    public ImportExecution prepareImport(UUID organizationId,UUID versionId,UUID fileId) {
+        var workspace=repository.findWorkspace(organizationId,versionId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"模板版本不存在"));
+        if(!workspace.schema().path("x-jsd-lab-template").isObject()) {
+            if(workbookInstanceParser!=null) {
+                var file=files.find(organizationId,fileId).orElseThrow(()->new ApiException(ApiErrorCode.FILE_NOT_READY,"数据源文件不存在"));
+                if(file.originalName().toLowerCase(java.util.Locale.ROOT).endsWith(".xlsx"))try(var stored=storage.get(file.objectKey())) {
+                    var snapshot=workbookInstanceParser.parseInstance(stored.stream()).snapshot();
+                    var instance=com.jsd.aird.shared.excel.WorkbookStructure.instance(snapshot);
+                    if(instance instanceof ObjectNode importedInstance) {
+                        // An exported workbook can be extended in Excel before it is
+                        // uploaded again. This is a fresh import, not a saved draft.
+                        com.jsd.aird.shared.excel.WorkbookStructure.expandImportedRegions(objectMapper,snapshot,importedInstance,fileId.toString());
+                        return prepareWorkbookImport(organizationId,versionId,snapshot,importedInstance);
+                    }
+                    boolean repeating=false;for(var binding:workspace.mapping())if("REPEAT_REGION".equals(binding.path("mappingKind").asText()))repeating=true;
+                    if(repeating) {
+                        var generated=com.jsd.aird.shared.excel.WorkbookStructure.seed(objectMapper,snapshot,workspace.schema(),workspace.mapping(),fileId.toString());
+                        com.jsd.aird.shared.excel.WorkbookStructure.expandImportedRegions(objectMapper,snapshot,generated,fileId.toString());
+                        return prepareWorkbookImport(organizationId,versionId,snapshot,generated);
+                    }
+                }catch(ApiException ex){throw ex;}catch(Exception ex){throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"工作簿结构读取失败："+ex.getMessage());}
+            }
+            return TemplateDataImportFacade.super.prepareImport(organizationId,versionId,fileId);
+        }
+        var file=files.find(organizationId,fileId).orElseThrow(()->new ApiException(ApiErrorCode.FILE_NOT_READY,"数据源文件不存在"));
+        try(var stored=storage.get(file.objectKey())) {
+            var source=workbookInstanceParser.parseInstance(stored.stream()).snapshot();
+            var prepared=com.jsd.aird.shared.lab.LabWorkbook.prepare(objectMapper,source,readSnapshot(organizationId,workspace),fileId.toString());
+            // Recompute mass totals from the raw g inputs. POI cannot evaluate all of
+            // Univer's array formulas, and an uploaded formula cache is not evidence.
+            var labModel=com.jsd.aird.shared.lab.LabWorkbook.extract(objectMapper,prepared,objectMapper.createObjectNode(),fileId.toString());
+            var pack=new UnifiedLabTemplateCatalog(objectMapper).describe(workspace.templateCode(),prepared,objectMapper.createObjectNode()).payload();
+            var fields=new LinkedHashMap<String,FieldDefinition>();collectSchemaFields(pack.path("schema"),fields);
+            var contract=pack.path("contract");
+            var definition=new DataTemplateDefinition(workspace.templateId(),versionId,workspace.templateCode(),workspace.name(),null,workspace.versionNo(),"XLSX",pack.path("schema"),pack.path("mapping"),List.copyOf(fields.values()),9,contract.path("layoutStructureVersion").asInt(),contract.path("contractHash").asText(),contract);
+            var tabularSnapshot=prepared.deepCopy();
+            var totalRow=com.jsd.aird.shared.lab.LabWorkbook.definition(prepared).path("formulaTotalRow").asInt();
+            var totalSheet=com.jsd.aird.shared.lab.LabWorkbook.sheet(tabularSnapshot);
+            for(var cell:totalSheet.path("cellData").path(""+totalRow))if(cell instanceof ObjectNode object)object.remove("f");
+            var bytes=workbookExporter.export(tabularSnapshot,objectMapper.createArrayNode(),objectMapper.createObjectNode(),null).content();
+            var parsed=parser.parse(new java.io.ByteArrayInputStream(bytes),"experiment.xlsx");
+            for(var sheet:parsed.sheets())for(var cell:sheet.layoutIr().path("cells")) {
+                if(cell.path("row").asInt()!=totalRow+1||cell.path("column").asInt()<3)continue;
+                if(!com.jsd.aird.shared.lab.LabWorkbook.sheet(prepared).path("cellData").path(""+totalRow).path(""+(cell.path("column").asInt()-1)).hasNonNull("f"))continue;
+                ((ObjectNode)cell).put("valueSource","FORMULA").put("calculationSource","UNIFIED_LAB_RECALCULATED")
+                        .put("calculationStatus","VALID").put("formulaTrustStatus","TRUSTED_RECALCULATED");
+            }
+            parsed=instanceParsedSheets(parsed,prepared);
+            return new ImportExecution(definition,bindings(contractBindings(contract),contract),parsed,labModel.path("templateInstance").path("issues"));
+        }catch(ApiException ex){throw ex;}catch(Exception ex){throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"实验文件解析失败："+ex.getMessage());}
+    }
+
+    @Override
     public FieldRequest requestField(UUID organizationId, UUID templateVersionId, FieldRequestCommand command) {
         getPublished(organizationId, templateVersionId);
         var request = standardFieldService.request(new StandardFieldService.RequestCommand(
                 templateVersionId, command.fieldId(), command.displayName(), command.valueType(),
                 command.uiType(), command.groupCode(), command.description()));
         return new FieldRequest(request.id(), request.templateVersionId(), request.displayName(), request.valueType(), request.status());
+    }
+
+    @Override
+    public ImportExecution prepareWorkbookImport(UUID organizationId,UUID versionId,JsonNode source,JsonNode provided) {
+        var workspace=repository.findWorkspace(organizationId,versionId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"模板版本不存在"));
+        var snapshot=(ObjectNode)source.deepCopy();
+        var instance=com.jsd.aird.shared.excel.WorkbookStructure.validate(objectMapper,snapshot,provided);
+        JsonNode labIssues=instance.path("issues");
+        if(com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot)) {
+            snapshot=com.jsd.aird.shared.lab.LabWorkbook.prepare(objectMapper,snapshot,readSnapshot(organizationId,workspace),versionId.toString());
+            var labModel=com.jsd.aird.shared.lab.LabWorkbook.extract(objectMapper,snapshot,objectMapper.createObjectNode(),versionId.toString());
+            labIssues=labModel.path("templateInstance").path("issues");
+        }
+        var schema=(ObjectNode)workspace.schema().deepCopy();schema.set("x-jsd-field-model",instance.path("model").deepCopy());schema.set("x-jsd-workbook-instance",instance.deepCopy());
+        if(instance.path("execution").isObject())schema.set("x-jsd-experiment-import",instance.path("execution").deepCopy());
+        var mappings=objectMapper.createArrayNode();var valid=new java.util.HashSet<String>();
+        for(var binding:instance.path("mapping")) {
+            var locator=binding.path("locator");
+            if(!"VALID".equals(binding.path("bindingStatus").asText())||com.jsd.aird.shared.excel.WorkbookStructure.first(locator,"valueRange","address","dataRange","range").isBlank())continue;
+            boolean pending=false;
+            for(var field:instance.path("model").path("fields"))if(field.path("bindingId").equals(binding.path("bindingId"))&&(java.util.Set.of("NEEDS_CONFIRMATION","ISSUE").contains(field.path("reviewStatus").asText())||(instance.path("execution").path("templateUsage").asText().equals("EXPERIMENT_DATA")&&field.path("experimentSemanticStatus").asText().equals("NEEDS_REVIEW")))){pending=true;break;}
+            // Instance-local experimental observations remain visible and
+            // reviewable even before their semantic meaning is confirmed.
+            if(pending&&!com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot))continue;
+            var copy=(ObjectNode)binding.deepCopy();
+            for(var field:instance.path("model").path("fields"))if(field.path("bindingId").asText().equals(binding.path("bindingId").asText())) {
+                copy.put("unit",field.path("unit").asText()).put("valueType",field.path("valueType").asText("string")).put("required",field.path("required").asBoolean());
+                if(field.path("experimentField").isObject())copy.set("experimentField",field.path("experimentField").deepCopy());
+                boolean publicField=false;
+                if(workspace.mapping()!=null)for(var standard:workspace.mapping())if(standard.path("bindingId").equals(binding.path("bindingId"))&&standard.path("fieldCode").equals(binding.path("fieldCode"))){publicField=true;break;}
+                if(!publicField||"INSTANCE_LOCAL".equals(field.path("fieldOrigin").asText()))copy.put("trainingEligible",false).put("trainingRole","EXCLUDE");
+                copy.withObject("/diagnostic").put("displayName",field.path("name").asText());
+            }
+            mappings.add(copy);valid.add(binding.path("bindingId").asText());
+        }
+        var executableFields=objectMapper.createArrayNode();
+        for(var f:instance.path("model").path("fields"))if(valid.contains(f.path("bindingId").asText()))executableFields.add(f.deepCopy());
+        schema.withObject("/x-jsd-field-model").set("fields",executableFields);
+        var canonical=new com.jsd.aird.shared.json.JsonCanonicalizer(objectMapper);
+        var compiled=new TemplateImportContractCompiler(objectMapper,canonical).compile(objectMapper.createObjectNode().put("structureVersion",7),schema,mappings);
+        var fields=new LinkedHashMap<String,FieldDefinition>();collectSchemaFields(schema,fields);
+        // Current instance properties override legacy schema properties and
+        // parent-column copies, which may still retain the field's initial name.
+        for(var field:executableFields) {
+            var code=field.path("fieldCode").asText();if(code.isBlank()||field.path("displayRole").asText().equals("REGION"))continue;
+            fields.put(code,new FieldDefinition(code,field.path("name").asText(code),field.path("valueType").asText("string"),field.path("unit").asText(""),field.path("required").asBoolean(),field.path("identity").asBoolean(),strings(field.path("aliases")),field.path("dataPath").asText(code)));
+        }
+        var definition=new DataTemplateDefinition(workspace.templateId(),versionId,workspace.templateCode(),workspace.name(),null,workspace.versionNo(),"XLSX",schema,mappings,List.copyOf(fields.values()),compiled.importContractVersion(),compiled.layoutStructureVersion(),compiled.contractHash(),compiled.contract());
+        var tabular=snapshot.deepCopy();
+        int totalRow=-1;
+        if(com.jsd.aird.shared.lab.LabWorkbook.supported(tabular)) {
+            totalRow=com.jsd.aird.shared.lab.LabWorkbook.definition(tabular).path("formulaTotalRow").asInt();
+            for(var cell:com.jsd.aird.shared.lab.LabWorkbook.sheet(tabular).path("cellData").path(""+totalRow))if(cell instanceof ObjectNode object)object.remove("f");
+        }
+        try {
+            var bytes=workbookExporter.export(tabular,objectMapper.createArrayNode(),objectMapper.createObjectNode(),null).content();
+            var parsed=parser.parse(new java.io.ByteArrayInputStream(bytes),"workbook.xlsx");
+            for(var sheet:parsed.sheets())for(var cell:sheet.layoutIr().path("cells"))if(totalRow>=0&&cell.path("row").asInt()==totalRow+1&&cell.path("column").asInt()>=3&&cell instanceof ObjectNode object)
+                if(com.jsd.aird.shared.lab.LabWorkbook.sheet(snapshot).path("cellData").path(""+totalRow).path(""+(cell.path("column").asInt()-1)).hasNonNull("f"))object.put("valueSource","FORMULA").put("calculationSource","UNIFIED_LAB_RECALCULATED").put("calculationStatus","VALID").put("formulaTrustStatus","TRUSTED_RECALCULATED");
+            parsed=instanceParsedSheets(parsed,snapshot);
+            return new ImportExecution(definition,bindings(contractBindings(compiled.contract()),compiled.contract()),parsed,labIssues);
+        }catch(Exception ex){if(ex instanceof ApiException api)throw api;throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"工作簿草稿解析失败："+ex.getMessage());}
+    }
+
+    private ParsedTabularFile instanceParsedSheets(ParsedTabularFile parsed,JsonNode snapshot) {
+        return new ParsedTabularFile(parsed.format(),parsed.parserVersion(),parsed.sheets().stream().filter(s->!s.sheetName().startsWith("_JSD")).map(s->{
+            String instanceSheetId=s.sheetId();
+            for(var actual:snapshot.path("sheets"))if(actual.path("name").asText().equals(s.sheetName())){instanceSheetId=actual.path("id").asText(s.sheetId());break;}
+            return new ParsedSheet(instanceSheetId,s.sheetName(),s.sheetOrder(),s.firstRow(),s.lastRow(),s.firstColumn(),s.lastColumn(),s.headerCandidates(),s.suggestedHeaderRow(),s.suggestedDataStartRow(),s.rows(),s.layoutIr(),s.structureFingerprint());
+        }).toList());
     }
 
     @Override
@@ -421,6 +567,11 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
         } catch (Exception exception) {
             throw new ApiException(ApiErrorCode.FILE_NOT_READY, "模板工作簿快照读取失败");
         }
+    }
+
+    private void requireCurrentLabTemplate(String code) {
+        if(!com.jsd.aird.shared.lab.UnifiedLabTemplateCodes.contains(code))
+            throw new ApiException(ApiErrorCode.EXPERIMENT_TEMPLATE_REQUIRED,"新实验请使用统一测试实验或合成实验模板；历史记录仍可按原版本查看");
     }
 
     private void collectSchemaFields(JsonNode schema, LinkedHashMap<String, FieldDefinition> fields) {

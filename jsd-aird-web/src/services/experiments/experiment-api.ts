@@ -98,7 +98,12 @@ export interface ExperimentModel extends Record<string, unknown> {
   blankDocument?: boolean;
   documentSnapshot?: Record<string, unknown>;
   dynamicValues?: Record<string, unknown>;
-  templateDataReview?: { required: boolean; confirmed: boolean; dataHash?: string; confirmedRevision?: number };
+  templateDataReview?: {
+    required: boolean;
+    confirmed: boolean;
+    dataHash?: string;
+    confirmedRevision?: number;
+  };
   importDataReview?: { confirmed: boolean; dataHash?: string; confirmedRevision?: number };
   recognizedFields?: Array<{
     id: string;
@@ -158,6 +163,7 @@ export interface ExperimentDetail {
   attachments: Array<Record<string, unknown>>;
 }
 export interface ExperimentTemplateDataReview {
+  templateInstance?: import('@/features/template-workspace/workbook-instance').WorkbookTemplateInstance;
   templateVersionId: string;
   contractHash: string;
   fields: TemplateFieldDefinition[];
@@ -196,13 +202,19 @@ export interface Category {
   allowedActions?: string[];
 }
 const data = <T>(r: { data: ApiResponse<T> }) => r.data.data;
-export async function listExperiments(params: Record<string, unknown>) {
+export async function listExperiments(params: Record<string, unknown>, signal?: AbortSignal) {
   return data(
-    await httpClient.get<ApiResponse<Page<ExperimentSummary>>>('/api/v1/experiments', { params }),
+    await httpClient.get<ApiResponse<Page<ExperimentSummary>>>('/api/v1/experiments', {
+      params,
+      signal,
+    }),
   );
 }
 /** Project-detail experiment list. The project id is part of the resource path. */
-export async function listProjectExperiments(projectId: string, params: Record<string, unknown> = {}) {
+export async function listProjectExperiments(
+  projectId: string,
+  params: Record<string, unknown> = {},
+) {
   return data(
     await httpClient.get<ApiResponse<Page<ExperimentSummary>>>(
       `/api/v1/projects/${projectId}/experiments`,
@@ -216,14 +228,34 @@ export async function getExperiment(id: string) {
   );
 }
 export async function getExperimentTemplateDataReview(id: string) {
-  return data(await httpClient.get<ApiResponse<ExperimentTemplateDataReview>>(`/api/v1/experiments/${id}/data-review`));
+  return data(
+    await httpClient.get<ApiResponse<ExperimentTemplateDataReview>>(
+      `/api/v1/experiments/${id}/data-review`,
+    ),
+  );
 }
 export async function confirmExperimentTemplateData(id: string, revision: number) {
-  return data(await httpClient.post<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/confirm-data`, { revision }));
+  return data(
+    await httpClient.post<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/confirm-data`, {
+      revision,
+    }),
+  );
 }
-export async function exportExperiment(id: string) {
+export async function getExperimentPresentation(id: string, revision: number) {
+  return data(
+    await httpClient.get<
+      ApiResponse<{
+        revision: number;
+        snapshot: Record<string, unknown>;
+        locationMap: Record<string, unknown>;
+      }>
+    >(`/api/v1/experiments/${id}/presentation`, { params: { revision } }),
+  );
+}
+export async function exportExperiment(id: string, view: 'RESULT' | 'BLANK' = 'RESULT') {
   const response = await httpClient.get<Blob>(`/api/v1/experiments/${id}/export`, {
     responseType: 'blob',
+    params: { view },
     headers: { Accept: '*/*' },
   });
   return response.data;
@@ -241,27 +273,40 @@ export async function createProjectExperiment(projectId: string, input: Record<s
   );
 }
 export async function copyExperiment(id: string) {
-  return data(await httpClient.post<ApiResponse<ExperimentSummary>>(`/api/v1/experiments/${id}/copy`));
+  return data(
+    await httpClient.post<ApiResponse<ExperimentSummary>>(`/api/v1/experiments/${id}/copy`),
+  );
 }
 export async function saveExperiment(id: string, input: Record<string, unknown>) {
   return data(
-    await httpClient.post<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/draft`, input),
+    await httpClient.post<ApiResponse<ExperimentDetail>>(
+      `/api/v1/experiments/${id}/draft`,
+      JSON.stringify(input),
+      { headers: { 'Content-Type': 'application/json' } },
+    ),
   );
 }
 export async function deleteExperiment(id: string, revision: number) {
-  return data(await httpClient.delete<ApiResponse<null>>(`/api/v1/experiments/${id}/eln-delete`, { params: { revision } }));
+  return data(
+    await httpClient.delete<ApiResponse<null>>(`/api/v1/experiments/${id}/eln-delete`, {
+      params: { revision },
+    }),
+  );
 }
 /** Delete an experiment through its project-scoped endpoint. */
 export async function deleteProjectExperiment(projectId: string, id: string, revision: number) {
   return data(
-    await httpClient.delete<ApiResponse<null>>(
-      `/api/v1/projects/${projectId}/experiments/${id}`,
-      { params: { revision } },
-    ),
+    await httpClient.delete<ApiResponse<null>>(`/api/v1/projects/${projectId}/experiments/${id}`, {
+      params: { revision },
+    }),
   );
 }
 export async function publishExperiment(id: string, revision: number) {
-  return data(await httpClient.post<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/publish`, { revision }));
+  return data(
+    await httpClient.post<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/publish`, {
+      revision,
+    }),
+  );
 }
 export async function actExperiment(
   id: string,
@@ -297,7 +342,12 @@ export async function createRevision(id: string, revision: number, reason: strin
     }),
   );
 }
-export async function rollbackVersion(id: string, revision: number, versionNo: number, reason: string) {
+export async function rollbackVersion(
+  id: string,
+  revision: number,
+  versionNo: number,
+  reason: string,
+) {
   return data(
     await httpClient.post<ApiResponse<ExperimentDetail>>(
       `/api/v1/experiments/${id}/versions/${versionNo}/rollback`,
@@ -312,26 +362,37 @@ export async function listAudits(id: string) {
     ),
   );
 }
-export async function listCategories(includeInactive = false) {
+export async function listCategories(includeInactive = false, signal?: AbortSignal) {
   return data(
     await httpClient.get<ApiResponse<Category[]>>('/api/v1/experiment-categories', {
       params: { includeInactive },
+      signal,
     }),
   );
 }
 export async function createCategory(input: { code: string; name: string; description: string }) {
   return data(await httpClient.post<ApiResponse<Category>>('/api/v1/experiment-categories', input));
 }
-export async function updateCategory(id: string, input: { revision: number; name: string; description: string }) {
-  return data(await httpClient.put<ApiResponse<Category>>(`/api/v1/experiment-categories/${id}`, input));
+export async function updateCategory(
+  id: string,
+  input: { revision: number; name: string; description: string },
+) {
+  return data(
+    await httpClient.put<ApiResponse<Category>>(`/api/v1/experiment-categories/${id}`, input),
+  );
 }
 export async function setCategoryActive(id: string, revision: number, active: boolean) {
-  return data(await httpClient.put<ApiResponse<Category>>(`/api/v1/experiment-categories/${id}/active`, { revision, active }));
+  return data(
+    await httpClient.put<ApiResponse<Category>>(`/api/v1/experiment-categories/${id}/active`, {
+      revision,
+      active,
+    }),
+  );
 }
 /** Deletes the category; experiments inside it move to replacementCategoryId (empty means uncategorized). */
-export async function deleteCategory(id: string, replacementCategoryId?: string) {
+export async function deleteCategory(id: string, revision: number, replacementCategoryId?: string) {
   await httpClient.delete(`/api/v1/experiment-categories/${id}`, {
-    params: replacementCategoryId ? { replacementCategoryId } : undefined,
+    params: { replacementCategoryId, revision },
   });
 }
 export interface StagedFile {
@@ -342,7 +403,10 @@ export interface StagedFile {
   sha256: string;
   status: 'STAGED';
 }
-export interface ExperimentImportAccepted { jobId: string; status: string }
+export interface ExperimentImportAccepted {
+  jobId: string;
+  status: string;
+}
 export interface ExperimentImportJob {
   id: string;
   sourceFileId: string;
@@ -394,7 +458,10 @@ export async function importExperimentFile(input: {
   duplicateOverride?: boolean;
 }) {
   return data(
-    await httpClient.post<ApiResponse<ExperimentImportAccepted>>('/api/v1/experiment-imports', input),
+    await httpClient.post<ApiResponse<ExperimentImportAccepted>>(
+      '/api/v1/experiment-imports',
+      input,
+    ),
   );
 }
 export async function listExperimentImports() {
@@ -403,11 +470,15 @@ export async function listExperimentImports() {
   );
 }
 export async function getExperimentImport(id: string) {
-  return data(await httpClient.get<ApiResponse<ExperimentImportJob>>(`/api/v1/experiment-imports/${id}`));
+  return data(
+    await httpClient.get<ApiResponse<ExperimentImportJob>>(`/api/v1/experiment-imports/${id}`),
+  );
 }
 export async function retryExperimentImport(id: string) {
   return data(
-    await httpClient.post<ApiResponse<ExperimentImportAccepted>>(`/api/v1/experiment-imports/${id}/retry`),
+    await httpClient.post<ApiResponse<ExperimentImportAccepted>>(
+      `/api/v1/experiment-imports/${id}/retry`,
+    ),
   );
 }
 export async function deleteExperimentImport(id: string) {

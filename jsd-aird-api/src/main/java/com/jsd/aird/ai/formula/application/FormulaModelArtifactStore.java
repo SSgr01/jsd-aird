@@ -59,14 +59,14 @@ public class FormulaModelArtifactStore {
     }
 
     public StoredArtifact verify(String objectKey, String expectedHash, String contentType) {
-        try (var object = storage.get(objectKey); var output = new ByteArrayOutputStream()) {
-            object.stream().transferTo(output);
-            var bytes = output.toByteArray();
-            var actual = sha256(bytes);
+        try (var object = storage.get(objectKey)) {
+            var digest=MessageDigest.getInstance("SHA-256");
+            long size=com.jsd.aird.shared.resource.BoundedStreams.copy(object.stream(),java.io.OutputStream.nullOutputStream(),512L*1024*1024,digest);
+            var actual=java.util.HexFormat.of().formatHex(digest.digest());
             if (!actual.equals(expectedHash)) {
                 throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "计算制品哈希校验失败");
             }
-            return new StoredArtifact(objectKey, actual, bytes.length, contentType);
+            return new StoredArtifact(objectKey, actual, size, contentType);
         } catch (ApiException exception) {
             throw exception;
         } catch (Exception exception) {

@@ -23,7 +23,7 @@ public interface ProjectRepository {
 
     boolean update(Project project, long version, String operator);
 
-    boolean softDelete(UUID id, String operator);
+    boolean softDelete(UUID id, long expectedVersion, String operator);
 
     String nextProjectCode(int year);
 

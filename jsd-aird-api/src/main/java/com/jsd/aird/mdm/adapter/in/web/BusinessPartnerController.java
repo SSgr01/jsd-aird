@@ -91,7 +91,7 @@ public class BusinessPartnerController {
 
     public record SavePartnerRequest(@NotBlank @Size(max = 32) String partnerCode,
                                      @NotBlank @Size(max = 20) String name, @Size(max = 100) String industry,
-                                     @Size(max = 50) String address, @Size(max = 1000) String remark,
+                                     @Size(max = 500) String address, @Size(max = 1000) String remark,
                                      @Size(max = 50) String customerLevel,
                                      @Size(max = 50) String cooperationStatus,
                                      @Size(max = 500) String mainBusiness, JsonNode customFields,

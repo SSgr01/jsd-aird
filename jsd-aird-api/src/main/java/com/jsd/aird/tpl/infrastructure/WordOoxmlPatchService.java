@@ -32,10 +32,13 @@ import javax.xml.transform.stream.StreamResult;
 
 @Component
 public class WordOoxmlPatchService implements WordOoxmlPatcher {
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private IsolatedOfficeProcess isolated;
     private static final String W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     private final WordDocumentSnapshotExporter snapshotExporter = new WordDocumentSnapshotExporter();
 
     public byte[] apply(byte[] source, ArrayNode operations) {
+        if(isolated!=null)return isolated.apply(source,operations);
         if (operations == null || operations.isEmpty()) return source;
         try {
             var parts = new ArrayList<Part>();
@@ -75,6 +78,7 @@ public class WordOoxmlPatchService implements WordOoxmlPatcher {
 
     @Override
     public byte[] applySnapshot(byte[] source, JsonNode snapshot) {
+        if(isolated!=null)return isolated.applySnapshot(source,snapshot);
         return snapshotExporter.export(source, snapshot);
     }
 

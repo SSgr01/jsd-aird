@@ -27,3 +27,5 @@ class Settings:
     model_threads: int = max(1, int(os.getenv("JSD_AIRD_AI_MODEL_THREADS", "2")))
     temporary_root: Path = Path(os.getenv("JSD_AIRD_AI_TMP", ".tmp/jsd-aird-ai"))
     internal_token: str | None = os.getenv("JSD_AIRD_AI_INTERNAL_TOKEN") or None
+    computation_concurrency: int = max(1, int(os.getenv("JSD_AIRD_AI_COMPUTATION_CONCURRENCY", "1")))
+    maximum_json_bytes: int = int(os.getenv("JSD_AIRD_AI_MAX_JSON_BYTES", str(32 * 1024 * 1024)))

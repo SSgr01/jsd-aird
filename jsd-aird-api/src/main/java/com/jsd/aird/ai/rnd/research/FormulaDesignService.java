@@ -97,7 +97,8 @@ public class FormulaDesignService {
         var materials = commonMaterials(bindings);
         var ratioCodes=new LinkedHashSet<String>();
         for(var b:bindings)if(WorkbenchFormulaSupport.supports(b.contractVersion()))
-            WorkbenchFormulaSupport.materialIds(b.frozenInputScheme()).forEach(id->ratioCodes.add("formula:"+id));
+            for(var field:b.frozenInputScheme().path("fields"))if(WorkbenchFormulaSupport.materialId(field)!=null)
+                ratioCodes.add(field.path("code").asText());
         var conditions=json.createArrayNode();
         for(var field:root.path("requiredInputs")){
             if(!ratioCodes.contains(field.path("code").asText()))conditions.add(field);
@@ -105,7 +106,9 @@ public class FormulaDesignService {
         root.set("requiredInputs",conditions);
         materials.forEach(m -> {
             var ranges = json.createArrayNode();
-            for (var b : bindings) addRange(ranges,b,"formula:"+m.path("materialId").asText());
+            for (var b : bindings) for(var field:b.frozenInputScheme().path("fields"))
+                if(m.path("materialId").asText().equals(WorkbenchFormulaSupport.materialId(field)))
+                    addRange(ranges,b,field.path("code").asText());
             ((ObjectNode)m).set("supportedRanges",ranges);
         });
         var commonIds=new LinkedHashSet<String>();materials.forEach(m->commonIds.add(m.path("materialId").asText()));
@@ -173,8 +176,8 @@ public class FormulaDesignService {
                 var id = raw.path("materialId").asText();
                 if(binding.modelDomain()!=null&&binding.modelDomain().path("features").isArray()&&!binding.modelDomain().path("features").isEmpty()){
                     boolean learned=false;
-                    var prefix="formula:";
-                    for(var feature:binding.modelDomain().path("features"))if(feature.asText().equals(prefix+id)){learned=true;break;}
+                    for(var field:binding.frozenInputScheme().path("fields"))if(id.equals(WorkbenchFormulaSupport.materialId(field)))
+                        for(var feature:binding.modelDomain().path("features"))if(feature.asText().equals(field.path("code").asText())){learned=true;break;}
                     if(!learned)continue;
                 }
                 ids.add(id);
@@ -237,7 +240,7 @@ public class FormulaDesignService {
     public ResearchPage page(int page,int size,String status){var a=actor();var p=Math.max(0,page);var s=Math.min(100,Math.max(1,size));var rows=repository.page(a.organizationId(),a.userId(),p,s,status);return new ResearchPage(rows.stream().map(r->view(a.organizationId(),r)).toList(),repository.count(a.organizationId(),a.userId(),status),p,s);}
     public void fail(UUID org,UUID run,String code,String message){repository.fail(org,run,code,message);}
 
-    public JsonNode execute(UUID org,UUID runId){var row=repository.any(org,runId).orElseThrow();if(!repository.markRunning(org,runId))return row.result();try{repository.progress(org,runId,15,"CHECKING_CONDITIONS");var request=row.request().deepCopy();var payload=buildRecommendPayload(org,row,request);var targetNames=targetNames(org,row);repository.progress(org,runId,35,"SEARCHING");var response=compute.recommend(payload);repository.progress(org,runId,85,"RULE_CHECKING");if("FAILED".equals(response.path("executionStatus").asText())){repository.fail(org,runId,response.path("code").asText("COMPUTE_UNAVAILABLE"),response.path("message").asText("计算服务执行失败"));return response;}var candidates=response.path("candidates");var saved=0;for(var c:candidates){if(!c.isObject()||!candidateMatchesRequest(c,request,payload))continue;var f=c.path("formula");var inputs=c.has("inputs")?c.path("inputs"):c.path("process");var document=json.createObjectNode();document.set("formula",f);document.set("inputs",inputs);var hash=hashing.hash(document);var resultNode=(ObjectNode)resultsObject(c.path("results"),targetNames);normalizeResultTargetIds(resultNode,row.bindings());var quality=c.path("quality");repository.saveCandidate(org,runId,++saved,f,inputs,resultNode,quality,c.path("applicability"),c.path("ruleCheck"),c.path("evidence"),c.path("score").asDouble(),hash,request.path("fixedInputs"),request.path("searchSpace"),c.path("targetGate"),c.path("preferenceScore").asDouble(0),c.path("diversityScore").asDouble(0),request.path("targetTotal").asDouble(100));}var simulation=false;var summary=json.createObjectNode().put("requestedCandidateCount",request.path("candidateCount").asInt(4)).put("actualCandidateCount",saved).put("simulation",simulation);if(simulation)summary.put("predictionMode","SIMULATION");for(var name:List.of("shortfallReason","shortfallReasonCode","rejectionSummary","actionHints","searchEngine","searchStrategy","searchEvidence"))if(response.has(name))summary.set(name,response.path(name));summary.set("candidates",repositoryCandidates(repository.candidates(org,runId)));var outcome=saved==0?"BLOCKED":saved<request.path("candidateCount").asInt(4)?"PARTIAL":"SUCCEEDED";repository.complete(org,runId,outcome,summary,null);return summary;}catch(Exception e){repository.fail(org,runId,e instanceof ApiException a?a.errorCode().code():"COMPUTE_UNAVAILABLE",String.valueOf(e.getMessage()));throw e instanceof RuntimeException r?r:new IllegalStateException(e);}}
+    public JsonNode execute(UUID org,UUID runId){var row=repository.any(org,runId).orElseThrow();if(!repository.markRunning(org,runId))return row.result();try{repository.progress(org,runId,15,"CHECKING_CONDITIONS");var request=row.request().deepCopy();var payload=buildRecommendPayload(org,row,request);var targetNames=targetNames(org,row);repository.progress(org,runId,35,"SEARCHING");var response=compute.recommend(payload);repository.progress(org,runId,85,"RULE_CHECKING");if("FAILED".equals(response.path("executionStatus").asText())){repository.fail(org,runId,response.path("code").asText("COMPUTE_UNAVAILABLE"),response.path("message").asText("计算服务执行失败"));return response;}var candidates=response.path("candidates");var saved=0;for(var c:candidates){if(!c.isObject()||!candidateMatchesRequest(c,request,payload))continue;var f=c.path("formula");var inputs=c.has("inputs")?c.path("inputs"):c.path("process");var document=json.createObjectNode();document.set("formula",f);document.set("inputs",inputs);var hash=hashing.hash(document);var resultNode=(ObjectNode)resultsObject(c.path("results"),targetNames);normalizeResultTargetIds(resultNode,row.bindings());var quality=c.path("quality");repository.saveCandidate(org,runId,++saved,f,inputs,resultNode,quality,c.path("applicability"),c.path("ruleCheck"),c.path("evidence"),c.path("score").asDouble(),hash,request.path("fixedInputs"),request.path("searchSpace"),c.path("targetGate"),c.path("preferenceScore").asDouble(0),c.path("diversityScore").asDouble(0), "ABSOLUTE_MASS".equals(f.path("basis").asText()) ? f.path("recordedTotal").asDouble() : request.path("targetTotal").asDouble(100));}var simulation=false;var summary=json.createObjectNode().put("requestedCandidateCount",request.path("candidateCount").asInt(4)).put("actualCandidateCount",saved).put("simulation",simulation);if(simulation)summary.put("predictionMode","SIMULATION");for(var name:List.of("shortfallReason","shortfallReasonCode","rejectionSummary","actionHints","searchEngine","searchStrategy","searchEvidence"))if(response.has(name))summary.set(name,response.path(name));summary.set("candidates",repositoryCandidates(repository.candidates(org,runId)));var outcome=saved==0?"BLOCKED":saved<request.path("candidateCount").asInt(4)?"PARTIAL":"SUCCEEDED";repository.complete(org,runId,outcome,summary,null);return summary;}catch(Exception e){repository.fail(org,runId,e instanceof ApiException a?a.errorCode().code():"COMPUTE_UNAVAILABLE",String.valueOf(e.getMessage()));throw e instanceof RuntimeException r?r:new IllegalStateException(e);}}
 
     private JsonNode buildRecommendPayload(UUID org,FormulaDesignRepository.Row row,JsonNode request){ObjectNode p=(ObjectNode)request.deepCopy();p.put("contractVersion","formula-model.v2").put("requestId",row.requestId()).put("seed",row.seed()).put("runId",row.id().toString()).put("mode",RUN_TYPE);var bindings=json.createArrayNode();var orderedGoals=json.createArrayNode();var originalGoals=p.path("typedGoals");var goalsByTarget=new LinkedHashMap<String,JsonNode>();if(originalGoals.isArray())originalGoals.forEach(g->{if(g.isObject())goalsByTarget.put(g.path("targetId").asText(),g);});var it=row.bindings().fields();while(it.hasNext()){var e=it.next();var id=UUID.fromString(e.getKey());var b=predictions.targetBindings(org,List.of(id)).stream().findFirst().orElseThrow();bindings.add(binding(b));if(!Objects.equals(b.modelId(),UUID.fromString(e.getValue().asText())))throw new ApiException(ApiErrorCode.MODEL_VERSION_CHANGED);var goal=goalsByTarget.get(id.toString());if(goal!=null){var copy=goal.deepCopy();if(copy.isObject()){((ObjectNode)copy).put("targetId",b.targetVersionId().toString());((ObjectNode)copy).remove("expectedModelVersionId");((ObjectNode)copy).remove("valueType");}orderedGoals.add(copy);}}if(orderedGoals.isEmpty()&&originalGoals.isArray())originalGoals.forEach(g->{if(g.isObject()){var copy=g.deepCopy();((ObjectNode)copy).remove("expectedModelVersionId");((ObjectNode)copy).remove("valueType");orderedGoals.add(copy);}});p.set("goals",orderedGoals);p.remove("typedGoals");p.remove("targetTotal");p.remove("formulaBasis");p.remove(List.of("simulation","displayContext"));p.set("modelBindings",bindings);if(!p.has("candidateCount"))p.put("candidateCount",4);if(!p.has("fixedInputs"))p.set("fixedInputs",json.createObjectNode());if(!p.has("constraints"))p.set("constraints",json.createObjectNode());if(!p.has("searchSpace"))p.set("searchSpace",json.createObjectNode());p.set("baselineFormula",formulaNormalization.forModelCompute(p.path("baselineFormula")));return p;}
     public ObjectNode frozenModelBinding(PredictionRepository.TargetBinding b){return com.jsd.aird.ai.rnd.modeling.WorkbenchModelBinding.create(b,json,artifacts,true);}
@@ -303,6 +306,8 @@ public class FormulaDesignService {
             if(field.path("encoding").has("formulaMaterialId"))mapped=true;
         if(!mapped)return true;
         var formula=candidate.path("formula");var components=formula.path("components");
+        boolean mass="ABSOLUTE_MASS".equals(request.path("formulaBasis").asText());
+        if(!request.path("formulaBasis").asText().equals(formula.path("basis").asText()))return false;
         if(!formula.path("compositionComplete").asBoolean()||!components.isArray()||components.isEmpty())return false;
         var expected=new LinkedHashMap<String,Double>();
         request.path("baselineFormula").path("components").forEach(c->expected.put(c.path("materialId").asText(),c.path("ratio").asDouble()));
@@ -312,12 +317,12 @@ public class FormulaDesignService {
         for(var component:components){
             var id=component.path("materialId").asText();var ratio=component.path("ratio");
             if(!actual.add(id)||!expected.containsKey(id)||!finite(ratio)||ratio.asDouble()<0)return false;
-            if(!List.of("PERCENT","%").contains(component.path("unit").asText()))return false;
+            if(mass ? !"g".equalsIgnoreCase(component.path("unit").asText()) : !List.of("PERCENT","%").contains(component.path("unit").asText()))return false;
             var value=ratio.asDouble();total+=value;var range=bounds.get(id);
             if(range==null){if(Math.abs(value-expected.get(id))>1e-6)return false;}
             else if(value<range.path("minimum").asDouble()-1e-6||value>range.path("maximum").asDouble()+1e-6)return false;
         }
-        if(!actual.equals(expected.keySet())||Math.abs(total-100)>1e-4)return false;
+        if(!actual.equals(expected.keySet())||(!mass && Math.abs(total-100)>1e-4))return false;
         var inputs=candidate.path("inputs");
         var fixed=request.path("fixedInputs").fields();
         while(fixed.hasNext()){
@@ -334,13 +339,15 @@ public class FormulaDesignService {
     }
 
     private void validateFormulaRequest(JsonNode body,List<PredictionRepository.TargetBinding> bindings){
+        boolean mass="ABSOLUTE_MASS".equals(body.path("formulaBasis").asText());
         var total=body.path("targetTotal"); if(!total.isNumber()||!Double.isFinite(total.asDouble())||total.asDouble()<=0)throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"目标合计必须是大于0的有限数值");
-        if(!"MASS_PERCENT".equals(body.path("formulaBasis").asText("MASS_PERCENT")))throw new ApiException(ApiErrorCode.FORMULA_BASIS_UNRESOLVED,"当前配方预测只支持质量百分比基准");
+        if(!mass && !"MASS_PERCENT".equals(body.path("formulaBasis").asText("MASS_PERCENT")))throw new ApiException(ApiErrorCode.FORMULA_BASIS_UNRESOLVED,"配方基准无效");
         var formula=body.path("baselineFormula"); var components=formula.path("components"); if(!components.isArray()||components.isEmpty())throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"至少需要一种配方材料");
+        if(mass && (!"ABSOLUTE_MASS".equals(formula.path("basis").asText()) || java.util.stream.StreamSupport.stream(components.spliterator(),false).anyMatch(c -> !"g".equalsIgnoreCase(c.path("unit").asText()))))throw new ApiException(ApiErrorCode.FORMULA_BASIS_UNRESOLVED,"配方用量单位应为 g");
         var tolerance=new java.math.BigDecimal("0.001");
-        var recorded=formula.path("recordedTotal"); if(!recorded.isNumber()||recorded.decimalValue().subtract(total.decimalValue()).abs().compareTo(tolerance)>0)throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"配方记录的总量与目标合计不一致，请检查比例");
-        var sum=java.math.BigDecimal.ZERO; for(var c:components){if(!c.path("amountKnown").asBoolean(false)||!finite(c.path("ratio")))throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"材料用量必须明确填写，空值不能作为搜索条件");if(c.path("ratio").asDouble()<0)throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"材料比例不能为负数");sum=sum.add(c.path("ratio").decimalValue());}
-        if(sum.subtract(total.decimalValue()).abs().compareTo(tolerance)>0)throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"材料比例合计与目标合计偏差超过0.001个百分点，请检查缺项和原始数值");
+        var recorded=formula.path("recordedTotal"); if(!mass && (!recorded.isNumber()||recorded.decimalValue().subtract(total.decimalValue()).abs().compareTo(tolerance)>0))throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"配方记录的总量与目标合计不一致，请检查比例");
+        var sum=java.math.BigDecimal.ZERO; for(var c:components){if(!c.path("amountKnown").asBoolean(false)||!finite(c.path("ratio")))throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"材料用量必须明确填写，空值不能作为搜索条件");if(c.path("ratio").asDouble()<0)throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"材料用量不能为负数");sum=sum.add(c.path("ratio").decimalValue());}
+        if(!mass && sum.subtract(total.decimalValue()).abs().compareTo(tolerance)>0)throw new ApiException(ApiErrorCode.FIXED_CONSTRAINT_CONFLICT,"材料比例合计与目标合计偏差超过0.001个百分点，请检查缺项和原始数值");
         var intersection=new LinkedHashSet<String>(); boolean first=true; for(var binding:bindings){var ids=new LinkedHashSet<String>();binding.frozenDictionary().path("materials").forEach(m->ids.add(m.path("materialId").asText()));if(first){intersection.addAll(ids);first=false;}else intersection.retainAll(ids);}for(var c:components)if(!intersection.contains(c.path("materialId").asText()))throw new ApiException(ApiErrorCode.MATERIAL_SPACE_CONFLICT,"配方材料不在所选目标共同材料空间");
         var variableMaterials=body.path("searchSpace").path("variableMaterials");if(!variableMaterials.isArray()||variableMaterials.isEmpty())throw new ApiException(ApiErrorCode.MATERIAL_SPACE_CONFLICT,"至少需要一种允许调整的材料");
         for(var binding:bindings)for(var material:binding.frozenDictionary().path("materials"))if(material.hasNonNull("fixedValue")) {
@@ -350,14 +357,14 @@ public class FormulaDesignService {
             for(var variable:variableMaterials)if(id.equals(variable.path("materialId").asText())&&(variable.path("minimum").asDouble()!=value||variable.path("maximum").asDouble()!=value))
                 throw new ApiException(ApiErrorCode.MATERIAL_SPACE_CONFLICT,"固定材料不能作为可变比例："+material.path("name").asText());
         }
-        for(var variable:variableMaterials){var id=variable.path("materialId").asText();if(!intersection.contains(id))throw new ApiException(ApiErrorCode.MATERIAL_SPACE_CONFLICT,"可变材料不在所选目标共同材料空间");if(!finite(variable.path("minimum"))||!finite(variable.path("maximum"))||variable.path("minimum").asDouble()<0||variable.path("minimum").asDouble()>variable.path("maximum").asDouble())throw new ApiException(ApiErrorCode.MATERIAL_SPACE_CONFLICT,"材料比例范围无效");}
+        for(var variable:variableMaterials){var id=variable.path("materialId").asText();if(!intersection.contains(id))throw new ApiException(ApiErrorCode.MATERIAL_SPACE_CONFLICT,"可变材料不在所选目标共同材料空间");if(!finite(variable.path("minimum"))||!finite(variable.path("maximum"))||variable.path("minimum").asDouble()<0||variable.path("minimum").asDouble()>variable.path("maximum").asDouble())throw new ApiException(ApiErrorCode.MATERIAL_SPACE_CONFLICT,"材料用量范围无效");}
         var fixed=body.path("fixedInputs");var variableInputs=body.path("searchSpace").path("variableInputs");
         for(var binding:bindings)if(WorkbenchFormulaSupport.supports(binding.contractVersion()))for(var field:binding.frozenInputScheme().path("fields")) {
             var materialId=WorkbenchFormulaSupport.materialId(field);if(materialId==null)continue;
             if(!java.util.stream.StreamSupport.stream(components.spliterator(),false).anyMatch(c->materialId.equals(c.path("materialId").asText())))
                 throw new ApiException(ApiErrorCode.MATERIAL_SPACE_CONFLICT,"配方缺少模型使用的材料："+field.path("name").asText());
             var code=field.path("code").asText();
-            if(fixed.has(code)||variableInputs.has(code))throw new ApiException(ApiErrorCode.INPUT_SPACE_CONFLICT,"材料比例请在配方材料中设置："+field.path("name").asText());
+            if(fixed.has(code)||variableInputs.has(code))throw new ApiException(ApiErrorCode.INPUT_SPACE_CONFLICT,"材料用量请在配方材料中设置："+field.path("name").asText());
         }
 
         for(var binding:bindings)for(var field:binding.frozenInputScheme().path("fields"))if(field.path("required").asBoolean()&&!"COMPOSITION".equals(field.path("valueType").asText())

@@ -27,6 +27,92 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 class DataImportValidationTest {
+    @Test void draftAndParsedUnboundCellProduceOneWarning() {
+        givenJob();var definition=definition(false);
+        var instance=mapper.createObjectNode();
+        var pending=instance.putArray("issues").addObject().put("code","UNBOUND_VALUE").put("sheetId","sheet-1").put("address","H8").put("message","未绑定");
+        var structure=mapper.createObjectNode();structure.putArray("labParseIssues").add(pending.deepCopy());
+        var snapshot=mapper.createObjectNode();when(repository.findWorkbookDraft(ORGANIZATION_ID,jobId)).thenReturn(Optional.of(new DataRepository.WorkbookDraft(snapshot,instance,mapper.createArrayNode())));
+        when(templates.prepareWorkbookImport(ORGANIZATION_ID,templateVersionId,snapshot,instance)).thenReturn(new TemplateDataImportFacade.ImportExecution(definition,List.of(),null));
+        when(repository.listSheets(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Sheet(UUID.randomUUID(),"sheet-1","sheet",0,true,List.of(1),2,2,structure,"CONFIRMED")));
+        when(repository.listMappings(ORGANIZATION_ID,jobId)).thenReturn(List.of(mapping("A",mapper.createObjectNode().put("bindingId","a").put("dataPath","/a"))));
+        when(repository.listRows(ORGANIZATION_ID,jobId)).thenReturn(List.of(row("A","ok")));
+        service.validateInternal(ORGANIZATION_ID,jobId);
+        var issues=ArgumentCaptor.forClass(List.class);
+        verify(repository).replaceValidation(eq(ORGANIZATION_ID),eq(jobId),any(),issues.capture(),eq("WAITING_CONFIRM"));
+        assertThat(issues.getValue()).hasSize(1);
+        assertThat(((DataRepository.Issue)issues.getValue().getFirst()).address()).isEqualTo("H8");
+    }
+    @Test void draftAndLocatedFieldIssuesDoNotProduceRepeatedWarnings() {
+        givenJob();var definition=definition(false);when(templates.getVersion(ORGANIZATION_ID,templateVersionId)).thenReturn(definition);
+        var instance=mapper.createObjectNode();var field=instance.withObject("/model").putArray("fields").addObject().put("id","local");field.withObject("/locator").put("labelRange","B19");
+        var generic=instance.putArray("issues").addObject().put("code","FIELD_UNCONFIRMED").put("fieldId","local").put("message","字段含义待确认");
+        var structure=mapper.createObjectNode();var parsed=structure.putArray("labParseIssues");parsed.add(generic.deepCopy());parsed.addObject().put("code","FIELD_UNCONFIRMED").put("address","B19").put("message","新增测试项目待确认类型和单位");
+        var snapshot=mapper.createObjectNode();when(repository.findWorkbookDraft(ORGANIZATION_ID,jobId)).thenReturn(Optional.of(new DataRepository.WorkbookDraft(snapshot,instance,mapper.createArrayNode())));
+        when(templates.prepareWorkbookImport(ORGANIZATION_ID,templateVersionId,snapshot,instance)).thenReturn(new TemplateDataImportFacade.ImportExecution(definition,List.of(),null));
+        when(repository.listSheets(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Sheet(UUID.randomUUID(),"sheet-1","sheet",0,true,List.of(1),2,2,structure,"CONFIRMED")));
+        when(repository.listMappings(ORGANIZATION_ID,jobId)).thenReturn(List.of(mapping("A",mapper.createObjectNode().put("bindingId","a").put("dataPath","/a"))));
+        when(repository.listRows(ORGANIZATION_ID,jobId)).thenReturn(List.of(row("A","ok")));
+        service.validateInternal(ORGANIZATION_ID,jobId);
+        var issues=ArgumentCaptor.forClass(List.class);verify(repository).replaceValidation(eq(ORGANIZATION_ID),eq(jobId),any(),issues.capture(),eq("WAITING_CONFIRM"));
+        assertThat(issues.getValue()).hasSize(1);
+        assertThat(((DataRepository.Issue)issues.getValue().getFirst()).address()).isEqualTo("B19");
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"10000 mg","-1","abc"})
+    void invalidMaterialQuantitiesAreWarningsAndKeepTheirActualUnits(String raw) {
+        givenJob();when(templates.getVersion(ORGANIZATION_ID,templateVersionId)).thenReturn(definition(false));
+        var detail=mapper.createObjectNode().put("bindingId","qty").put("dataPath","/qty").put("mappingKind","LIST_PROJECTION");
+        var semantic=detail.putObject("experimentField").put("domain","FORMULA").put("field","ACTUAL_QTY");
+        when(repository.listMappings(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Mapping(UUID.randomUUID(),"sheet-1","A","MAT","FORMULA.ACTUAL_QTY","MAT","MAP","TEXT",null,"g",detail,"CONFIRMED")));
+        var base=row("A",raw);var meta=mapper.createObjectNode();var cell=meta.withObject("/cells/A").put("cellAddress","C25").put("itemLabel","MAT");cell.set("experimentField",semantic.deepCopy());
+        when(repository.listRows(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Row(base.id(),base.sheetId(),base.rowNumber(),base.rawValues(),base.normalizedValues(),base.correctedValues(),base.status(),meta)));
+        service.validateInternal(ORGANIZATION_ID,jobId);
+        var rows=ArgumentCaptor.forClass(List.class);var issues=ArgumentCaptor.forClass(List.class);
+        verify(repository).replaceValidation(eq(ORGANIZATION_ID),eq(jobId),rows.capture(),issues.capture(),eq("WAITING_CONFIRM"));
+        var value=((DataRepository.Row)rows.getValue().getFirst()).normalizedValues().path("FORMULA.ACTUAL_QTY");
+        assertThat(value.path("rawValue").asText()).isEqualTo(raw);assertThat(value.path("normalizedUnit").asText()).isEmpty();
+        assertThat(value.path("trainingEligible").asBoolean()).isFalse();
+        if(raw.contains("mg"))assertThat(value.path("rawUnit").asText()).isEqualTo("mg");
+        assertThat(issues.getValue()).anyMatch(i->((DataRepository.Issue)i).issueType().equals("MATERIAL_QUANTITY_INVALID")&&((DataRepository.Issue)i).severity().equals("WARNING"));
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"INTEGER,/", "DATE,/", "DATETIME,未测", "TIME,不适用", "DURATION,/", "BOOLEAN,/"})
+    void laboratoryStatusMarkersDoNotBecomeTypeErrors(String type,String raw) {
+        givenJob();when(templates.getVersion(ORGANIZATION_ID,templateVersionId)).thenReturn(definition(false));
+        var detail=mapper.createObjectNode().put("bindingId","typed").put("dataPath","/typed");detail.withObject("/experimentField").put("domain","TEST").put("field","VALUE");
+        when(repository.listMappings(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Mapping(UUID.randomUUID(),"sheet-1","A","验收字段","TYPED","验收字段","MAP",type,null,null,detail,"CONFIRMED")));
+        when(repository.listRows(ORGANIZATION_ID,jobId)).thenReturn(List.of(row("A",raw)));
+        service.validateInternal(ORGANIZATION_ID,jobId);
+        var issues=ArgumentCaptor.forClass(List.class);verify(repository).replaceValidation(eq(ORGANIZATION_ID),eq(jobId),any(),issues.capture(),eq("WAITING_CONFIRM"));assertThat(issues.getValue()).isEmpty();
+    }
+    @Test void spreadsheetDatesUseFullPrecisionSourceEvidence() {
+        givenJob();when(templates.getVersion(ORGANIZATION_ID,templateVersionId)).thenReturn(definition(false));
+        var detail=mapper.createObjectNode().put("bindingId","typed").put("dataPath","/typed");
+        when(repository.listMappings(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Mapping(UUID.randomUUID(),"sheet-1","A","验收字段","TYPED","验收字段","MAP","DATETIME",null,null,detail,"CONFIRMED")));
+        var base=row("A","46321.52426");var meta=base.sourceMetadata().deepCopy();((com.fasterxml.jackson.databind.node.ObjectNode)meta).withObject("/cells/A").put("rawNumericValue","46321.52425925926").put("numberFormat","yyyy-mm-dd hh:mm:ss");
+        when(repository.listRows(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Row(base.id(),base.sheetId(),base.rowNumber(),base.rawValues(),base.normalizedValues(),base.correctedValues(),base.status(),meta)));
+        service.validateInternal(ORGANIZATION_ID,jobId);
+        var rows=ArgumentCaptor.forClass(List.class);var issues=ArgumentCaptor.forClass(List.class);verify(repository).replaceValidation(eq(ORGANIZATION_ID),eq(jobId),rows.capture(),issues.capture(),eq("WAITING_CONFIRM"));assertThat(issues.getValue()).isEmpty();
+        assertThat(((DataRepository.Row)rows.getValue().getFirst()).normalizedValues().path("TYPED").path("normalizedValue").asText()).isEqualTo("2026-10-26 12:34:56");
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "DATE,2026/10/26,2026-10-26", "DATETIME,2026-10-26 12:34:56,2026-10-26 12:34:56",
+        "TIME,12:34:56,12:34:56", "DURATION,01:30:00,5400", "BOOLEAN,否,false", "INTEGER,80,80"
+    })
+    void importValidationUsesTheDeclaredFieldType(String type,String raw,String expected) {
+        givenJob();when(templates.getVersion(ORGANIZATION_ID,templateVersionId)).thenReturn(definition(false));
+        var detail=mapper.createObjectNode().put("bindingId","typed").put("dataPath","/typed");
+        when(repository.listMappings(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Mapping(UUID.randomUUID(),"sheet-1","A","验收字段","TYPED","验收字段","MAP",type,null,null,detail,"CONFIRMED")));
+        when(repository.listRows(ORGANIZATION_ID,jobId)).thenReturn(List.of(row("A",raw)));
+        service.validateInternal(ORGANIZATION_ID,jobId);
+        var rows=ArgumentCaptor.forClass(List.class);var issues=ArgumentCaptor.forClass(List.class);
+        verify(repository).replaceValidation(eq(ORGANIZATION_ID),eq(jobId),rows.capture(),issues.capture(),eq("WAITING_CONFIRM"));
+        assertThat(issues.getValue()).isEmpty();
+        var result=(DataRepository.Row)rows.getValue().getFirst();
+        assertThat(result.normalizedValues().path("TYPED").path("normalizedValue").asText()).isEqualTo(expected);
+    }
 
     private static final UUID ORGANIZATION_ID = UUID.fromString("00000000-0000-0000-0000-000000000001");
     private static final UUID USER_ID = UUID.fromString("00000000-0000-0000-0000-000000000002");
@@ -147,7 +233,7 @@ class DataImportValidationTest {
         assertThatThrownBy(() -> service.create(new DataImportService.CreateCommand(sourceFileId, templateVersionId,
                 null, false, List.of(), "DATA_ONLY", null)))
                 .isInstanceOf(ApiException.class)
-                .hasMessage("所选模板格式与文件类型不匹配：Excel / CSV 请选择 Excel 模板，DOCX 请选择 Word 模板；PDF 请使用自由识别");
+                .hasMessage("所选模板格式与文件类型不匹配：Excel / CSV 请选择 Excel 模板，DOC / DOCX 请选择 Word 模板；PDF 不支持数据中心导入");
         verify(repository, never()).insertJob(any());
     }
 

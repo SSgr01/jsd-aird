@@ -1,14 +1,13 @@
-package com.jsd.aird.tpl.api;
+package com.jsd.aird.ops.application.port;
 
-/** Public template-center boundary for normalizing legacy Office binaries. */
+/** Shared boundary for normalizing legacy Office files for imports and previews. */
 public interface TemplateOfficeNormalizationFacade {
 
     NormalizedOfficeFile normalizeOfficeFile(String originalName, String contentType, byte[] source);
 
     /**
-     * Lenient variant for upload preview: a converted copy that fails the
-     * strict high-fidelity validation is still returned with status DEGRADED
-     * instead of throwing, so the workspace can show an online preview.
+     * Lenient variant for browser preview: converted files are returned even
+     * when high-fidelity validation reports layout differences.
      */
     NormalizedOfficeFile normalizeOfficeFileForPreview(String originalName, String contentType, byte[] source);
 

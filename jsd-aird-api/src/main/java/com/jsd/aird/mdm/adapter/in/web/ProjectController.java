@@ -247,8 +247,9 @@ public class ProjectController {
 
     @DeleteMapping("/{id:[0-9a-fA-F-]+}")
     @Operation(summary = "删除项目", description = "逻辑删除指定项目")
-    public ApiResponse<Void> delete(@Parameter(description = "项目 ID") @PathVariable UUID id) {
-        service.delete(id);
+    public ApiResponse<Void> delete(@Parameter(description = "项目 ID") @PathVariable UUID id,
+                                    @RequestParam @PositiveOrZero long version) {
+        service.delete(id, version);
         return ok(null);
     }
 
@@ -274,7 +275,8 @@ public class ProjectController {
                                      LocalDate startDate, LocalDate endDate,
                                      ProjectPriority priority, ProjectStatus status,
                                      @PositiveOrZero Integer teamSize,
-                                     String background, JsonNode customFields, JsonNode teamMembers, Long version) {
+                                     String background, JsonNode customFields, JsonNode teamMembers,
+                                     @PositiveOrZero Long version) {
         ProjectCommands.SaveProject toCommand() {
             return new ProjectCommands.SaveProject(projectCode, name, partnerId, partnerName, owner,
                 startDate, endDate, priority, status, teamSize, background, customFields, teamMembers, version);

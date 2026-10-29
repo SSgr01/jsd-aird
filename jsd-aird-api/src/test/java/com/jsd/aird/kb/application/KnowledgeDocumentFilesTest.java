@@ -72,11 +72,25 @@ class KnowledgeDocumentFilesTest {
         when(repository.findDocument(org, id)).thenReturn(Optional.of(doc));
         when(repository.findCategory(org, categoryId)).thenReturn(Optional.of(new KnowledgeRepository.CategoryRow(categoryId, "EXTERNAL", "供应商资料", null, 0, 1)));
         var source = mapper.createObjectNode().put("description", "供应商检测资料").put("visibility", "项目组可见");
-        service().updateDocument(id, new KnowledgeService.UpdateDocumentCommand(" 新名称 ", "EXTERNAL", categoryId, List.of(" UV ", "uv", "耐磨"), source, null));
+        service().updateDocument(id, new KnowledgeService.UpdateDocumentCommand(service().get(id).getRevision()," 新名称 ", "EXTERNAL", categoryId, List.of(" UV ", "uv", "耐磨"), source, null));
         verify(governance).updateDraftMetadata(org, id, "新名称", "EXTERNAL", categoryId);
         verify(governance).replaceTags(org, user, id, List.of("UV", "耐磨"));
         verify(governance).updateSourceInfo(org, id, versionId, source);
         verify(repository, never()).assignCategory(any(), any(), any());
+    }
+
+    @Test void rejectsStaleMetadataAndDeletionBeforeMutatingTagsLinksOrFiles() {
+        var doc = mock(KnowledgeRepository.DocumentRow.class);
+        when(doc.id()).thenReturn(id); when(doc.currentVersionId()).thenReturn(versionId);
+        when(repository.findDocument(org,id)).thenReturn(Optional.of(doc));
+        var service=service(); var original=service.get(id).getRevision();
+        when(doc.title()).thenReturn("another editor saved");
+        assertThatThrownBy(() -> service.renameDocument(id,"old editor",original)).isInstanceOf(ApiException.class)
+                .satisfies(error -> assertThat(((ApiException)error).errorCode()).isEqualTo(com.jsd.aird.shared.error.ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT));
+        assertThatThrownBy(() -> service.deleteDocument(id,original)).isInstanceOf(ApiException.class);
+        verify(repository,never()).deleteDocument(any(),any());
+        verify(governance,never()).updateDraftMetadata(any(),any(),any(),any(),any());
+        verifyNoInteractions(storage);
     }
 
     @Test void refusesToDeleteAnUnpublishedDocumentLinkedToAProject() {
@@ -84,7 +98,7 @@ class KnowledgeDocumentFilesTest {
         when(governance.hasPublication(org, id)).thenReturn(false);
         when(projectResources.hasLinks(any(Actor.class), eq(ResourceType.KNOWLEDGE_DOCUMENT), eq(id))).thenReturn(true);
 
-        assertThatThrownBy(() -> service().deleteDocument(id))
+        assertThatThrownBy(() -> service().deleteDocument(id,service().get(id).getRevision()))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("已关联项目");
         verify(repository, never()).deleteDocument(org, id);

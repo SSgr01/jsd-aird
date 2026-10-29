@@ -68,9 +68,10 @@ public class MaterialController {
     ApiResponse<Void> update(@Parameter(description = "资料 ID") @PathVariable UUID id,
                              @Valid @RequestBody MaterialRequest r) {
         var now = Instant.now();
+        if(r.version()==null)throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.VALIDATION_ERROR,"必须提交读取时的数据版本");
         var domain = new Material(id, r.code(), r.name(), r.category(),
                 r.sourceCategory(), r.sourceModule(), r.stage(), r.contactPerson(),
-                r.status(), r.description(), r.version() == null ? 0 : r.version(), null, now, false);
+                r.status(), r.description(), r.version(), null, now, false);
         service.update(id, domain);
         return ok(null);
     }

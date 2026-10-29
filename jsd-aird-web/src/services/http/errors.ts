@@ -4,6 +4,7 @@ export class HttpError extends Error {
     public readonly code: string,
     public readonly status?: number,
     public readonly traceId?: string,
+    public readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = 'HttpError';
@@ -22,6 +23,13 @@ export function httpErrorMessage(status: number | undefined, code: string | unde
       : '当前用户没有操作权限';
   }
   return backendMessage || transportMessage || '请求失败';
+}
+
+export function retryAfterMillis(value: unknown, now = Date.now()): number | undefined {
+  if (typeof value !== 'string' && typeof value !== 'number') return undefined;
+  const text = String(value).trim();
+  const millis = /^\d+(\.\d+)?$/.test(text) ? Number(text) * 1000 : Date.parse(text) - now;
+  return Number.isFinite(millis) && millis >= 0 ? Math.min(millis, 2_147_483_647) : undefined;
 }
 
 /** 从未知错误中提取可读消息（优先使用后端返回的 message），失败时回退到 fallback。 */

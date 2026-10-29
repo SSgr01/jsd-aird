@@ -1,5 +1,5 @@
 import { FileTextOutlined, UploadOutlined } from '@ant-design/icons';
-import { App, Form, Input, Select, Space, Typography } from 'antd';
+import { App, Form, Input, Select, Space, Typography, Upload } from 'antd';
 import type { UploadFile } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -8,7 +8,7 @@ import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import { downloadPreviewFile } from '@/components/file-preview';
 import { fetchFileBlob, fileContentUrl, stageFile } from '@/services/files';
-import { knowledgeApi, type KnowledgeCategory, type KnowledgeUploadContext, type KnowledgeUploadTask, type UploadPreflight } from '@/services/knowledge';
+import { knowledgeApi, type KnowledgeCategory, type KnowledgeUploadCapabilities, type KnowledgeUploadContext, type KnowledgeUploadTask, type UploadPreflight } from '@/services/knowledge';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 
 const formatSize = (size: number) => size < 1024 * 1024 ? `${Math.ceil(size / 1024)} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`;
@@ -52,6 +52,7 @@ export function KnowledgeLibraryPage() {
   const [uploading, setUploading] = useState(false);
   const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
   const [uploadTasks, setUploadTasks] = useState<KnowledgeUploadTask[]>([]);
+  const [uploadCapabilities, setUploadCapabilities] = useState<KnowledgeUploadCapabilities>();
   const [tasksLoading, setTasksLoading] = useState(true);
   const uploadLock = useRef(false);
 
@@ -67,6 +68,11 @@ export function KnowledgeLibraryPage() {
   }, [message]);
 
   useEffect(() => { void loadUploadTasks(); }, [loadUploadTasks]);
+
+  useEffect(() => {
+    void knowledgeApi.uploadCapabilities().then(setUploadCapabilities)
+      .catch((error) => void message.error(error instanceof Error ? error.message : '上传能力加载失败'));
+  }, [message]);
 
   useEffect(() => {
     if (!uploadTasks.some((task) => ['STAGING', 'CHECKING', 'SUBMITTING', 'QUEUED'].includes(task.status))) return undefined;
@@ -269,6 +275,24 @@ export function KnowledgeLibraryPage() {
     finally { uploadLock.current = false; setUploading(false); }
   };
 
+  const validateSelectedFile = (file: File) => {
+    if (!uploadCapabilities) {
+      void message.warning('上传能力仍在加载，请稍后重试');
+      return Upload.LIST_IGNORE;
+    }
+    const dot = file.name.lastIndexOf('.');
+    const extension = dot >= 0 ? file.name.slice(dot).toLowerCase() : '';
+    if (!uploadCapabilities.supportedExtensions.includes(extension)) {
+      void message.error(`${file.name}：不支持该文件格式`);
+      return Upload.LIST_IGNORE;
+    }
+    if (file.size > uploadCapabilities.maxFileBytes) {
+      void message.error(`${file.name}：文件超过 ${formatSize(uploadCapabilities.maxFileBytes)} 限制`);
+      return Upload.LIST_IGNORE;
+    }
+    return false;
+  };
+
   const allTasks = [...uploadTasks].sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
   const inProgressCount = allTasks.filter((task) => ['STAGING', 'CHECKING', 'SUBMITTING', 'QUEUED'].includes(task.status)).length;
   const failedCount = allTasks.filter((task) => ['FAILED', 'DUPLICATE'].includes(task.status)).length;
@@ -329,12 +353,14 @@ export function KnowledgeLibraryPage() {
         <Form.Item label="关联项目 / 阶段 / 任务" extra="批量上传时，所选关联会应用到所有文件；新版本沿用原有关联。"><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></Form.Item>
         <Form.Item label="权限可见" required><Select value={visibility} onChange={setVisibility} options={[{ value: '研发部可见', label: '研发部可见' }, { value: '全员可见', label: '全员可见' }, { value: '项目组可见', label: '项目组可见' }]} /></Form.Item>
       </Form>}
-      accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.csv,.txt,.md,.png,.jpg,.jpeg,.tif,.tiff,.wav,.mp3,.m4a,.aac,.flac,.ogg,.opus"
+      accept={uploadCapabilities?.supportedExtensions.join(',') || ''}
+      beforeUpload={validateSelectedFile}
+      uploadDisabled={!uploadCapabilities}
       multiple files={fileList} onFilesChange={setFileList}
       onRemoveFile={(file) => setFileList((current) => current.filter((item) => item.uid !== file.uid))}
       onClearFiles={() => setFileList([])}
       uploadMainText="拖拽文件到此处/点击选择文件/点击拍照上传"
-      uploadHint="支持 PDF / Office / CSV / TXT / 图片 / 音频，可批量上传，单个文件最大100M。"
+      uploadHint={uploadCapabilities ? `支持文档、图片、音频和视频，可批量上传，单个文件最大 ${formatSize(uploadCapabilities.maxFileBytes)}。` : '正在读取服务端支持的文件格式和大小限制…'}
       submitLabel="开始上传" submitIcon={<UploadOutlined />} onSubmit={() => void upload()} submitting={uploading}
       rightTitle="上传记录" rightCount={taskRecords.length}
       rightFilters={[{ key: 'ALL', label: '全部', count: allTasks.length }, { key: 'PROCESSING', label: '进行中', count: inProgressCount }, { key: 'COMPLETED', label: '已完成', count: completedCount }, { key: 'FAILED', label: '需处理', count: failedCount }]}

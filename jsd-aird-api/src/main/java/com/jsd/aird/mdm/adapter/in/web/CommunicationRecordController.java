@@ -48,6 +48,7 @@ public class CommunicationRecordController {
     @Operation(summary = "更新沟通记录", description = "更新指定沟通记录（需携带版本号）")
     ApiResponse<Void> updateCommunication(@Parameter(description = "沟通记录 ID") @PathVariable UUID id,
                                            @Valid @RequestBody CommunicationRequest r) {
+        if(r.version()==null)throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.VALIDATION_ERROR,"必须提交读取时的数据版本");
         service.updateCommunication(id, r.toDomain());
         return ok(null);
     }

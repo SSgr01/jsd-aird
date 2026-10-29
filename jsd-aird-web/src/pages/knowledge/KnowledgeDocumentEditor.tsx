@@ -47,7 +47,7 @@ export function KnowledgeDocumentEditor({ item, tagOptions, onCancel, onSaved }:
     const values = await form.validateFields();
     setSaving(true);
     try {
-      await knowledgeApi.updateMetadata(item.id, {
+      await knowledgeApi.updateMetadata(item.id, { revision: item.revision,
         title: values.title.trim(), libraryScope: values.libraryScope, categoryId: values.categoryId,
         tags: values.tags || [],
         sourceInfo: { ...item.sourceInfo, description: values.description?.trim() || '', visibility: values.visibility },

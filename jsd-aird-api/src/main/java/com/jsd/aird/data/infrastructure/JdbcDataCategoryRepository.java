@@ -18,6 +18,11 @@ public class JdbcDataCategoryRepository implements DataCategoryRepository {
         this.jdbc = jdbc;
     }
 
+    @Override public void lockCategory(UUID organizationId,UUID categoryId){
+        if(jdbc.query("SELECT id FROM data.data_category WHERE organization_id=? AND id=? FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),organizationId,categoryId).isEmpty())
+            throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,"分类不存在");
+    }
+
     @Override
     public List<Category> list(UUID organizationId) {
         return jdbc.query("""
@@ -71,6 +76,15 @@ public class JdbcDataCategoryRepository implements DataCategoryRepository {
                 WHERE c.organization_id = ? AND c.id = ?
                 GROUP BY c.id, c.name, c.description, c.sort_order, c.created_at
                 """, this::map, organizationId, categoryId).stream().findFirst();
+    }
+
+    @Override
+    public boolean hasHistoricalFreeformSources(UUID organizationId, UUID categoryId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS(SELECT 1 FROM data.import_job
+                WHERE organization_id=? AND category_id=? AND source_owner='DATA_CENTER'
+                  AND recognition_mode='FREEFORM')
+                """, Boolean.class, organizationId, categoryId));
     }
 
     @Override

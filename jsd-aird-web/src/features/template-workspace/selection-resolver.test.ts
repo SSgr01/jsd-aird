@@ -45,4 +45,8 @@ describe('resolveBindingSelection', () => {
       binding('other', { sheetId: 'sheet-2', sheetName: 'Sheet2', address: 'B3' }),
     ], selection)).toBeUndefined();
   });
+  it('resolves a valueRange-only binding without relying on an address alias', () => {
+    expect(resolveBindingSelection([binding('material', { valueRange: 'B10:B23' })],
+      { ...selection, address: 'B17' })?.binding.bindingId).toBe('material');
+  });
 });

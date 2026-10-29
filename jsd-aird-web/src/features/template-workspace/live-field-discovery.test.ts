@@ -6,9 +6,17 @@ import {
   isSingleCellAddress,
   isStructuredDataCell,
   potentialFieldLabel,
+  mutationCells,
 } from './live-field-discovery';
 
 describe('live field discovery guards', () => {
+  it('tracks every pasted label rather than just the first cell', () => {
+    expect(mutationCells({ subUnitId: 's', cellValue: { 62: { 1: { v: '文本' } }, 63: { 1: { v: '整数' }, 2: { v: 0 } }, 64: { 1: { v: '日期' } } } })).toEqual([
+      { sheetId: 's', address: 'B63' }, { sheetId: 's', address: 'B64' }, { sheetId: 's', address: 'C64' }, { sheetId: 's', address: 'B65' },
+    ]);
+    expect(mutationCells({ subUnitId: 's', cellValue: { 0: { 0: { s: 'style' }, 26: { v: false } } } })).toEqual([{ sheetId: 's', address: 'AA1' }]);
+    expect(mutationCells({ cellValue: {} })).toEqual([]);
+  });
   it('accepts a single ordinary cell, including a same-cell range', () => {
     expect(isSingleCellAddress('B4')).toBe(true);
     expect(isSingleCellAddress('$B$4:$B$4')).toBe(true);

@@ -13,6 +13,30 @@ import {
 import { locatorValueRange } from './locator';
 
 describe('field model', () => {
+  it('uses configured group names for legacy ID prefixes while preserving scientific labels and field identity', () => {
+    const fields = ['basic', 'conditions'].map((groupId, index) => ({
+      id: `f-${groupId}`, bindingId: `f-${groupId}`, groupId,
+      name: index ? '实验素材' : '实验题目', kind: 'SCALAR', valueType: 'string',
+      required: false, reviewStatus: 'CONFIRMED',
+    }));
+    const schema = { 'x-jsd-field-model': {
+      modelVersion: 1, fields, blocks: [], semanticAnnotations: [],
+      groups: [{ id: 'basic', name: '基础信息', order: 0 }, { id: 'conditions', name: '实验条件', order: 1 }],
+    } };
+    const mapping: TemplateBinding[] = fields.map((field, index) => ({
+      bindingId: field.id, fieldCode: field.id, dataPath: `/fields/${field.id}`, role: 'FIELD',
+      mappingKind: index ? 'REPEAT_FIELD' : 'SCALAR', locatorType: 'CELL_RANGE',
+      locator: { sheetId: 's', labelRange: index ? 'B8' : 'A1', valueRange: index ? 'C8:H8' : 'B1' },
+      labelPath: index ? 'conditions > pH > 实验素材' : 'basic > 实验题目',
+      syncDirection: 'TWO_WAY', primaryBinding: true, bindingStatus: 'VALID',
+    }));
+    const result = readFieldModel(schema, mapping);
+    expect(result.fields.map((field) => field.pathSegments)).toEqual([
+      ['基础信息', '实验题目'], ['实验条件', 'pH', '实验素材'],
+    ]);
+    expect(result.fields[1]).toMatchObject({ id: 'f-conditions', bindingId: 'f-conditions', fieldType: 'TABLE_COLUMN' });
+    expect(mapping[0]?.labelPath).toBe('basic > 实验题目');
+  });
   it('uses the complete visible row path instead of splitting a sanitized field code', () => {
     const schema = {
       'x-jsd-field-model': {

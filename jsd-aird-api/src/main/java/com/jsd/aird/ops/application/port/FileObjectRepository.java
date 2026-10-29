@@ -12,6 +12,8 @@ public interface FileObjectRepository {
 
     void activate(UUID fileId);
 
+    default int discardUnreferencedStaged(UUID organizationId,UUID fileId){return 0;}
+
     int markExpiredStagedDeleted(Instant olderThan);
 
     record NewFileObject(

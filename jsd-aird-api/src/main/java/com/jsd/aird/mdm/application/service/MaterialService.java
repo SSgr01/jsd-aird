@@ -115,7 +115,7 @@ public class MaterialService {
                 Instant.now(),
                 false
         );
-        if (!repository.update(value, current.version(), CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
+        if (!repository.update(value, input.version(), CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
     }
 
     @Transactional

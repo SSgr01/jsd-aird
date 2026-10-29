@@ -42,11 +42,13 @@ Copy-Item .env.example .env
 .\scripts\db-up.ps1
 ```
 
-启动后端（Flyway 会自动创建 pgvector 扩展与业务 Schema）：
+启动本地 API 与异步 Worker：
 
 ```powershell
-.\scripts\dev-api.ps1
+.\scripts\dev-stack.ps1
 ```
+
+该命令会保持两个服务运行，按 Ctrl+C 同时停止；API 与 Worker 日志保存在 .runtime/dev-stack/。仅需 API 时仍可单独运行 dev-api.ps1。
 
 在另一个 PowerShell 窗口启动前端：
 

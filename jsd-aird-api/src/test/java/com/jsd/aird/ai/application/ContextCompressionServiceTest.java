@@ -22,11 +22,16 @@ class ContextCompressionServiceTest {
 
         assertThat(context.characterCount()).isLessThanOrEqualTo(200);
         assertThat(context.characterCount()).isEqualTo(context.text().length());
-        assertThat(context.text()).contains("evidenceRef=D1")
+        // Mixed-source small budgets reserve a stable half for knowledge. A
+        // source that cannot fit its metadata must not leak a partial citation.
+        assertThat(context.text()).contains("evidenceRef=K1")
                 .doesNotContain("ref=")
                 .doesNotContain(hit.chunkId().toString())
                 .doesNotContain(hit.documentId().toString())
-                .doesNotContain(hit.versionId().toString());
+                .doesNotContain(hit.versionId().toString())
+                .doesNotContain(data.hitId().toString())
+                .doesNotContain(data.fileObjectId().toString());
+        assertThat(context.evidenceRefs()).containsExactly("K1");
     }
 
     @Test

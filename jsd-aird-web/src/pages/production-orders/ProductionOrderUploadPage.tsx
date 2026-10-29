@@ -298,7 +298,7 @@ export function ProductionOrderUploadPage() {
   const retry = async (upload: ProductionUpload) => {
     setRetryingId(upload.id);
     try {
-      await productionUploadApi.retry(upload.id);
+      await productionUploadApi.retry(upload.id,upload.lockVersion);
       void message.success(`“${upload.originalName}”已重新提交解析`);
       await loadUploads();
     } catch (error) {
@@ -322,7 +322,7 @@ export function ProductionOrderUploadPage() {
       onOk: async () => {
         setDeletingId(upload.id);
         try {
-          await productionUploadApi.delete(upload.id);
+          await productionUploadApi.delete(upload.id,upload.lockVersion);
           message.success('上传记录已删除');
           await loadUploads();
         } catch (error) {

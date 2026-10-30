@@ -34,8 +34,26 @@ class JdbcKnowledgeRepositoryTest {
         var args = ArgumentCaptor.forClass(Object[].class);
         verify(jdbc).update(sql.capture(), args.capture());
         assertThat(sql.getValue()).contains("NOT EXISTS", "current_run.parse_run_id = ?",
-                "current_run.step_key = legacy.step_key", "legacy.parse_run_id IS NULL");
-        assertThat(args.getValue()).containsExactly(parseRunId, organizationId, versionId, parseRunId);
+                "current_run.step_key = legacy.step_key", "legacy.parse_run_id IS NULL",
+                "SELECT DISTINCT ON (step_key) id", "ORDER BY step_key, updated_at DESC, id DESC", "legacy.id = latest.id");
+        assertThat(args.getValue()).containsExactly(organizationId, versionId, parseRunId, parseRunId);
+    }
+
+    @Test
+    void startingProcessingStepReusesAnExistingUnscopedStep() {
+        var jdbc = mock(JdbcTemplate.class);
+        var repository = new JdbcKnowledgeRepository(jdbc);
+        var org = UUID.randomUUID();
+        var document = UUID.randomUUID();
+        var version = UUID.randomUUID();
+        repository.startProcessingStep(org, document, version, null, "SCAN", "scanner", null, "hash");
+        var sql = ArgumentCaptor.forClass(String.class);
+        var args = ArgumentCaptor.forClass(Object[].class);
+        verify(jdbc, times(2)).update(sql.capture(), args.capture());
+        assertThat(sql.getAllValues().getFirst()).contains("WHERE NOT EXISTS", "existing.parse_run_id IS NOT DISTINCT FROM ?",
+                "existing.review_revision_id IS NOT DISTINCT FROM ?");
+        assertThat(java.util.Arrays.copyOfRange(args.getAllValues().getFirst(), 10, 15))
+                .containsExactly(org, version, "SCAN", null, null);
     }
 
     @Test

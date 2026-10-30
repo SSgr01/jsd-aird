@@ -47,11 +47,12 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
-/** MinerU precise PDF parser. The worker owns the asynchronous ingestion boundary. */
+/** MinerU PDF parser and shared precise extraction for presentations. */
 @Component
 public final class MineruDocumentParser implements DocumentParser {
 
     static final long MAX_DOWNLOAD_BYTES = 512L * 1024 * 1024;
+    private static final long MAX_PRESENTATION_BYTES = 200L * 1024 * 1024;
     private static final int MAX_REQUEST_ATTEMPTS = 3;
     private static final Logger log = LoggerFactory.getLogger(MineruDocumentParser.class);
 
@@ -180,6 +181,36 @@ public final class MineruDocumentParser implements DocumentParser {
             throw preciseFailure == null ? MineruException.contract("MinerU 精准解析不可用", null) : preciseFailure;
         } catch (IOException exception) {
             throw new MineruException("PDF 临时文件读取失败", null, "FILE_IO", null,
+                    false, false, exception);
+        } finally {
+            deleteQuietly(sourceFile);
+        }
+    }
+
+    /** Submit original PPT/PPTX bytes without PDF inspection, splitting, or Agent fallback. */
+    ParsedDocument parsePresentation(InputStream source, String fileName, ParseContext context) {
+        if (!isPreciselyConfigured()) {
+            throw MineruException.contract("PPT/PPTX 解析需要启用 MinerU 并配置精准接口 Token", null);
+        }
+        if (context != null && context.size() > MAX_PRESENTATION_BYTES) {
+            throw MineruException.contract("PPT/PPTX 超过 MinerU 精准接口 200 MB 限制，请拆分后上传", null);
+        }
+        var format = fileName.toLowerCase(Locale.ROOT).endsWith(".pptx") ? "PPTX" : "PPT";
+        Path sourceFile = null;
+        try {
+            sourceFile = Files.createTempFile("mineru-presentation-", "." + format.toLowerCase(Locale.ROOT));
+            try (var output = Files.newOutputStream(sourceFile)) {
+                com.jsd.aird.shared.resource.BoundedStreams.copy(source, output, MAX_PRESENTATION_BYTES, null);
+            }
+            var decision = new PdfOcrDecider.Decision(false, "PRESENTATION_NATIVE_PARSE", 0, 0, 0);
+            var parsed = parsePreciseSingle(sourceFile, fileName, context, OcrMode.AUTO, decision);
+            var metadata = new LinkedHashMap<>(parsed.metadata());
+            metadata.put("sourceFormat", format);
+            metadata.put("sourceFileName", fileName);
+            return new ParsedDocument(parsed.blocks(), parsed.parserVersion(), parsed.providerTaskId(),
+                    metadata, parsed.sourceTables());
+        } catch (IOException exception) {
+            throw new MineruException("PPT/PPTX 临时文件读写失败", null, "FILE_IO", null,
                     false, false, exception);
         } finally {
             deleteQuietly(sourceFile);

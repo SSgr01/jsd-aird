@@ -1,3 +1,4 @@
+import '@/compat/browser';
 import { markPerformance } from '@/services/performance/metrics';
 import { editorReady } from './workspace-loading';
 import {

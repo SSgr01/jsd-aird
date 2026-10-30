@@ -906,6 +906,7 @@ export function addWorkbookField(source: WorkbookTemplateInstance, options: {
   }
   const created = createCustomFieldWorkspace({}, source.model, source.mapping, { ownerId: options.ownerId, origin: options.origin,
     kind: parent ? 'REPEAT_FIELD' : 'SCALAR', name: '新字段', groupId: options.groupId ?? context?.groupId ?? parent?.groupId,
+    repeatValueLayout: 'FIELD_ARRAY',
     parentField: parent, parentBinding: parent && source.mapping.find(binding => binding.bindingId === parent.bindingId),
     sheet: options.selection ?? { sheetId: locatorText(parent?.locator?.sheetId ?? source.mapping[0]?.locator.sheetId), sheetName: locatorText(parent?.locator?.sheetName ?? source.mapping[0]?.locator.sheetName) },
   });
@@ -953,7 +954,12 @@ export function deleteWorkbookField(source: WorkbookTemplateInstance, id: string
     && !source.mapping.some(binding => removed.bindingIds.has(binding.bindingId) && binding.mappingKind === 'REPEAT_REGION'
       && binding.componentId && binding.componentId === projection.componentId));
   const projectionIds = new Set(projections?.map(projection => projection.listProjectionId));
-  if (next.execution && projections) next.execution.listProjections = projections;
+  if (next.execution && projections) {
+    next.execution.listProjections = projections;
+    next.execution.identities = next.execution.identities.filter(identity => !removed.bindingIds.has(identity.bindingId)
+      && !source.mapping.some(binding => removed.bindingIds.has(binding.bindingId) && binding.mappingKind === 'REPEAT_REGION'
+        && binding.componentId && binding.componentId === identity.componentId));
+  }
   next.records = next.records.filter(record => !removed.bindingIds.has(record.regionId));
   next.items = next.items.filter(item => projectionIds.has(item.regionId));
   next.issues = next.issues.filter(issue => !issue.fieldId || !removed.fieldIds.has(issue.fieldId));

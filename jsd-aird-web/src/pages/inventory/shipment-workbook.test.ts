@@ -36,4 +36,15 @@ describe('出货记录表附件格式', () => {
     const sheet = XLSX.utils.aoa_to_sheet(rows.map((row, index) => index === 1 ? ['日期', '2025.03-07'] : row));
     expect(parseShipmentWorkbook(sheet).details[0]?.businessDate).toBe('2025-03-07');
   });
+
+  it('普通 HTTP 缺少 randomUUID 时仍可生成单号', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis.crypto, 'randomUUID');
+    Object.defineProperty(globalThis.crypto, 'randomUUID', { configurable: true, value: undefined });
+    try {
+      expect(parseShipmentWorkbook(XLSX.utils.aoa_to_sheet(rows)).shipmentNo).toMatch(/^CH-20250307-[A-F0-9]{8}$/);
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis.crypto, 'randomUUID', descriptor);
+      else Reflect.deleteProperty(globalThis.crypto, 'randomUUID');
+    }
+  });
 });

@@ -209,7 +209,7 @@ public class KnowledgeGovernanceService {
         }
         knowledge.markIndexStale(actor.organizationId(), documentId, versionId, reviewRevisionId);
         enqueueIndex(actor.organizationId(), actor.userId(), documentId, versionId, reviewRevisionId, lockVersion,
-                authorizeAi);
+                authorizeAi, "FAILED".equals(review.reviewRevision().status()));
         audit(actor.organizationId(), actor.userId(), "KB_PUBLICATION_INDEX_QUEUED", documentId,
                 objectMapper.createObjectNode().put("versionId", versionId.toString())
                         .put("reviewRevisionId", reviewRevisionId.toString()));
@@ -437,7 +437,7 @@ public class KnowledgeGovernanceService {
         if (!"READY".equals(review.processingStatus())) reasons.add("解析未完成");
         if (review.categoryId() == null) reasons.add("分类为空");
         if (review.parseRun() == null || !"SUCCEEDED".equals(review.parseRun().status())
-                || review.reviewRevision() == null || !"DRAFT".equals(review.reviewRevision().status())) {
+                || review.reviewRevision() == null || !Set.of("DRAFT", "FAILED").contains(review.reviewRevision().status())) {
             reasons.add("没有可发布的校对内容");
         }
         if (review.reviewRevision() == null || (!StringUtils.hasText(documents.project(
@@ -460,13 +460,13 @@ public class KnowledgeGovernanceService {
     }
 
     private void enqueueIndex(UUID organizationId, UUID actorId, UUID documentId, UUID versionId,
-                              UUID reviewRevisionId, int lockVersion, boolean authorizeAi) {
+                              UUID reviewRevisionId, int lockVersion, boolean authorizeAi, boolean retryFailed) {
         var payload = objectMapper.createObjectNode().put("organizationId", organizationId.toString())
                 .put("actorId", actorId.toString()).put("documentId", documentId.toString())
                 .put("versionId", versionId.toString()).put("reviewRevisionId", reviewRevisionId.toString())
                 .put("lockVersion", lockVersion).put("authorizeAi", authorizeAi);
         async.enqueue(organizationId, "KB_BUILD_KNOWLEDGE_INDEX", payload,
-                "kb-index:" + reviewRevisionId, 50);
+                "kb-index:" + reviewRevisionId + (retryFailed ? ":retry:" + UUID.randomUUID() : ""), 50);
     }
 
     private List<BatchResult> batch(List<DocumentRevision> documents, BatchAction action, String auditAction) {

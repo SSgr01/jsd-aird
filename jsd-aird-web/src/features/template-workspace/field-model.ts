@@ -857,12 +857,11 @@ export function removeBusinessField(
   model: FieldModel,
   fieldId: string,
 ) {
-  const field = model.fields.find((item) => item.id === fieldId);
-  const nextModel = removeFieldDefinitions(structuredClone(model), [], [fieldId]).model;
+  const removed = removeFieldDefinitions(structuredClone(model), [], [fieldId]);
+  const nextModel = removed.model;
   const nextSchema = structuredClone(schema);
-  if (field?.dataPath) {
-    if (field.parentFieldId) removeArrayItemSchemaAtPath(nextSchema, field.dataPath);
-    else removeSchemaAtPath(nextSchema, field.dataPath);
+  for (const field of model.fields) {
+    if (removed.fieldIds.has(field.id) && field.dataPath) removeSchemaAtPath(nextSchema, field.dataPath);
   }
   return { model: nextModel, schema: writeFieldModel(nextSchema, nextModel) };
 }

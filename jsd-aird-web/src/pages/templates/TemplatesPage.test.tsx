@@ -13,6 +13,7 @@ vi.mock('@/services/templates/template-api', () => ({
     listCategories: vi.fn(),
     filterOptions: vi.fn(),
     exportFiles: vi.fn(),
+    batchActions: vi.fn(),
   },
 }));
 
@@ -27,6 +28,8 @@ const listCategoriesMock = vi.mocked(templateApi.listCategories);
 const filterOptionsMock = vi.mocked(templateApi.filterOptions);
 // eslint-disable-next-line @typescript-eslint/unbound-method
 const exportFilesMock = vi.mocked(templateApi.exportFiles);
+// eslint-disable-next-line @typescript-eslint/unbound-method
+const batchActionsMock = vi.mocked(templateApi.batchActions);
 const testRouterFuture = { v7_startTransition: true, v7_relativeSplatPath: true } as const;
 
 const publishedWithDraft: TemplateListItem = {
@@ -173,5 +176,32 @@ describe('TemplatesPage catalog presentation', () => {
 
     expect(await screen.findByText('导出服务不可用')).toBeInTheDocument();
     await waitFor(() => expect(exportButton).not.toBeDisabled());
+  });
+
+  it('opens the row menu and its move dialog without navigating the row', async () => {
+    render(<AppProviders><MemoryRouter future={testRouterFuture}><TemplatesPage /></MemoryRouter></AppProviders>);
+    await screen.findByText('已发布模板');
+    fireEvent.click(screen.getAllByRole('button', { name: '更多模板操作' })[0]!);
+    const menu = await screen.findByRole('menu', { hidden: false });
+    fireEvent.click(within(menu).getByText('移动分类'));
+    const title = await screen.findByText('移动“已发布模板”', { selector: '.ant-modal-title' }, { timeout: 10_000 });
+    const dialog = title.closest('.ant-modal') as HTMLElement;
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: '空分类' })).toBeVisible(), { timeout: 10_000 });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  });
+
+  it('selects a category in the batch move modal and sends the selected category', async () => {
+    batchActionsMock.mockResolvedValue([{ templateId: publishedWithDraft.templateId, success: true }]);
+    render(<AppProviders><MemoryRouter future={testRouterFuture}><TemplatesPage /></MemoryRouter></AppProviders>);
+    await screen.findByText('已发布模板');
+    fireEvent.click(screen.getAllByRole('checkbox')[1]!);
+    fireEvent.click(await screen.findByRole('button', { name: /移动分类/ }));
+    const title = await screen.findByText('批量移动分类', { selector: '.ant-modal-title' }, { timeout: 10_000 });
+    const dialog = title.closest('.ant-modal') as HTMLElement;
+    fireEvent.mouseDown(within(dialog).getByRole('combobox'));
+    const option = await screen.findByText('空分类', { selector: '.ant-select-item-option-content' });
+    fireEvent.click(option);
+    fireEvent.click(within(dialog).getByRole('button', { name: /确.*定/ }));
+    await waitFor(() => expect(batchActionsMock).toHaveBeenCalledWith(expect.objectContaining({ action: 'MOVE', categoryId: 'category-empty' })));
   });
 });

@@ -303,7 +303,7 @@ export function BasicLayout() {
         avatarProps={false}
         actionsRender={false}
         rightContentRender={() => null}
-        contentStyle={{ minHeight: 'calc(100dvh - 64px)', padding: 0 }}
+        contentStyle={{ minHeight: 'calc(var(--app-viewport-height, 100vh) - 64px)', padding: 0 }}
         menuItemRender={(item: MenuDataItem & { isUrl: boolean; onClick: () => void }, dom: React.ReactNode, menuProps: { isMobile?: boolean }) => (item.path ? <PrefetchLink to={item.path} onClick={menuProps.isMobile ? item.onClick : undefined}>{dom}</PrefetchLink> : dom)}
       >
         <main

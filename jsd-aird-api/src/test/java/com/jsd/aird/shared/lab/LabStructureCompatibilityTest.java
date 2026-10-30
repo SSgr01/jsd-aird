@@ -11,6 +11,25 @@ import java.io.ByteArrayInputStream;
 import static org.assertj.core.api.Assertions.*;
 
 class LabStructureCompatibilityTest {
+    @Test void keepsDeletedFieldsDeletedWhenAnEditedInstanceIsPreparedAgain() throws Exception {
+        var json=new ObjectMapper();var parser=new XlsxStructureParser(json);var catalog=new UnifiedLabTemplateCatalog(json);
+        var pack=catalog.compile(UnifiedLabTemplateCatalog.TEST,parser.parseInstance(getClass().getResourceAsStream("/templates/unified/test.xlsx"))).payload();
+        var snapshot=pack.path("snapshot").deepCopy();var sheet=LabWorkbook.sheet(snapshot);
+        var instance=WorkbookStructure.seed(json,snapshot,pack.path("schema"),pack.path("mapping"),"delete-field");
+        String removedCode="contact.water";
+        var removedAt=LabWorkbook.findField(sheet,removedCode);assertThat(removedAt).isNotNull();
+        String label=LabWorkbook.value(sheet,removedAt[0],1);
+        instance.withArray("/model/fields").removeIf(f->f.path("fieldCode").asText().equals(removedCode));
+        instance.withArray("/mapping").removeIf(b->b.path("fieldCode").asText().equals(removedCode));
+        WorkbookStructure.attach(snapshot,instance);
+        var prepared=LabWorkbook.prepare(json,snapshot,pack.path("snapshot"),"delete-field-save");
+        var reopened=WorkbookStructure.seed(json,prepared,pack.path("schema"),pack.path("mapping"),"delete-field-reopen");
+        assertThat(LabWorkbook.definition(prepared).path("fields").has(removedCode)).isFalse();
+        assertThat(reopened.path("model").path("fields").findValuesAsText("fieldCode")).doesNotContain(removedCode);
+        assertThat(reopened.path("model").path("fields").findValuesAsText("name")).doesNotContain(label);
+        assertThat(LabWorkbook.value(LabWorkbook.sheet(prepared),removedAt[0],1)).isEqualTo(label);
+    }
+
     @Test void duplicateAndUnlabelledSampleRowsRetainIndependentValues() throws Exception {
         var json=new ObjectMapper();var parser=new XlsxStructureParser(json);var catalog=new UnifiedLabTemplateCatalog(json);
         var pack=catalog.compile(UnifiedLabTemplateCatalog.TEST,parser.parseInstance(getClass().getResourceAsStream("/templates/unified/test.xlsx"))).payload();

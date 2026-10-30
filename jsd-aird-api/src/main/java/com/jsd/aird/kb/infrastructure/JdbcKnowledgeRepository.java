@@ -449,10 +449,16 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                     id, organization_id, document_id, document_version_id, parse_run_id, review_revision_id,
                     step_key, status, progress,
                     attempt, provider, model, input_sha256, started_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'RUNNING', 0, 0, ?, ?, ?, now(), now())
+                ) SELECT ?, ?, ?, ?, ?, ?, ?, 'RUNNING', 0, 0, ?, ?, ?, now(), now()
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM kb.document_processing_step existing
+                    WHERE existing.organization_id = ? AND existing.document_version_id = ?
+                      AND existing.step_key = ? AND existing.parse_run_id IS NOT DISTINCT FROM ?
+                      AND existing.review_revision_id IS NOT DISTINCT FROM ?
+                )
                 ON CONFLICT DO NOTHING
                 """, UUID.randomUUID(), organizationId, documentId, versionId, parseRunId, reviewRevisionId, stepKey,
-                provider, model, inputSha256);
+                provider, model, inputSha256, organizationId, versionId, stepKey, parseRunId, reviewRevisionId);
         jdbc.update("""
                 UPDATE kb.document_processing_step
                 SET status = 'RUNNING', progress = 0, attempt = attempt + 1, provider = ?, model = ?,
@@ -482,9 +488,16 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     @Override
     public void attachProcessingSteps(UUID organizationId, UUID versionId, UUID parseRunId) {
         jdbc.update("""
+                WITH latest AS MATERIALIZED (
+                    SELECT DISTINCT ON (step_key) id
+                    FROM kb.document_processing_step
+                    WHERE organization_id = ? AND document_version_id = ?
+                      AND parse_run_id IS NULL AND review_revision_id IS NULL
+                    ORDER BY step_key, updated_at DESC, id DESC
+                )
                 UPDATE kb.document_processing_step legacy SET parse_run_id = ?, updated_at = now()
-                WHERE legacy.organization_id = ? AND legacy.document_version_id = ?
-                  AND legacy.parse_run_id IS NULL AND legacy.review_revision_id IS NULL
+                FROM latest
+                WHERE legacy.id = latest.id AND legacy.parse_run_id IS NULL AND legacy.review_revision_id IS NULL
                   AND NOT EXISTS (
                       SELECT 1 FROM kb.document_processing_step current_run
                       WHERE current_run.organization_id = legacy.organization_id
@@ -492,7 +505,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                         AND current_run.parse_run_id = ? AND current_run.review_revision_id IS NULL
                         AND current_run.step_key = legacy.step_key
                   )
-                """, parseRunId, organizationId, versionId, parseRunId);
+                """, organizationId, versionId, parseRunId, parseRunId);
     }
 
     @Override
@@ -1160,9 +1173,9 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     }
 
     private String jsonStrings(List<String> values) {
-        if (values == null || values.isEmpty()) return "[]";
-        return values.stream().map(value -> "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"")
-                .reduce((left, right) -> left + "," + right).map(value -> "[" + value + "]").orElse("[]");
+        var array = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
+        if (values != null) values.forEach(array::add);
+        return array.toString();
     }
 
     private String categoryClause(List<UUID> categoryIds) {

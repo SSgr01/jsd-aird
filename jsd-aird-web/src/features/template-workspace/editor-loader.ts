@@ -1,3 +1,4 @@
+import '@/compat/browser';
 import { lazy } from 'react';
 
 const sheetsImport = () => import('./UniverSheetsEditor').then(module => ({ default: module.UniverSheetsEditor }));

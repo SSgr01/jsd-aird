@@ -16,6 +16,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.infrastructure.XlsxStructureParser;
 import org.junit.jupiter.api.Test;
 
 class TemplateWorkspaceServiceRepeatMappingTest {
@@ -29,6 +30,55 @@ class TemplateWorkspaceServiceRepeatMappingTest {
         var mapping = columnMapping("sheet-1", "D8:J8");
 
         assertThatCode(() -> validate(mapping)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void allowsPublishedUnifiedMappingsWithoutRewritingTheirFieldPaths() throws Exception {
+        var parser = new XlsxStructureParser(objectMapper);
+        var catalog = new UnifiedLabTemplateCatalog(objectMapper);
+        for (var name : List.of("test", "synthesis")) {
+            var code = name.equals("test") ? UnifiedLabTemplateCatalog.TEST : UnifiedLabTemplateCatalog.SYNTHESIS;
+            var pack = catalog.compile(code, parser.parseInstance(
+                    getClass().getResourceAsStream("/templates/unified/" + name + ".xlsx"))).payload();
+            var mapping = pack.path("mapping");
+            var original = mapping.deepCopy();
+            assertThatCode(() -> service.validateMappings(TemplateFormat.XLSX, mapping))
+                    .doesNotThrowAnyException();
+            assertThat(mapping).isEqualTo(original);
+        }
+    }
+
+    @Test
+    void allowsFlatFieldArraysForBothRepeatAxes() {
+        var column = columnMapping("sheet-1", "D8:J8");
+        ((ObjectNode) column.get(1)).put("dataPath", "/fields/resinCode")
+                .withObject("/locator").put("valueMode", "ARRAY_ROW");
+        assertThatCode(() -> validate(column)).doesNotThrowAnyException();
+        var row = rowMapping("sheet-1", "D2:D3", false);
+        ((ObjectNode) row.get(1)).put("dataPath", "/customFields/note")
+                .withObject("/locator").put("valueMode", "ARRAY_COLUMN");
+        assertThatCode(() -> validate(row)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void flatFieldArraysStillRejectInvalidPathsDirectionsAndGeometry() {
+        var mapping = columnMapping("sheet-1", "D8:J8");
+        var child = (ObjectNode) mapping.get(1);
+        child.put("dataPath", "/unrelated/*/value").withObject("/locator").put("valueMode", "ARRAY_ROW");
+        assertThatThrownBy(() -> validate(mapping)).isInstanceOf(ApiException.class);
+        child.put("dataPath", "/fields/value").withObject("/locator").put("valueMode", "ARRAY_COLUMN");
+        assertThatThrownBy(() -> validate(mapping)).isInstanceOf(ApiException.class);
+        child.withObject("/locator").put("valueMode", "ARRAY_ROW").put("sheetId", "other");
+        assertThatThrownBy(() -> validate(mapping)).isInstanceOf(ApiException.class)
+                .hasMessageContaining("不在同一工作表");
+        child.withObject("/locator").put("sheetId", "sheet-1").put("valueRange", "D7:J7");
+        assertThatThrownBy(() -> validate(mapping)).isInstanceOf(ApiException.class)
+                .hasMessageContaining("超出了父级重复区域");
+        child.withObject("/locator").put("valueRange", "D8:J8");
+        var duplicate = child.deepCopy().put("bindingId", "overlap").put("dataPath", "/customFields/overlap");
+        mapping.add(duplicate);
+        assertThatThrownBy(() -> validate(mapping)).isInstanceOf(ApiException.class)
+                .hasMessageContaining("位置发生重叠");
     }
 
     @Test

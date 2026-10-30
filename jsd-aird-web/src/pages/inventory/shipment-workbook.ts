@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import * as XLSX from 'xlsx';
+import { generateUUID } from '@/utils/uuid';
 
 const columns = ['客户名', '品名', '批次号', '规格', '数量', '总数量', '快递公司', '备注'];
 const cellText = (value: unknown): string =>
@@ -41,7 +42,7 @@ export function parseShipmentWorkbook(
   if (!/^\d{4}-\d{2}-\d{2}$/.test(businessDate) || dayjs(businessDate).format('YYYY-MM-DD') !== businessDate)
     throw new Error('B2 日期须为明确的单日，格式 YYYY-MM-DD；请先修正原表日期');
   const shipmentNo = cellText(rows[1]?.[3]) || defaultShipmentNo ||
-    `CH-${businessDate.replaceAll('-', '')}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+    `CH-${businessDate.replaceAll('-', '')}-${generateUUID().slice(0, 8).toUpperCase()}`;
   const details = rows.slice(3).flatMap((row, index) => {
     if (row.every((cell) => cellText(cell) === '')) return [];
     const rowNo = index + 4;

@@ -120,11 +120,13 @@ class ApiClient:
         })
 
     def stage_file(self, file_path: Path) -> dict[str, Any]:
-        # Escape curl's form syntax while preserving the actual path and filename.
-        source = str(file_path.resolve()).replace("\\", "/")
+        # curl parses commas/semicolons inside --form itself, independently of
+        # shell quoting. Quote both form values and escape only quote/backslash.
+        source = file_path.resolve().as_posix()
         name = file_path.name
-        escape = lambda value: value.replace("\\", "\\\\").replace('"', '\\"').replace(";", "\\;")
-        form = f'file=@{escape(source)};filename={escape(name)}'
+        def quote(value: str) -> str:
+            return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        form = f'file=@{quote(source)};filename={quote(name)}'
         query = urllib.parse.urlencode({"kind": "KNOWLEDGE"})
         return self._run([
             "--request", "POST", "--header", "Accept: application/json",
@@ -382,10 +384,17 @@ def wait_for_parse(api: ApiClient, document_id: str, version_id: str, timeout_se
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         state = api.json("GET", f"{api_path_document(document_id)}/processing")
+        if state.get("versionId") != version_id:
+            raise ImportErrorWithMessage("等待解析时文档文件版本发生变化，请核对后重跑")
         status = state.get("parseRunStatus")
         if status == "SUCCEEDED" and state.get("documentStatus") == "READY":
             return state
-        if status in {"FAILED", "REJECTED"} or (state.get("terminal") and status != "SUCCEEDED"):
+        # A newly queued reparse can still expose the preceding failed parse run.
+        parsing_active = state.get("jobStatus") in {"READY", "RUNNING"} and not state.get("terminal")
+        failed_parse = (status in {"FAILED", "REJECTED"}
+                        or state.get("documentStatus") in {"FAILED", "REJECTED", "PENDING_PROVIDER"})
+        failed_parse = failed_parse and not parsing_active and state.get("documentStatus") not in {"QUEUED", "PROCESSING"}
+        if failed_parse or (state.get("terminal") and status != "SUCCEEDED"):
             reason = state.get("parseRunError") or state.get("lastError") or "文件解析失败"
             raise ImportErrorWithMessage(reason)
         time.sleep(10)
@@ -399,20 +408,29 @@ def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_s
         raise ImportErrorWithMessage("文档的当前文件版本已变化，请核对后重跑")
     if not document.get("currentPublicationId") or document.get("reviewStatus") != "PUBLISHED":
         processing = api.json("GET", f"{api_path_document(document_id)}/processing")
-        if processing.get("parseRunStatus") in {"FAILED", "REJECTED"}:
+        parsing_active = processing.get("jobStatus") in {"READY", "RUNNING"} and not processing.get("terminal")
+        parse_failed = (processing.get("parseRunStatus") in {"FAILED", "REJECTED"}
+                        or processing.get("documentStatus") in {"FAILED", "REJECTED", "PENDING_PROVIDER"})
+        if parse_failed and not parsing_active:
             if not retry_failed:
                 raise ImportErrorWithMessage(processing.get("parseRunError") or "文件解析失败；可使用 --retry-failed 重试")
+            failed_review = api.json("GET", f"{api_path_document(document_id)}/versions/{version_id}/review")
+            failed_revision = failed_review.get("reviewRevision") or {}
             queue_api_call(api, lambda: api.json(
-                "POST", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/reparse", {}
+                "POST", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/reparse", {
+                    "reviewRevisionId": failed_revision.get("id"),
+                    "lockVersion": failed_revision.get("lockVersion"),
+                }
             ), queue_timeout_seconds)
         wait_for_parse(api, document_id, version_id, timeout_seconds)
         review = api.json("GET", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/review")
         revision = review.get("reviewRevision")
         if not revision:
             raise ImportErrorWithMessage("解析完成，但没有生成待校对内容")
-        if revision.get("status") == "FAILED":
-            raise ImportErrorWithMessage(revision.get("failureReason") or "校对版本生成失败")
-        if revision.get("status") == "DRAFT":
+        if revision.get("status") == "FAILED" and not retry_failed:
+            raise ImportErrorWithMessage((revision.get("failureReason") or "发布或索引生成失败")
+                                         + "；修复原因后可使用 --retry-failed 重试发布")
+        if revision.get("status") in {"DRAFT", "FAILED"}:
             queue_api_call(api, lambda: api.json(
                 "POST", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/publish", {
                     "reviewRevisionId": revision["id"],
@@ -700,7 +718,7 @@ def main() -> int:
                         help="同时处于解析/发布流程的最大文件数，默认 8，并自动受组织队列容量限制")
     parser.add_argument("--queue-wait-timeout-minutes", type=int, default=24 * 60,
                         help="单次等待任务队列容量的最长分钟数，默认 1440")
-    parser.add_argument("--retry-failed", action="store_true", help="重新解析知识库中解析失败的文档")
+    parser.add_argument("--retry-failed", action="store_true", help="重试解析失败的文档，以及解析完成但发布或索引失败的文档")
     parser.add_argument("--dry-run", action="store_true", help="只扫描并统计文件，不登录、不上传")
     args = parser.parse_args()
     try:

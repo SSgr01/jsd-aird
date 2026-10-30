@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react';
 import { defineConfig, loadEnv } from 'vite';
 import { buildInfoPlugin } from './scripts/build-info-plugin';
 import { createDevProxy } from './scripts/dev-proxy';
+import { browserCssCompat } from './scripts/browser-css-compat';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
@@ -11,6 +12,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), buildInfoPlugin()],
+    css: { postcss: { plugins: [browserCssCompat()] } },
     resolve: {
       // Univer declares RxJS as a peer dependency. Keep every Univer package
       // on the same modern RxJS build; otherwise pnpm may resolve a nested
@@ -29,6 +31,8 @@ export default defineConfig(({ mode }) => {
       },
     },
     build: {
+      target: ['chrome106', 'edge106'],
+      cssTarget: ['chrome106', 'edge106'],
       manifest: true,
       sourcemap: true,
     },

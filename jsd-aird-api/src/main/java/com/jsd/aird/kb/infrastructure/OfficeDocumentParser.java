@@ -13,8 +13,6 @@ import org.apache.poi.hwpf.extractor.WordExtractor;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.apache.poi.ss.util.CellReference;
-import org.apache.poi.xslf.usermodel.XMLSlideShow;
-import org.apache.poi.xslf.usermodel.XSLFShape;
 import org.apache.poi.xwpf.usermodel.IBodyElement;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
@@ -36,8 +34,7 @@ public class OfficeDocumentParser implements DocumentParser {
     @Override
     public boolean supports(String fileName, String contentType) {
         var name = fileName.toLowerCase(Locale.ROOT);
-        return name.endsWith(".docx") || name.endsWith(".doc") || name.endsWith(".xlsx") || name.endsWith(".xls")
-                || name.endsWith(".pptx") || name.endsWith(".ppt");
+        return name.endsWith(".docx") || name.endsWith(".doc") || name.endsWith(".xlsx") || name.endsWith(".xls");
     }
 
     @Override
@@ -47,7 +44,6 @@ public class OfficeDocumentParser implements DocumentParser {
         try {
             if (name.endsWith(".docx")) return parseDocx(source);
             if (name.endsWith(".doc")) return parseLegacyDoc(source);
-            if (name.endsWith(".pptx") || name.endsWith(".ppt")) return parsePpt(source);
             return parseWorkbook(source);
         } catch (Exception exception) {
             throw new OfficeDocumentParseException(fileName, exception);
@@ -117,23 +113,6 @@ public class OfficeDocumentParser implements DocumentParser {
         }
         if (paragraph.getNumID() != null) return "list-item";
         return "paragraph";
-    }
-
-    private ParsedDocument parsePpt(InputStream source) throws Exception {
-        var blocks = new ArrayList<TextBlock>();
-        try (var show = new XMLSlideShow(source)) {
-            var page = 1;
-            for (var slide : show.getSlides()) {
-                var text = new StringBuilder();
-                for (XSLFShape shape : slide.getShapes()) {
-                    if (shape instanceof org.apache.poi.xslf.usermodel.XSLFTextShape textShape
-                            && !textShape.getText().isBlank()) text.append(textShape.getText()).append('\n');
-                }
-                if (!text.isEmpty()) blocks.add(new TextBlock(page, "paragraph", text.toString().strip()));
-                page++;
-            }
-        }
-        return new ParsedDocument(blocks, "office-ppt-text-v2");
     }
 
     private ParsedDocument parseWorkbook(InputStream source) throws Exception {

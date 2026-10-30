@@ -204,6 +204,24 @@ describe('field model', () => {
     expect(product?.properties).not.toHaveProperty('name');
   });
 
+  it('removes flat child schema properties and required entries when deleting a field or its region', () => {
+    const schema = { type: 'object', properties: {
+      samples: { type: 'array' },
+      fields: { type: 'object', properties: { note: { type: 'string' }, keep: { type: 'string' } }, required: ['note', 'keep'] },
+    } };
+    const model = { modelVersion: 1, groups: [{ id: 'g', name: '测试', order: 0 }], blocks: [], semanticAnnotations: [], fields: [
+      { id: 'root', dataPath: '/samples', groupId: 'g', name: '样品', kind: 'COLUMN_TABLE' as const, valueType: 'array', required: false, reviewStatus: 'CONFIRMED' as const },
+      { id: 'note', parentFieldId: 'root', dataPath: '/fields/note', groupId: 'g', name: '备注', kind: 'SCALAR' as const, valueType: 'string', required: true, reviewStatus: 'CONFIRMED' as const },
+    ] };
+    for (const id of ['note', 'root']) {
+      const removed = removeBusinessField(schema, model, id);
+      expect(removed.schema.properties).toMatchObject({ fields: { properties: { keep: { type: 'string' } }, required: ['keep'] } });
+      expect((removed.schema.properties as typeof schema.properties).fields.properties).not.toHaveProperty('note');
+      expect(removed.model.fields.some(field => field.id === 'note')).toBe(false);
+    }
+    expect(schema.properties.fields.properties).toHaveProperty('note');
+  });
+
   it('keeps horizontal repeat children as independent mappings', () => {
     const schema = { type: 'object', properties: {} };
     const model = readFieldModel(schema, []);

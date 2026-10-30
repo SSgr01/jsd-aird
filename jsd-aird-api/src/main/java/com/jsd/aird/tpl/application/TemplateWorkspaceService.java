@@ -1662,13 +1662,24 @@ public class TemplateWorkspaceService {
             }
             var parentPath = parent.path("dataPath").asText("");
             var childPath = binding.path("dataPath").asText("");
-            if (!childPath.startsWith(parentPath + "/*/")) {
-                throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "明细字段 dataPath 必须位于父级记录下：" + childPath);
+            // Record-oriented mappings use /records/*/field. Workbook field
+            // arrays deliberately keep a flat path (/fields/code or
+            // /customFields/id); parentBindingId and geometry own the region.
+            // Published unified templates and instance-local fields use this
+            // representation, so copying/editing them must not rewrite paths.
+            if (!childPath.startsWith(parentPath + "/*/") && !isFlatRepeatField(binding, parent)) {
+                var name = binding.path("diagnostic").path("displayName")
+                        .asText(binding.path("fieldCode").asText(binding.path("bindingId").asText()));
+                throw new ApiException(ApiErrorCode.INVALID_SCHEMA,
+                        "明细字段“" + name + "”的数据位置与所属区域不一致，请检查字段结构和填写位置");
             }
             if ("REPEAT_FIELD".equals(kind)) {
                 var axis = binding.path("repeatAxis").asText(parent.path("repeatAxis").asText(""));
                 if (!Set.of("ROW", "COLUMN").contains(axis)) {
                     throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "重复明细必须指定按行或按列展开");
+                }
+                if (!axis.equals(parent.path("repeatAxis").asText(""))) {
+                    throw new ApiException(ApiErrorCode.INVALID_SCHEMA, "明细字段与父级重复区域的展开方向不一致");
                 }
             }
             if ("REPEAT_REGION".equals(parentKind) || "REPEAT_FIELD".equals(kind)) {
@@ -1703,6 +1714,21 @@ public class TemplateWorkspaceService {
                 }
             }
         }
+    }
+
+    private boolean isFlatRepeatField(JsonNode binding, JsonNode parent) {
+        var path = binding.path("dataPath").asText("");
+        if (!"REPEAT_FIELD".equals(binding.path("mappingKind").asText())
+                || !path.startsWith("/") || path.length() < 2 || path.contains("*")
+                || path.contains("[") || path.contains("]")
+                || path.equals(parent.path("dataPath").asText())) return false;
+        var column = "COLUMN".equals(parent.path("repeatAxis").asText());
+        if (!(column ? "ARRAY_ROW" : "ARRAY_COLUMN")
+                .equals(binding.path("locator").path("valueMode").asText())) return false;
+        var range = repeatChildRange(binding);
+        // A new field may still be missing its position in a draft. Once
+        // positioned, one vector must span only the record axis.
+        return range == null || (column ? range[1] == range[3] : range[0] == range[2]);
     }
 
     private int[] repeatParentRange(JsonNode parent) {

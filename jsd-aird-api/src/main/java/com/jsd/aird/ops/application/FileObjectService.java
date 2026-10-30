@@ -2,6 +2,7 @@ package com.jsd.aird.ops.application;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.DigestInputStream;
@@ -131,7 +132,7 @@ public class FileObjectService implements FileStorageFacade {
 
             var id = UUID.randomUUID();
             var safeName = sanitizeFileName(originalName);
-            var objectKey = organizationId + "/" + (derived ? "derived" : "staged") + "/" + id + "/" + safeName;
+            var objectKey = organizationId + "/" + (derived ? "derived" : "staged") + "/" + id + "/" + objectFileName(safeName, id);
             uploadedKey=objectKey;
             try (var uploadStream = Files.newInputStream(temporary)) {
                 objectStorage.put(objectKey, uploadStream, size, effectiveContentType);
@@ -354,6 +355,17 @@ public class FileObjectService implements FileStorageFacade {
     private String sanitizeFileName(String originalName) {
         var value = StringUtils.hasText(originalName) ? originalName.trim() : "unnamed.bin";
         return value.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_");
+    }
+
+    /** MinIO may use a filesystem with a 255-byte limit per path component.
+     * Keep the original display/download name in the repository; only shorten
+     * the opaque object key, including for parser-generated image filenames. */
+    private String objectFileName(String name, UUID fileId) {
+        if (name.getBytes(StandardCharsets.UTF_8).length <= 255) return name;
+        var dot = name.lastIndexOf('.');
+        var extension = dot < 0 ? "" : name.substring(dot);
+        if (!extension.matches("\\.[A-Za-z0-9]{1,16}")) extension = "";
+        return fileId + extension;
     }
 
     private String hex(byte[] value) {

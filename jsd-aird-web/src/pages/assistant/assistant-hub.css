@@ -1,0 +1,82 @@
+.assistant-hub {
+  gap: 12px;
+  padding: 24px;
+}
+.assistant-hub-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.assistant-hub-heading h1.ant-typography {
+  margin: 0 0 4px;
+  font-size: 24px;
+  line-height: 1.4;
+}
+/* The original page component and its data/stream lifecycle remain unchanged. */
+.assistant-hub .assistant-page > .page-heading {
+  display: none;
+}
+.assistant-hub .assistant-page,
+.assistant-hub .research-workspace {
+  padding: 0;
+  margin: 0;
+  max-width: none;
+  min-width: 0;
+}
+.assistant-mode-tabs > .ant-tabs-nav {
+  margin-bottom: 12px;
+}
+.assistant-mode-tabs > .ant-tabs-nav .ant-tabs-tab-active .ant-tabs-tab-btn {
+  text-shadow: none;
+  color: var(--app-text);
+}
+.assistant-hub .ai-conversation-workspace {
+  height: calc(100dvh - 232px);
+  min-height: 500px;
+}
+/* These overrides apply only inside the research tab, never to ordinary Q&A. */
+.assistant-hub .research-workspace .ai-message-assistant-body {
+  min-height: 0;
+}
+.assistant-hub .research-workspace .ai-conversation-welcome {
+  min-height: 0;
+  padding-block: 24px;
+}
+.assistant-hub .research-workspace .ai-conversation-welcome-mark,
+.assistant-hub .research-workspace .ai-message-assistant-icon {
+  display: none;
+}
+.assistant-hub .research-workspace .ant-btn-primary:not(:disabled) {
+  background: var(--app-text);
+  border-color: var(--app-text);
+  box-shadow: none;
+}
+.assistant-hub .research-workspace .ai-conversation-side {
+  box-shadow: none;
+}
+.assistant-hub .research-workspace .ai-conversation-workspace:not(.is-side-open) .ai-conversation-scrim {
+  visibility: hidden;
+}
+.assistant-hub .research-workspace .harness-examples {
+  width: min(100%, 680px);
+  margin-inline: auto;
+}
+.assistant-hub .research-workspace .ai-conversation-workspace {
+  box-shadow: none;
+}
+@media (max-width: 760px) {
+  .assistant-hub {
+    padding: 16px;
+  }
+  .assistant-hub-heading {
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .assistant-hub-heading h1.ant-typography {
+    font-size: 22px;
+  }
+  .assistant-hub .ai-conversation-workspace {
+    height: calc(100dvh - 250px);
+    min-height: 450px;
+  }
+}

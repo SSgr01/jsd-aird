@@ -67,6 +67,7 @@ public class AssistantService {
     private final AssistantRepository repository;
     private final KnowledgeSearchFacade knowledge;
     private final RagRetrievalService rag;
+    private final RetrievalPipeline retrievalPipeline;
     private final DataSearchAuthorizationService dataAuthorization;
     private final ConversationMemoryService memory;
     private final ConversationRevisionService revisions;
@@ -110,6 +111,7 @@ public class AssistantService {
         this.memory = memory;
         this.revisions = revisions;
         this.contextCompression = contextCompression;
+        this.retrievalPipeline = new RetrievalPipeline(rag, contextCompression);
         this.clients = clients;
         this.objectMapper = objectMapper;
         this.parser = parser;
@@ -405,8 +407,8 @@ public class AssistantService {
         history.addAll(repository.recentMessages(organizationId, conversationId, 8));
         timings.put("conversationDatabaseMs", elapsedMs(databaseStarted));
         var retrievalStarted = System.nanoTime();
-        var retrieval = rag.retrieve(organizationId, command.question(), history,
-                command.knowledgeCategoryIds(), command.dataCategoryIds(), true, command.webSearchEnabled(),
+        var retrieval = retrievalPipeline.retrieve(organizationId, command.question(), history,
+                command.knowledgeCategoryIds(), command.dataCategoryIds(), command.webSearchEnabled(),
                 retrievalAccessScope);
         timings.put("ragRetrieveMs", elapsedMs(retrievalStarted));
         if (!retrieval.trace().fallbacks().isEmpty()) {
@@ -503,7 +505,7 @@ public class AssistantService {
                                          RagRetrievalService.Retrieval retrieval) {
         var answerDataHits = answerDataHits(retrieval);
         var contextCharacterLimit = 18_000;
-        var compressed = contextCompression.compress(hits, answerDataHits, contextCharacterLimit);
+        var compressed = retrievalPipeline.compress(hits, answerDataHits, contextCharacterLimit);
         log.info("assistant_context_compressed knowledgeCandidates={} knowledgeIncluded={} knowledgeOmitted={} dataCandidates={} dataIncluded={} dataOmitted={} characters={} maxCharacters={}",
                 hits.size(), compressed.knowledgeCount(), Math.max(0, hits.size() - compressed.knowledgeCount()),
                 answerDataHits.size(), compressed.dataFileCount(),
@@ -673,7 +675,7 @@ public class AssistantService {
         return dataLookupContext(detail, dataChannelSkipped ? "SKIPPED" : "SUCCEEDED");
     }
 
-    private static String dataLookupContext(DataSourceFileSearchFacade.DataDetailResult detail, String dataChannelStatus) {
+    static String dataLookupContext(DataSourceFileSearchFacade.DataDetailResult detail, String dataChannelStatus) {
         if (detail == null || detail.mode() == DataSourceFileSearchFacade.DataQueryMode.NONE) {
             var searchSummary = switch (dataChannelStatus) {
                 case "SUCCEEDED" -> "常规结构化检索已找到相关证据，见上方上下文。";

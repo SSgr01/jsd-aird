@@ -19,6 +19,19 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         this.jdbc = jdbc;
     }
 
+    @Override
+    public List<ResearchDocument> researchDocuments(UUID organizationId, int offset, int limit) {
+        return jdbc.query("""
+            SELECT d.id, d.current_publication_id, p.document_version_id, d.title
+            FROM kb.document d JOIN kb.publication p ON p.id=d.current_publication_id
+            JOIN kb.document_ai_grant g ON g.document_id=d.id AND g.organization_id=d.organization_id
+            WHERE d.organization_id=? AND d.lifecycle_status='ACTIVE'
+              AND g.status='APPROVED' AND p.status='CURRENT'
+            ORDER BY d.id LIMIT ? OFFSET ?
+            """, (rs, index) -> new ResearchDocument(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class),
+                rs.getObject(3, UUID.class), rs.getString(4)), organizationId, Math.min(501, limit), Math.max(0, offset));
+    }
+
     @Override public void lockCategory(UUID organizationId,UUID categoryId){
         if(jdbc.query("SELECT id FROM kb.document_category WHERE organization_id=? AND id=? FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),organizationId,categoryId).isEmpty())
             throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,"分类不存在");
@@ -862,6 +875,13 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     @Override
     public List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly,
                                        List<UUID> categoryIds, int limit, int dimension) {
+        return vectorSearch(organizationId, vector, aiOnly, categoryIds, null, limit, dimension);
+    }
+
+    @Override
+    public List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly,
+                                       List<UUID> categoryIds, java.util.Set<UUID> documentIds, int limit, int dimension) {
+        if (documentIds != null && documentIds.isEmpty()) return List.of();
         var aiClause = aiOnly ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g WHERE g.document_id = d.id AND g.status = 'APPROVED')" : "";
         var dimensionClause = dimension > 0 ? " AND vector_dims(c.embedding) = ?\n" : "";
         var sql = """
@@ -877,12 +897,13 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                     AND p.document_version_id = c.document_version_id AND p.review_revision_id = c.review_revision_id
                     AND p.status = 'CURRENT'
                 WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
-                """ + aiClause + categoryClause(categoryIds) + " AND c.chunk_role = 'CHILD' AND c.embedding IS NOT NULL\n"
+                """ + aiClause + categoryClause(categoryIds) + documentClause(documentIds) + " AND c.chunk_role = 'CHILD' AND c.embedding IS NOT NULL\n"
                 + dimensionClause
                 + "ORDER BY c.embedding <=> CAST(? AS vector) LIMIT ?";
         var args = new java.util.ArrayList<Object>();
         args.add(vector); args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
+        if (documentIds != null) args.addAll(documentIds);
         if (dimension > 0) args.add(dimension);
         args.add(vector); args.add(limit);
         return jdbc.query(sql, this::mapSearch, args.toArray());

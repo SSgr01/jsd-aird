@@ -11,6 +11,10 @@ public interface DataSourceFileSearchFacade {
 
     UUID UNCATEGORIZED_SCOPE_ID = new UUID(0L, 0L);
 
+    default boolean matchesSource(UUID organizationId, UUID valueId, UUID fileId, UUID ownerId, boolean experiment) {
+        return false;
+    }
+
     default DataDetailResult queryDetails(UUID organizationId, DataDetailQuery query, List<UUID> categoryIds,
                                            AccessScope accessScope) {
         return DataDetailResult.empty(query == null ? DataQueryMode.NONE : query.mode());

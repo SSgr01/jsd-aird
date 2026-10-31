@@ -1,4 +1,5 @@
 import { fileURLToPath, URL } from 'node:url';
+import { realpathSync } from 'node:fs';
 
 import react from '@vitejs/plugin-react';
 import { defineConfig, loadEnv } from 'vite';
@@ -22,6 +23,14 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: 5173,
+      // Worktrees may reuse installed dependencies through a junction. Allow only
+      // that dependency directory, not its parent repository or private .env.
+      fs: {
+        allow: [
+          fileURLToPath(new URL('.', import.meta.url)),
+          realpathSync(fileURLToPath(new URL('./node_modules', import.meta.url))),
+        ],
+      },
       proxy: {
         '/api': createDevProxy(apiTarget),
         '/actuator': createDevProxy(apiTarget),

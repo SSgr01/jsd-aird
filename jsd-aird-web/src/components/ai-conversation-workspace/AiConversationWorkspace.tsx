@@ -10,7 +10,16 @@ import {
   SendOutlined,
 } from '@ant-design/icons';
 import { Button, Empty, Input, List, Modal, Popconfirm, Space, Spin, Typography } from 'antd';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import type { TextAreaRef } from 'antd/es/input/TextArea';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+} from 'react';
 
 export interface ConversationItem {
   id: string;
@@ -30,6 +39,8 @@ interface AiConversationWorkspaceProps {
   conversations: ConversationItem[];
   activeConversationId?: string;
   messages: ConversationMessage[];
+  /** Opt-in reading position for a newly published long plan; normal chat still follows latest. */
+  initialScrollMessageId?: string;
   scopeContent?: ReactNode;
   question: string;
   loading?: boolean;
@@ -37,6 +48,9 @@ interface AiConversationWorkspaceProps {
   scopeSummary?: ReactNode;
   composerTopContent?: ReactNode;
   composerActions?: ReactNode;
+  submitAction?: ReactNode;
+  inputDisabled?: boolean;
+  inputRef?: Ref<TextAreaRef>;
   assistantLabel?: string;
   submitDisabled?: boolean;
   pendingLabel?: string;
@@ -44,6 +58,12 @@ interface AiConversationWorkspaceProps {
   welcomeTitle?: string;
   welcomeDescription?: string;
   welcomeContent?: ReactNode;
+  inputLabel?: string;
+  inputPlaceholder?: string;
+  inputMaxLength?: number;
+  submitLabel?: string;
+  navigationDisabled?: boolean;
+  hideEmptyList?: boolean;
   onNewConversation: () => void;
   onSelectConversation: (id: string) => void;
   onRenameConversation?: (item: ConversationItem, title: string) => void | Promise<void>;
@@ -70,6 +90,7 @@ export function AiConversationWorkspace({
   conversations,
   activeConversationId,
   messages,
+  initialScrollMessageId,
   scopeContent,
   question,
   loading,
@@ -77,6 +98,9 @@ export function AiConversationWorkspace({
   scopeSummary,
   composerTopContent,
   composerActions,
+  submitAction,
+  inputDisabled = false,
+  inputRef,
   assistantLabel = 'AI研发助手',
   submitDisabled = false,
   pendingLabel = '正在阅读资料并整理依据',
@@ -84,6 +108,12 @@ export function AiConversationWorkspace({
   welcomeTitle = '从研发资料开始提问',
   welcomeDescription = '选择左侧资料范围，输入问题后开始受控检索和问答。',
   welcomeContent,
+  inputLabel = '输入问题',
+  inputPlaceholder = '输入你的问题…',
+  inputMaxLength = 2000,
+  submitLabel = '发送问题',
+  navigationDisabled = false,
+  hideEmptyList = false,
   onNewConversation,
   onSelectConversation,
   onRenameConversation,
@@ -101,8 +131,27 @@ export function AiConversationWorkspace({
   const [confirmEditOpen, setConfirmEditOpen] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
+  const customSubmit = Boolean(submitAction);
   const followLatestRef = useRef(true);
   const activeConversationRef = useRef<string>();
+  const readingAnchorRef = useRef<string>();
+
+  useLayoutEffect(() => {
+    if (!customSubmit) return;
+    const composer = composerRef.current;
+    if (!composer) return;
+    const update = () =>
+      composer.parentElement?.style.setProperty(
+        '--ai-composer-height',
+        `${composer.getBoundingClientRect().height}px`,
+      );
+    update();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(update);
+    observer.observe(composer);
+    return () => observer.disconnect();
+  }, [customSubmit]);
 
   const openRename = (item: ConversationItem) => {
     setEditingConversation(item);
@@ -146,6 +195,31 @@ export function AiConversationWorkspace({
   }, []);
 
   useLayoutEffect(() => {
+    if (hideEmptyList && !messages.length) {
+      if (messagesRef.current) messagesRef.current.scrollTop = 0;
+      followLatestRef.current = true;
+      setShowJumpToLatest(false);
+      return;
+    }
+    if (
+      initialScrollMessageId &&
+      (readingAnchorRef.current !== initialScrollMessageId ||
+        activeConversationRef.current !== activeConversationId)
+    ) {
+      const container = messagesRef.current;
+      const anchor = Array.from(
+        container?.querySelectorAll<HTMLElement>('[data-message-id]') || [],
+      ).find((element) => element.dataset.messageId === initialScrollMessageId);
+      if (container && anchor) {
+        readingAnchorRef.current = initialScrollMessageId;
+        activeConversationRef.current = activeConversationId;
+        followLatestRef.current = false;
+        container.scrollTop +=
+          anchor.getBoundingClientRect().top - container.getBoundingClientRect().top;
+        setShowJumpToLatest(!isNearBottom());
+        return;
+      }
+    }
     if (activeConversationRef.current !== activeConversationId) {
       activeConversationRef.current = activeConversationId;
       followLatestRef.current = true;
@@ -157,9 +231,17 @@ export function AiConversationWorkspace({
     } else if (messages.length) {
       setShowJumpToLatest(!isNearBottom());
     }
-  }, [activeConversationId, isNearBottom, messages.length, scrollToLatest]);
+  }, [
+    activeConversationId,
+    hideEmptyList,
+    initialScrollMessageId,
+    isNearBottom,
+    messages.length,
+    scrollToLatest,
+  ]);
 
   useEffect(() => {
+    if (hideEmptyList && !messages.length) return;
     const content = messagesRef.current?.querySelector('.ant-list-items');
     if (!content || typeof ResizeObserver === 'undefined') return;
     let frame: number | undefined;
@@ -175,7 +257,7 @@ export function AiConversationWorkspace({
       observer.disconnect();
       if (frame !== undefined) window.cancelAnimationFrame(frame);
     };
-  }, [activeConversationId, scrollToLatest]);
+  }, [activeConversationId, hideEmptyList, messages.length, scrollToLatest]);
 
   useEffect(() => {
     if (!messages.length) {
@@ -209,7 +291,8 @@ export function AiConversationWorkspace({
   const editedMessageIndex = editingMessage
     ? messages.findIndex((item) => item.id === editingMessage.id)
     : -1;
-  const followingMessageCount = editedMessageIndex < 0 ? 0 : messages.length - editedMessageIndex - 1;
+  const followingMessageCount =
+    editedMessageIndex < 0 ? 0 : messages.length - editedMessageIndex - 1;
 
   return (
     <div className={`ai-conversation-workspace${sideOpen ? ' is-side-open' : ''}`}>
@@ -220,6 +303,7 @@ export function AiConversationWorkspace({
             size="large"
             icon={<PlusOutlined />}
             block
+            disabled={navigationDisabled}
             onClick={() => {
               onNewConversation();
               setSideOpen(false);
@@ -247,6 +331,7 @@ export function AiConversationWorkspace({
                 <List.Item
                   className={item.id === activeConversationId ? 'is-active' : ''}
                   onClick={() => {
+                    if (navigationDisabled) return;
                     onSelectConversation(item.id);
                     setSideOpen(false);
                   }}
@@ -349,98 +434,104 @@ export function AiConversationWorkspace({
               <Typography.Text type="secondary">正在加载会话…</Typography.Text>
             </div>
           )}
-          <List
-            split={false}
-            dataSource={messages}
-            renderItem={(item) => {
-              const isEditingMessage = editingMessage?.id === item.id;
-              const messageBody = item.pending ? (
-                <ThinkingIndicator label={pendingLabel} />
-              ) : (
-                item.content ||
-                (streaming && item.role === 'ASSISTANT' ? (
+          {(messages.length > 0 || !hideEmptyList) && (
+            <List
+              locale={hideEmptyList ? { emptyText: null } : undefined}
+              split={false}
+              dataSource={messages}
+              renderItem={(item) => {
+                const isEditingMessage = editingMessage?.id === item.id;
+                const messageBody = item.pending ? (
                   <ThinkingIndicator label={pendingLabel} />
-                ) : null)
-              );
+                ) : (
+                  item.content ||
+                  (streaming && item.role === 'ASSISTANT' ? (
+                    <ThinkingIndicator label={pendingLabel} />
+                  ) : null)
+                );
 
-              return (
-                <List.Item className={`ai-message ai-message-${item.role.toLowerCase()}`}>
-                  <div className={`ai-message-content${isEditingMessage ? ' is-editing' : ''}`}>
-                    {item.role === 'ASSISTANT' ? (
-                      <>
-                        <div className="ai-message-assistant-heading">
-                          <span className="ai-message-assistant-icon" aria-hidden="true">
-                            ✦
-                          </span>
-                          <Typography.Text strong className="ai-message-meta">
-                            {assistantLabel}
-                          </Typography.Text>
-                        </div>
-                        <div className="ai-message-body ai-message-assistant-body">
-                          {messageBody}
-                        </div>
-                      </>
-                    ) : isEditingMessage ? (
-                      <div className="ai-message-editor">
-                        <Input.TextArea
-                          autoFocus
-                          aria-label="编辑已发送的问题"
-                          autoSize={{ minRows: 2, maxRows: 8 }}
-                          maxLength={2000}
-                          showCount
-                          value={editingValue}
-                          onChange={(event) => setEditingValue(event.target.value)}
-                          onPressEnter={(event) => {
-                            if (!event.shiftKey) {
-                              event.preventDefault();
-                              if (editingValue.trim()) setConfirmEditOpen(true);
-                            }
-                          }}
-                        />
-                        <Space size={8} className="ai-message-editor-actions">
-                          <Button size="small" onClick={cancelEditingMessage}>
-                            取消
-                          </Button>
-                          <Button
-                            size="small"
-                            type="primary"
-                            disabled={!editingValue.trim()}
-                            onClick={() => setConfirmEditOpen(true)}
-                          >
-                            保存并重新发送
-                          </Button>
-                        </Space>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="ai-message-user-heading">
-                          <Typography.Text strong className="ai-message-meta">
-                            你
-                          </Typography.Text>
-                        </div>
-                        <div className="ai-message-body">{messageBody}</div>
-                        {item.editableText && onEditMessage ? (
-                          <div className="ai-message-actions">
-                            <Button
-                              className="ai-message-edit-button"
-                              type="text"
-                              size="small"
-                              icon={<EditOutlined />}
-                              aria-label="编辑并重新发送这条问题"
-                              disabled={Boolean(loading || streaming)}
-                              onClick={() => startEditingMessage(item)}
-                            >
-                              编辑
-                            </Button>
+                return (
+                  <List.Item
+                    data-message-id={item.id}
+                    className={`ai-message ai-message-${item.role.toLowerCase()}`}
+                  >
+                    <div className={`ai-message-content${isEditingMessage ? ' is-editing' : ''}`}>
+                      {item.role === 'ASSISTANT' ? (
+                        <>
+                          <div className="ai-message-assistant-heading">
+                            <span className="ai-message-assistant-icon" aria-hidden="true">
+                              ✦
+                            </span>
+                            <Typography.Text strong className="ai-message-meta">
+                              {assistantLabel}
+                            </Typography.Text>
                           </div>
-                        ) : null}
-                      </>
-                    )}
-                  </div>
-                </List.Item>
-              );
-            }}
-          />
+                          <div className="ai-message-body ai-message-assistant-body">
+                            {messageBody}
+                          </div>
+                        </>
+                      ) : isEditingMessage ? (
+                        <div className="ai-message-editor">
+                          <Input.TextArea
+                            autoFocus
+                            aria-label="编辑已发送的问题"
+                            autoSize={{ minRows: 2, maxRows: 8 }}
+                            maxLength={2000}
+                            showCount
+                            value={editingValue}
+                            onChange={(event) => setEditingValue(event.target.value)}
+                            onPressEnter={(event) => {
+                              if (!event.shiftKey) {
+                                event.preventDefault();
+                                if (editingValue.trim()) setConfirmEditOpen(true);
+                              }
+                            }}
+                          />
+                          <Space size={8} className="ai-message-editor-actions">
+                            <Button size="small" onClick={cancelEditingMessage}>
+                              取消
+                            </Button>
+                            <Button
+                              size="small"
+                              type="primary"
+                              disabled={!editingValue.trim()}
+                              onClick={() => setConfirmEditOpen(true)}
+                            >
+                              保存并重新发送
+                            </Button>
+                          </Space>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="ai-message-user-heading">
+                            <Typography.Text strong className="ai-message-meta">
+                              你
+                            </Typography.Text>
+                          </div>
+                          <div className="ai-message-body">{messageBody}</div>
+                          {item.editableText && onEditMessage ? (
+                            <div className="ai-message-actions">
+                              <Button
+                                className="ai-message-edit-button"
+                                type="text"
+                                size="small"
+                                icon={<EditOutlined />}
+                                aria-label="编辑并重新发送这条问题"
+                                disabled={Boolean(loading || streaming)}
+                                onClick={() => startEditingMessage(item)}
+                              >
+                                编辑
+                              </Button>
+                            </div>
+                          ) : null}
+                        </>
+                      )}
+                    </div>
+                  </List.Item>
+                );
+              }}
+            />
+          )}
         </div>
         {showJumpToLatest ? (
           <Button
@@ -452,38 +543,54 @@ export function AiConversationWorkspace({
             onClick={() => scrollToLatest('smooth')}
           />
         ) : null}
-        <div className="ai-conversation-composer">
+        <div ref={composerRef} className="ai-conversation-composer">
           {composerTopContent || composerActions ? (
             <div className="ai-conversation-composer-top">
               <div className="ai-conversation-composer-context">{composerTopContent}</div>
-              {composerActions ? <div className="ai-conversation-composer-actions">{composerActions}</div> : null}
+              {composerActions ? (
+                <div className="ai-conversation-composer-actions">{composerActions}</div>
+              ) : null}
             </div>
           ) : null}
           <div className="ai-conversation-composer-row">
             <Input.TextArea
-              aria-label="输入问题"
+              ref={inputRef}
+              disabled={inputDisabled}
+              aria-label={inputLabel}
               autoSize={{ minRows: 3, maxRows: 6 }}
-              maxLength={2000}
-              showCount={{ formatter: ({ count, maxLength }) => `${count}/${maxLength || 2000}` }}
-              placeholder="输入你的问题…"
+              maxLength={inputMaxLength}
+              showCount={{
+                formatter: ({ count, maxLength }) => `${count}/${maxLength || inputMaxLength}`,
+              }}
+              placeholder={inputPlaceholder}
               value={question}
               onChange={(event) => onQuestionChange(event.target.value)}
               onPressEnter={(event) => {
-                if (!event.shiftKey) {
+                if (!event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault();
-                  if (question.trim() && !loading && !streaming && !submitDisabled) onSubmit();
+                  if (
+                    question.trim() &&
+                    !inputDisabled &&
+                    !loading &&
+                    !streaming &&
+                    !submitDisabled
+                  )
+                    onSubmit();
                 }
               }}
             />
-            <Button
-              type="primary"
-              size="large"
-              icon={<SendOutlined />}
-              aria-label="发送问题"
-              loading={streaming}
-              disabled={!question.trim() || loading || streaming || submitDisabled}
-              onClick={onSubmit}
-            />
+            {submitAction ?? (
+              <Button
+                type="primary"
+                size="large"
+                icon={<SendOutlined />}
+                aria-label={submitLabel}
+                title={submitLabel}
+                loading={streaming}
+                disabled={!question.trim() || loading || streaming || submitDisabled}
+                onClick={onSubmit}
+              />
+            )}
           </div>
         </div>
       </main>

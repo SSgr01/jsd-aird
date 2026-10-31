@@ -7,6 +7,7 @@ import type * as XLSX from 'xlsx';
 
 import type { SourceAnchor, SourceNode } from '@/services/knowledge';
 import { normalizedAnchorContainsPoint, normalizedAnchorStyle } from './anchor-geometry';
+import './knowledge-document.css';
 
 export interface OriginalDocumentViewerProps { fileName: string; contentType: string; load: () => Promise<Blob>; contentUrl?: string; sourceNodes: SourceNode[]; selectedSourceNodeKey?: string; onSourceSelect?: (sourceNodeKey: string) => void }
 
@@ -33,7 +34,7 @@ function PdfViewer({ source, selected, sourceNodes, onSourceSelect }: { source: 
   const parent = useRef<HTMLDivElement>(null);
   const virtual = useVirtualizer({ count: pdf?.numPages ?? 0, getScrollElement: () => parent.current, estimateSize: () => 1080, overscan: 2 });
   useEffect(() => { let active = true; let task: PDFDocumentLoadingTask | undefined; setPdf(undefined); setError(undefined); void (async () => { const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs'); pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString(); const input = typeof source === 'string' ? { url: source, withCredentials: true } : { data: new Uint8Array(await source.arrayBuffer()) }; if (!active) return; task = pdfjs.getDocument(input); const value = await task.promise; if (active) setPdf(value); })().catch(() => { if (active) setError('PDF 预览加载失败，请刷新后重试或下载原文件查看'); }); return () => { active = false; void task?.destroy(); }; }, [source]);
-  useEffect(() => { if (selected?.page) virtual.scrollToIndex(selected.page - 1, { align: 'center' }); }, [selected?.page, virtual]);
+  useEffect(() => { if (pdf && selected?.page && selected.page <= pdf.numPages) virtual.scrollToIndex(selected.page - 1, { align: 'start' }); }, [pdf, selected?.page, virtual]);
   if (error) return <div className="knowledge-viewer-state"><Alert type="error" showIcon message={error} /></div>;
   if (!pdf) return <div className="knowledge-viewer-state"><Spin /></div>;
   return <div className="knowledge-pdf-pages" ref={parent}><div className="knowledge-pdf-virtual-canvas" style={{ height: virtual.getTotalSize() }}>{virtual.getVirtualItems().map((row) => { const pageNo = row.index + 1; return <div className="knowledge-pdf-page-slot" data-index={row.index} key={row.key} ref={virtual.measureElement} style={{ transform: `translateY(${row.start}px)` }}><PdfPage pdf={pdf} pageNo={pageNo} highlight={selected?.page === pageNo ? selected : undefined} onClick={(x, y) => { const node = sourceNodes.find((item) => item.sourceAnchor.page === pageNo && anchorContainsPoint(item.sourceAnchor, x, y)) || sourceNodes.find((item) => item.sourceAnchor.page === pageNo); if (node) onSourceSelect?.(node.sourceNodeKey); }} /></div>; })}</div></div>;

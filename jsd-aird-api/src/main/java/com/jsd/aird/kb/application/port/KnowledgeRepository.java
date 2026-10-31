@@ -7,6 +7,10 @@ import java.util.UUID;
 import com.jsd.aird.shared.api.AllowedActions;
 
 public interface KnowledgeRepository {
+    record ResearchDocument(UUID id, UUID publicationId, UUID versionId, String title) { }
+    default List<ResearchDocument> researchDocuments(UUID organizationId, int offset, int limit) {
+        throw new UnsupportedOperationException("Authorized research discovery requires published AI document enumeration");
+    }
     void lockCategory(UUID organizationId,UUID categoryId);
 
 
@@ -116,6 +120,12 @@ public interface KnowledgeRepository {
     default List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly,
                                          List<UUID> categoryIds, int limit, int dimension) {
         return vectorSearch(organizationId, vector, aiOnly, categoryIds, limit);
+    }
+
+    default List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly,
+                                         List<UUID> categoryIds, Set<UUID> documentIds, int limit, int dimension) {
+        if (documentIds != null && documentIds.isEmpty()) return List.of();
+        throw new UnsupportedOperationException("Scoped vector search must filter before ranking");
     }
 
     default List<RankedChunk> batchBm25Rank(UUID organizationId, List<AnalyzedQuery> queries,

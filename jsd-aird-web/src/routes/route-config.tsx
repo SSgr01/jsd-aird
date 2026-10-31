@@ -9,7 +9,7 @@ import { AuthorizedHomeRedirect, PageAnyPermissionGate, PagePermissionGate } fro
 
 const BasicLayout = routePage(async () => ({ default: (await import('@/layouts/BasicLayout')).BasicLayout }));
 
-const AssistantPage = routePage(async () => ({ default: (await import('@/pages/assistant/AssistantPage')).AssistantPage }));
+const AssistantPage = routePage(async () => ({ default: (await import('@/pages/assistant/AssistantHubPage')).AssistantHubPage }));
 const FormulaPredictionPage = routePage(async () => ({ default: (await import('@/pages/formula-research/FormulaPredictionPage')).FormulaPredictionPage }));
 const ExperimentOptimizationPage = routePage(async () => ({ default: (await import('@/pages/formula-research/HistoricalOptimizationWorkbench')).HistoricalOptimizationWorkbench }));
 const ModelCenterPage = routePage(async () => ({ default: (await import('@/pages/model-center/ModelCenterPage')).ModelCenterPage }));
@@ -91,6 +91,7 @@ const applicationRoutes: RouteObject[] = [
       { path: 'knowledge/review/:documentId/:versionId', element: <PagePermissionGate permission="knowledge.review"><KnowledgeReviewPage /></PagePermissionGate> },
       { path: 'knowledge/documents/:id', element: <KnowledgeDocumentPage /> },
       { path: 'assistant', element: <AssistantPage /> },
+      { path: 'assistant/research', element: <PagePermissionGate permission="ai.use"><Navigate to="/assistant?mode=research" replace /></PagePermissionGate> },
       { path: 'assistant/formula-prediction', element: <PagePermissionGate permission="ai.formula.predict"><FormulaPredictionPage /></PagePermissionGate> },
       { path: 'assistant/performance-prediction', element: <PagePermissionGate permission="ai.performance.predict"><PerformancePredictionPage /></PagePermissionGate> },
       { path: 'assistant/experiment-optimization', element: <PagePermissionGate permission="ai.experiment.optimize"><ExperimentOptimizationPage /></PagePermissionGate> },
@@ -216,6 +217,7 @@ registerRoutePreload('/knowledge/search', KnowledgeSearchPage.preload);
 registerRoutePreload('/knowledge/review/:documentId/:versionId', KnowledgeReviewPage.preload);
 registerRoutePreload('/knowledge/documents/:id', KnowledgeDocumentPage.preload);
 registerRoutePreload('/assistant', AssistantPage.preload);
+registerRoutePreload('/assistant/research', AssistantPage.preload);
 registerRoutePreload('/assistant/formula-prediction', FormulaPredictionPage.preload);
 registerRoutePreload('/assistant/performance-prediction', PerformancePredictionPage.preload);
 registerRoutePreload('/assistant/experiment-optimization', ExperimentOptimizationPage.preload);

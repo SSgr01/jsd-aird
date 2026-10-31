@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/earendil-works/pi.git",
+  "upstreamCommit": "e7a0df27c09d11bf4161d3605246cbf57a129cb2",
+  "localBranch": "jsd/harness",
+  "sdkVersion": "1.4.0",
+  "integration": "source-build",
+  "patches": []
+}

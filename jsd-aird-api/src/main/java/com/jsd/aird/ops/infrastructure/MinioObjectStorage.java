@@ -15,7 +15,10 @@ import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
+import io.minio.errors.ErrorResponseException;
 import io.minio.http.Method;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -23,6 +26,8 @@ import org.springframework.stereotype.Component;
 @Component
 @ConditionalOnProperty(name = "app.storage.provider", havingValue = "minio", matchIfMissing = true)
 public class MinioObjectStorage implements ObjectStorage {
+
+    private static final Logger log = LoggerFactory.getLogger(MinioObjectStorage.class);
 
     private final MinioClient client;
     private final MinioClient publicClient;
@@ -69,6 +74,13 @@ public class MinioObjectStorage implements ObjectStorage {
                     .stream(source, size, -1)
                     .build());
         } catch (Exception exception) {
+            // Preserve the provider reason for diagnosis without logging the
+            // SDK request/response, which can contain signed credentials.
+            var reason = exception instanceof ErrorResponseException error
+                    ? error.errorResponse().code() + ": " + error.errorResponse().message()
+                    : exception.getClass().getSimpleName();
+            log.error("Object storage write failed: bucket={}, objectKey={}, size={}, reason={}",
+                    bucket, objectKey, size, reason);
             throw new ApiException(ApiErrorCode.SNAPSHOT_PERSIST_FAILED, "对象存储写入失败");
         }
     }

@@ -1,3 +1,4 @@
+import '@/compat/browser';
 import ReactDOM from 'react-dom/client';
 
 import '@/utils/dayjs';

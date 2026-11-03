@@ -694,7 +694,7 @@ export function TemplateWorkspacePage() {
   function saveErrorMessage(error: unknown) {
     const raw = error instanceof Error ? error.message : '';
     if (raw.includes('dataPath 必须位于父级记录下')) {
-      return '明细字段的记录位置与所属明细区域不一致，未保存本次修改；请重新打开该明细字段并保存。';
+      return '明细字段的数据位置与所属区域不一致，请检查字段结构和填写位置；本次修改尚未保存。';
     }
     if (raw.includes('Mapping 缺少 bindingId') || raw.includes('Mapping 缺少 dataPath') || raw.includes('Mapping 缺少 locator')) {
       return '有字段还没有完整的填写位置，未保存本次修改；请在字段属性中补充填写位置。';

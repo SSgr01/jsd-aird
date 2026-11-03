@@ -218,7 +218,8 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                     SET page_no = ?, bbox_jsonb = ?, caption = ?, footnote = ?, ocr_text = ?
                     WHERE organization_id = ? AND result_file_id = ? AND asset_file_id = ? AND entry_path = ?
                     """, anchor.path("page").isNumber() ? anchor.path("page").asInt() : null,
-                    json(anchor.path("polygon")), anchor.path("caption").asText(""),
+                    json(anchor.path("polygon").isArray() ? anchor.path("polygon") : objectMapper.createArrayNode()),
+                    anchor.path("caption").asText(""),
                     anchor.path("footnote").asText(""), anchor.path("ocrText").asText(""),
                     organizationId, sourceResultFileId, sourceAssetFileId, entryPath);
         }
@@ -598,7 +599,7 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                 SET status = 'BUILDING', confirmed_text = ?, failure_reason = NULL, updated_at = now()
                 FROM kb.document d
                 WHERE r.document_id = d.id AND d.organization_id = ? AND d.id = ?
-                  AND r.document_version_id = ? AND r.id = ? AND r.lock_version = ? AND r.status = 'DRAFT'
+                  AND r.document_version_id = ? AND r.id = ? AND r.lock_version = ? AND r.status IN ('DRAFT', 'FAILED')
                   AND r.base_publication_id IS NOT DISTINCT FROM ?
                   AND d.current_publication_id IS NOT DISTINCT FROM ?
                 """, confirmedText, organizationId, documentId, versionId, reviewRevisionId,
@@ -914,7 +915,7 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
         try {
             var value = new PGobject();
             value.setType("jsonb");
-            value.setValue(node == null ? "{}" : node.toString());
+            value.setValue(node == null ? "{}" : node.isMissingNode() ? "null" : node.toString());
             return value;
         } catch (SQLException exception) {
             throw new IllegalArgumentException("JSON数据无效", exception);

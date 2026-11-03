@@ -1,3 +1,4 @@
+import '/src/compat/browser.ts';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { UniverSheetsEditor } from '/src/features/template-workspace/UniverSheetsEditor.tsx';

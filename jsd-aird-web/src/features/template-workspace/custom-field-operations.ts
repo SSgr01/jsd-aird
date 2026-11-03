@@ -23,6 +23,8 @@ export interface CreateCustomFieldInput {
   sheet?: Pick<EditorSelection, 'sheetId' | 'sheetName'>;
   labelRange?: string;
   valueRange?: string;
+  /** Workbook instances store each repeated field as a flat vector. */
+  repeatValueLayout?: 'FIELD_ARRAY';
 }
 
 export function createCustomFieldWorkspace(
@@ -39,7 +41,7 @@ export function createCustomFieldWorkspace(
   if (input.kind !== 'SCALAR' && (!parent || !parentBinding || !parent.dataPath)) {
     throw new Error('明细字段缺少父级区域');
   }
-  const dataPath = parent?.dataPath
+  const dataPath = parent?.dataPath && input.repeatValueLayout !== 'FIELD_ARRAY'
     ? `${parent.dataPath}/*/${key}`
     : `${input.origin === 'ORDER_LOCAL' ? '/orderLocalFields' : '/customFields'}/${key}`;
   const groupId = input.groupId || parent?.groupId || model.groups[0]?.id || 'group-other';

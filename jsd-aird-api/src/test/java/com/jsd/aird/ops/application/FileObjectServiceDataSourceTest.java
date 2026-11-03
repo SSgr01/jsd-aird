@@ -21,6 +21,7 @@ import com.jsd.aird.shared.security.ActorContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class FileObjectServiceDataSourceTest {
 
@@ -89,6 +90,46 @@ class FileObjectServiceDataSourceTest {
                 .hasMessageContaining("DOC 文件内容无效");
 
         verifyNoInteractions(storage, repository);
+    }
+
+    @Test
+    void shortensLongUtf8DerivedImageKeysWhilePreservingTheOriginalName() {
+        var name = "动力学分析和光固化的硅酸盐基硫醇 - 烯的纳米复合材料的物理性能：乙烯基POSS烯的对聚合反应动力学和硫醇 - 三烯丙基醚网络的物理性质的影响.pdf.mineru."
+                + "a".repeat(64) + ".jpg";
+        assertThat(name.length()).isLessThan(255);
+        assertThat(name.getBytes(StandardCharsets.UTF_8).length).isGreaterThan(255);
+        var actor = ActorContext.required();
+        var staged = service.stageDerived(actor.organizationId(), actor.userId(), name,
+                "image/jpeg", "KB_MINERU_RESULT_ASSET", stream(new byte[]{(byte) 0xff, (byte) 0xd8, (byte) 0xff}));
+        var insert = ArgumentCaptor.forClass(FileObjectRepository.NewFileObject.class);
+        verify(repository).insert(insert.capture());
+        var file = insert.getValue();
+        assertThat(file.objectKey()).endsWith("/" + staged.fileId() + "/" + staged.fileId() + ".jpg");
+        assertThat(file.originalName()).isEqualTo(name);
+        assertThat(staged.originalName()).isEqualTo(name);
+        assertThat(staged.contentType()).isEqualTo("image/jpeg");
+        verify(storage).put(org.mockito.ArgumentMatchers.eq(file.objectKey()), any(), org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.eq("image/jpeg"));
+    }
+
+    @Test
+    void acceptsLongOriginalNamesWithoutChangingTheirDisplayOrDownloadNames() {
+        var name = "测试".repeat(50) + ".pdf";
+        var staged = service.stage(name, "application/pdf", "DATA_SOURCE", stream("%PDF-1.7\nsource".getBytes(StandardCharsets.US_ASCII)));
+        var insert = ArgumentCaptor.forClass(FileObjectRepository.NewFileObject.class);
+        verify(repository).insert(insert.capture());
+        assertThat(insert.getValue().objectKey()).endsWith("/" + staged.fileId() + ".pdf");
+        assertThat(insert.getValue().originalName()).isEqualTo(name);
+        assertThat(staged.originalName()).isEqualTo(name);
+    }
+
+    @Test
+    void preservesTheExact255ByteBoundaryForExistingFilenameBehavior() {
+        var name = "中".repeat(83) + "aa.pdf";
+        assertThat(name.getBytes(StandardCharsets.UTF_8)).hasSize(255);
+        service.stage(name, "application/pdf", "DATA_SOURCE", stream("%PDF-1.7\nsource".getBytes(StandardCharsets.US_ASCII)));
+        var insert = ArgumentCaptor.forClass(FileObjectRepository.NewFileObject.class);
+        verify(repository).insert(insert.capture());
+        assertThat(insert.getValue().objectKey()).endsWith("/" + name);
     }
 
     private ByteArrayInputStream stream(byte[] bytes) {

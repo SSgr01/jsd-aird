@@ -1,3 +1,9 @@
+:root { --app-viewport-height: 100vh; }
+
+@supports (height: 100dvh) {
+  :root { --app-viewport-height: 100dvh; }
+}
+
 :root {
   /* Primitive tokens: refined technology palette */
   --color-blue-600: #315cf6;

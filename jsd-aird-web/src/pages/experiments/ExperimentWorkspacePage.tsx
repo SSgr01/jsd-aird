@@ -86,6 +86,7 @@ import {
   type FilePreviewDescriptor,
 } from '@/components/file-preview';
 import { Can } from '@/components/auth/Can';
+import { generateUUID } from '@/utils/uuid';
 import { templateApi, type TemplateCategory } from '@/services/templates/template-api';
 import { ExperimentFieldReviewPanel } from './ExperimentFieldReviewPanel';
 import './experiments.css';
@@ -1745,7 +1746,7 @@ export function ExperimentWorkspacePage({
                       });
                     }}
                     onAddField={(regionId) => {
-                      const fieldId = crypto.randomUUID();
+                      const fieldId = generateUUID();
                       setEditModel((current) => ({
                         ...current,
                         recognizedFields: [

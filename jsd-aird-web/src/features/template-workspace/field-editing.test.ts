@@ -99,6 +99,32 @@ describe('shared field editing', () => {
     const outside = addWorkbookField(source, { ownerId: 'record', origin: 'INSTANCE_LOCAL', selection: { sheetId: 's', sheetName: '表', address: 'B100' }, snapshot });
     expect(outside.instance.model.fields.at(-1)!.mappingKind).toBe('SCALAR');
   });
+  it.each(['ROW', 'COLUMN'] as const)('stores manually added %s fields as flat vectors like discovered fields', (axis) => {
+    const source = fixture(axis);
+    const created = addWorkbookField(source, { ownerId: 'record', origin: 'INSTANCE_LOCAL', parentId: 'region:root' });
+    const field = created.instance.model.fields.find(field => field.id === created.fieldId)!;
+    const binding = created.instance.mapping.find(binding => binding.bindingId === field.bindingId)!;
+    expect(field.dataPath).toMatch(/^\/customFields\/field_/);
+    expect(binding.dataPath).toBe(field.dataPath);
+    expect(binding.parentBindingId).toBe('root');
+    expect(binding.locator.valueMode).toBe(axis === 'ROW' ? 'ARRAY_COLUMN' : 'ARRAY_ROW');
+    expect(field.reviewStatus).toBe('NEEDS_CONFIRMATION');
+    expect(created.instance.model.fields.find(field => field.id === 'f')!.reviewStatus).toBe('CONFIRMED');
+    const removed = deleteWorkbookField(created.instance, created.fieldId);
+    expect(removed.model.fields).toMatchObject(source.model.fields);
+    expect(removed.mapping).toEqual(source.mapping);
+    expect(removed.issues).toEqual(source.issues);
+  });
+  it('removes deleted identity references while retaining unrelated identities', () => {
+    const source = fixture();
+    source.execution = { templateUsage: 'EXPERIMENT_DATA', listProjections: [], identities: [
+      { identityType: 'EXPERIMENT_NO', sourceKind: 'BINDING', componentId: 'root', bindingId: 'f' },
+      { identityType: 'SAMPLE_NO', sourceKind: 'BINDING', componentId: 'other', bindingId: 'other' },
+    ] };
+    const removed = deleteWorkbookField(source, 'f');
+    expect(removed.execution!.identities).toEqual([source.execution.identities[1]]);
+    expect(source.execution.identities).toHaveLength(2);
+  });
   it('clears a structural issue after repairing an inserted half-record', () => {
     const source = fixture('ROW'); source.mapping = [{ ...source.mapping[0]!, recordHeight: 2, recordStride: 2, locator: { sheetId: 's', dataRange: 'C3:H8' } }];
     const seeded = createWorkbookInstance(source.model, source.mapping);

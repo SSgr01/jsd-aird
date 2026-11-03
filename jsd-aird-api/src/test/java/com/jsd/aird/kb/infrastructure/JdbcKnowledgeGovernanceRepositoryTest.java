@@ -18,6 +18,40 @@ import org.springframework.jdbc.core.JdbcTemplate;
 class JdbcKnowledgeGovernanceRepositoryTest {
 
     @Test
+    void imageWithoutCoordinatesStoresEmptyArrayInsteadOfInvalidJson() {
+        var jdbc = mock(JdbcTemplate.class);
+        var json = new ObjectMapper();
+        var repository = new JdbcKnowledgeGovernanceRepository(jdbc, json, mock(StructuredDocumentCodec.class));
+        var anchor = json.createObjectNode()
+                .put("resultFileId", UUID.randomUUID().toString())
+                .put("assetFileId", UUID.randomUUID().toString())
+                .put("resultEntryPath", "images/presentation.png")
+                .put("page", 1);
+        var diagnostics = json.createObjectNode();
+        diagnostics.putArray("resultAssets");
+        var source = new StructuredDocumentCodec.SourceNodeDraft(
+                UUID.randomUUID(), 0, "image", "[图片]", anchor, json.createObjectNode());
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(repository, "persistResultAssets",
+                UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), diagnostics, java.util.List.of(source));
+
+        var sql = ArgumentCaptor.forClass(String.class);
+        var args = ArgumentCaptor.forClass(Object[].class);
+        verify(jdbc).update(sql.capture(), args.capture());
+        assertThat(sql.getValue()).contains("UPDATE kb.document_result_asset");
+        assertThat(((org.postgresql.util.PGobject) args.getValue()[1]).getValue()).isEqualTo("[]");
+    }
+
+    @Test
+    void missingJsonNodeSerializesAsJsonNull() {
+        var repository = new JdbcKnowledgeGovernanceRepository(
+                mock(JdbcTemplate.class), new ObjectMapper(), mock(StructuredDocumentCodec.class));
+        org.postgresql.util.PGobject value = org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                repository, "json", com.fasterxml.jackson.databind.node.MissingNode.getInstance());
+        assertThat(value.getValue()).isEqualTo("null");
+    }
+
+    @Test
     void reviewQueueUsesLatestRevisionAndExcludesBuildingItems() {
         var jdbc = mock(JdbcTemplate.class);
         var repository = new JdbcKnowledgeGovernanceRepository(

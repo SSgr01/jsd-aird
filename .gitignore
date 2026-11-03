@@ -66,4 +66,4 @@ Thumbs.db
 !/scripts/testdata/r10_bulk_client_template_import.py
 !/scripts/testdata/r10_noformula_bundle.py
 !/scripts/testdata/r10_register_noformula_model.sql
-/jsd-aird-agents/.coverage
+/jsd-aird-agent/control/.coverage

@@ -1,3 +1,4 @@
+import type { SourceRef } from '@/services/evidence/protocol';
 import type { ApiResponse } from '@/types/api';
 import { appEnv } from '@/app/config/env';
 import { ensureCsrfToken, httpClient, refreshCsrfToken } from '@/services/http/client';
@@ -17,6 +18,8 @@ export class AssistantRequestError extends Error {
 }
 
 export interface AssistantCitation {
+  evidenceId?: string;
+  source?: SourceRef;
   sourceType: string;
   chunkId?: string;
   documentId?: string;
@@ -323,7 +326,10 @@ export const assistantApi = {
                 : '';
           if (token) {
             const replace =
-              parsed && typeof parsed === 'object' && 'replace' in parsed && parsed.replace === true;
+              parsed &&
+              typeof parsed === 'object' &&
+              'replace' in parsed &&
+              parsed.replace === true;
             if (replace) onToken(token, true);
             else onToken(token);
           }

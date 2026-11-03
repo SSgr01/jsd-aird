@@ -1,3 +1,4 @@
+import { applyTextUpdate } from '@/services/evidence/identity';
 import {
   assistantApi,
   type AssistantCitation,
@@ -120,7 +121,7 @@ export function startAssistantStream(input: StartAssistantStreamInput) {
       (token, replace) => {
         const current = snapshot.get(id);
         if (current)
-          update(id, { ...current, answer: replace ? token : current.answer + token }, true);
+          update(id, { ...current, answer: applyTextUpdate(current.answer, token, replace) }, true);
       },
       (response) => acceptResponse(id, response),
       (event, data) => acceptEvent(id, event, data),

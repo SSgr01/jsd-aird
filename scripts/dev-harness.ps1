@@ -43,7 +43,13 @@ $env:JSD_AIRD_HARNESS_JAVA_URL = 'http://127.0.0.1:8180'
 $env:JSD_AIRD_HARNESS_CONTROL_URL = 'http://127.0.0.1:8093'
 $env:JSD_AIRD_HARNESS_RUNTIME_URL = 'http://127.0.0.1:8092'
 $env:JSD_AIRD_HARNESS_STORAGE_ROOT = Join-Path $runtimeRoot 'control'
-$env:JSD_AIRD_HARNESS_SANDBOX_ENABLED = 'false'
+if (-not (Test-Path Env:JSD_AIRD_HARNESS_SANDBOX_ENABLED)) { $env:JSD_AIRD_HARNESS_SANDBOX_ENABLED = 'false' }
+if ($env:JSD_AIRD_HARNESS_SANDBOX_ENABLED -eq 'true') {
+    $sandboxSecretFile = Join-Path $runtimeRoot 'sandbox-secret.txt'
+    if (-not (Test-Path -LiteralPath $sandboxSecretFile)) { throw 'Start scripts/dev-sandbox.ps1 before enabling the sandbox.' }
+    $env:JSD_AIRD_HARNESS_SANDBOX_SECRET = [IO.File]::ReadAllText($sandboxSecretFile).Trim()
+    $env:JSD_AIRD_HARNESS_SANDBOX_URL = 'http://127.0.0.1:8094'
+}
 $env:JSD_AIRD_HARNESS_MAX_STEPS = '64'
 $env:JSD_AIRD_HARNESS_PAPERQA_MODEL = 'openai/' + $env:JSD_AIRD_MODEL_NAME
 $env:JSD_AIRD_HARNESS_PAPERQA_BASE_URL = $env:JSD_AIRD_MODEL_BASE_URL
@@ -52,15 +58,16 @@ $env:JSD_AIRD_PI_SESSION_ROOT = Join-Path $runtimeRoot 'pi-sessions'
 $env:APP_AI_HARNESS_SHARED_SECRET = $secrets.delegation
 $env:APP_AI_HARNESS_CONTROL_URL = 'http://127.0.0.1:8093'
 $env:APP_AI_HARNESS_ENABLED = 'true'
+if (-not (Test-Path Env:APP_AI_HARNESS_QA_ENABLED)) { $env:APP_AI_HARNESS_QA_ENABLED = 'true' }
 $env:PYTHONUTF8 = '1'
 
 switch ($Service) {
     'node' {
-        Push-Location (Join-Path $repoRoot 'jsd-aird-agent-runtime')
+        Push-Location (Join-Path $repoRoot 'jsd-aird-agent/pi-worker')
         try { & node src/server.mjs } finally { Pop-Location }
     }
     { $_ -in 'control', 'migrate-control' } {
-        $agentsRoot = Join-Path $repoRoot 'jsd-aird-agents'
+        $agentsRoot = Join-Path $repoRoot 'jsd-aird-agent/control'
         $env:PYTHONPATH = Join-Path $agentsRoot 'src'
         # Reuse the locally verified optional PaperQA environment when available.
         $sourceRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $repoRoot))
@@ -72,8 +79,8 @@ switch ($Service) {
         try {
             $pythonCommand = Join-Path $agentsRoot '.venv/Scripts/python.exe'
             if ($Service -eq 'migrate-control') {
-                & $pythonCommand -m jsd_aird_agents.harness_v1 --migrate
-            } else { & $pythonCommand -m jsd_aird_agents.harness_v1 }
+                & $pythonCommand -m aird_agent.server --migrate
+            } else { & $pythonCommand -m aird_agent.server }
         } finally { Pop-Location }
     }
     'web' {

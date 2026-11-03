@@ -160,6 +160,12 @@ public interface KnowledgeRepository {
         return List.of();
     }
 
+    record ChunkPublication(UUID chunkId, UUID publicationId) { }
+    record ParentChunk(UUID childId, UUID parentId, UUID documentId, UUID versionId, UUID publicationId,
+                       UUID reviewRevisionId, String originalName, String content, String childContent) { }
+    default List<ParentChunk> loadParents(UUID organizationId, List<ChunkPublication> children) { return List.of(); }
+    default Optional<ParentChunk> parentAtPublication(UUID organizationId, UUID parentId, UUID publicationId) { return Optional.empty(); }
+
     record CategoryRow(UUID id, String scope, String name, String description, int sortOrder, long documentCount) {
         public String getRevision(){return com.jsd.aird.shared.json.RevisionToken.of(id,scope,name,description,sortOrder);}
         public List<String> getAllowedActions() { return AllowedActions.category(false); }

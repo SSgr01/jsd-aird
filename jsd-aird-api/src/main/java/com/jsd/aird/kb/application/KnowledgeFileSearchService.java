@@ -22,6 +22,8 @@ public class KnowledgeFileSearchService implements KnowledgeFileSearchFacade {
     private final KnowledgeGovernanceRepository governance;
     private final LexicalAnalyzer lexicalAnalyzer;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    @org.springframework.beans.factory.annotation.Value("${app.ai.retrieval.rrf-k:60}")
+    private int rrfK=60;
 
     public KnowledgeFileSearchService(KnowledgeRepository documents,
                                       KnowledgeGovernanceRepository governance,
@@ -41,19 +43,17 @@ public class KnowledgeFileSearchService implements KnowledgeFileSearchFacade {
                                        Set<UUID> allowedDocumentIds, int limit) {
         if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
         var candidateLimit = Math.min(400, Math.max(40, limit * 12));
-        var rows = new LinkedHashMap<UUID, KnowledgeRepository.SearchRow>();
         var terms = new java.util.LinkedHashSet<KnowledgeRepository.AnalyzedTerm>();
         lexicalAnalyzer.analyzeCompatibleQuery(query).forEach(family -> family.alternatives().forEach(term -> terms.add(
                 new KnowledgeRepository.AnalyzedTerm(family.ordinal(), term.analyzerVersion(), term.term()))));
-        documents.bm25Search(organizationId, List.copyOf(terms), false,
-                categoryIds, allowedDocumentIds, candidateLimit).forEach(row -> rows.putIfAbsent(row.chunkId(), row));
-        documents.fullTextSearch(organizationId, query, false, categoryIds, allowedDocumentIds, candidateLimit)
-                .forEach(row -> rows.putIfAbsent(row.chunkId(), row));
-        documents.searchPublishedMetadata(organizationId, List.of(query), false, categoryIds,
-                allowedDocumentIds, Math.min(100, Math.max(10, limit * 5)))
-                .forEach(row -> rows.putIfAbsent(row.chunkId(), row));
+        var channels=List.of(
+            new com.jsd.aird.shared.retrieval.RankFusion.Channel<>("BM25",1,documents.bm25Search(organizationId,List.copyOf(terms),false,categoryIds,allowedDocumentIds,candidateLimit)),
+            new com.jsd.aird.shared.retrieval.RankFusion.Channel<>("FULLTEXT",1,documents.fullTextSearch(organizationId,query,false,categoryIds,allowedDocumentIds,candidateLimit)),
+            new com.jsd.aird.shared.retrieval.RankFusion.Channel<>("METADATA",1,documents.searchPublishedMetadata(organizationId,List.of(query),false,categoryIds,allowedDocumentIds,Math.min(100,Math.max(10,limit*5)))));
+        var ranked=com.jsd.aird.shared.retrieval.RankFusion.fuse(channels,row->row.versionId()+":"+row.chunkId(),rrfK);
+        var scores=new java.util.HashMap<UUID,Double>();ranked.forEach(r->scores.put(r.value().chunkId(),r.score()));
         var grouped = new LinkedHashMap<UUID, List<KnowledgeRepository.SearchRow>>();
-        for (var hit : rows.values()) grouped.computeIfAbsent(hit.versionId(), ignored -> new ArrayList<>()).add(hit);
+        for (var item : ranked) {var hit=item.value();grouped.computeIfAbsent(hit.versionId(), ignored -> new ArrayList<>()).add(hit);}
         var result = new ArrayList<FileMatch>();
         for (var entry : grouped.entrySet()) {
             if (result.size() >= limit) break;
@@ -69,7 +69,7 @@ public class KnowledgeFileSearchService implements KnowledgeFileSearchFacade {
                         var anchor = documents.findChunkAnchor(organizationId, hit.chunkId()).orElse(
                                 new KnowledgeRepository.ChunkAnchorRow(hit.pageNo(), null, null, null, List.of(),
                                         null, null, hit.section(), null, "[]", List.of(), List.of()));
-                        return new Hit(hit.chunkId(), hit.content(), hit.score(), anchor.pageNo(), anchor.sheetName(),
+                        return new Hit(hit.chunkId(), hit.content(), scores.get(hit.chunkId()), anchor.pageNo(), anchor.sheetName(),
                                 anchor.cellRange(), anchor.paragraphId(), anchor.bbox(), anchor.startTimeMs(),
                                 anchor.endTimeMs(), anchor.section(), read(anchor.primaryAnchorJson()),
                                 readArray(anchor.anchorsJson()), anchor.reviewNodeIds(), anchor.sourceNodeKeys());

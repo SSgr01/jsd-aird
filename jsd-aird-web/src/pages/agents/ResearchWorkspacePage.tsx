@@ -1,3 +1,9 @@
+import { researchEvidence } from '@/services/evidence/adapters';
+import { applyTextUpdate } from '@/services/evidence/identity';
+import {
+  AuthorizedEvidence,
+  EvidenceViewDetails,
+} from '@/components/ai-conversation-workspace/EvidenceDetails';
 import {
   App,
   Alert,
@@ -27,17 +33,21 @@ import {
   type Conversation,
   type EvidenceCard,
   type SourceRef,
+  type SourceQuote,
   type QueueChange,
 } from '@/services/agents/agent-api';
 import {
   knowledgeApi,
   type KnowledgeDocument,
   type PublishedContent,
+  type SourceAnchor,
 } from '@/services/knowledge/knowledge-api';
 import { useAuthStore } from '@/stores/auth-store';
 import { HarnessConversation } from './HarnessConversation';
 import { ResearchQualityPanel } from './ResearchQualityPanel';
 import { ResearchReportReader } from './ResearchReportReader';
+import { ConversationSources } from './ConversationSources';
+import { ResearchOperations } from './ResearchOperations';
 import { reportAssessment, reportOutputs } from './research-presentation';
 import { generateUUID } from '@/utils/uuid';
 import './research-workspace.css';
@@ -56,7 +66,12 @@ export function ResearchWorkspacePage() {
   const [request, setRequest] = useState('');
   const [draft, setDraft] = useState('');
   const [progress, setProgress] = useState<Array<{ key: number; text: string }>>([]);
-  const [source, setSource] = useState<SourceRef>();
+  const [source, updateSource] = useState<SourceRef>();
+  const [sourceQuote, setSourceQuote] = useState<SourceQuote>();
+  const setSource = (value?: SourceRef, quote?: SourceQuote) => {
+    updateSource(value);
+    setSourceQuote(quote);
+  };
   const [resourcesOpen, setResourcesOpen] = useState(false);
   const [resourcesTab, setResourcesTab] = useState('documents');
   const [reportOpen, setReportOpen] = useState(false);
@@ -72,6 +87,7 @@ export function ResearchWorkspacePage() {
   const actionLock = useRef(false);
   const sendAttempt = useRef<{ signature: string; conversation?: Conversation; key: string }>();
   const queueAttempt = useRef<{ signature: string; conversation: Conversation; key: string }>();
+  const sourceAttempt = useRef<{ signature: string; key: string }>();
   const [note, setNote] = useState('');
   useEffect(() => {
     if (!owner) return;
@@ -85,6 +101,9 @@ export function ResearchWorkspacePage() {
     setReportOpen(false);
     setSelectedReportId(undefined);
     openedReportRun.current = undefined;
+    sourceAttempt.current = undefined;
+    setSource(undefined);
+    setResourcesOpen(false);
   }, [owner]);
   const capability = useQuery({
     queryKey: ['agent-capabilities', owner],
@@ -137,6 +156,13 @@ export function ResearchWorkspacePage() {
     enabled: documentsOpen,
   });
   const active = Boolean(run && activeStatuses.includes(run.status));
+  const privateSources = useQuery({
+    queryKey: ['harness-private-sources', owner, conversation?.id],
+    queryFn: () => agentApi.privateSources(conversation!.id),
+    enabled: Boolean(conversation?.id),
+    refetchInterval: (query) =>
+      query.state.data?.some((item) => item.status === 'PARSING') ? 2000 : false,
+  });
 
   useEffect(() => {
     const latest = reportOutputs(run)[0];
@@ -288,7 +314,7 @@ export function ResearchWorkspacePage() {
         }
         if (event.type === 'message.delta' && typeof event.payload.delta === 'string') {
           const delta = event.payload.delta;
-          setDraft((value) => value + delta);
+          setDraft((value) => applyTextUpdate(value, delta));
         }
         if (event.type === 'message.completed' && typeof event.payload.text === 'string') {
           const text = event.payload.text;
@@ -509,6 +535,7 @@ export function ResearchWorkspacePage() {
   };
 
   const selectTask = (id?: string) => {
+    sourceAttempt.current = undefined;
     const legacyTopic = id?.startsWith('topic:') ? id.slice(6) : undefined;
     setSelectedTask(id);
     setTopicId(legacyTopic);
@@ -547,6 +574,47 @@ export function ResearchWorkspacePage() {
   const showMaterials = (tab: string) => {
     setResourcesTab(tab);
     setResourcesOpen(true);
+  };
+  const ensureSourceConversation = async () => {
+    if (conversation) return conversation;
+    const created = await agentApi.createConversation();
+    setConversation(created);
+    setSelectedTask(created.id);
+    setTopicId(undefined);
+    if (owner) sessionStorage.setItem('harness-conversation:' + owner, created.id);
+    return created;
+  };
+  const attachSource = async (file?: File, pmcid?: string) => {
+    await act(async () => {
+      if (file && file.size > 10 * 1024 * 1024) throw new Error('单份私有资料不能超过 10 MiB。');
+      const signature = file
+        ? JSON.stringify([file.name, file.size, file.lastModified])
+        : 'oa:' + pmcid;
+      if (sourceAttempt.current?.signature !== signature)
+        sourceAttempt.current = { signature, key: generateUUID() };
+      const current = await ensureSourceConversation();
+      if (file) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        let binary = '';
+        for (let offset = 0; offset < bytes.length; offset += 8192)
+          binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+        await agentApi.uploadPrivateSource(
+          current.id,
+          {
+            name: file.name,
+            content_type: file.type || 'application/octet-stream',
+            base64: btoa(binary),
+          },
+          sourceAttempt.current.key,
+        );
+      } else if (pmcid)
+        await agentApi.acquireOpenAccess(current.id, pmcid, sourceAttempt.current.key);
+      sourceAttempt.current = undefined;
+      setConversation(await agentApi.conversation(current.id));
+      await queries.invalidateQueries({ queryKey: ['harness-private-sources', owner, current.id] });
+      void conversationList.refetch();
+      void message.success('资料已接收，解析就绪后可开始研究。');
+    });
   };
   const openReport = (id: string) => {
     setSelectedReportId(id);
@@ -605,7 +673,17 @@ export function ResearchWorkspacePage() {
       draft={draft}
       request={request}
       busy={busy}
-      ready={capability.data?.enabled === true && capability.data.available === true}
+      ready={
+        capability.data?.enabled === true &&
+        capability.data.available === true &&
+        !privateSources.data?.some((item) => item.status !== 'READY') &&
+        !(Boolean(conversation?.private_source_ids?.length) && !privateSources.data)
+      }
+      readinessMessage={
+        privateSources.data?.some((item) => item.status !== 'READY')
+          ? '私有资料仍在解析或解析失败；请等待就绪，或在“资料与成果”中移出失败文件。'
+          : undefined
+      }
       restoring={restoring || Boolean(topicId && topicQuery.isFetching && !topic)}
       progress={progress}
       reports={reports.data}
@@ -710,12 +788,39 @@ export function ResearchWorkspacePage() {
         onClose={() => setResourcesOpen(false)}
         width="min(1060px, 96vw)"
       >
+        <ConversationSources
+          sources={privateSources.data || []}
+          busy={busy}
+          active={Boolean(run && observedStatuses.includes(run.status))}
+          onUpload={(file) => attachSource(file)}
+          onAcquire={(pmcid) => attachSource(undefined, pmcid)}
+          onDetach={async (id) => {
+            if (!conversation) return;
+            await act(async () => {
+              await agentApi.detachPrivateSource(conversation.id, id);
+              setConversation(await agentApi.conversation(conversation.id));
+              await privateSources.refetch();
+            });
+          }}
+        />
+        {privateSources.isError && (
+          <Alert
+            type="error"
+            message="私有资料状态暂时无法读取"
+            action={<Button onClick={() => void privateSources.refetch()}>刷新</Button>}
+          />
+        )}
+        <ResearchOperations
+          runId={run?.id}
+          owner={owner}
+          active={Boolean(run && observedStatuses.includes(run.status))}
+        />
         {!topic ? (
           <>
             <ResearchQualityPanel
               matrix={run?.research_matrix}
               review={matrixReview}
-              onQuote={(quote) => setSource(quote.source)}
+              onQuote={(quote) => setSource(quote.source, quote)}
             />
             <Typography.Paragraph>
               本次任务按需获取授权资料；保存文献证据和研究报告时才建立研究主题。
@@ -803,7 +908,7 @@ export function ResearchWorkspacePage() {
                     <ResearchQualityPanel
                       matrix={run?.research_matrix}
                       review={matrixReview}
-                      onQuote={(quote) => setSource(quote.source)}
+                      onQuote={(quote) => setSource(quote.source, quote)}
                     />
                   ),
                 },
@@ -1135,6 +1240,7 @@ export function ResearchWorkspacePage() {
       </Modal>
       <SourceReader
         source={source}
+        quote={sourceQuote}
         snapshot={
           [
             ...Object.values(run?.evidence || {}),
@@ -1162,11 +1268,13 @@ export function ResearchWorkspacePage() {
 
 function SourceReader({
   source,
+  quote,
   snapshot,
   close,
   onAnnotate,
 }: {
   source?: SourceRef;
+  quote?: SourceQuote;
   snapshot?: string;
   close: () => void;
   onAnnotate: (text: string, source: SourceRef) => Promise<void>;
@@ -1177,7 +1285,7 @@ function SourceReader({
   const [published, setPublished] = useState<PublishedContent>();
   const [error, setError] = useState<string>();
   useEffect(() => {
-    if (!source?.publication_id) return;
+    if (source?.kind !== 'KB_PUBLICATION' || !source.publication_id) return;
     setAnnotation('');
     let current = true;
     setPublished(undefined);
@@ -1198,6 +1306,13 @@ function SourceReader({
     () => knowledgeApi.contentBlob(source!.document_id, published!.publication.versionId),
     [source, published],
   );
+  const loadPrivate = useCallback(async () => {
+    const response = await fetch(agentApi.privateSourceUrl(source!.document_id), {
+      credentials: 'include',
+    });
+    if (!response.ok) throw new Error('原文件加载失败或访问权限已变化');
+    return response.blob();
+  }, [source?.document_id]);
   const anchorKeys = source?.anchor.sourceNodeKeys;
   const selectedKey =
     Array.isArray(anchorKeys) && typeof anchorKeys[0] === 'string'
@@ -1211,85 +1326,123 @@ function SourceReader({
       onClose={close}
       destroyOnClose
     >
-      {source && source.kind !== 'KB_PUBLICATION' ? (
-        <>
-          <Alert
-            type="info"
-            message={
-              source.kind === 'BUSINESS_RECORD'
-                ? '这是读取时的业务记录快照，不是实时状态。'
-                : '该来源不使用知识库 PDF 阅读器。'
-            }
-          />
-          <Typography.Paragraph>
-            版本：{source.version_id} · 来源位置：{source.source_node_key}
-          </Typography.Paragraph>
-          <Typography.Paragraph copyable>{JSON.stringify(source.anchor)}</Typography.Paragraph>
-          {snapshot && (
-            <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
-              {snapshot}
-            </Typography.Paragraph>
-          )}
-          {source.kind === 'WEB_RESULT' && source.url && /^https?:\/\//.test(source.url) && (
-            <a href={source.url} target="_blank" rel="noreferrer">
-              打开原始网页
-            </a>
-          )}
-        </>
-      ) : error ? (
-        <Alert type="error" message={error} />
-      ) : !source || !published ? (
-        <Spin />
-      ) : (
-        <>
-          <Typography.Paragraph type="secondary">
-            发布 #{published.publication.publicationNo} · 文件版本固定；文件页序与印刷页码可能不同。
-          </Typography.Paragraph>
-          {source?.source_node_key && source.content_sha256 && (
-            <Space.Compact style={{ width: '100%', marginBottom: 16 }}>
-              <Input
-                aria-label="原文位置批注"
-                placeholder="为当前来源位置添加批注"
-                value={annotation}
-                onChange={(event) => setAnnotation(event.target.value)}
-                maxLength={6000}
-              />
-              <Button
-                loading={saving}
-                disabled={!annotation.trim()}
-                onClick={() => {
-                  setSaving(true);
-                  void onAnnotate(annotation, source)
-                    .then(() => {
-                      setAnnotation('');
-                      void message.success('原文批注已保存');
-                    })
-                    .catch(() => void message.error('批注保存失败，原文版本或权限可能已变化'))
-                    .finally(() => setSaving(false));
-                }}
-              >
-                保存批注
-              </Button>
-            </Space.Compact>
-          )}
-          <div className="research-reader">
-            <OriginalDocumentViewer
-              fileName={published.originalName}
-              contentType={published.contentType}
-              sourceNodes={published.sourceNodes}
-              selectedSourceNodeKey={selectedKey}
-              load={load}
-              contentUrl={knowledgeApi.contentUrl(
-                source.document_id,
-                published.publication.versionId,
+      {source && (
+        <AuthorizedEvidence key={JSON.stringify(source)} source={source}>
+          <EvidenceViewDetails evidence={researchEvidence(source, snapshot, quote)} />
+          {source && (source.kind === 'RUN_UPLOAD' || source.kind === 'EXTERNAL_FULLTEXT') ? (
+            <>
+              <Typography.Paragraph type="secondary">
+                会话私有来源 · 固定文件版本 {source.version_id}
+              </Typography.Paragraph>
+              {snapshot && (
+                <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
+                  {snapshot}
+                </Typography.Paragraph>
               )}
-            />
-            <StructuredDocumentRenderer
-              value={published.confirmedDocument}
-              selectedSourceNodeKey={selectedKey}
-            />
-          </div>
-        </>
+              <OriginalDocumentViewer
+                fileName={source.title}
+                contentType={
+                  source.title.toLowerCase().endsWith('.pdf')
+                    ? 'application/pdf'
+                    : 'application/octet-stream'
+                }
+                contentUrl={agentApi.privateSourceUrl(source.document_id)}
+                load={loadPrivate}
+                sourceNodes={[
+                  {
+                    sourceNodeKey: source.source_node_key,
+                    nodeNo: 0,
+                    nodeType: 'paragraph',
+                    rawText: snapshot || '',
+                    sourceAnchor: source.anchor as unknown as SourceAnchor,
+                    confidence: {},
+                  },
+                ]}
+                selectedSourceNodeKey={source.source_node_key}
+              />
+            </>
+          ) : source && source.kind !== 'KB_PUBLICATION' ? (
+            <>
+              <Alert
+                type="info"
+                message={
+                  source.kind === 'BUSINESS_RECORD'
+                    ? '这是读取时的业务记录快照，不是实时状态。'
+                    : '该来源不使用知识库 PDF 阅读器。'
+                }
+              />
+              <Typography.Paragraph>
+                版本：{source.version_id} · 来源位置：{source.source_node_key}
+              </Typography.Paragraph>
+              <Typography.Paragraph copyable>{JSON.stringify(source.anchor)}</Typography.Paragraph>
+              {snapshot && (
+                <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
+                  {snapshot}
+                </Typography.Paragraph>
+              )}
+              {source.kind === 'WEB_RESULT' && source.url && /^https?:\/\//.test(source.url) && (
+                <a href={source.url} target="_blank" rel="noreferrer">
+                  打开原始网页
+                </a>
+              )}
+            </>
+          ) : error ? (
+            <Alert type="error" message={error} />
+          ) : !source || !published ? (
+            <Spin />
+          ) : (
+            <>
+              <Typography.Paragraph type="secondary">
+                发布 #{published.publication.publicationNo} ·
+                文件版本固定；文件页序与印刷页码可能不同。
+              </Typography.Paragraph>
+              {source?.source_node_key && source.content_sha256 && (
+                <Space.Compact style={{ width: '100%', marginBottom: 16 }}>
+                  <Input
+                    aria-label="原文位置批注"
+                    placeholder="为当前来源位置添加批注"
+                    value={annotation}
+                    onChange={(event) => setAnnotation(event.target.value)}
+                    maxLength={6000}
+                  />
+                  <Button
+                    loading={saving}
+                    disabled={!annotation.trim()}
+                    onClick={() => {
+                      setSaving(true);
+                      void onAnnotate(annotation, source)
+                        .then(() => {
+                          setAnnotation('');
+                          void message.success('原文批注已保存');
+                        })
+                        .catch(() => void message.error('批注保存失败，原文版本或权限可能已变化'))
+                        .finally(() => setSaving(false));
+                    }}
+                  >
+                    保存批注
+                  </Button>
+                </Space.Compact>
+              )}
+              <div className="research-reader">
+                <OriginalDocumentViewer
+                  fileName={published.originalName}
+                  contentType={published.contentType}
+                  sourceNodes={published.sourceNodes}
+                  selectedSourceNodeKey={selectedKey}
+                  load={load}
+                  contentUrl={knowledgeApi.contentUrl(
+                    source.document_id,
+                    published.publication.versionId,
+                  )}
+                />
+                <StructuredDocumentRenderer
+                  value={published.confirmedDocument}
+                  selectedSourceNodeKey={selectedKey}
+                />
+              </div>
+            </>
+          )}
+        </AuthorizedEvidence>
       )}
     </Drawer>
   );

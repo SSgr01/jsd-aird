@@ -168,6 +168,27 @@ app:
       timeout: ${JSD_AIRD_QUERY_REWRITE_TIMEOUT:8s}
       max-completion-tokens: ${JSD_AIRD_QUERY_REWRITE_MAX_COMPLETION_TOKENS:640}
     retrieval:
+      rrf-k: 60
+      rerank-top: 30
+      research-page-size: 12
+      profiles:
+        qa:
+          rewrite-enabled: ${app.ai.query-rewrite.enabled:true}
+          rerank-enabled: true
+          bm25-enabled: true
+          vector-enabled: true
+          metadata-enabled: true
+        research:
+          rewrite-enabled: false
+          rerank-enabled: true
+          bm25-enabled: true
+          vector-enabled: true
+          metadata-enabled: true
+      parent:
+        enabled: true
+        max-count: 3
+        preview-chars: 2000
+        max-chars: 6000
       executor-threads: ${JSD_AIRD_RETRIEVAL_EXECUTOR_THREADS:8}
       queue-capacity: ${JSD_AIRD_RETRIEVAL_QUEUE_CAPACITY:64}
       data-max-hits: ${JSD_AIRD_DATA_RETRIEVAL_MAX_HITS:32}

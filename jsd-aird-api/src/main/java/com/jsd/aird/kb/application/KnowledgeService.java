@@ -7,6 +7,8 @@ import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -548,145 +550,101 @@ public class KnowledgeService implements KnowledgeSearchFacade {
 
     @Override
     public KnowledgeSearchFacade.SearchResult search(KnowledgeSearchFacade.SearchRequest request) {
-        if (!StringUtils.hasText(request.query())) {
-            return new KnowledgeSearchFacade.SearchResult(List.of(),
-                    new KnowledgeSearchFacade.RetrievalTrace("BM25_VECTOR_RRF", 0, 0, 0, List.of("EMPTY_QUERY")));
-        }
+        var raw = recall(request);
+        var channels = raw.channels().stream().map(c -> new com.jsd.aird.shared.retrieval.RankFusion.Channel<>(c.name(), c.weight(), c.hits())).toList();
+        var hits = com.jsd.aird.shared.retrieval.RankFusion.fuse(channels, h -> h.chunkId().toString(), 60).stream()
+            .limit(Math.min(60, Math.max(1, request.limit())))
+            .map(r -> r.value().withScores(r.value().retrievalScore(), r.score(), r.score())).toList();
+        return new KnowledgeSearchFacade.SearchResult(hits, raw.trace(), raw.factCandidates());
+    }
+
+    @Override
+    public KnowledgeSearchFacade.RecallResult recall(KnowledgeSearchFacade.SearchRequest request) {
+        if (!StringUtils.hasText(request.query()) || request.allowedDocumentIds()!=null&&request.allowedDocumentIds().isEmpty()) return new KnowledgeSearchFacade.RecallResult(List.of(),
+            new KnowledgeSearchFacade.RetrievalTrace("RAW_CHANNELS",0,0,0,List.of("EMPTY_QUERY_OR_AUTHORIZED_SCOPE")),List.of());
         var organizationId = request.organizationId();
-        var safeLimit = Math.min(60, Math.max(1, request.limit()));
         var variants = searchVariants(request);
-        var phrases = searchPhrases(request);
         var vectorQueries = vectorQueries(request);
+        var phrases = searchPhrases(request);
         CompletableFuture<ChannelResult> bm25Future;
         CompletableFuture<ChannelResult> vectorFuture;
-        try {
-            bm25Future = CompletableFuture.supplyAsync(
-                    () -> bm25Channel(organizationId, variants, request.aiOnly(), request.categoryIds()), retrievalExecutor);
-        } catch (java.util.concurrent.RejectedExecutionException exception) {
-            bm25Future = CompletableFuture.completedFuture(new ChannelResult(List.of(), List.of(),
-                    List.of("BM25_REJECTED"), Map.of("lexicalAnalyzeMs", 0L, "bm25DbMs", 0L)));
-        }
-        try {
-            vectorFuture = CompletableFuture.supplyAsync(
-                    () -> vectorChannel(organizationId, vectorQueries, request.aiOnly(), request.categoryIds()), retrievalExecutor);
-        } catch (java.util.concurrent.RejectedExecutionException exception) {
-            vectorFuture = CompletableFuture.completedFuture(new ChannelResult(List.of(), List.of(),
-                    List.of("VECTOR_REJECTED"), Map.of("embeddingMs", 0L, "vectorDbMs", 0L)));
-        }
-        CompletableFuture.allOf(bm25Future, vectorFuture).join();
-        var bm25 = bm25Future.join();
-        var vector = vectorFuture.join();
-
-        var fallbacks = new ArrayList<String>();
-        fallbacks.addAll(bm25.fallbacks());
-        fallbacks.addAll(vector.fallbacks());
-        var queryTraces = new ArrayList<KnowledgeSearchFacade.QueryTrace>();
-        queryTraces.addAll(bm25.traces());
-        queryTraces.addAll(vector.traces());
-        var timings = new LinkedHashMap<String, Long>();
-        timings.putAll(bm25.timings());
-        timings.putAll(vector.timings());
-        var scores = new LinkedHashMap<UUID, Double>();
-        var retrievalScores = new LinkedHashMap<UUID, Double>();
-        var queryCandidates = new LinkedHashMap<String, Set<UUID>>();
-        var bm25Ids = new java.util.LinkedHashSet<UUID>();
-        var vectorIds = new java.util.LinkedHashSet<UUID>();
-        var phraseIds = new java.util.LinkedHashSet<UUID>();
-        mergeRanked(bm25.ranks(), variants, 1.0, scores, retrievalScores, bm25Ids, queryCandidates);
-        mergeRanked(vector.ranks(), vectorQueries, 1.0, scores, retrievalScores, vectorIds, queryCandidates);
-
-        var fallbackRows = new LinkedHashMap<UUID, KnowledgeRepository.SearchRow>();
-        if (bm25.ranks().isEmpty()) {
-            fallbacks.add("BM25_EMPTY");
-            var fallbackPhrases = phrases.isEmpty() && StringUtils.hasText(request.originalQuery())
-                    ? List.of(request.originalQuery().strip()) : phrases;
-            if (!fallbackPhrases.isEmpty()) {
-                var started = System.nanoTime();
-                try {
-                    var channel = phrases.isEmpty()
-                            ? repository.fullTextSearch(organizationId, fallbackPhrases.getFirst(), request.aiOnly(),
-                                    request.categoryIds(), 48)
-                            : repository.phraseSearch(organizationId, fallbackPhrases, request.aiOnly(),
-                                    request.categoryIds(), 48);
-                    mergeRows(channel, 1.2, scores, retrievalScores, fallbackRows);
-                    channel.forEach(row -> phraseIds.add(row.chunkId()));
-                    queryTraces.add(queryTrace(String.join(" | ", fallbackPhrases), "PHRASE_TRGM", "SUCCEEDED",
-                            channel, started, ""));
-                    timings.put("phraseDbMs", elapsedMs(started));
-                } catch (RuntimeException exception) {
-                    fallbacks.add("PHRASE_ERROR");
-                    queryTraces.add(queryTrace(String.join(" | ", fallbackPhrases), "PHRASE_TRGM", "FAILED",
-                            List.of(), started, exception.getMessage()));
-                    timings.put("phraseDbMs", elapsedMs(started));
-                }
-            }
-        }
-
-        var metadataQueries = new java.util.LinkedHashSet<String>();
-        addQuery(metadataQueries, request.originalQuery());
-        addQuery(metadataQueries, request.query());
-        request.queryVariants().forEach(value -> addQuery(metadataQueries, value));
-        request.requiredFacts().forEach(value -> addQuery(metadataQueries, value.retrievalQuery()));
-        request.retrievalTerms().forEach(term -> {
-            addQuery(metadataQueries, term.text());
-            term.aliases().forEach(value -> addQuery(metadataQueries, value));
-        });
-        var metadataStarted = System.nanoTime();
-        try {
-            var metadataRows = repository.searchPublishedMetadata(organizationId, List.copyOf(metadataQueries),
-                    request.aiOnly(), request.categoryIds(), null, 60);
-            for (var row : metadataRows) {
-                fallbackRows.putIfAbsent(row.chunkId(), row);
-                retrievalScores.merge(row.chunkId(), row.score(), Math::max);
-                scores.merge(row.chunkId(), row.score(), Math::max);
-            }
-            queryTraces.add(queryTrace(String.join(" | ", metadataQueries), "DOCUMENT_METADATA", "SUCCEEDED",
-                    metadataRows, metadataStarted, ""));
-        } catch (RuntimeException exception) {
-            fallbacks.add("DOCUMENT_METADATA_ERROR");
-            queryTraces.add(queryTrace(String.join(" | ", metadataQueries), "DOCUMENT_METADATA", "FAILED",
-                    List.of(), metadataStarted, safeTraceError(exception)));
-        }
-        timings.put("metadataSearchMs", elapsedMs(metadataStarted));
-
-        var rankedIds = scores.keySet().stream()
-                .sorted((a, b) -> Double.compare(scores.getOrDefault(b, 0.0), scores.getOrDefault(a, 0.0)))
-                .limit(60)
-                .toList();
-        var hydrationStarted = System.nanoTime();
+        if (!request.options().bm25()) bm25Future = CompletableFuture.completedFuture(new ChannelResult(List.of(), List.of(new KnowledgeSearchFacade.QueryTrace(request.query(), "BM25", "SKIPPED_CONFIG", 0, 0, "", List.of())), List.of(), Map.of()));
+        else try { bm25Future = CompletableFuture.supplyAsync(() -> bm25Channel(organizationId,variants,request.aiOnly(),request.categoryIds(),request.allowedDocumentIds()),retrievalExecutor); }
+        catch (java.util.concurrent.RejectedExecutionException error) { bm25Future = CompletableFuture.completedFuture(new ChannelResult(List.of(),List.of(),List.of("BM25_REJECTED"),Map.of())); }
+        if (!request.options().vector()) vectorFuture = CompletableFuture.completedFuture(new ChannelResult(List.of(), List.of(new KnowledgeSearchFacade.QueryTrace(request.query(), "VECTOR", "SKIPPED_CONFIG", 0, 0, "", List.of())), List.of(), Map.of()));
+        else try { vectorFuture = CompletableFuture.supplyAsync(() -> vectorChannel(organizationId,vectorQueries,request.aiOnly(),request.categoryIds(),request.allowedDocumentIds()),retrievalExecutor); }
+        catch (java.util.concurrent.RejectedExecutionException error) { vectorFuture = CompletableFuture.completedFuture(new ChannelResult(List.of(),List.of(),List.of("VECTOR_REJECTED"),Map.of())); }
+        var bm25 = bm25Future.join(); var vector = vectorFuture.join();
+        var fallbacks = new ArrayList<String>(); fallbacks.addAll(bm25.fallbacks()); fallbacks.addAll(vector.fallbacks());
+        var traces = new ArrayList<KnowledgeSearchFacade.QueryTrace>(); traces.addAll(bm25.traces()); traces.addAll(vector.traces());
+        var timings = new LinkedHashMap<String,Long>(); timings.putAll(bm25.timings()); timings.putAll(vector.timings());
+        var ids = new LinkedHashSet<UUID>(); bm25.ranks().forEach(r->ids.add(r.chunkId())); vector.ranks().forEach(r->ids.add(r.chunkId()));
         var rows = new LinkedHashMap<UUID, KnowledgeRepository.SearchRow>();
-        try {
-            repository.loadSearchRows(organizationId, rankedIds).forEach(row -> rows.put(row.chunkId(), row));
-        } catch (RuntimeException exception) {
-            fallbacks.add("CHUNK_HYDRATION_ERROR");
-            log.warn("Chunk hydration failed", exception);
+        try { repository.loadSearchRows(organizationId,List.copyOf(ids)).forEach(row->rows.put(row.chunkId(),row)); }
+        catch(RuntimeException error) { fallbacks.add("CHUNK_HYDRATION_ERROR"); }
+        var channels = new ArrayList<KnowledgeSearchFacade.RecallChannel>();
+        var facts = new LinkedHashMap<String, Set<UUID>>();
+        rawChannels(organizationId,"BM25",variants,bm25.ranks(),rows,channels,facts);
+        rawChannels(organizationId,"VECTOR",vectorQueries,vector.ranks(),rows,channels,facts);
+        int phraseCount = 0;
+        if(request.options().bm25() && bm25.ranks().isEmpty()) {
+            fallbacks.add("BM25_EMPTY");
+            var fallback = phrases.isEmpty() ? List.of(request.originalQuery()) : phrases;
+            long started = System.nanoTime();
+            try {
+                var values = request.allowedDocumentIds()!=null
+                    ? fallback.stream().flatMap(q->repository.fullTextSearch(organizationId,q,request.aiOnly(),request.categoryIds(),request.allowedDocumentIds(),48).stream()).distinct().limit(48).toList()
+                    : phrases.isEmpty() ? repository.fullTextSearch(organizationId,fallback.getFirst(),request.aiOnly(),request.categoryIds(),48)
+                    : repository.phraseSearch(organizationId,fallback,request.aiOnly(),request.categoryIds(),48);
+                phaseChannel(organizationId,"PHRASE",String.join(" | ",fallback),1.2,values,channels);
+                phraseCount = values.size(); values.forEach(row->ids.add(row.chunkId()));
+                traces.add(queryTrace(String.join(" | ",fallback),"PHRASE_TRGM","SUCCEEDED",values,started,""));
+            } catch(RuntimeException error) {
+                fallbacks.add("PHRASE_ERROR"); traces.add(queryTrace(String.join(" | ",fallback),"PHRASE_TRGM","FAILED",List.of(),started,safeTraceError(error)));
+            }
+            timings.put("phraseDbMs",elapsedMs(started));
         }
-        fallbackRows.forEach(rows::putIfAbsent);
-        timings.put("chunkHydrationMs", elapsedMs(hydrationStarted));
-        var hits = rankedIds.stream()
-                .limit(safeLimit)
-                .map(rows::get).filter(java.util.Objects::nonNull)
-                .map(row -> toSearchHit(organizationId, row, retrievalScores.getOrDefault(row.chunkId(), 0.0),
-                        scores.getOrDefault(row.chunkId(), 0.0)))
-                .toList();
-        var factCandidates = request.requiredFacts().stream().map(fact -> {
-            var ids = queryCandidates.getOrDefault(fact.retrievalQuery(), Set.of()).stream()
-                    .sorted((left, right) -> Double.compare(scores.getOrDefault(right, 0d), scores.getOrDefault(left, 0d)))
-                    .toList();
-            return new KnowledgeSearchFacade.FactCandidateSet(fact.label(), fact.retrievalQuery(), ids);
-        }).toList();
-        var fallbackSnapshot = fallbacks.stream().distinct().toList();
-        var traceSnapshot = queryTraces.stream().sorted(java.util.Comparator
-                    .comparing(KnowledgeSearchFacade.QueryTrace::channel)
-                    .thenComparing(KnowledgeSearchFacade.QueryTrace::query)).toList();
-        return new KnowledgeSearchFacade.SearchResult(hits,
-                new KnowledgeSearchFacade.RetrievalTrace("DYNAMIC_BM25_VECTOR_PHRASE_RRF", bm25Ids.size(),
-                        vectorIds.size(), rankedIds.size(), phraseIds.size(), fallbackSnapshot, traceSnapshot,
-                        variants.size(), timings), factCandidates);
+        if (request.options().metadata()) {
+        var metadataQueries = new LinkedHashSet<String>(); addQuery(metadataQueries,request.originalQuery()); addQuery(metadataQueries,request.query());
+        request.queryVariants().forEach(v->addQuery(metadataQueries,v)); request.requiredFacts().forEach(v->addQuery(metadataQueries,v.retrievalQuery()));
+        request.retrievalTerms().forEach(t->{addQuery(metadataQueries,t.text());t.aliases().forEach(v->addQuery(metadataQueries,v));});
+        long started = System.nanoTime();
+        try {
+            var values = repository.searchPublishedMetadata(organizationId,List.copyOf(metadataQueries),request.aiOnly(),request.categoryIds(),request.allowedDocumentIds(),request.options().metadataLimit());
+            phaseChannel(organizationId,"METADATA",String.join(" | ",metadataQueries),1,values,channels);
+            values.forEach(row->ids.add(row.chunkId()));
+            traces.add(queryTrace(String.join(" | ",metadataQueries),"DOCUMENT_METADATA","SUCCEEDED",values,started,""));
+        } catch(RuntimeException error) {
+            fallbacks.add("DOCUMENT_METADATA_ERROR");traces.add(queryTrace(String.join(" | ",metadataQueries),"DOCUMENT_METADATA","FAILED",List.of(),started,safeTraceError(error)));
+        }
+        timings.put("metadataSearchMs",elapsedMs(started));
+        } else traces.add(new KnowledgeSearchFacade.QueryTrace(request.query(), "DOCUMENT_METADATA", "SKIPPED_CONFIG", 0, 0, "", List.of()));
+        var factCandidates = request.requiredFacts().stream().map(f->new KnowledgeSearchFacade.FactCandidateSet(f.label(),f.retrievalQuery(),List.copyOf(facts.getOrDefault(f.retrievalQuery(),Set.of())))).toList();
+        return new KnowledgeSearchFacade.RecallResult(channels,new KnowledgeSearchFacade.RetrievalTrace("RAW_BM25_VECTOR_PHRASE_METADATA",
+            (int)bm25.ranks().stream().map(KnowledgeRepository.RankedChunk::chunkId).distinct().count(),
+            (int)vector.ranks().stream().map(KnowledgeRepository.RankedChunk::chunkId).distinct().count(),ids.size(),phraseCount,
+            fallbacks.stream().distinct().toList(),traces,variants.size(),timings),factCandidates);
+    }
+
+    private void rawChannels(UUID org, String channel, List<String> queries, List<KnowledgeRepository.RankedChunk> ranked,
+            Map<UUID,KnowledgeRepository.SearchRow> rows, List<KnowledgeSearchFacade.RecallChannel> target, Map<String,Set<UUID>> facts) {
+        var groups=ranked.stream().collect(java.util.stream.Collectors.groupingBy(KnowledgeRepository.RankedChunk::queryOrdinal));
+        for(var entry:groups.entrySet()) {
+            var query=entry.getKey()<queries.size()?queries.get(entry.getKey()):"";
+            var hits=entry.getValue().stream().sorted(Comparator.comparingInt(KnowledgeRepository.RankedChunk::rank))
+                .filter(r->rows.containsKey(r.chunkId())).map(r->toSearchHit(org,rows.get(r.chunkId()),r.score(),0)).toList();
+            target.add(new KnowledgeSearchFacade.RecallChannel(channel,query,1,hits));
+            hits.forEach(h->facts.computeIfAbsent(query,k->new LinkedHashSet<>()).add(h.chunkId()));
+        }
+    }
+
+    private void phaseChannel(UUID org,String name,String query,double weight,List<KnowledgeRepository.SearchRow> rows,
+            List<KnowledgeSearchFacade.RecallChannel> target) {
+        target.add(new KnowledgeSearchFacade.RecallChannel(name,query,weight,rows.stream().map(r->toSearchHit(org,r,r.score(),0)).toList()));
     }
 
     private ChannelResult bm25Channel(UUID organizationId, List<String> variants, boolean aiOnly,
-                                      List<UUID> categoryIds) {
+                                      List<UUID> categoryIds,Set<UUID> allowed) {
         var analyzeStarted = System.nanoTime();
         var queries = new ArrayList<KnowledgeRepository.AnalyzedQuery>();
         try {
@@ -706,7 +664,8 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var analyzeMs = elapsedMs(analyzeStarted);
         var dbStarted = System.nanoTime();
         try {
-            var ranks = repository.batchBm25Rank(organizationId, queries, aiOnly, categoryIds, 48);
+            var ranks = allowed==null ? repository.batchBm25Rank(organizationId, queries, aiOnly, categoryIds, 48)
+                : scopedBm25(organizationId,queries,aiOnly,categoryIds,allowed);
             var dbMs = elapsedMs(dbStarted);
             return new ChannelResult(ranks, rankTraces("BM25", variants, ranks, dbMs, "SUCCEEDED"), List.of(),
                     Map.of("lexicalAnalyzeMs", analyzeMs, "bm25DbMs", dbMs));
@@ -719,7 +678,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     }
 
     private ChannelResult vectorChannel(UUID organizationId, List<String> queryTexts, boolean aiOnly,
-                                        List<UUID> categoryIds) {
+                                        List<UUID> categoryIds,Set<UUID> allowed) {
         var embeddingStarted = System.nanoTime();
         List<java.util.Optional<String>> vectors;
         try {
@@ -752,8 +711,8 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         }
         var dbStarted = System.nanoTime();
         try {
-            var ranks = repository.batchVectorRank(organizationId, vectorQueries, aiOnly, categoryIds, 48,
-                    embeddingDimension);
+            var ranks = allowed==null ? repository.batchVectorRank(organizationId, vectorQueries, aiOnly, categoryIds, 48, embeddingDimension)
+                : scopedVector(organizationId,vectorQueries,aiOnly,categoryIds,allowed);
             var dbMs = elapsedMs(dbStarted);
             traces.addAll(rankTraces("VECTOR", queryTexts, ranks, dbMs, "SUCCEEDED"));
             return new ChannelResult(ranks, List.copyOf(traces), List.copyOf(fallbacks),
@@ -766,6 +725,23 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             return new ChannelResult(List.of(), List.copyOf(traces), List.copyOf(fallbacks),
                     Map.of("embeddingMs", embeddingMs, "vectorDbMs", dbMs));
         }
+    }
+
+    private List<KnowledgeRepository.RankedChunk> scopedBm25(UUID org,List<KnowledgeRepository.AnalyzedQuery> queries,boolean aiOnly,List<UUID> categories,Set<UUID> allowed) {
+        var result=new ArrayList<KnowledgeRepository.RankedChunk>();
+        for(var query:queries) {
+            var rows=repository.bm25Search(org,query.terms(),aiOnly,categories,allowed,48);
+            for(int i=0;i<rows.size();i++)result.add(new KnowledgeRepository.RankedChunk(query.ordinal(),rows.get(i).chunkId(),rows.get(i).score(),i+1));
+        }
+        return result;
+    }
+    private List<KnowledgeRepository.RankedChunk> scopedVector(UUID org,List<KnowledgeRepository.VectorQuery> queries,boolean aiOnly,List<UUID> categories,Set<UUID> allowed) {
+        var result=new ArrayList<KnowledgeRepository.RankedChunk>();
+        for(var query:queries) {
+            var rows=repository.vectorSearch(org,query.vector(),aiOnly,categories,allowed,48,embeddingDimension);
+            for(int i=0;i<rows.size();i++)result.add(new KnowledgeRepository.RankedChunk(query.ordinal(),rows.get(i).chunkId(),rows.get(i).score(),i+1));
+        }
+        return result;
     }
 
     private List<String> searchVariants(KnowledgeSearchFacade.SearchRequest request) {
@@ -800,33 +776,6 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         if (StringUtils.hasText(value)) values.add(value.strip());
     }
 
-    private void mergeRanked(List<KnowledgeRepository.RankedChunk> channel, List<String> queries, double weight,
-                             Map<UUID, Double> scores, Map<UUID, Double> retrievalScores,
-                             Set<UUID> channelIds, Map<String, Set<UUID>> queryCandidates) {
-        if (channel == null) return;
-        for (var item : channel) {
-            channelIds.add(item.chunkId());
-            retrievalScores.merge(item.chunkId(), item.score(), Math::max);
-            scores.merge(item.chunkId(), weight / (60 + Math.max(1, item.rank())), Double::sum);
-            if (item.queryOrdinal() >= 0 && item.queryOrdinal() < queries.size()) {
-                queryCandidates.computeIfAbsent(queries.get(item.queryOrdinal()), ignored -> new java.util.LinkedHashSet<>())
-                        .add(item.chunkId());
-            }
-        }
-    }
-
-    private void mergeRows(List<KnowledgeRepository.SearchRow> channel, double weight,
-                           Map<UUID, Double> scores, Map<UUID, Double> retrievalScores,
-                           Map<UUID, KnowledgeRepository.SearchRow> rows) {
-        if (channel == null) return;
-        for (var index = 0; index < channel.size(); index++) {
-            var row = channel.get(index);
-            rows.putIfAbsent(row.chunkId(), row);
-            retrievalScores.merge(row.chunkId(), row.score(), Math::max);
-            scores.merge(row.chunkId(), weight / (60 + index + 1), Double::sum);
-        }
-    }
-
     private List<KnowledgeSearchFacade.QueryTrace> rankTraces(String channel, List<String> queries,
                                                                List<KnowledgeRepository.RankedChunk> ranks,
                                                                long elapsedMs, String status) {
@@ -838,7 +787,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         for (var ordinal = 0; ordinal < queries.size(); ordinal++) {
             var rows = grouped.getOrDefault(ordinal, List.of()).stream()
                     .sorted(java.util.Comparator.comparingInt(KnowledgeRepository.RankedChunk::rank)).toList();
-            result.add(new KnowledgeSearchFacade.QueryTrace(queries.get(ordinal), channel, status, rows.size(),
+            result.add(new KnowledgeSearchFacade.QueryTrace(queries.get(ordinal), channel, "SUCCEEDED".equals(status)&&rows.isEmpty()?"EMPTY":status, rows.size(),
                     elapsedMs, "", rows.stream().limit(10).map(KnowledgeRepository.RankedChunk::chunkId).toList()));
         }
         return List.copyOf(result);
@@ -850,7 +799,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var safeRows = rows == null ? List.<KnowledgeRepository.SearchRow>of() : rows;
         var safeError = error == null ? "" : error;
         if (safeError.length() > 300) safeError = safeError.substring(0, 300);
-        return new KnowledgeSearchFacade.QueryTrace(query, channel, status, safeRows.size(), elapsedMs(started), safeError,
+        return new KnowledgeSearchFacade.QueryTrace(query, channel, "SUCCEEDED".equals(status)&&safeRows.isEmpty()?"EMPTY":status, safeRows.size(), elapsedMs(started), safeError,
                 safeRows.stream().limit(10).map(KnowledgeRepository.SearchRow::chunkId).toList());
     }
 

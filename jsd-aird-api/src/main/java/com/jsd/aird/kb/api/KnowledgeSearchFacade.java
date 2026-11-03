@@ -10,16 +10,39 @@ public interface KnowledgeSearchFacade {
 
     SearchResult search(SearchRequest request);
 
+    /** Raw source channels. The Agent pipeline owns fusion, reranking and selection. */
+    default RecallResult recall(SearchRequest request) {
+        var result = search(request);
+        return new RecallResult(List.of(new RecallChannel("COMPAT", request.query(), 1, result.hits())),
+            result.trace(), result.factCandidates());
+    }
+    record RecallChannel(String name, String query, double weight, List<SearchHit> hits) { }
+    record RecallResult(List<RecallChannel> channels, RetrievalTrace trace, List<FactCandidateSet> factCandidates) { }
+
     record SearchRequest(UUID organizationId, String query, boolean aiOnly, int limit,
                           List<UUID> categoryIds, List<String> queryVariants,
                           List<SearchTerm> retrievalTerms, List<RequiredFact> requiredFacts,
-                          String originalQuery) {
+                          String originalQuery, RecallOptions options, java.util.Set<UUID> allowedDocumentIds) {
         public SearchRequest {
             categoryIds = categoryIds == null ? List.of() : List.copyOf(categoryIds);
             queryVariants = queryVariants == null ? List.of() : List.copyOf(queryVariants);
             retrievalTerms = retrievalTerms == null ? List.of() : List.copyOf(retrievalTerms);
             requiredFacts = requiredFacts == null ? List.of() : List.copyOf(requiredFacts);
             originalQuery = originalQuery == null ? query : originalQuery;
+            options = options == null ? new RecallOptions(true, true, true) : options;
+            allowedDocumentIds = allowedDocumentIds == null ? null : java.util.Set.copyOf(allowedDocumentIds);
+        }
+
+        public SearchRequest(UUID organizationId, String query, boolean aiOnly, int limit,
+                             List<UUID> categoryIds, List<String> queryVariants, List<SearchTerm> retrievalTerms,
+                             List<RequiredFact> requiredFacts, String originalQuery, RecallOptions options) {
+            this(organizationId, query, aiOnly, limit, categoryIds, queryVariants, retrievalTerms, requiredFacts, originalQuery, options, null);
+        }
+
+        public SearchRequest(UUID organizationId, String query, boolean aiOnly, int limit,
+                             List<UUID> categoryIds, List<String> queryVariants, List<SearchTerm> retrievalTerms,
+                             List<RequiredFact> requiredFacts, String originalQuery) {
+            this(organizationId, query, aiOnly, limit, categoryIds, queryVariants, retrievalTerms, requiredFacts, originalQuery, null);
         }
 
         public SearchRequest(UUID organizationId, String query, boolean aiOnly, int limit,
@@ -27,6 +50,10 @@ public interface KnowledgeSearchFacade {
             this(organizationId, query, aiOnly, limit, categoryIds, queryVariants,
                     List.of(), List.of(), query);
         }
+    }
+
+    record RecallOptions(boolean bm25, boolean vector, boolean metadata, int metadataLimit) {
+        public RecallOptions(boolean bm25,boolean vector,boolean metadata) {this(bm25,vector,metadata,60);}
     }
 
     record SearchTerm(String text, List<String> aliases, String kind) {

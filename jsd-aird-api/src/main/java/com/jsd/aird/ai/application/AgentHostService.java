@@ -21,11 +21,17 @@ public class AgentHostService {
     private final AgentSourceAuthorization sources;
     private final AuthorizationService authorization;
     private final ObjectMapper mapper;
+    private final PrivateResearchSourceService privateSources;
+    private RetrievalPipeline retrieval;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void retrievalPolicy(RetrievalPipeline retrieval) { this.retrieval = retrieval; }
 
     public AgentHostService(LiteratureResearchService research, ResearchKnowledgeFacade knowledge, AgentProjectFacade projects,
-            AgentSourceAuthorization sources, AuthorizationService authorization, ObjectMapper mapper) {
+            AgentSourceAuthorization sources, AuthorizationService authorization, ObjectMapper mapper, PrivateResearchSourceService privateSources) {
         this.research = research; this.knowledge = knowledge; this.projects = projects;
         this.sources = sources; this.authorization = authorization; this.mapper = mapper;
+        this.privateSources = privateSources;
     }
 
     public ObjectNode context(ObjectNode request) {
@@ -34,6 +40,8 @@ public class AgentHostService {
         var profile = request.path("profile").asText("agent");
         if (!Set.of("agent", "fast_qa").contains(profile)) throw new ApiException(ApiErrorCode.BAD_REQUEST);
         var result = mapper.createObjectNode().put("scope_mode", "AUTOMATIC").put("profile", profile);
+        result.put("conversation_id", request.path("conversation_id").asText());
+        if (retrieval != null) result.set("retrieval_policy", mapper.valueToTree(retrieval.configuration()));
         result.putArray("documents"); result.putArray("notes");
         if (request.hasNonNull("topic_id")) {
             var topic = research.get("topic", UUID.fromString(request.path("topic_id").asText()));
@@ -57,13 +65,33 @@ public class AgentHostService {
         }
         if (!contexts.isEmpty()) result.put("scope_mode", "SELECTED");
         result.set("retrieval_scope", request.hasNonNull("retrieval_scope") ? request.path("retrieval_scope") : mapper.createObjectNode());
+        if (request.path("private_source_ids").isArray() && !request.path("private_source_ids").isEmpty()) {
+            if (request.path("private_source_ids").size() > 20) throw new ApiException(ApiErrorCode.BAD_REQUEST);
+            var privateDocuments = result.putArray("private_documents");
+            var privateIds = result.putArray("private_source_ids");
+            for (var sourceId : request.path("private_source_ids")) {
+                var source = privateSources.get(UUID.fromString(sourceId.asText()));
+                if (!source.path("conversation_id").asText().equals(request.path("conversation_id").asText()))
+                    throw new ApiException(ApiErrorCode.DATA_SCOPE_DENIED);
+                if (!"READY".equals(source.path("status").asText())) result.put("private_sources_ready", false);
+                privateIds.add(sourceId.asText());
+                privateDocuments.add(mapper.createObjectNode().put("document_id", sourceId.asText())
+                    .put("publication_id", source.path("version_id").asText()));
+            }
+        }
         var packs = result.putArray("pack_ids").add("core");
         if ("fast_qa".equals(profile)) packs.add("fast-qa");
-        else { packs.add("files").add("literature"); if (projects.available()) packs.add("project-readonly"); }
+        else { packs.add("files").add("literature").add("private-literature"); if (projects.available()) packs.add("project-readonly"); }
         var documents = new ArrayList<ResearchKnowledgeFacade.DocumentRef>();
         for (var document : result.path("documents")) documents.add(mapper.convertValue(document, ResearchKnowledgeFacade.DocumentRef.class));
         knowledge.authorize(documents);
         return result;
+    }
+
+    public ObjectNode validateEvidence(ObjectNode args) {
+        if(!args.path("candidates").isArray()||args.path("candidates").size()>50) throw new ApiException(ApiErrorCode.BAD_REQUEST);
+        for(var candidate:args.path("candidates")) sources.validate(candidate.path("source"),candidate.path("text").asText());
+        return mapper.createObjectNode().put("allowed",true);
     }
 
     public ObjectNode ensureTopic(ObjectNode args) {

@@ -1086,6 +1086,50 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         return jdbc.query(sql, this::mapHydratedSearch, args.toArray());
     }
 
+    @Override
+    public List<ParentChunk> loadParents(UUID organizationId, List<ChunkPublication> children) {
+        if(children==null||children.isEmpty()) return List.of();
+        if(children.size()>100) throw new IllegalArgumentException("Parent batch exceeds limit");
+        var values=String.join(",",java.util.Collections.nCopies(children.size(),"(?::uuid,?::uuid)"));
+        var sql="WITH wanted(child_id,publication_id) AS (VALUES "+values+") " + """
+            SELECT c.id AS child_id, parent.id AS parent_id, parent.document_id, parent.document_version_id,
+                   p.id AS publication_id, p.review_revision_id, v.original_name, parent.content, c.content AS child_content
+            FROM wanted w JOIN kb.document_chunk c ON c.id=w.child_id AND c.chunk_role='CHILD'
+            JOIN kb.document_chunk parent ON parent.id=c.parent_chunk_id AND parent.chunk_role='PARENT'
+                AND parent.document_id=c.document_id AND parent.document_version_id=c.document_version_id
+                AND parent.review_revision_id=c.review_revision_id
+            JOIN kb.publication p ON p.id=w.publication_id AND p.document_id=c.document_id
+                AND p.document_version_id=c.document_version_id AND p.review_revision_id=c.review_revision_id
+            JOIN kb.document d ON d.id=c.document_id AND d.organization_id=? AND d.lifecycle_status='ACTIVE'
+            JOIN kb.document_version v ON v.id=p.document_version_id
+            JOIN ops.file_object f ON f.id=v.file_object_id AND f.organization_id=d.organization_id AND f.status<>'DELETED'
+            """;
+        var args=new java.util.ArrayList<Object>();
+        children.forEach(c->{args.add(c.chunkId());args.add(c.publicationId());});args.add(organizationId);
+        return jdbc.query(sql,this::mapParent,args.toArray());
+    }
+
+    @Override
+    public Optional<ParentChunk> parentAtPublication(UUID organizationId, UUID parentId, UUID publicationId) {
+        return jdbc.query("""
+            SELECT NULL::uuid AS child_id, parent.id AS parent_id, parent.document_id, parent.document_version_id,
+                   p.id AS publication_id,p.review_revision_id,v.original_name,parent.content,NULL::text AS child_content
+            FROM kb.document_chunk parent
+            JOIN kb.publication p ON p.id=? AND p.document_id=parent.document_id
+                AND p.document_version_id=parent.document_version_id AND p.review_revision_id=parent.review_revision_id
+            JOIN kb.document d ON d.id=parent.document_id AND d.organization_id=? AND d.lifecycle_status='ACTIVE'
+            JOIN kb.document_version v ON v.id=p.document_version_id
+            JOIN ops.file_object f ON f.id=v.file_object_id AND f.organization_id=d.organization_id AND f.status<>'DELETED'
+            WHERE parent.id=? AND parent.chunk_role='PARENT'
+            """,this::mapParent,publicationId,organizationId,parentId).stream().findFirst();
+    }
+    private ParentChunk mapParent(java.sql.ResultSet rs,int ignored) throws java.sql.SQLException {
+        return new ParentChunk(rs.getObject("child_id",UUID.class),rs.getObject("parent_id",UUID.class),
+            rs.getObject("document_id",UUID.class),rs.getObject("document_version_id",UUID.class),
+            rs.getObject("publication_id",UUID.class),rs.getObject("review_revision_id",UUID.class),
+            rs.getString("original_name"),rs.getString("content"),rs.getString("child_content"));
+    }
+
     private String documentQuery(String where) {
         return """
                 SELECT d.id, d.organization_id, d.title, d.status, d.scan_status,

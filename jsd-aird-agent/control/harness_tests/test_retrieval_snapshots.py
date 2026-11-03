@@ -1,0 +1,155 @@
+import copy
+import hashlib
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import pytest
+from fastapi import HTTPException
+
+from aird_agent.evidence.navigation import cached_host, context_for
+from aird_agent.evidence.registry import register_candidates
+
+
+def candidate(text, role="MATCH"):
+    return {
+        "text": text,
+        "source": {
+            "kind": "KB_PUBLICATION",
+            "document_id": str(uuid4()),
+            "version_id": str(uuid4()),
+            "publication_id": str(uuid4()),
+            "source_node_key": str(uuid4()),
+            "anchor": {},
+            "content_sha256": hashlib.sha256(text.encode()).hexdigest(),
+            "title": "test.pdf",
+        },
+        "role": role,
+    }
+
+
+def runtime_for(run):
+    @asynccontextmanager
+    async def transaction(*args):
+        yield None
+
+    async def remember(principal, state, result):
+        run["evidence"] = register_candidates(
+            run["evidence"], result.get("candidates", []) + result.get("context_candidates", [])
+        )
+
+    return SimpleNamespace(
+        store=SimpleNamespace(get=AsyncMock(return_value=run), update=AsyncMock(), transaction=transaction),
+        active=AsyncMock(return_value=run),
+        remember_sources=remember,
+        callback=AsyncMock(),
+    )
+
+
+async def test_snapshot_is_controlled_and_reuse_reauthorizes_parent_and_child(principal):
+    run = {
+        "id": str(uuid4()),
+        "epoch": 1,
+        "scope_hash": "scope",
+        "evidence": {},
+        "retrieval_policy": {"fingerprint": "one", "research": {"rewrite": True}},
+    }
+    runtime = runtime_for(run)
+    child, parent = candidate("result 12 kPa"), candidate("Conditions 25 °C, 24 h", "PARENT_CONTEXT")
+    runtime.host_call = AsyncMock(
+        return_value={
+            "candidates": [child],
+            "context_candidates": [parent],
+            "trace": {"profile": "research"},
+            "ranking_snapshot": {"handles": [{"source": child["source"]}], "policy_hash": "one"},
+        }
+    )
+    first = await cached_host(runtime, principal, run, "knowledge_search", {"query": "result"})
+    assert "ranking_snapshot" not in first
+    assert len(run["evidence"]) == 2 and "read_coverage" not in run
+    assert runtime.callback.await_count == 1
+    again = await cached_host(runtime, principal, run, "knowledge_search", {"query": "result"})
+    assert again["context_candidates"][0]["text"] == parent["text"]
+    assert runtime.host_call.call_args.args[1] == "validate_cached_evidence"
+    assert len(runtime.host_call.call_args.args[2]["candidates"]) == 2
+    await cached_host(runtime, principal, run, "knowledge_search", {"query": "result", "offset": 12})
+    assert runtime.host_call.call_args.args[2]["ranking_snapshot"]["policy_hash"] == "one"
+    assert runtime.callback.await_count == 1
+    # Snapshot metadata must not contain another body store.
+    assert all(
+        "text" not in handle
+        for snapshot in run["ranking_snapshots"].values()
+        for handle in snapshot["handles"]
+    )
+    run["retrieval_policy"]["fingerprint"] = "two"
+    await cached_host(runtime, principal, run, "knowledge_search", {"query": "result", "offset": 24})
+    assert "ranking_snapshot" not in runtime.host_call.call_args.args[2]
+    assert runtime.callback.await_count == 2
+    runtime.host_call.side_effect = HTTPException(403, "revoked")
+    with pytest.raises(HTTPException, match="revoked"):
+        await cached_host(runtime, principal, run, "knowledge_search", {"query": "result", "offset": 24})
+
+
+async def test_parent_cursor_and_neighbor_calls_have_independent_progress(principal):
+    run = {"id": str(uuid4()), "epoch": 1, "scope_hash": "scope", "evidence": {}}
+    runtime = runtime_for(run)
+    value = candidate("parent span", "PARENT_CONTEXT")
+    runtime.host_call = AsyncMock(
+        side_effect=lambda *args: {
+            "candidates": [copy.deepcopy(value)],
+            "trace": {"fulltext_coverage": False},
+        }
+    )
+    for cursor in (0, 2000, 4000, 6000):
+        result = await context_for(runtime, principal, run, value, cursor=cursor, relation="parent")
+        assert not result["trace"]["fulltext_coverage"]
+    assert runtime.host_call.await_count == 4
+    assert runtime.callback.await_count == 0
+
+
+async def test_stale_replay_clears_only_navigation_indexes_and_can_restart(principal):
+    run = {"id": str(uuid4()), "epoch": 1, "scope_hash": "scope", "evidence": {}}
+    runtime = runtime_for(run)
+    value = candidate("preserved source")
+    runtime.host_call = AsyncMock(
+        return_value={"candidates": [value], "ranking_snapshot": {"handles": []}, "trace": {}}
+    )
+    await cached_host(runtime, principal, run, "knowledge_search", {"query": "frequency"})
+    runtime.host_call.side_effect = HTTPException(409, "source changed")
+    with pytest.raises(HTTPException, match="SNAPSHOT_CHANGED"):
+        await cached_host(runtime, principal, run, "knowledge_search", {"query": "frequency"})
+    assert run["evidence"] and not run.get("ranking_snapshots") and not run.get("navigation_cache")
+    runtime.host_call.side_effect = None
+    runtime.host_call.return_value = {"candidates": [value], "trace": {}}
+    await cached_host(runtime, principal, run, "knowledge_search", {"query": "frequency"})
+    assert "ranking_snapshot" not in runtime.host_call.call_args.args[2]
+
+
+def test_authorized_recovery_retains_handle_indexes_and_policy_without_body_copies():
+    from aird_agent.hosts.jsd.bindings import JsdBindings
+
+    prior = {
+        "ranking_snapshots": {"key": {"handles": []}},
+        "retrieval_policy": {"fingerprint": "one"},
+        "navigation_cache": {},
+    }
+    assert JsdBindings().inherit(prior) == prior
+
+
+async def test_host_query_limit_error_is_actionable_without_forwarding_arbitrary_details(settings, principal):
+    import httpx
+
+    from aird_agent.hosts.jsd.host import JsdHostGateway
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                400, json={"message": "Use at most eight search terms", "internal": "must not escape"}
+            )
+        )
+    ) as client:
+        host = JsdHostGateway(settings, client)
+        with pytest.raises(HTTPException, match="RETRIEVAL_QUERY_LIMIT") as caught:
+            await host.call(principal, "knowledge_search", {"query": "long query"})
+        assert "must not escape" not in str(caught.value.detail)

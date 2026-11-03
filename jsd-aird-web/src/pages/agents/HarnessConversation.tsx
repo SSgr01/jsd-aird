@@ -7,7 +7,7 @@ import {
   type ConversationItem,
   type ConversationMessage,
 } from '@/components/ai-conversation-workspace';
-import { MarkdownContent } from '@/components/markdown/MarkdownContent';
+import { ConversationBody } from '@/components/ai-conversation-workspace/ConversationBody';
 import {
   agentApi,
   citedMarkdown,
@@ -34,6 +34,7 @@ interface Props {
   request: string;
   busy: boolean;
   ready: boolean;
+  readinessMessage?: string;
   restoring: boolean;
   progress: Array<{ key: number; text: string }>;
   reports?: LiteratureReport[];
@@ -81,7 +82,7 @@ export function HarnessConversation(props: Props) {
   const files = (run?.registered_outputs || []).filter((item) => item.kind === 'artifact');
   const markdown = (text: string, runId?: string) => (
     <div onClick={(event) => props.onCitation(event, runId)}>
-      <MarkdownContent value={citedMarkdown(researchText(text))} />
+      <ConversationBody text={citedMarkdown(researchText(text))} streaming={active} />
     </div>
   );
   const messages: ConversationMessage[] = history.map((item) => ({
@@ -320,6 +321,7 @@ export function HarnessConversation(props: Props) {
           <span>{props.scope || '自动查找授权知识库'}</span>
           <span className="harness-muted">外部检索需确认</span>
           <Button onClick={() => props.onMaterials('documents')}>文献与阅读</Button>
+          <Button onClick={() => props.onMaterials('sources')}>私有资料与执行回执</Button>
           <Button onClick={() => props.onMaterials('evidence')}>证据核对与比较</Button>
           <Button onClick={() => props.onMaterials('reports')}>研究报告</Button>
         </Space>
@@ -356,7 +358,9 @@ export function HarnessConversation(props: Props) {
             onChange={props.onQueue}
           />
           {!props.ready && (
-            <p className="harness-muted">执行服务尚未就绪；可以先阅读已保存资料。</p>
+            <p className="harness-muted">
+              {props.readinessMessage || '执行服务尚未就绪；可以先阅读已保存资料。'}
+            </p>
           )}
           {waiting && <p className="harness-muted">请先确认上方外部检索请求，或停止本轮任务。</p>}
         </div>

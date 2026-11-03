@@ -1,6 +1,27 @@
 .research-topic-picker {
   display: none;
 }
+.research-private-sources,
+.research-operations {
+  margin-block: 24px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .research-private-sources .ant-list-item,
+  .research-operations .ant-list-item {
+    display: block;
+  }
+  .research-private-sources .ant-list-item-action,
+  .research-operations .ant-list-item-action {
+    margin: 12px 0 0;
+  }
+  .research-private-sources .ant-btn,
+  .research-private-sources .ant-input,
+  .research-operations .ant-btn {
+    min-height: 44px;
+  }
+}
 .research-quality {
   margin-block: 16px;
   min-width: 0;

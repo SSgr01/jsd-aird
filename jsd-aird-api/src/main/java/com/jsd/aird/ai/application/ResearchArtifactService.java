@@ -58,7 +58,9 @@ public class ResearchArtifactService {
                     || !Objects.equals(topicId == null ? null : topicId.toString(), record.path("topic_id").asText(null))
                     || !Objects.equals(request.path("conversation_id").asText(null), record.path("conversation_id").asText(null))
                     || !Objects.equals(request.path("run_id").asText(null), record.path("run_id").asText(null))
-                    || !sourceRefs.equals(record.has("source_refs") ? record.path("source_refs") : mapper.createArrayNode()))
+                    || !sourceRefs.equals(record.has("source_refs") ? record.path("source_refs") : mapper.createArrayNode())
+                    || !request.path("execution_receipt").equals(record.path("execution_receipt"))
+                    || !(request.has("source_quotes")?request.path("source_quotes"):mapper.createArrayNode()).equals(record.has("source_quotes")?record.path("source_quotes"):mapper.createArrayNode()))
                 throw new ApiException(ApiErrorCode.IDEMPOTENCY_CONFLICT);
             return record;
         }
@@ -71,10 +73,22 @@ public class ResearchArtifactService {
         if (topicId != null) metadata.put("topic_id", topicId.toString());
         if (request.hasNonNull("conversation_id")) metadata.put("conversation_id", request.path("conversation_id").asText());
         metadata.set("source_refs", sourceRefs.deepCopy());
+        metadata.set("source_quotes",request.has("source_quotes")?request.path("source_quotes").deepCopy():mapper.createArrayNode());
+        if(request.hasNonNull("execution_receipt")) metadata.set("execution_receipt",request.path("execution_receipt").deepCopy());
         metadata.set("documents", topic.has("documents") ? topic.path("documents").deepCopy() : mapper.createArrayNode());
         var saved = research.create("artifact", metadata, key);
         storage.activate(file.fileId());
         return saved;
+    }
+
+    public ObjectNode provenance(UUID id) throws Exception {
+        try(var file=open(id)) {
+            var artifact=research.get("artifact",id);
+            var result=mapper.createObjectNode().put("artifact_id",id.toString()).put("sha256",artifact.path("sha256").asText())
+                .put("verification","AI_GENERATED_UNVERIFIED");
+            for(var key:List.of("source_refs","source_quotes","execution_receipt")) if(artifact.has(key)) result.set(key,artifact.path(key).deepCopy());
+            return result;
+        }
     }
 
     public FileStorageFacade.StoredFile open(UUID id) {

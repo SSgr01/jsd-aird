@@ -92,12 +92,15 @@ public class AgentController {
         return ResponseFactory.success(research.verify(id, body.path("revision").asLong(), body.path("name").asText(), body.path("status").asText()), RequestIdHolder.currentOrUnknown());
     }
 
-    @RequestMapping(value={"/packs", "/runs", "/runs/{id}", "/runs/{id}/{operation}", "/conversations", "/conversations/{id}", "/conversations/{id}/messages", "/conversations/{id}/queue"},
-        method={RequestMethod.GET, RequestMethod.POST})
+    @RequestMapping(value={"/packs", "/monitor", "/runs", "/runs/{id}", "/runs/{id}/{operation}", "/runs/{id}/operations/{callId}/reconcile", "/conversations", "/conversations/{id}", "/conversations/{id}/messages", "/conversations/{id}/queue", "/conversations/{id}/sources", "/conversations/{id}/sources/oa", "/conversations/{id}/sources/{sid}"},
+        method={RequestMethod.GET, RequestMethod.POST, RequestMethod.DELETE})
     public Object proxy(HttpServletRequest request, @RequestBody(required=false) JsonNode body) throws Exception {
         requireEnabled();
         var suffix = request.getRequestURI().substring("/api/v1/agents".length());
-        if (!suffix.equals("/packs") && !suffix.matches("/(runs|conversations)(/[0-9a-f-]{36})?(/(messages|queue|resume|cancel|workspace))?"))
+        if (!suffix.equals("/packs") && !suffix.equals("/monitor")
+            && !suffix.matches("/(runs|conversations)(/[0-9a-f-]{36})?(/(messages|queue|resume|cancel|workspace|operations|sources)(/oa)?)?")
+            && !suffix.matches("/runs/[0-9a-f-]{36}/operations/[A-Za-z0-9_%-]{1,600}/reconcile")
+            && !suffix.matches("/conversations/[0-9a-f-]{36}/sources/[0-9a-f-]{36}"))
             throw new ApiException(ApiErrorCode.BAD_REQUEST);
         if ("/runs".equals(suffix) && "POST".equals(request.getMethod()) && body != null && !body.hasNonNull("topic_id") && !body.hasNonNull("profile")) {
             var task = body.path("request").asText().strip();
@@ -172,6 +175,13 @@ public class AgentController {
             return ResponseEntity.ok().header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=research-report.docx")
                 .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.wordprocessingml.document")).body(output.toByteArray());
         }
+    }
+
+    @GetMapping("/research/artifact/{id}/provenance")
+    public ResponseEntity<byte[]> artifactProvenance(@PathVariable UUID id) throws Exception {
+        requireEnabled();
+        return ResponseEntity.ok().header(HttpHeaders.CONTENT_DISPOSITION,"attachment; filename=artifact-provenance.json")
+            .contentType(MediaType.APPLICATION_JSON).body(mapper.writeValueAsBytes(artifacts.provenance(id)));
     }
 
     @GetMapping("/research/artifact/{id}/content")

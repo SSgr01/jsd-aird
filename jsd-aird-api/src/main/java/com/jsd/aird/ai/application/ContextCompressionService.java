@@ -31,6 +31,12 @@ public class ContextCompressionService {
 
     public Context compress(List<KnowledgeSearchFacade.SearchHit> knowledge,
                             List<DataSourceFileSearchFacade.SourceFileHit> dataFiles, int maxChars) {
+        return compress(knowledge, dataFiles, maxChars, List.of());
+    }
+
+    public Context compress(List<KnowledgeSearchFacade.SearchHit> knowledge,
+                            List<DataSourceFileSearchFacade.SourceFileHit> dataFiles, int maxChars,
+                            List<com.jsd.aird.kb.api.ResearchKnowledgeFacade.Candidate> parents) {
         var chunks = new ArrayList<String>();
         var includedEvidenceRefs = new ArrayList<String>();
         var used = 0;
@@ -41,6 +47,16 @@ public class ContextCompressionService {
         // sources are present. A structured-data query should not silently
         // shrink the knowledge-base context further in a mixed-scope answer.
         var knowledgeBudget = safeDataFiles.isEmpty() ? budget : budget / 2;
+        var parentParts = new LinkedHashMap<String,String>();
+        int parentReserved = 0;
+        for (int i=0; i<parents.size(); i++) {
+            var parent=parents.get(i);
+            var label="K"+(safeKnowledge.size()+i+1);
+            var part="[source=knowledge,relation=PARENT_CONTEXT,file="+parent.source().title()+"] [evidenceRef="+label+"] "+parent.text();
+            // A parent is an independently hashed exact span. Never truncate or normalize its body here.
+            if (parentReserved+part.length()+2 > Math.min(6000,knowledgeBudget/3)) continue;
+            parentParts.put(label,part);parentReserved+=part.length()+2;
+        }
         var knowledgeRefs = new HashMap<java.util.UUID, String>();
         for (var index = 0; index < safeKnowledge.size(); index++) {
             knowledgeRefs.put(safeKnowledge.get(index).chunkId(), "K" + (index + 1));
@@ -52,7 +68,7 @@ public class ContextCompressionService {
             groupedKnowledge.computeIfAbsent(key, ignored -> new ArrayList<>()).add(hit);
         }
         for (var group : groupedKnowledge.values()) {
-            var remaining = Math.max(0, knowledgeBudget - used);
+            var remaining = Math.max(0, knowledgeBudget - parentReserved - used);
             var groupParts = new ArrayList<String>();
             var groupRefs = new ArrayList<String>();
             for (var hit : group) {
@@ -80,6 +96,11 @@ public class ContextCompressionService {
                 if (excerpt.contains("[evidenceRef=" + evidenceRef + "]")) includedEvidenceRefs.add(evidenceRef);
             }
             used += prefix.length() + excerpt.length() + separatorLength;
+        }
+        for (var entry : parentParts.entrySet()) {
+            var separator=chunks.isEmpty()?0:2;
+            if(used+entry.getValue().length()+separator > knowledgeBudget) continue;
+            chunks.add(entry.getValue());includedEvidenceRefs.add(entry.getKey());used+=entry.getValue().length()+separator;
         }
         for (var index = 0; index < safeDataFiles.size(); index++) {
             var hit = safeDataFiles.get(index);

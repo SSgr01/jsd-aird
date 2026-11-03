@@ -3,32 +3,8 @@ import { httpClient } from '@/services/http/client';
 import type { ApiResponse } from '@/types/api';
 import { generateUUID } from '@/utils/uuid';
 
-export interface SourceRef {
-  kind:
-    | 'KB_PUBLICATION'
-    | 'RUN_UPLOAD'
-    | 'EXTERNAL_FULLTEXT'
-    | 'BUSINESS_RECORD'
-    | 'DATA_SOURCE_FILE'
-    | 'WEB_RESULT';
-  resource_id?: string;
-  resource_type?: string;
-  project_id?: string;
-  document_id: string;
-  version_id: string;
-  publication_id?: string;
-  source_node_key: string;
-  content_sha256: string;
-  title: string;
-  anchor: Record<string, unknown>;
-  url?: string;
-}
-export interface Candidate {
-  evidence_id: string;
-  text: string;
-  source: SourceRef;
-  score?: number;
-}
+import type { SourceRef, Candidate } from '@/services/evidence/protocol';
+export type { SourceRef, Candidate } from '@/services/evidence/protocol';
 export interface ResearchTopic {
   id: string;
   revision: number;
@@ -67,14 +43,8 @@ export interface LiteratureReport {
   evidence_matrix?: ResearchMatrix;
   quality_review?: ReportQualityReview;
 }
-export interface SourceQuote {
-  quote_id: string;
-  evidence_id: string;
-  start: number;
-  end: number;
-  text: string;
-  source: SourceRef;
-}
+export type { SourceQuote } from '@/services/evidence/protocol';
+import type { SourceQuote } from '@/services/evidence/protocol';
 export interface ResearchMatrix {
   revision: number;
   questions: Record<
@@ -111,6 +81,30 @@ export interface Conversation {
   messages: ConversationEntry[];
   queued?: ConversationEntry[];
   queue_paused?: boolean;
+  private_source_ids?: string[];
+}
+
+export interface PrivateSource {
+  id: string;
+  conversation_id: string;
+  version_id: string;
+  name: string;
+  content_type: string;
+  bytes: number;
+  sha256: string;
+  status: 'PARSING' | 'READY' | 'FAILED';
+  kind: 'RUN_UPLOAD' | 'EXTERNAL_FULLTEXT';
+  provenance?: { pmcid?: string; doi?: string; license?: string; source_url?: string };
+}
+
+export interface OperationReceipt {
+  call_id: string;
+  tool_name: string;
+  status: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN';
+  request_hash: string;
+  updated_at: string;
+  receipt_id?: string;
+  authority?: string;
 }
 export interface ConversationEntry {
   id: string;
@@ -242,6 +236,24 @@ export const agentApi = {
     post(`/research/card/${card.id}/verify`, { revision: card.revision, name, status }),
   conversations: () => get<Conversation[]>('/conversations'),
   conversation: (id: string) => get<Conversation>(`/conversations/${id}`),
+  createConversation: () => post<Conversation>('/conversations', {}),
+  privateSources: (id: string) => get<PrivateSource[]>(`/conversations/${id}/sources`),
+  uploadPrivateSource: (
+    id: string,
+    file: { name: string; content_type: string; base64: string },
+    key: string,
+  ) => post<PrivateSource>(`/conversations/${id}/sources`, file, key),
+  acquireOpenAccess: (id: string, pmcid: string, key: string) =>
+    post<PrivateSource>(`/conversations/${id}/sources/oa`, { pmcid }, key),
+  privateSourceUrl: (id: string) => appEnv.apiBaseUrl + base + `/private-sources/${id}/content`,
+  detachPrivateSource: (cid: string, id: string) =>
+    httpClient.delete(base + `/conversations/${cid}/sources/${id}`),
+  operations: (id: string) => get<OperationReceipt[]>(`/runs/${id}/operations`),
+  reconcile: (id: string, callId: string) =>
+    post<{ outcome: 'CONFIRMED_SUCCEEDED' | 'STILL_UNKNOWN'; replayed: false }>(
+      `/runs/${id}/operations/${encodeURIComponent(callId)}/reconcile`,
+      {},
+    ),
   run: (id: string) => get<AgentRun>(`/runs/${id}`),
   start: (
     topicId: string | undefined,

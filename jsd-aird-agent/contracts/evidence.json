@@ -1,0 +1,262 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "text": "原文值 12 kPa；温度 25 °C. No rewritten units.",
+      "source": {
+        "kind": "KB_PUBLICATION",
+        "document_id": "00000000-0000-0000-0000-000000000001",
+        "version_id": "00000000-0000-0000-0000-000000000002",
+        "source_node_key": "node-1",
+        "content_sha256": "3030b4ee155c38995d1322b789dd2648a441528cb818da7ec409032b242873b1",
+        "anchor": {
+          "page": 3,
+          "nested": {
+            "z": "末",
+            "a": "首"
+          }
+        },
+        "title": "脱敏来源",
+        "publication_id": "00000000-0000-0000-0000-000000000003"
+      },
+      "label": "K1",
+      "evidence_id": "eafff6c17d58cc4d5d9f50289",
+      "quotes": [
+        {
+          "quote_id": "q2a8daa16e17fd873b612b29c",
+          "evidence_id": "eafff6c17d58cc4d5d9f50289",
+          "start": 0,
+          "end": 20,
+          "text": "原文值 12 kPa；温度 25 °C."
+        },
+        {
+          "quote_id": "qb20b99fabfd217bc15ccf542",
+          "evidence_id": "eafff6c17d58cc4d5d9f50289",
+          "start": 21,
+          "end": 40,
+          "text": "No rewritten units."
+        }
+      ]
+    },
+    {
+      "text": "原文值 12 kPa；温度 25 °C. No rewritten units.",
+      "source": {
+        "kind": "RUN_UPLOAD",
+        "document_id": "00000000-0000-0000-0000-000000000001",
+        "version_id": "00000000-0000-0000-0000-000000000002",
+        "source_node_key": "node-1",
+        "content_sha256": "3030b4ee155c38995d1322b789dd2648a441528cb818da7ec409032b242873b1",
+        "anchor": {
+          "page": 3,
+          "nested": {
+            "z": "末",
+            "a": "首"
+          }
+        },
+        "title": "脱敏来源"
+      },
+      "label": "K2",
+      "evidence_id": "ea5dedfef73f0b64be671828d",
+      "quotes": [
+        {
+          "quote_id": "qfddf4358b198d85379a8c940",
+          "evidence_id": "ea5dedfef73f0b64be671828d",
+          "start": 0,
+          "end": 20,
+          "text": "原文值 12 kPa；温度 25 °C."
+        },
+        {
+          "quote_id": "q3538d26227fdb36075cf02b1",
+          "evidence_id": "ea5dedfef73f0b64be671828d",
+          "start": 21,
+          "end": 40,
+          "text": "No rewritten units."
+        }
+      ]
+    },
+    {
+      "text": "原文值 12 kPa；温度 25 °C. No rewritten units.",
+      "source": {
+        "kind": "EXTERNAL_FULLTEXT",
+        "document_id": "00000000-0000-0000-0000-000000000001",
+        "version_id": "00000000-0000-0000-0000-000000000002",
+        "source_node_key": "node-1",
+        "content_sha256": "3030b4ee155c38995d1322b789dd2648a441528cb818da7ec409032b242873b1",
+        "anchor": {
+          "page": 3,
+          "nested": {
+            "z": "末",
+            "a": "首"
+          }
+        },
+        "title": "脱敏来源"
+      },
+      "label": "K3",
+      "evidence_id": "ed8d4b5faa19fa1294ed8df9a",
+      "quotes": [
+        {
+          "quote_id": "q81dd443f97547d9227177a4f",
+          "evidence_id": "ed8d4b5faa19fa1294ed8df9a",
+          "start": 0,
+          "end": 20,
+          "text": "原文值 12 kPa；温度 25 °C."
+        },
+        {
+          "quote_id": "q6633e04a11ebdfb224f73f7a",
+          "evidence_id": "ed8d4b5faa19fa1294ed8df9a",
+          "start": 21,
+          "end": 40,
+          "text": "No rewritten units."
+        }
+      ]
+    },
+    {
+      "text": "原文值 12 kPa；温度 25 °C. No rewritten units.",
+      "source": {
+        "kind": "BUSINESS_RECORD",
+        "document_id": "00000000-0000-0000-0000-000000000001",
+        "version_id": "00000000-0000-0000-0000-000000000002",
+        "source_node_key": "node-1",
+        "content_sha256": "3030b4ee155c38995d1322b789dd2648a441528cb818da7ec409032b242873b1",
+        "anchor": {
+          "page": 3,
+          "nested": {
+            "z": "末",
+            "a": "首"
+          }
+        },
+        "title": "脱敏来源"
+      },
+      "label": "K4",
+      "evidence_id": "e0417cc5e1bbf450ff4697f94",
+      "quotes": [
+        {
+          "quote_id": "q41d836689790a0e0dec81077",
+          "evidence_id": "e0417cc5e1bbf450ff4697f94",
+          "start": 0,
+          "end": 20,
+          "text": "原文值 12 kPa；温度 25 °C."
+        },
+        {
+          "quote_id": "q0ad26c3a0f7a58f70f2c30f8",
+          "evidence_id": "e0417cc5e1bbf450ff4697f94",
+          "start": 21,
+          "end": 40,
+          "text": "No rewritten units."
+        }
+      ]
+    },
+    {
+      "text": "原文值 12 kPa；温度 25 °C. No rewritten units.",
+      "source": {
+        "kind": "DATA_SOURCE_FILE",
+        "document_id": "00000000-0000-0000-0000-000000000001",
+        "version_id": "00000000-0000-0000-0000-000000000002",
+        "source_node_key": "node-1",
+        "content_sha256": "3030b4ee155c38995d1322b789dd2648a441528cb818da7ec409032b242873b1",
+        "anchor": {
+          "page": 3,
+          "nested": {
+            "z": "末",
+            "a": "首"
+          }
+        },
+        "title": "脱敏来源",
+        "resource_type": "DATA",
+        "resource_id": "00000000-0000-0000-0000-000000000004"
+      },
+      "label": "K5",
+      "evidence_id": "eb5e80a1e895a6e3a0747769b",
+      "quotes": [
+        {
+          "quote_id": "q06fa2a217bfb6db1eb6ecab7",
+          "evidence_id": "eb5e80a1e895a6e3a0747769b",
+          "start": 0,
+          "end": 20,
+          "text": "原文值 12 kPa；温度 25 °C."
+        },
+        {
+          "quote_id": "q0b81f1a7ca1bcf80e11c73dc",
+          "evidence_id": "eb5e80a1e895a6e3a0747769b",
+          "start": 21,
+          "end": 40,
+          "text": "No rewritten units."
+        }
+      ]
+    },
+    {
+      "text": "原文值 12 kPa；温度 25 °C. No rewritten units.",
+      "source": {
+        "kind": "WEB_RESULT",
+        "document_id": "00000000-0000-0000-0000-000000000001",
+        "version_id": "00000000-0000-0000-0000-000000000002",
+        "source_node_key": "node-1",
+        "content_sha256": "3030b4ee155c38995d1322b789dd2648a441528cb818da7ec409032b242873b1",
+        "anchor": {
+          "page": 3,
+          "nested": {
+            "z": "末",
+            "a": "首"
+          }
+        },
+        "title": "脱敏来源",
+        "url": "https://example.org/paper"
+      },
+      "label": "K6",
+      "evidence_id": "e92860d9083fbe76353796dcb",
+      "quotes": [
+        {
+          "quote_id": "q1bd7d10a8ad2d1a0877a8839",
+          "evidence_id": "e92860d9083fbe76353796dcb",
+          "start": 0,
+          "end": 20,
+          "text": "原文值 12 kPa；温度 25 °C."
+        },
+        {
+          "quote_id": "qa3a6382c61e9d49fd39fe6f5",
+          "evidence_id": "e92860d9083fbe76353796dcb",
+          "start": 21,
+          "end": 40,
+          "text": "No rewritten units."
+        }
+      ]
+    },
+    {
+      "label": "K3",
+      "source": {
+        "kind": "KB_PUBLICATION",
+        "document_id": "00000000-0000-4000-8000-000000000031",
+        "version_id": "00000000-0000-4000-8000-000000000032",
+        "publication_id": "00000000-0000-4000-8000-000000000033",
+        "source_node_key": "00000000-0000-4000-8000-000000000034",
+        "content_sha256": "25992c145d6465b935442f7fa39f56f888427c92db9bc999d14af7acda631d2f",
+        "title": "parent-test.pdf",
+        "anchor": {
+          "parent_chunk_id": "00000000-0000-4000-8000-000000000034",
+          "parent_content_sha256": "b8d23a5207b63beb477d249d583293b8d4ec4af41d260199ba7f14e296c6a12f",
+          "span_start": 0,
+          "span_end": 44,
+          "offset_unit": "unicode_codepoint"
+        }
+      },
+      "text": "🧪 Conditions: 25 °C, 24 h.\nStrength: 12 kPa.",
+      "evidence_id": "eb2b74a310f2ab3e79e2a1274",
+      "quotes": [
+        {
+          "quote_id": "q7c9e97485f1c8e0e558e9fb6",
+          "evidence_id": "eb2b74a310f2ab3e79e2a1274",
+          "start": 0,
+          "end": 26,
+          "text": "🧪 Conditions: 25 °C, 24 h."
+        },
+        {
+          "quote_id": "q97df81494c09db0c6d156267",
+          "evidence_id": "eb2b74a310f2ab3e79e2a1274",
+          "start": 27,
+          "end": 44,
+          "text": "Strength: 12 kPa."
+        }
+      ]
+    }
+  ]
+}

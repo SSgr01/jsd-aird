@@ -1,3 +1,4 @@
+import { assistantEvidence } from '@/services/evidence/adapters';
 import {
   ArrowLeftOutlined,
   DatabaseOutlined,
@@ -21,8 +22,8 @@ import {
   downloadPreviewFile,
   type FilePreviewDescriptor,
 } from '@/components/file-preview';
-import { MarkdownContent } from '@/components/markdown/MarkdownContent';
-import { StreamingMarkdownContent } from '@/components/markdown/StreamingMarkdownContent';
+import { ConversationBody } from '@/components/ai-conversation-workspace/ConversationBody';
+import { EvidenceDetailsButton } from '@/components/ai-conversation-workspace/EvidenceDetails';
 import {
   AssistantRequestError,
   assistantApi,
@@ -135,10 +136,10 @@ function syncAssistantTaskMessages(messages: ChatMessage[], task: AssistantStrea
     task.status === 'RUNNING'
       ? undefined
       : task.status === 'FAILED'
-      ? task.answer
-        ? `${task.answer}\n\n回答未完成：${assistantFailure(task.failure)}`
-        : assistantFailure(task.failure)
-      : task.answer;
+        ? task.answer
+          ? `${task.answer}\n\n回答未完成：${assistantFailure(task.failure)}`
+          : assistantFailure(task.failure)
+        : task.answer;
   let next = messages.map((item) => {
     if (
       item.id === task.localUserMessageId ||
@@ -203,7 +204,7 @@ function LiveAssistantAnswer({ runId }: { runId: string }) {
   const getSnapshot = useCallback(() => getAssistantStream(runId)?.answer || '', [runId]);
   const answer = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return answer ? (
-    <StreamingMarkdownContent value={answer} />
+    <ConversationBody text={answer} streaming />
   ) : (
     <Typography.Text type="secondary">正在生成回答…</Typography.Text>
   );
@@ -222,7 +223,7 @@ function renderAssistantContent(
   const citationGroups = groupAssistantCitations(evidence);
   return (
     <div>
-      <MarkdownContent value={displayAnswer(message.content)} />
+      <ConversationBody text={displayAnswer(message.content)} />
       {candidates.length ? (
         <div className="ai-message-file-candidates">
           <Typography.Text type="secondary">请选择数据文件</Typography.Text>
@@ -281,6 +282,9 @@ function renderAssistantContent(
                         : `${citationPagesLabel(group.pages)}${citationEvidenceLabel(group.evidenceCount)}`}
                     </span>
                   </button>
+                  {citation.source && (
+                    <EvidenceDetailsButton evidence={assistantEvidence(citation)} />
+                  )}
                   {hasOriginalFile(citation) && (
                     <div className="ai-message-citation-actions">
                       <Button
@@ -594,7 +598,8 @@ export function AssistantPage() {
         fileName,
         load: async () => {
           if (/\.doc$/i.test(fileName)) {
-            const resolvedVersionId = versionId || (await knowledgeApi.get(documentId)).currentVersionId;
+            const resolvedVersionId =
+              versionId || (await knowledgeApi.get(documentId)).currentVersionId;
             const versions = await knowledgeApi.versions(documentId);
             const version = versions.find((item) => item.id === resolvedVersionId);
             if (!version) throw new Error('找不到知识文档对应的文件版本');
@@ -639,11 +644,13 @@ export function AssistantPage() {
   };
 
   const viewMessages: ConversationMessage[] = messages.map((item, messageIndex) => {
-    const streamTask = item.role === 'ASSISTANT'
-      ? [...assistantStreams.values()].find(
-          (task) => task.localAssistantMessageId === item.id || task.assistantMessageId === item.id,
-        )
-      : undefined;
+    const streamTask =
+      item.role === 'ASSISTANT'
+        ? [...assistantStreams.values()].find(
+            (task) =>
+              task.localAssistantMessageId === item.id || task.assistantMessageId === item.id,
+          )
+        : undefined;
     const live = streamTask?.status === 'RUNNING';
     return {
       id: item.id,
@@ -663,7 +670,9 @@ export function AssistantPage() {
               (citation) =>
                 Boolean(
                   citation.documentId ||
-                  ['DATA_SOURCE_FILE', 'EXPERIMENT_TEMPLATE_SOURCE'].includes(citation.sourceType) ||
+                  ['DATA_SOURCE_FILE', 'EXPERIMENT_TEMPLATE_SOURCE'].includes(
+                    citation.sourceType,
+                  ) ||
                   citationSources[citationSourceKey(citation)],
                 ),
               (citation) => {

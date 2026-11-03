@@ -562,6 +562,9 @@ class RagRetrievalServiceTest {
 
         assertThat(retrieval.knowledgeHits()).hasSize(12);
         assertThat(retrieval.knowledgeHits().getFirst().chunkId()).isEqualTo(target.chunkId());
+        var scored=retrieval.knowledgeHits().stream().filter(h->h.chunkId().equals(hits.get(1).chunkId())).findFirst().orElseThrow();
+        assertThat(scored.rerankScore()).isEqualTo(.99);
+        assertThat(scored.rrfScore()).isEqualTo(hits.get(1).rrfScore());
         assertThat(retrieval.trace().factCoverage()).singleElement().satisfies(coverage -> {
             assertThat(coverage.status()).isEqualTo("COVERED");
             assertThat(coverage.chunkId()).isEqualTo(target.chunkId());

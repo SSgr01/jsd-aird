@@ -23,7 +23,7 @@ export function ResearchQualityPanel({
   frozen?: boolean;
 }) {
   const rows = Object.values(matrix?.questions || {});
-  const legacyReview = review && review.quality_check_version !== 2;
+  const legacyReview = review && review.quality_check_version !== 3;
   const prescreen = review?.verification === 'DETERMINISTIC_PRESCREEN_NOT_AI_OR_HUMAN_VERIFICATION';
   const spans = new Map(
     rows.flatMap((row) => row.claims.flatMap((claim) => claim.quotes)).map((q) => [q.quote_id, q]),

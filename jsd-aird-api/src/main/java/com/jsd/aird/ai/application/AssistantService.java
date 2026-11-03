@@ -1,5 +1,7 @@
 package com.jsd.aird.ai.application;
 
+import static com.jsd.aird.ai.application.RetrievalContextSupport.*;
+
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -67,7 +69,6 @@ public class AssistantService {
     private final AssistantRepository repository;
     private final KnowledgeSearchFacade knowledge;
     private final RagRetrievalService rag;
-    private final RetrievalPipeline retrievalPipeline;
     private final DataSearchAuthorizationService dataAuthorization;
     private final ConversationMemoryService memory;
     private final ConversationRevisionService revisions;
@@ -83,6 +84,8 @@ public class AssistantService {
     private final String configuredApiKey;
     private final String configuredModel;
     private final ExecutorService streamExecutor;
+    private final HarnessQaClient harness;
+    private final SharedRetrievalService sharedRetrieval;
 
     public AssistantService(
             AssistantRepository repository,
@@ -102,7 +105,8 @@ public class AssistantService {
             @org.springframework.beans.factory.annotation.Value("${app.model.base-url:}") String configuredBaseUrl,
             @org.springframework.beans.factory.annotation.Value("${app.model.api-key:}") String configuredApiKey,
             @org.springframework.beans.factory.annotation.Value("${app.model.model:}") String configuredModel,
-            @Qualifier("aiStreamExecutor") ExecutorService streamExecutor
+            @Qualifier("aiStreamExecutor") ExecutorService streamExecutor,
+            HarnessQaClient harness, SharedRetrievalService sharedRetrieval
     ) {
         this.repository = repository;
         this.knowledge = knowledge;
@@ -111,7 +115,6 @@ public class AssistantService {
         this.memory = memory;
         this.revisions = revisions;
         this.contextCompression = contextCompression;
-        this.retrievalPipeline = new RetrievalPipeline(rag, contextCompression);
         this.clients = clients;
         this.objectMapper = objectMapper;
         this.parser = parser;
@@ -123,6 +126,7 @@ public class AssistantService {
         this.configuredApiKey = configuredApiKey;
         this.configuredModel = configuredModel;
         this.streamExecutor = streamExecutor;
+        this.harness = harness; this.sharedRetrieval = sharedRetrieval;
     }
 
     @PostConstruct
@@ -145,7 +149,7 @@ public class AssistantService {
         var runId = UUID.randomUUID().toString();
         try {
             requireModelConfiguration();
-            if (clients.getIfAvailable() == null) throw new ApiException(ApiErrorCode.AI_MODEL_NOT_CONFIGURED,
+            if (!harness.enabled() && clients.getIfAvailable() == null) throw new ApiException(ApiErrorCode.AI_MODEL_NOT_CONFIGURED,
                     ApiErrorCode.AI_MODEL_NOT_CONFIGURED.defaultMessage());
             if (!circuitBreaker.allow("chat")) {
                 throw new ApiException(ApiErrorCode.AI_PROVIDER_UNAVAILABLE, "AI 模型暂时熔断，请稍后重试");
@@ -164,6 +168,7 @@ public class AssistantService {
                 "traceId", traceId, "runId", runId));
         send(emitter, "thinking", "UNDERSTANDING");
         streamExecutor.submit(() -> {
+            ActorContext.set(actor);
             RequestIdHolder.set(traceId);
             RequestTimingHolder.set(initialTimings);
             try {
@@ -177,6 +182,7 @@ public class AssistantService {
                         "timeoutReason", code == ApiErrorCode.AI_MODEL_TIMEOUT ? "PROVIDER_TIMEOUT" : ""));
                 emitter.complete();
             } finally {
+                ActorContext.clear();
                 RequestIdHolder.clear();
                 RequestTimingHolder.clear();
             }
@@ -212,31 +218,42 @@ public class AssistantService {
         }
         send(emitter, "thinking", "COMPOSING");
         var builder = clients.getIfAvailable();
-        if (builder == null) throw new ApiException(ApiErrorCode.AI_MODEL_NOT_CONFIGURED,
+        if (!harness.enabled() && builder == null) throw new ApiException(ApiErrorCode.AI_MODEL_NOT_CONFIGURED,
                 ApiErrorCode.AI_MODEL_NOT_CONFIGURED.defaultMessage());
         var promptStarted = System.nanoTime();
         var prompt = buildUserPrompt(command.question(), prepared.history(), prepared.hits(), prepared.retrieval());
         var userPrompt = prompt.text();
         prepared.timings().put("contextCompressionMs", elapsedMs(promptStarted));
-        var request = builder.build().prompt().system(systemPrompt()).user(userPrompt);
+        reactor.core.publisher.Flux<HarnessQaClient.Chunk> generation;
+        if (harness.enabled()) {
+            generation = harness.stream(actor, prepared.conversationId(), prepared.userMessageId(), command.question(),
+                systemPrompt(), userPrompt, prompt.evidence().keySet(),
+                prompt.candidates(),
+                command.knowledgeCategoryIds(), command.dataCategoryIds(), command.webSearchEnabled());
+        } else {
+            generation = builder.build().prompt().system(systemPrompt()).user(userPrompt).stream().chatResponse()
+                .map(response -> {
+                    var measured = usage(response);
+                    var token = response.getResult() == null || response.getResult().getOutput() == null
+                        ? "" : response.getResult().getOutput().getText();
+                    return new HarnessQaClient.Chunk(token, measured.inputTokens(), measured.outputTokens());
+                });
+        }
         var content = new StringBuilder();
         var streamedAnswer = new StringBuilder();
         var sequence = new int[]{0};
         var streamUsage = new int[3];
         var generationStarted = System.nanoTime();
         var firstTokenAt = new long[]{0};
-        request.stream().chatClientResponse().subscribe(
+        generation.subscribe(
                 response -> {
-                    var chatResponse = response == null ? null : response.chatResponse();
-                    var usage = usage(chatResponse);
-                    if (usage.totalTokens() > 0) {
-                        streamUsage[0] = usage.inputTokens();
-                        streamUsage[1] = usage.outputTokens();
-                        streamUsage[2] = usage.totalTokens();
+                    if (response.reset()) content.setLength(0);
+                    if (response.inputTokens() + response.outputTokens() > 0) {
+                        streamUsage[0] = response.inputTokens();
+                        streamUsage[1] = response.outputTokens();
+                        streamUsage[2] = response.inputTokens() + response.outputTokens();
                     }
-                    var token = chatResponse == null || chatResponse.getResult() == null
-                            || chatResponse.getResult().getOutput() == null ? ""
-                            : chatResponse.getResult().getOutput().getText();
+                    var token = response.text();
                     if (StringUtils.hasText(token)) {
                         if (firstTokenAt[0] == 0) firstTokenAt[0] = System.nanoTime();
                         content.append(token);
@@ -344,7 +361,8 @@ public class AssistantService {
                     repository.insertCallAudit(actor.organizationId(), actor.userId(), prepared.conversationId(), "QA_STREAM",
                             configuredModel, promptVersion, sha256(userPrompt), sha256(answer), finalUsage.inputTokens(),
                             finalUsage.outputTokens(), finalUsage.totalTokens(), "SUCCEEDED", null);
-                    memory.maybeSummarize(actor.organizationId(), prepared.conversationId());
+                    if (harness.enabled()) memory.summarize(actor.organizationId(), prepared.conversationId());
+                    else memory.maybeSummarize(actor.organizationId(), prepared.conversationId());
                     send(emitter, "done", new AssistantResponse(prepared.conversationId(), prepared.userMessageId(),
                             messageId, answer, normalized.citations(), normalized.usedWebSearch(), traceId, finalUsage));
                     emitter.complete();
@@ -407,7 +425,7 @@ public class AssistantService {
         history.addAll(repository.recentMessages(organizationId, conversationId, 8));
         timings.put("conversationDatabaseMs", elapsedMs(databaseStarted));
         var retrievalStarted = System.nanoTime();
-        var retrieval = retrievalPipeline.retrieve(organizationId, command.question(), history,
+        var retrieval = sharedRetrieval.retrieveFixed(organizationId, command.question(), history,
                 command.knowledgeCategoryIds(), command.dataCategoryIds(), command.webSearchEnabled(),
                 retrievalAccessScope);
         timings.put("ragRetrieveMs", elapsedMs(retrievalStarted));
@@ -505,7 +523,7 @@ public class AssistantService {
                                          RagRetrievalService.Retrieval retrieval) {
         var answerDataHits = answerDataHits(retrieval);
         var contextCharacterLimit = 18_000;
-        var compressed = retrievalPipeline.compress(hits, answerDataHits, contextCharacterLimit);
+        var compressed = sharedRetrieval.compress(retrieval, contextCharacterLimit);
         log.info("assistant_context_compressed knowledgeCandidates={} knowledgeIncluded={} knowledgeOmitted={} dataCandidates={} dataIncluded={} dataOmitted={} characters={} maxCharacters={}",
                 hits.size(), compressed.knowledgeCount(), Math.max(0, hits.size() - compressed.knowledgeCount()),
                 answerDataHits.size(), compressed.dataFileCount(),
@@ -516,7 +534,7 @@ public class AssistantService {
                 && !answerDataHits.isEmpty()) {
             var formulaRows = answerDataHits.stream()
                     .filter(hit -> hit != null && "FORMULA".equalsIgnoreCase(hit.semanticDomain())).count();
-            var totalRows = answerDataHits.stream().filter(AssistantService::isFormulaTotal).count();
+            var totalRows = answerDataHits.stream().filter(RetrievalContextSupport::isFormulaTotal).count();
             log.info("assistant_formula_check_context dataHits={} formulaRows={} totalRows={} mismatchContextIncluded={}",
                     answerDataHits.size(), formulaRows, totalRows, !formulaCheck.isBlank());
         }
@@ -546,8 +564,25 @@ public class AssistantService {
                 + (formulaCheck.isBlank() ? "" : "配方数值核对结果（来自同一来源、同一业务记录的原始字段计算）："
                 + formulaCheck + "。答案应逐项保留核对清单中的组分名称和值；若组分之和与来源合计不一致，必须同时给出两者并明确说明不一致；不得只报来源合计，也不得猜测缺项或原因。")
                 + "回答应为非空的自然语言文本。";
-        return new PromptBundle(text, evidenceCatalog(compressed.evidenceRefs(), external.evidenceRefs(), hits,
+        var evidence = new LinkedHashMap<>(evidenceCatalog(compressed.evidenceRefs(), external.evidenceRefs(), hits,
                 answerDataHits, retrieval.webHits()));
+        for(int i=0;i<retrieval.contextCandidates().size();i++) {
+            var label="K"+(hits.size()+i+1);
+            if(!compressed.evidenceRefs().contains(label))continue;
+            var parent=retrieval.contextCandidates().get(i);var source=parent.source();
+            var citation=new Citation("KNOWLEDGE_CHUNK",source.source_node_key(),source.document_id(),source.version_id(),
+                null,null,null,source.title(),source.title(),null,"父块上下文",preview(parent.text(),240),0,0,0,
+                "parent:"+parent.node_offset(),objectMapper.valueToTree(source.anchor()),List.of(),List.of(),List.of(),null,null,null,null,source.content_sha256());
+            evidence.put(label,new Evidence(citation,null,null));
+        }
+        var candidates = sharedRetrieval.preparedCandidates(retrieval, evidence.keySet());
+        for (var candidate : candidates) {
+            var label = candidate.path("label").asText();
+            var item = evidence.get(label);
+            evidence.put(label, new Evidence(item.citation().withEvidence(candidate.path("source")),
+                item.knowledgeHit(), item.dataHit()));
+        }
+        return new PromptBundle(text, evidence, candidates);
     }
 
     private String untrustedEvidence(String source, String value) {
@@ -557,167 +592,44 @@ public class AssistantService {
                 + safeValue + "\n" + endMarker;
     }
 
-    static List<DataSourceFileSearchFacade.SourceFileHit> answerDataHits(RagRetrievalService.Retrieval retrieval) {
-        if (retrieval == null) return List.of();
-        var result = new ArrayList<DataSourceFileSearchFacade.SourceFileHit>();
-        var seen = new HashSet<UUID>();
-        for (var hit : retrieval.dataHits()) {
-            if (hit.hitId() == null || seen.add(hit.hitId())) result.add(hit);
-        }
-        for (var context : retrieval.dataDetail().recordContexts()) {
-            for (var hit : context.contextHits()) {
-                if (hit.hitId() == null || seen.add(hit.hitId())) result.add(hit);
-            }
+    static List<String> selectEvidenceRefs(String answerStatus, List<String> requested, Set<String> available) {
+        if ("NOT_FOUND".equals(normalizedAnswerStatus(answerStatus)) || requested == null || requested.isEmpty()
+                || available == null || available.isEmpty()) return List.of();
+        var result = new ArrayList<String>();
+        for (var value : requested) {
+            if (!StringUtils.hasText(value)) continue;
+            var ref = value.strip().toUpperCase(Locale.ROOT);
+            if (available.contains(ref) && !result.contains(ref)) result.add(ref);
+            if (result.size() >= MAX_USED_EVIDENCE_REFS) break;
         }
         return List.copyOf(result);
     }
 
-    static String formulaConsistencyContext(String question,
-                                            List<DataSourceFileSearchFacade.SourceFileHit> hits) {
-        if (question == null || !question.matches("(?s).*(配方|组分|组成|合计|总计|添加量).*")) return "";
-        if (hits == null || hits.isEmpty()) return "";
-        var groups = new LinkedHashMap<String, List<DataSourceFileSearchFacade.SourceFileHit>>();
-        for (var hit : hits) {
-            // Imported totals may be mapped as OTHER/DYNAMIC_VALUE while the
-            // individual ingredients are correctly classified as FORMULA.
-            // Keep named total fields for comparison, but never sum arbitrary
-            // numeric observations as formula components.
-            if (hit == null || (!"FORMULA".equalsIgnoreCase(hit.semanticDomain())
-                    && !isFormulaTotal(hit))) continue;
-            var group = String.join("|", safeText(hit.fileObjectId() == null ? null : hit.fileObjectId().toString()),
-                    safeText(hit.importJobId() == null ? null : hit.importJobId().toString()),
-                    businessRecordKey(hit), safeText(hit.sheetName()));
-            groups.computeIfAbsent(group, ignored -> new ArrayList<>()).add(hit);
+    private Set<String> allowedImageAssets(List<KnowledgeSearchFacade.SearchHit> hits) {
+        var result = new HashSet<String>();
+        for (var hit : hits == null ? List.<KnowledgeSearchFacade.SearchHit>of() : hits) {
+            if (hit.anchor() != null) addAsset(result, hit.anchor());
+            if (hit.anchors() != null) hit.anchors().forEach(anchor -> addAsset(result, anchor));
         }
-        var checks = new ArrayList<String>();
-        for (var group : groups.values()) {
-            var totals = group.stream().filter(AssistantService::isFormulaTotal)
-                    .filter(hit -> numericValue(hit.fieldValue()) != null).toList();
-            var components = group.stream().filter(hit -> "FORMULA".equalsIgnoreCase(hit.semanticDomain()))
-                    .filter(hit -> !isFormulaTotal(hit))
-                    .filter(hit -> numericValue(hit.fieldValue()) != null)
-                    .collect(java.util.stream.Collectors.toMap(
-                            hit -> String.join("|", safeText(hit.sourceLabel()), safeText(hit.fieldName()),
-                                    safeText(hit.fieldValue()), safeText(hit.unit())),
-                            hit -> hit, (left, right) -> left, LinkedHashMap::new)).values().stream().toList();
-            if (totals.size() != 1 || components.size() < 2) continue;
-            var total = totals.getFirst();
-            var unit = safeText(total.unit()).strip();
-            if (components.stream().anyMatch(hit -> !safeText(hit.unit()).strip().equals(unit))) continue;
-            var sum = components.stream().map(hit -> numericValue(hit.fieldValue()))
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-            var sourceTotal = numericValue(total.fieldValue());
-            if (sourceTotal == null) continue;
-            var difference = sourceTotal.subtract(sum);
-            if (difference.compareTo(BigDecimal.ZERO) == 0) continue;
-            var representative = total;
-            var record = displayBusinessRecord(representative);
-            var componentValues = components.stream().map(hit -> {
-                        var label = safeText(hit.fieldName()).isBlank()
-                                ? safeText(hit.sourceLabel()) : safeText(hit.fieldName());
-                        var value = safeText(hit.fieldValue());
-                        var componentUnit = safeText(hit.unit()).strip();
-                        return label + "=" + value + (componentUnit.isBlank() ? "" : " " + componentUnit);
-                    })
-                    .collect(java.util.stream.Collectors.joining("；"));
-            checks.add("文件《" + safeText(representative.originalName()) + "》业务记录“" + record
-                    + "”：检索到的组分明细=" + componentValues
-                    + "；组分之和=" + decimalText(sum) + (unit.isBlank() ? "" : " " + unit)
-                    + "，来源合计=" + decimalText(sourceTotal) + (unit.isBlank() ? "" : " " + unit)
-                    + "，差额（来源合计－组分之和）=" + signedDecimalText(difference));
+        return result;
+    }
+
+    private void addAsset(Set<String> target, JsonNode anchor) {
+        if (anchor == null) return;
+        var value = anchor.path("assetFileId").asText("");
+        if (!value.isBlank()) target.add(value.toLowerCase(java.util.Locale.ROOT));
+    }
+
+    private String sanitizeImageReferences(String answer, Set<String> allowed) {
+        var matcher = IMAGE_REFERENCE.matcher(answer == null ? "" : answer);
+        var output = new StringBuffer();
+        while (matcher.find()) {
+            var assetId = matcher.group(3).toLowerCase(java.util.Locale.ROOT);
+            var replacement = allowed.contains(assetId) ? matcher.group(0) : "（未授权图片已隐藏）";
+            matcher.appendReplacement(output, Matcher.quoteReplacement(replacement));
         }
-        return String.join("；", checks);
-    }
-
-    private static boolean isFormulaTotal(DataSourceFileSearchFacade.SourceFileHit hit) {
-        var label = (safeText(hit.sourceLabel()) + " " + safeText(hit.fieldName()) + " "
-                + safeText(hit.semanticField())).replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
-        return label.matches(".*(合计|总计|小计|总和|total|subtotal|sum).*" );
-    }
-
-    private static BigDecimal numericValue(String raw) {
-        if (raw == null) return null;
-        var value = raw.strip().replace(",", "");
-        if (!value.matches("[-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?")) return null;
-        try {
-            return new BigDecimal(value);
-        } catch (NumberFormatException ignored) {
-            return null;
-        }
-    }
-
-    private static String displayBusinessRecord(DataSourceFileSearchFacade.SourceFileHit hit) {
-        var matcher = Pattern.compile("(?i)记录\\s*[：:=]\\s*([^；;]+)[；;]\\s*字段").matcher(safeText(hit.content()));
-        if (matcher.find()) return matcher.group(1).strip();
-        var key = safeText(hit.recordKey()).strip();
-        return key.isBlank() || key.matches("(?i)^IMPORT[:_-].*") ? "未提供" : key;
-    }
-
-    private static String businessRecordKey(DataSourceFileSearchFacade.SourceFileHit hit) {
-        var matcher = Pattern.compile("(?i)记录\\s*[：:=]\\s*([^；;]+)[；;]\\s*字段").matcher(safeText(hit.content()));
-        return matcher.find() ? matcher.group(1).strip() : safeText(hit.recordKey());
-    }
-
-    private static String decimalText(BigDecimal value) {
-        return value.stripTrailingZeros().toPlainString();
-    }
-
-    private static String signedDecimalText(BigDecimal value) {
-        var text = decimalText(value);
-        return value.signum() > 0 ? "+" + text : text;
-    }
-
-    static String dataLookupContext(DataSourceFileSearchFacade.DataDetailResult detail) {
-        return dataLookupContext(detail, "EMPTY");
-    }
-
-    static String dataLookupContext(DataSourceFileSearchFacade.DataDetailResult detail, boolean dataChannelSkipped) {
-        return dataLookupContext(detail, dataChannelSkipped ? "SKIPPED" : "SUCCEEDED");
-    }
-
-    static String dataLookupContext(DataSourceFileSearchFacade.DataDetailResult detail, String dataChannelStatus) {
-        if (detail == null || detail.mode() == DataSourceFileSearchFacade.DataQueryMode.NONE) {
-            var searchSummary = switch (dataChannelStatus) {
-                case "SUCCEEDED" -> "常规结构化检索已找到相关证据，见上方上下文。";
-                case "EMPTY" -> "常规结构化检索本轮没有返回匹配内容。";
-                case "SKIPPED" -> "本轮选择的检索范围不包含结构化数据来源，未执行这部分检索。";
-                case "FAILED" -> "常规结构化检索未能完成，不能据此判断是否有匹配记录。";
-                case "PARTIAL" -> "常规结构化检索部分失败，只能依据已返回的证据回答。";
-                default -> "本轮结构化检索结果未能确定。";
-            };
-            return "本轮未执行精确的记录/字段定位；" + searchSummary
-                    + "未命中只表示本轮授权范围内没有检索到匹配内容，不能据此判断整个资料库是否包含相关数据。";
-        }
-        var exactResultEmpty = detail.hits().isEmpty();
-        var state = "SKIPPED".equals(dataChannelStatus)
-                ? "本轮没有检索结构化数据来源，因为用户选择的范围不包含数据中心或实验记录。"
-                : "FAILED".equals(dataChannelStatus)
-                ? "结构化数据检索未能完成，不能据此判断是否存在匹配记录。"
-                : "PARTIAL".equals(dataChannelStatus)
-                ? "结构化数据检索部分失败；只可依据已提供的命中回答，不能声称结果完整。"
-                : "SUCCEEDED".equals(dataChannelStatus) && exactResultEmpty
-                ? "精确的记录/字段定位未返回目标值，但一般结构化检索已找到相关证据；请依据上方命中内容回答。"
-                : "EMPTY".equals(dataChannelStatus) && exactResultEmpty
-                ? "精确定位和一般结构化检索本轮都未返回匹配内容，未找到匹配文件或记录；只能说明当前授权范围内本次未命中，不能据此判断整个资料库是否包含相关数据。"
-                : switch (detail.resolution()) {
-            case RESOLVED -> detail.hits().isEmpty()
-                    ? "查询已执行，但没有找到匹配的非空记录值。"
-                    : "查询已执行并找到匹配记录，命中数据见证据上下文。";
-            case FILE_REQUIRED -> "精确定位缺少唯一记录或文件线索；一般结构化检索结果仍需以已提供的证据为准。";
-            case AMBIGUOUS -> "查询命中多个同等匹配的数据文件，需要用户选择文件。";
-            case NOT_FOUND -> "当前授权数据范围内未找到匹配文件或记录。";
-            case NOT_REQUESTED -> "本轮没有执行精确的记录/字段查询。";
-        };
-        var result = new StringBuilder("查询类型=").append(detail.mode())
-                .append("；结果=").append(state)
-                .append("；命中记录值数=").append(detail.hits().size());
-        if (StringUtils.hasText(detail.originalName())) {
-            result.append("；来源文件=").append(promptText(detail.originalName(), ""));
-        }
-        var boundary = dataEvidenceBoundary(detail);
-        if (boundary.observationOnly()) result.append("；回答限制=").append(boundary.description());
-        if (detail.truncated()) result.append("；结果已截断，只能概括已提供的命中");
-        return result.toString();
+        matcher.appendTail(output);
+        return output.toString();
     }
 
     private ExternalContext externalContext(List<RagRetrievalService.WebHit> webHits) {
@@ -785,224 +697,6 @@ public class AssistantService {
                 answerStatus, usedEvidenceRefs);
     }
 
-    static String normalizedAnswerStatus(String value) {
-        if (!StringUtils.hasText(value)) return "NOT_FOUND";
-        var normalized = value.strip().toUpperCase(Locale.ROOT);
-        return Set.of("ANSWERED", "PARTIAL", "NOT_FOUND").contains(normalized) ? normalized : "NOT_FOUND";
-    }
-
-    private static String analysisGoalCode(DataSourceFileSearchFacade.DataDetailResult detail) {
-        return detail == null ? "VALUE" : detail.analysisGoal();
-    }
-
-    private static int contextCandidateCount(DataSourceFileSearchFacade.DataDetailResult detail) {
-        if (detail == null || detail.recordContexts() == null) return 0;
-        return detail.recordContexts().stream().mapToInt(context -> context.contextHits().size()).sum();
-    }
-
-    private static int contextSelectedCount(DataSourceFileSearchFacade.DataDetailResult detail) {
-        return contextCandidateCount(detail);
-    }
-
-    private static int contextTruncatedCount(DataSourceFileSearchFacade.DataDetailResult detail) {
-        if (detail == null || detail.recordContexts() == null) return 0;
-        return (int) detail.recordContexts().stream().filter(DataSourceFileSearchFacade.RecordContext::contextTruncated).count();
-    }
-
-    private static int comparableRecordCount(DataSourceFileSearchFacade.DataDetailResult detail) {
-        if (detail == null || detail.recordContexts() == null) return 0;
-        return (int) detail.recordContexts().stream().filter(DataSourceFileSearchFacade.RecordContext::comparable).count();
-    }
-
-    private static int conditionConflictCount(DataSourceFileSearchFacade.DataDetailResult detail) {
-        if (detail == null) return 0;
-        var groups = new LinkedHashMap<String, Set<String>>();
-        for (var hit : detail.hits()) groups.computeIfAbsent(fieldGroupKey(hit), ignored -> new java.util.LinkedHashSet<>())
-                .add(comparisonSignature(hit));
-        return (int) groups.values().stream().filter(values -> values.size() > 1).count();
-    }
-
-    private static String promptText(String value, String fallback) {
-        if (!StringUtils.hasText(value)) return fallback;
-        return value.replaceAll("[\\r\\n\\t]+", " ").strip();
-    }
-
-    private static String sourceLabel(DataSourceFileSearchFacade.SourceFileHit hit) {
-        return hit == null ? "" : StringUtils.hasText(hit.sourceLabel()) ? hit.sourceLabel() : hit.fieldName();
-    }
-
-    static DataEvidenceBoundary dataEvidenceBoundary(DataSourceFileSearchFacade.DataDetailResult detail) {
-        var hits = detail == null || detail.hits() == null ? List.<DataSourceFileSearchFacade.SourceFileHit>of()
-                : detail.hits();
-        var contextHits = detail == null ? List.<DataSourceFileSearchFacade.SourceFileHit>of()
-                : detail.recordContexts().stream().flatMap(context -> context.contextHits().stream()).toList();
-        var allEvidenceHits = new ArrayList<DataSourceFileSearchFacade.SourceFileHit>(hits);
-        allEvidenceHits.addAll(contextHits);
-        var aliases = recordAliases(hits);
-        var draft = allEvidenceHits.stream().anyMatch(hit -> "DRAFT".equalsIgnoreCase(safeText(hit.sourceStatus())));
-        var unconfirmed = allEvidenceHits.stream().anyMatch(AssistantService::observationOnlySource);
-        var confirmed = allEvidenceHits.stream().anyMatch(hit -> {
-            var status = safeText(hit.sourceStatus()).strip();
-            return "CONFIRMED".equalsIgnoreCase(status) || "COMPLETED".equalsIgnoreCase(status);
-        });
-        var grouped = new LinkedHashMap<String, Set<String>>();
-        for (var hit : hits) {
-            grouped.computeIfAbsent(fieldGroupKey(hit), ignored -> new java.util.LinkedHashSet<>())
-                    .add(recordBoundaryKey(hit));
-        }
-        var signatures = new LinkedHashMap<String, Set<String>>();
-        for (var hit : hits) signatures.computeIfAbsent(fieldGroupKey(hit), ignored -> new java.util.LinkedHashSet<>())
-                .add(comparisonSignature(hit));
-        var comparable = (int) grouped.entrySet().stream()
-                .filter(entry -> entry.getValue().size() > 1)
-                .filter(entry -> signatures.getOrDefault(entry.getKey(), Set.of()).size() == 1)
-                .count();
-        var observationOnly = draft || unconfirmed;
-        var description = observationOnly && confirmed
-                ? "来源状态混合：既有已确认记录，也有草稿或未正式确认来源。逐条注明状态；整体不作达标、优劣、稳定性或推荐判断。"
-                : draft
-                ? "包含草稿实验；只允许陈述和比较观察值，不用于达标、优劣、稳定性、原因或推荐判断。"
-                : unconfirmed
-                ? "包含未正式确认来源；只允许陈述和比较观察值，不用于最终研发判断。"
-                : "来源状态已确认；仍需在单位、测试方法和条件一致时才可比较，不自动推断因果。";
-        return new DataEvidenceBoundary(observationOnly, aliases.size(), comparable, description);
-    }
-
-    private static boolean observationOnlySource(DataSourceFileSearchFacade.SourceFileHit hit) {
-        var status = safeText(hit.sourceStatus()).strip().toUpperCase(Locale.ROOT);
-        return !("CONFIRMED".equals(status) || "COMPLETED".equals(status));
-    }
-
-    private static Map<String, String> recordAliases(List<DataSourceFileSearchFacade.SourceFileHit> hits) {
-        var result = new LinkedHashMap<String, String>();
-        if (hits == null) return result;
-        for (var hit : hits) {
-            var key = recordBoundaryKey(hit);
-            result.computeIfAbsent(key, ignored -> "观察" + (result.size() + 1));
-        }
-        return result;
-    }
-
-    private static String recordBoundaryKey(DataSourceFileSearchFacade.SourceFileHit hit) {
-        if (hit == null) return "UNKNOWN";
-        return safeText(hit.importJobId() == null ? null : hit.importJobId().toString()) + "|"
-                + safeText(hit.recordKey()) + "|" + safeText(hit.sheetName());
-    }
-
-    private static String fieldGroupKey(DataSourceFileSearchFacade.SourceFileHit hit) {
-        if (hit == null) return "UNKNOWN";
-        var semantic = normalizeLookup(hit.semanticDomain()) + "/" + normalizeLookup(hit.semanticField());
-        if (!semantic.equals("/")) return semantic;
-        var name = normalizeLookup(hit.fieldName());
-        return name.isBlank() ? normalizeLookup(hit.fieldCode()) : name;
-    }
-
-    private static String comparisonSignature(DataSourceFileSearchFacade.SourceFileHit hit) {
-        if (hit == null) return "";
-        return fieldGroupKey(hit) + "|label=" + normalizeLookup(sourceLabel(hit))
-                + "|declared=" + normalizeLookup(hit.declaredCondition())
-                + "|unit=" + normalizeLookup(StringUtils.hasText(hit.standardUnit()) ? hit.standardUnit() : hit.unit());
-    }
-
-    private static String sourceStatusLabel(DataSourceFileSearchFacade.SourceFileHit hit) {
-        var status = safeText(hit.sourceStatus()).strip().toUpperCase(Locale.ROOT);
-        return switch (status) {
-            case "DRAFT" -> "草稿";
-            case "CONFIRMED", "COMPLETED" -> "已确认";
-            case "UNCONFIRMED" -> "未正式确认";
-            default -> "状态未知，按未确认处理";
-        };
-    }
-
-    private static String safeDisplayText(String value, String fallback) {
-        if (!StringUtils.hasText(value)) return fallback;
-        return escapeMarkdown(value.replaceAll("[\\p{Cntrl}]+", " ").strip());
-    }
-
-    static FieldAmbiguity detectFieldAmbiguity(String question,
-                                                List<DataSourceFileSearchFacade.SourceFileHit> hits) {
-        var normalizedQuestion = normalizeLookup(question);
-        if (normalizedQuestion.isBlank() || hits == null || hits.isEmpty()) return null;
-        var grouped = new LinkedHashMap<String, LinkedHashMap<String, FieldCandidate>>();
-        for (var hit : hits) {
-            if (!StringUtils.hasText(hit.fieldName()) || !StringUtils.hasText(hit.fieldCode())) continue;
-            var normalizedName = normalizeLookup(hit.fieldName());
-            var normalizedCode = normalizeLookup(hit.fieldCode());
-            if (normalizedName.length() < 2
-                    || !(normalizedQuestion.contains(normalizedName) || normalizedQuestion.contains(normalizedCode))) {
-                continue;
-            }
-            var candidate = new FieldCandidate(hit.fieldCode(), hit.valueType(), hit.unit());
-            var signature = String.join("|", candidate.code(), safeText(candidate.valueType()), safeText(candidate.unit()));
-            grouped.computeIfAbsent(hit.fieldName(), ignored -> new LinkedHashMap<>()).putIfAbsent(signature, candidate);
-        }
-        return grouped.entrySet().stream()
-                .filter(entry -> entry.getValue().size() > 1)
-                .sorted(Map.Entry.comparingByKey())
-                .map(entry -> new FieldAmbiguity(entry.getKey(), entry.getValue().values().stream()
-                        .sorted(java.util.Comparator.comparing(FieldCandidate::code)).toList()))
-                .findFirst().orElse(null);
-    }
-
-    private static String normalizeLookup(String value) {
-        return value == null ? "" : value.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9\\u4E00-\\u9FFF]", "");
-    }
-
-    private static String markdownCell(String value, String fallback) {
-        var normalized = StringUtils.hasText(value) ? value.strip() : fallback;
-        normalized = normalized.replace('|', '｜').replaceAll("[\\r\\n\\t]+", " / ");
-        normalized = escapeMarkdown(normalized);
-        return normalized.length() <= 240 ? normalized : normalized.substring(0, 239) + "…";
-    }
-
-    private static String escapeMarkdown(String value) {
-        return value.replace("&", "&amp;").replace("*", "&#42;").replace("_", "&#95;").replace("`", "&#96;");
-    }
-
-    private static String safeText(String value) {
-        return value == null ? "" : value;
-    }
-
-    static List<String> selectEvidenceRefs(String answerStatus, List<String> requested, Set<String> available) {
-        if ("NOT_FOUND".equals(normalizedAnswerStatus(answerStatus)) || requested == null || requested.isEmpty()
-                || available == null || available.isEmpty()) return List.of();
-        var result = new ArrayList<String>();
-        for (var value : requested) {
-            if (!StringUtils.hasText(value)) continue;
-            var ref = value.strip().toUpperCase(Locale.ROOT);
-            if (available.contains(ref) && !result.contains(ref)) result.add(ref);
-            if (result.size() >= MAX_USED_EVIDENCE_REFS) break;
-        }
-        return List.copyOf(result);
-    }
-
-    private Set<String> allowedImageAssets(List<KnowledgeSearchFacade.SearchHit> hits) {
-        var result = new HashSet<String>();
-        for (var hit : hits == null ? List.<KnowledgeSearchFacade.SearchHit>of() : hits) {
-            if (hit.anchor() != null) addAsset(result, hit.anchor());
-            if (hit.anchors() != null) hit.anchors().forEach(anchor -> addAsset(result, anchor));
-        }
-        return result;
-    }
-
-    private void addAsset(Set<String> target, JsonNode anchor) {
-        if (anchor == null) return;
-        var value = anchor.path("assetFileId").asText("");
-        if (!value.isBlank()) target.add(value.toLowerCase(java.util.Locale.ROOT));
-    }
-
-    private String sanitizeImageReferences(String answer, Set<String> allowed) {
-        var matcher = IMAGE_REFERENCE.matcher(answer == null ? "" : answer);
-        var output = new StringBuffer();
-        while (matcher.find()) {
-            var assetId = matcher.group(3).toLowerCase(java.util.Locale.ROOT);
-            var replacement = allowed.contains(assetId) ? matcher.group(0) : "（未授权图片已隐藏）";
-            matcher.appendReplacement(output, Matcher.quoteReplacement(replacement));
-        }
-        matcher.appendTail(output);
-        return output.toString();
-    }
-
     private Citation fallbackCitation(KnowledgeSearchFacade.SearchHit hit) {
         return new Citation("KNOWLEDGE_CHUNK", hit.chunkId().toString(), hit.documentId().toString(), hit.versionId().toString(),
                 null, null, null, hit.title(), hit.originalName(), hit.pageNo(), hit.section(), preview(hit.content(), 240),
@@ -1036,6 +730,7 @@ public class AssistantService {
 
     private com.fasterxml.jackson.databind.node.ObjectNode retrievalTrace(Prepared prepared, Map<String, Long> extra) {
         com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.valueToTree(prepared.retrieval().trace());
+        result.set("pipeline",objectMapper.valueToTree(prepared.retrieval().pipelineTrace()));
         result.put("provider", providerName());
         result.put("status", "SUCCEEDED");
         var timings = result.putObject("assistantTimings");
@@ -1384,7 +1079,22 @@ public class AssistantService {
                            List<com.fasterxml.jackson.databind.JsonNode> anchors, List<UUID> reviewNodeIds,
                            List<UUID> sourceNodeKeys, String url, String siteName, String publishedAt,
                            String fetchedAt, String contentHash, String sourceOwner, String recognitionMode,
+                           UUID experimentId, UUID experimentVersionId, String evidenceId, com.fasterxml.jackson.databind.JsonNode source) {
+        public Citation(String sourceType, String chunkId, String documentId, String versionId, String fileObjectId,
+                           String importJobId, Integer rowNumber, String title, String originalName, Integer pageNo,
+                           String section, String snippet, double retrievalScore, double rrfScore, double rerankScore,
+                           String sourceLocator, com.fasterxml.jackson.databind.JsonNode anchor,
+                           List<com.fasterxml.jackson.databind.JsonNode> anchors, List<UUID> reviewNodeIds,
+                           List<UUID> sourceNodeKeys, String url, String siteName, String publishedAt,
+                           String fetchedAt, String contentHash, String sourceOwner, String recognitionMode,
                            UUID experimentId, UUID experimentVersionId) {
+            this(sourceType, chunkId, documentId, versionId, fileObjectId, importJobId, rowNumber, title, originalName, pageNo, section, snippet, retrievalScore, rrfScore, rerankScore, sourceLocator, anchor, anchors, reviewNodeIds, sourceNodeKeys, url, siteName, publishedAt, fetchedAt, contentHash, sourceOwner, recognitionMode, experimentId, experimentVersionId, null, null);
+        }
+
+        Citation withEvidence(com.fasterxml.jackson.databind.JsonNode value) {
+            return new Citation(sourceType, chunkId, documentId, versionId, fileObjectId, importJobId, rowNumber, title, originalName, pageNo, section, snippet, retrievalScore, rrfScore, rerankScore, sourceLocator, anchor, anchors, reviewNodeIds, sourceNodeKeys, url, siteName, publishedAt, fetchedAt, contentHash, sourceOwner, recognitionMode, experimentId, experimentVersionId, com.jsd.aird.ai.api.EvidenceProtocol.evidenceId(value), value);
+        }
+
         public Citation(String sourceType, String chunkId, String documentId, String versionId, String fileObjectId,
                         String importJobId, Integer rowNumber, String title, String originalName, Integer pageNo,
                         String section, String snippet, double retrievalScore, double rrfScore, double rerankScore,
@@ -1422,14 +1132,13 @@ public class AssistantService {
         }
     }
 
-    record FieldCandidate(String code, String valueType, String unit) { }
-    record FieldAmbiguity(String fieldName, List<FieldCandidate> candidates) { }
+
+
     private record Evidence(Citation citation, KnowledgeSearchFacade.SearchHit knowledgeHit,
                             DataSourceFileSearchFacade.SourceFileHit dataHit) { }
-    private record PromptBundle(String text, Map<String, Evidence> evidence) { }
+    private record PromptBundle(String text, Map<String, Evidence> evidence, com.fasterxml.jackson.databind.node.ArrayNode candidates) { }
     private record ExternalContext(String text, List<String> evidenceRefs) { }
-    record DataEvidenceBoundary(boolean observationOnly, int recordCount, int comparableFieldCount,
-                                String description) { }
+
     private record NormalizedAnswer(String answer, List<Citation> citations, boolean usedWebSearch,
                                     String answerStatus, List<String> usedEvidenceRefs) { }
 }

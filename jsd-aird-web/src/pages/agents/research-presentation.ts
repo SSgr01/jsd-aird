@@ -47,7 +47,7 @@ export function reportAssessment(report?: LiteratureReport) {
       detail: '没有对应这份报告的事实核查记录；使用前请核对原文。',
       passed: false,
     };
-  if (review.quality_check_version !== 2)
+  if (review.quality_check_version !== 3)
     return {
       label: '待重新核查',
       detail: '这份报告只有旧版核查记录，不能视为当前协议核查通过。',

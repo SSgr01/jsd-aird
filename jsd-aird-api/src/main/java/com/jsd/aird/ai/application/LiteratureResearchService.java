@@ -118,7 +118,7 @@ public class LiteratureResearchService {
                     || field.path("excerpt").asText().isBlank()) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "证据字段需要唯一名称与原文摘录");
                 var source = mapper.convertValue(field.path("source"), ResearchKnowledgeFacade.SourceRef.class);
                 versions.add(source.document_id() + ":" + source.publication_id() + ":" + source.version_id());
-                knowledge.validate(source, field.path("excerpt").asText());
+                sources.validate(field.path("source"), field.path("excerpt").asText());
                 ((ObjectNode) field).put("status", "AI_EXTRACTED");
                 ((ObjectNode) field).remove(List.of("verified_by", "verified_at"));
             }
@@ -126,11 +126,11 @@ public class LiteratureResearchService {
             payload.set("history", mapper.createArrayNode());
         }
         if ("annotation".equals(kind) && payload.hasNonNull("source"))
-            knowledge.validate(mapper.convertValue(payload.path("source"), ResearchKnowledgeFacade.SourceRef.class), payload.path("excerpt").asText(""));
+            sources.validate(payload.path("source"), payload.path("excerpt").asText(""));
         if ("report".equals(kind)) {
             payload.put("status", "CANDIDATE_PENDING_REVIEW");
             for (var evidence : payload.path("evidence"))
-                knowledge.validate(mapper.convertValue(evidence.path("source"), ResearchKnowledgeFacade.SourceRef.class), evidence.path("text").asText());
+                sources.validate(evidence.path("source"), evidence.path("text").asText());
             var matcher = java.util.regex.Pattern.compile("\\[E:([a-zA-Z0-9_-]+)\\]").matcher(payload.path("text").asText());
             if (!payload.path("evidence").isObject() || payload.path("evidence").isEmpty() || !matcher.find())
                 throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "研究报告至少需要一处原文证据引用；提纲请保存为笔记");
@@ -175,7 +175,7 @@ public class LiteratureResearchService {
         var card = get("card", id);
         var found = false;
         for (var field : card.path("fields")) if (name.equals(field.path("name").asText())) {
-            knowledge.validate(mapper.convertValue(field.path("source"), ResearchKnowledgeFacade.SourceRef.class), field.path("excerpt").asText());
+            sources.validate(field.path("source"), field.path("excerpt").asText());
             var before = field.deepCopy();
             ((ObjectNode) field).put("status", status).put("verified_by", ActorContext.required().userId().toString())
                 .put("verified_at", java.time.Instant.now().toString());
@@ -199,7 +199,26 @@ public class LiteratureResearchService {
     }
 
     private void authorizeSource(JsonNode source) {
-        knowledge.authorize(List.of(new ResearchKnowledgeFacade.DocumentRef(
-            UUID.fromString(source.path("document_id").asText()), UUID.fromString(source.path("publication_id").asText()))));
+        sources.one(source);
+    }
+
+    public ObjectNode receipt(ObjectNode args) {
+        requireUse();
+        var kind = switch (args.path("tool").asText()) {
+            case "note_save" -> "annotation";
+            case "evidence_save" -> "card";
+            case "report_save" -> "report";
+            case "artifact_save" -> "artifact";
+            default -> "";
+        };
+        var actor = ActorContext.required();
+        var key = args.path("operation_key").asText();
+        if (kind.isEmpty() || !key.matches("[a-f0-9]{64}")) return mapper.createObjectNode().put("status", "UNKNOWN");
+        var found = jdbc.queryForList("SELECT id FROM ai.research_record WHERE kind=? AND organization_id=? AND owner_id=? AND idempotency_key=?",
+            UUID.class, kind, actor.organizationId(), actor.userId(), key);
+        if (found.isEmpty()) return mapper.createObjectNode().put("status", "UNKNOWN");
+        var result = mapper.createObjectNode().put("status", "SUCCEEDED").put("operation_key", key);
+        result.set("result", get(kind, found.getFirst()));
+        return result;
     }
 }

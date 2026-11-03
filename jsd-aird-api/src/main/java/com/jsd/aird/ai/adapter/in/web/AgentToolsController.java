@@ -8,6 +8,7 @@ import com.jsd.aird.ai.application.LiteratureResearchService;
 import com.jsd.aird.ai.application.ResearchArtifactService;
 import com.jsd.aird.ai.application.AgentHostService;
 import com.jsd.aird.ai.application.SharedRetrievalService;
+import com.jsd.aird.ai.application.PrivateResearchSourceService;
 import com.jsd.aird.mdm.api.AgentProjectFacade;
 import com.jsd.aird.ai.application.port.WebSearchProvider;
 import com.jsd.aird.kb.api.ResearchKnowledgeFacade;
@@ -31,15 +32,17 @@ public class AgentToolsController {
     private final ObjectMapper mapper;
     private final boolean enabled;
     private final ResearchArtifactService artifacts;
+    private final PrivateResearchSourceService privateSources;
 
     public AgentToolsController(AgentDelegation delegation, LiteratureResearchService research,
             ResearchKnowledgeFacade knowledge, WebSearchProvider web, ObjectMapper mapper, ResearchArtifactService artifacts,
             AgentHostService host, SharedRetrievalService retrieval, AgentProjectFacade projects,
-            @Value("${app.ai.harness.enabled:false}") boolean enabled) {
+            @Value("${app.ai.harness.enabled:false}") boolean enabled, PrivateResearchSourceService privateSources) {
         this.delegation = delegation; this.research = research; this.knowledge = knowledge;
         this.web = web; this.mapper = mapper; this.enabled = enabled;
         this.host = host; this.retrieval = retrieval; this.projects = projects;
         this.artifacts = artifacts;
+        this.privateSources = privateSources;
     }
 
     public record ToolRequest(String action, ObjectNode arguments) { }
@@ -57,20 +60,31 @@ public class AgentToolsController {
                 case "topic" -> topic(UUID.fromString(args.path("id").asText()));
                 case "runtime_context" -> host.context(args);
                 case "authorize_sources" -> host.authorizeSources(args);
+                case "validate_cached_evidence" -> host.validateEvidence(args);
                 case "research_topic_ensure" -> host.ensureTopic(args);
                 case "retrieval_context" -> retrieval.retrieve(args);
+                case "private_source_upload" -> privateSources.upload(args);
+                case "private_source_get" -> privateSources.metadata(UUID.fromString(args.path("document_id").asText()));
+                case "private_source_read" -> privateSources.read(args);
+                case "private_source_search" -> retrieval.privateDocuments(host.context(args), args);
+                case "private_source_outline" -> privateSources.outline(args);
+                case "private_source_context" -> privateSources.context(args);
+                case "source_context" -> "parent".equals(args.path("relation").asText("neighbors"))
+                    ? knowledge.parentContext(mapper.convertValue(args.path("source"), ResearchKnowledgeFacade.SourceRef.class),args.path("cursor").asInt(),2000)
+                    : knowledge.context(mapper.convertValue(args.path("source"), ResearchKnowledgeFacade.SourceRef.class),args.path("before").asInt(1),args.path("after").asInt(1),args.path("cursor").asInt());
+                case "operation_receipt" -> research.receipt(args);
                 case "search_projects", "get_project_snapshot", "list_project_stages", "list_project_tasks", "get_task_detail" -> projects.read(command.action(), args);
                 case "authorize" -> { knowledge.authorize(refs(args.path("documents"))); yield Map.of("allowed", true); }
                 case "knowledge_search" -> {
                     var scope = args.hasNonNull("topic_id") ? topic(UUID.fromString(args.path("topic_id").asText())) : host.context(args);
                     yield retrieval.documents(scope, args);
                 }
-                case "document_read", "table_read" -> {
+                case "document_read", "document_outline", "table_read" -> {
                     var topic = args.hasNonNull("topic_id") ? topic(UUID.fromString(args.path("topic_id").asText())) : host.context(args);
                     var ref = new ResearchKnowledgeFacade.DocumentRef(UUID.fromString(args.path("document_id").asText()), UUID.fromString(args.path("publication_id").asText()));
                     if (!"AUTOMATIC".equals(topic.path("scope_mode").asText()) && !research.documents(topic).contains(ref))
                         throw new ApiException(ApiErrorCode.DATA_SCOPE_DENIED);
-                    yield "document_read".equals(command.action())
+                    yield "document_outline".equals(command.action()) ? knowledge.outline(ref,args.path("offset").asInt()) : "document_read".equals(command.action())
                         ? knowledge.read(ref, args.path("offset").asInt(), args.path("limit").asInt(12))
                         : knowledge.table(ref, UUID.fromString(args.path("table_id").asText()), args.path("offset").asInt());
                 }

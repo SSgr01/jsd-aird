@@ -9,7 +9,8 @@ import {
   RobotOutlined,
   SendOutlined,
 } from '@ant-design/icons';
-import { Button, Empty, Input, List, Modal, Popconfirm, Space, Spin, Typography } from 'antd';
+import { Button, Empty, Input, List, Modal, Popconfirm, Space, Typography } from 'antd';
+import { ConversationFeedback } from './ConversationFeedback';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import {
   useCallback,
@@ -430,8 +431,7 @@ export function AiConversationWorkspace({
           )}
           {loading && !messages.length && (
             <div className="ai-conversation-state">
-              <Spin />
-              <Typography.Text type="secondary">正在加载会话…</Typography.Text>
+              <ConversationFeedback kind="restoring" message="正在加载会话…" />
             </div>
           )}
           {(messages.length > 0 || !hideEmptyList) && (

@@ -19,15 +19,19 @@ public class AgentSourceAuthorization {
     private final ResearchKnowledgeFacade knowledge;
     private final AgentProjectFacade projects;
     private final DataSourceFileSearchFacade data;
+    private final PrivateResearchSourceService privateSources;
 
     public AgentSourceAuthorization(AuthorizationService authorization, ResearchKnowledgeFacade knowledge,
-            AgentProjectFacade projects, DataSourceFileSearchFacade data) {
+            AgentProjectFacade projects, DataSourceFileSearchFacade data, PrivateResearchSourceService privateSources) {
         this.authorization = authorization; this.knowledge = knowledge; this.projects = projects; this.data = data;
+        this.privateSources = privateSources;
     }
 
     public void authorize(JsonNode sources) {
         if (!sources.isArray() || sources.size() > 500) throw new ApiException(ApiErrorCode.BAD_REQUEST);
-        for (var source : sources) one(source);
+        privateSources.authorizeAll(sources);
+        for (var source : sources)
+            if (!List.of("RUN_UPLOAD", "EXTERNAL_FULLTEXT").contains(source.path("kind").asText())) one(source);
     }
 
     public void one(JsonNode source) {
@@ -36,6 +40,7 @@ public class AgentSourceAuthorization {
             case "KB_PUBLICATION" -> knowledge.authorize(List.of(new ResearchKnowledgeFacade.DocumentRef(
                 UUID.fromString(source.path("document_id").asText()), UUID.fromString(source.path("publication_id").asText()))));
             case "BUSINESS_RECORD" -> projects.authorizeSource(source);
+            case "RUN_UPLOAD", "EXTERNAL_FULLTEXT" -> privateSources.validate(source, null);
             case "DATA_SOURCE_FILE" -> {
                 boolean experiment = "EXPERIMENT".equals(source.path("resource_type").asText());
                 if (!experiment && !"DATA".equals(source.path("resource_type").asText())) throw new ApiException(ApiErrorCode.BAD_REQUEST);
@@ -51,6 +56,19 @@ public class AgentSourceAuthorization {
                     throw new ApiException(ApiErrorCode.BAD_REQUEST);
             }
             default -> throw new ApiException(ApiErrorCode.BAD_REQUEST, "尚未接入的来源类型");
+        }
+    }
+
+    public void validate(JsonNode source, String excerpt) {
+        if (List.of("RUN_UPLOAD", "EXTERNAL_FULLTEXT").contains(source.path("kind").asText())) {
+            privateSources.validate(source, excerpt);
+        } else {
+            one(source);
+            knowledge.validate(new ResearchKnowledgeFacade.SourceRef(source.path("kind").asText(),
+                source.path("document_id").asText(), source.path("version_id").asText(),
+                source.path("publication_id").asText(null), source.path("source_node_key").asText(),
+                source.path("content_sha256").asText(), source.path("anchor"), source.path("title").asText(),
+                source.path("url").asText(null)), excerpt);
         }
     }
 

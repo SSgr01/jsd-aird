@@ -7,8 +7,8 @@
 - `jsd-aird-web`：React 管理端基础外壳。
 - `jsd-aird-api`：Java/Spring Boot 模块化单体。
 - `jsd-aird-ai`：T07-PRE 独立 Python 配方模型计算服务，已完成A.2～A.5算法门禁、适用域、实验优化与分类目标Pipeline。
-- `jsd-aird-agents`：共享 AI 平台与可插拔业务模块，提供 LangGraph、Skills、统一调度、模拟 Java 读写审批闭环、恢复和 SSE；使用原生 Python 与独立 PostgreSQL，不依赖 Java 权限进度或 Docker。参见 [模块说明](jsd-aird-agents/README.md)。
-- `jsd-aird-agent-runtime`：从固定 pi 子模块源码构建的原生循环；Python `runtime_core` 提供可复用控制层，JSD 权限、文献和问答策略通过宿主适配器接入。普通问答可切换 pi 生成并保留 Java 历史与消息 ID；私有资料及执行回执需部署对应迁移。参见 [Harness 说明](jsd-aird-agent-runtime/README.md) 与 [当前验收记录](jsd-aird-agent-runtime/VALIDATION.md)。
+- `jsd-aird-agent/control`：原生 Python Harness 控制服务，提供可插拔业务能力包、受控技能读取与工具发现、统一调度、运行预算、审批约束、检查点恢复和 SSE。宿主无关控制层位于 `src/aird_agent/core`，JSD 权限、文献及问答策略通过 `src/aird_agent/hosts/jsd` 与能力包接入；任务账本使用独立 PostgreSQL。Java 宿主负责真实业务权限、检索与成果存储，业务写入仍需相应工具和正式审批接入，不能将旧模拟闭环视为已具备的业务能力。参见 [平台说明](jsd-aird-agent/README.md)与[控制服务说明](jsd-aird-agent/control/README.md)。
+- `jsd-aird-agent/pi-worker`：从固定 `vendor/pi` 子模块源码构建的 Node.js 原生模型执行循环，由 Python Harness 调度，当前不再使用 LangGraph 循环。普通问答可通过现有开关切换 pi 固定生成并保留 Java 历史与消息 ID；文献研究按需调用授权工具，两种策略共用底座但保留独立会话。私有资料及成果回执依赖对应数据库结构和存储配置；Docker 仅用于启用后的隔离沙箱计算，问答与普通工具调用不要求 Docker。参见 [pi 执行器说明](jsd-aird-agent/pi-worker/README.md)、[证据协议](jsd-aird-agent/docs/evidence-protocol.md)、[检索链路说明](jsd-aird-agent/docs/retrieval-pipeline.md)。
 - `compose.yaml`：提供 PostgreSQL 18/pgvector、MinIO、Worker 与 AI 计算服务的容器编排。
 
 T07-A 仅新增算法、适用域、不可变制品和跨语言契约，不接入 T03–T06 尚未合并的客户接口和数据库结构。

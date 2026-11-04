@@ -68,6 +68,19 @@ async def reconcile(service, principal, rid, call_id):
             workspace, digest([rid, operation["execution_epoch"], call_id])[:32]
         )
         authority["operation_key"] = digest([rid, call_id])
+    elif operation["tool_name"] == "literature_acquire":
+        result = await service.java(
+            principal, "literature_acquire_status",
+            {"conversation_id": run["conversation_id"], "work_id": operation["arguments"]["work_id"]}, rid,
+        )
+        known = (
+            result.get("status") in {"ACQUIRING", "PARSING", "READY", "FAILED"}
+            and result.get("conversation_id") == run["conversation_id"]
+            and result.get("work_id") == operation["arguments"]["work_id"]
+            and result.get("kind") == "EXTERNAL_FULLTEXT"
+        )
+        # The durable reservation confirms submission, not successful reading of the PDF.
+        authority = {"status": "SUCCEEDED" if known else "UNKNOWN", "operation_key": digest([rid, call_id]), "result": result}
     else:
         authority = await service.java(
             principal,

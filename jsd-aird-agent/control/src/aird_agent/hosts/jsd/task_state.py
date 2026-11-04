@@ -1,15 +1,27 @@
 """Observable task state, not a fixed workflow or scientific verification."""
 
 import json
+from pathlib import PurePosixPath
 
 from fastapi import HTTPException
 
+from aird_agent.capabilities.files.completion import check_file_completion
 from aird_agent.core.contracts import digest
 
 
 def check_plan(plan):
     """Keep legacy logs readable; new research plans carry explicit scope and method."""
+    if plan["task_type"] == "GENERAL" and plan.get("presentation") == "research_plan_v1":
+        # A display hint must not impose literature fields on an ordinary task.
+        plan = {key: value for key, value in plan.items() if key != "presentation"}
     steps = plan["steps"]
+    if "analysis_file" in plan.get("deliverables", []) and not plan.get("file_names"):
+        raise HTTPException(
+            422, "PLAN_FILE_NAMES_REQUIRED: list every requested download in file_names"
+        )
+    for name in plan.get("file_names", []):
+        if not name or PurePosixPath(name).name != name or any(c in name for c in "\\:\x00") or name in {".", ".."}:
+            raise HTTPException(422, "PLAN_FILE_NAME_INVALID: use a file name without directories")
     if (
         len({item["id"] for item in steps}) != len(steps)
         or sum(item["status"] == "in_progress" for item in steps) > 1
@@ -93,6 +105,7 @@ def check_completion(run, body):
             plan = {"task_type": "GENERAL", "steps": [], "deliverables": ["answer"]}
         if not plan:
             raise HTTPException(422, "PLAN_REQUIRED: record task and expected deliverables first")
+        check_file_completion(run, plan)
         if run.get("pack_versions", {}).get("literature", {}).get("version") == "4" and (
             requirements.get("require_report") or "report" in plan["deliverables"]
         ):
@@ -115,7 +128,7 @@ def check_completion(run, body):
                 422, "INCOMPLETE_COVERAGE: disclose missing work instead of claiming completion"
             )
         kinds = {item["kind"] for item in run.get("registered_outputs", [])}
-        required = {"report": "report", "comparison": "card", "analysis_file": "artifact"}
+        required = {"report": "report", "comparison": "card"}
         missing = [item for item in plan["deliverables"] if item in required and required[item] not in kinds]
         if missing:
             raise HTTPException(422, "DELIVERABLES_MISSING: " + ", ".join(missing))
@@ -183,6 +196,30 @@ def fully_read(value):
     return total > 0 and bool(ranges) and ranges[0][0] == 0 and ranges[0][1] >= total
 
 
+def source_catalog(run):
+    """Recovery handles only; canonical text and permission checks stay in the ledger."""
+    groups = {}
+    for item in run.get("evidence", {}).values():
+        source = item["source"]
+        key = tuple(source.get(field) for field in ("kind", "document_id", "publication_id", "version_id"))
+        groups.setdefault(key, []).append(item)
+    return [
+        {
+            **{
+                field: items[0]["source"].get(field)
+                for field in ("kind", "document_id", "publication_id", "version_id")
+            },
+            "title": items[0]["source"].get("title", "")[:160],
+            "evidence_count": len(items),
+            "reading_handles": [
+                {"evidence_id": item["evidence_id"], "node_offset": item.get("node_offset")}
+                for item in sorted(items, key=lambda value: len(value.get("text", "")), reverse=True)[:3]
+            ],
+        }
+        for items in list(groups.values())[-6:]
+    ]
+
+
 def read_progress(coverage):
     result = {}
     for key, value in coverage.items():
@@ -244,4 +281,8 @@ ACTIVITIES = {
     "sandbox_execute": "执行隔离数据分析",
     "external_search": "发现外部资料",
     "bibliography_lookup": "查询文献与 DOI",
+    "literature_search": "查找相关论文",
+    "literature_expand": "查找相关引用文献",
+    "literature_acquire": "获取论文全文",
+    "literature_acquire_status": "检查全文是否准备好",
 }

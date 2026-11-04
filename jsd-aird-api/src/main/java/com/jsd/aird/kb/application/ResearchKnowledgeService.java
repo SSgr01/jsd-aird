@@ -26,6 +26,9 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
     private final AuthorizationService authorization;
     private final ObjectMapper mapper;
     private final com.jsd.aird.kb.api.KnowledgeSearchFacade publishedRecall;
+    private com.jsd.aird.kb.application.port.BibliographyRepository bibliography;
+    @org.springframework.beans.factory.annotation.Autowired
+    void bibliography(com.jsd.aird.kb.application.port.BibliographyRepository value) {bibliography=value;}
     @org.springframework.beans.factory.annotation.Autowired
     public ResearchKnowledgeService(KnowledgeRepository repository, KnowledgeGovernanceService governance,
             StructuredDocumentCodec codec,com.jsd.aird.kb.api.KnowledgeSearchFacade recall,
@@ -287,7 +290,7 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
                 if (anchor.primaryAnchorJson() != null) try { locator.setAll((com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(anchor.primaryAnchorJson())); } catch (Exception ignored) { }
                 locator.set("sourceNodeKeys", mapper.valueToTree(anchor.sourceNodeKeys()));
             }
-            if (!com.jsd.aird.kb.api.SourceAnchorComparison.same(locator, source.anchor()) || !row.title().equals(source.title()))
+            if (!com.jsd.aird.kb.api.SourceAnchorComparison.same(locator, locatorAnchor(source.anchor())) || !sourceTitleMatches(source,row.title()))
                 throw new ApiException(ApiErrorCode.VERSION_CONFLICT, "来源位置或标题不匹配");
         } else {
             var node = codec.project(view.confirmedDocument(), view.excludedReviewNodeIds()).nodes().stream()
@@ -299,7 +302,7 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
             if (!node.sourceNodeKeys().isEmpty()) view.sourceNodes().stream()
                 .filter(item -> item.sourceNodeKey().equals(node.sourceNodeKeys().getFirst())).findFirst()
                 .ifPresent(item -> locator.set("original", item.sourceAnchor()));
-            if (!com.jsd.aird.kb.api.SourceAnchorComparison.same(locator, source.anchor()) || !view.originalName().equals(source.title()))
+            if (!com.jsd.aird.kb.api.SourceAnchorComparison.same(locator, locatorAnchor(source.anchor())) || !sourceTitleMatches(source,view.originalName()))
                 throw new ApiException(ApiErrorCode.VERSION_CONFLICT, "来源位置或标题不匹配");
         }
         if (!sha(text).equals(source.content_sha256()))throw new ApiException(ApiErrorCode.VERSION_CONFLICT,"来源原文哈希已变化");
@@ -384,12 +387,12 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
             .orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND));
         var anchor=source.anchor();int total=parent.content().codePointCount(0,parent.content().length());
         if(!parent.documentId().toString().equals(source.document_id())||!parent.versionId().toString().equals(source.version_id())||!parent.parentId().toString().equals(anchor.path("parent_chunk_id").asText())
-            ||!parent.originalName().equals(source.title())||!sha(parent.content()).equals(anchor.path("parent_content_sha256").asText())
+            ||!sourceTitleMatches(source,parent.originalName())||!sha(parent.content()).equals(anchor.path("parent_content_sha256").asText())
             ||!anchor.path("span_start").isIntegralNumber()||!anchor.path("span_end").isIntegralNumber())throw new ApiException(ApiErrorCode.VERSION_CONFLICT,"父块来源或跨度无效");
         int start=anchor.path("span_start").asInt(-1),end=anchor.path("span_end").asInt(-1);
         if(start<0||end<=start||end>total||end-start>6000)throw new ApiException(ApiErrorCode.BAD_REQUEST);
         var expected=parentSpan(parent,start,end-start);
-        if(!expected.source().anchor().equals(anchor)||!sha(expected.text()).equals(source.content_sha256()))throw new ApiException(ApiErrorCode.VERSION_CONFLICT,"父块片段哈希不匹配");
+        if(!locatorAnchor(expected.source().anchor()).equals(locatorAnchor(anchor))||!sha(expected.text()).equals(source.content_sha256()))throw new ApiException(ApiErrorCode.VERSION_CONFLICT,"父块片段哈希不匹配");
         return expected.text();
     }
 
@@ -422,7 +425,27 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
     }
 
     private SourceRef source(DocumentRef ref, UUID version, String node, JsonNode anchor, String title, String text) {
+        if(bibliography!=null) {
+            var accepted=bibliography.find(ActorContext.required().organizationId(),version,null).orElse(null);
+            if(accepted!=null&&accepted.documentId().equals(ref.document_id())&&!accepted.accepted().path("title").asText().isBlank()) {
+                var located=(com.fasterxml.jackson.databind.node.ObjectNode)anchor.deepCopy();
+                located.put("bibliography_revision",accepted.revision());anchor=located;title=accepted.accepted().path("title").asText();
+            }
+        }
         return new SourceRef("KB_PUBLICATION", ref.document_id().toString(), version.toString(), ref.publication_id().toString(), node, sha(text), anchor, title, null);
+    }
+
+    private JsonNode locatorAnchor(JsonNode anchor) {
+        if(anchor==null||!anchor.has("bibliography_revision"))return anchor;
+        var result=(com.fasterxml.jackson.databind.node.ObjectNode)anchor.deepCopy();result.remove("bibliography_revision");return result;
+    }
+    private boolean sourceTitleMatches(SourceRef source,String legacyTitle) {
+        if(!source.anchor().has("bibliography_revision"))return Objects.equals(legacyTitle,source.title());
+        var revision=source.anchor().get("bibliography_revision");
+        if(bibliography==null||!revision.isInt()||revision.asInt()<1)return false;
+        return bibliography.find(ActorContext.required().organizationId(),UUID.fromString(source.version_id()),revision.asInt())
+            .filter(r->r.documentId().toString().equals(source.document_id()))
+            .map(r->r.accepted().path("title").asText().equals(source.title())).orElse(false);
     }
 
     private String sha(String text) {

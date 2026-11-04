@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from aird_agent.capabilities.literature.acquisition import acquired_source
 from aird_agent.capabilities.literature.quality import (
     ReportAuditor,
     ReviewOutputInvalid,
@@ -223,23 +224,34 @@ class LiteratureTools:
         if name == "report_check":
             text = normalize_citations(args["text"], run["evidence"])
             prepared = prepare_review(run, args["title"], text)
-            async with self.store.transaction(principal, run["id"]) as conn:
-                current = await self.active(principal, run["id"], run["epoch"], conn)
-                if (
-                    not prepared.get("blocking_findings")
-                    and current["model_calls"] >= self.settings.max_model_calls
-                ):
-                    raise HTTPException(409, "BUDGET_EXCEEDED")
-                if not prepared.get("blocking_findings"):
+            previous = run.get("report_checks", {}).get(prepared["report_hash"])
+            if (previous and previous.get("quality_check_version") == 3
+                    and (not previous.get("passed") or not prepared.get("blocking_findings"))):
+                return {
+                    **previous,
+                    "unchanged_report": True,
+                    "next_action": "The report and evidence matrix are unchanged. Reuse this check; do not resubmit the same draft. "
+                    "Revise the specific unsupported statements or add real source evidence before checking again. "
+                    "If no supported revision is possible or the reviewer remains unavailable, finish_task with PARTIAL and disclose the gap.",
+                }
+
+            async def reserve_model_call():
+                async with self.store.transaction(principal, run["id"]) as conn:
+                    current = await self.active(principal, run["id"], run["epoch"], conn)
+                    if current["model_calls"] >= self.settings.max_model_calls:
+                        raise HTTPException(409, "BUDGET_EXCEEDED")
                     current["model_calls"] += 1
-                await self.store.update(principal, "run", current, conn)
+                    await self.store.update(principal, "run", current, conn)
+
             invalid = None
             for attempt in range(2):
                 try:
                     review = (
-                        await self.report_auditor.review(prepared)
+                        await self.report_auditor.review(prepared, reserve_model_call=reserve_model_call)
                         if invalid is None
-                        else await self.report_auditor.review(prepared, repair=invalid)
+                        else await self.report_auditor.review(
+                            prepared, repair=invalid, reserve_model_call=reserve_model_call
+                        )
                     )
                     break
                 except ReviewOutputInvalid as error:
@@ -247,10 +259,6 @@ class LiteratureTools:
                     if attempt == 0:
                         async with self.store.transaction(principal, run["id"]) as conn:
                             current = await self.active(principal, run["id"], run["epoch"], conn)
-                            if current["model_calls"] >= self.settings.max_model_calls:
-                                raise HTTPException(409, "BUDGET_EXCEEDED") from None
-                            current["model_calls"] += 1
-                            await self.store.update(principal, "run", current, conn)
                             await self.store.event(
                                 principal,
                                 run["id"],
@@ -269,11 +277,14 @@ class LiteratureTools:
                         "blocking_findings": [
                             {
                                 "unit_id": "review",
-                                "reason": "REVIEW_OUTPUT_INVALID: retry review; no source support was established",
+                                "reason": "REVIEW_OUTPUT_INVALID: automatic format repair was exhausted; no source support was established. "
+                                "Do not repeatedly submit this unchanged report; disclose that verification is unavailable and finish PARTIAL if it cannot be resolved.",
                             }
                         ],
                         "verification": "INVALID_REVIEW_OUTPUT_NOT_VERIFIED",
                     }
+                except HTTPException:
+                    raise
                 except Exception:
                     raise HTTPException(
                         422, "REPORT_REVIEW_UNAVAILABLE: no passing check was recorded"
@@ -285,6 +296,12 @@ class LiteratureTools:
                     != prepared["report_hash"]
                 ):
                     raise HTTPException(422, "REPORT_MATRIX_CHANGED_DURING_REVIEW")
+                assertions = {unit["unit_id"]: unit["text"] for unit in prepared["units"]}
+                review["findings"] = [
+                    {**unit, "text": assertions[unit["unit_id"]]}
+                    for unit in review.get("units", [])
+                    if unit["verdict"] not in {"SUPPORTED", "NON_FACTUAL"}
+                ]
                 current["report_checks"] = {prepared["report_hash"]: review}
                 await self.store.update(principal, "run", current, conn)
                 await self.store.event(
@@ -451,7 +468,14 @@ class LiteratureTools:
                 },
                 run["id"],
             )
-        if name in {"external_search", "bibliography_lookup"}:
+        if name == "literature_acquire_status":
+            result = await self.java(
+                principal, name, {**args, "conversation_id": run["conversation_id"]}, run["id"]
+            )
+            return await acquired_source(self.runtime, principal, run, result, args["work_id"])
+        if name in {"external_search", "bibliography_lookup", "literature_search", "literature_expand", "literature_acquire"}:
+            if name == "literature_acquire" and "private-literature" not in run.get("pack_ids", []):
+                raise HTTPException(409, "PRIVATE_LITERATURE_CAPABILITY_REQUIRED")
             approval_key = digest({"tool": name, "arguments": args})
             approval = run["approvals"].get(approval_key)
             if approval and approval.get("decision") == "REJECTED":
@@ -467,6 +491,13 @@ class LiteratureTools:
                         "id": approval_key,
                         "tool": name,
                         "arguments": args,
+                        "description": (
+                            "获取已选论文的开放全文，解析后用于本次研究。不会发布到企业知识库。"
+                            if name == "literature_acquire"
+                            else "查找这篇论文引用的文献。" if name == "literature_expand" and args.get("direction", "references") == "references"
+                            else "查找引用这篇论文的后续研究。" if name == "literature_expand"
+                            else "将搜索：" + args.get("query", "")
+                        ),
                         "expires_at": time.time() + 900,
                     }
                     current["active_seconds"] += time.time() - current["started_at"]
@@ -474,8 +505,16 @@ class LiteratureTools:
                     await self.store.event(
                         principal, run["id"], "approval.required", current["pending_approval"], conn
                     )
-                return {"approval_required": True, "approval_id": approval_key, "query": args["query"]}
-            return await self.java(principal, name, args, run["id"])
+                return {"approval_required": True, "approval_id": approval_key, "query": args.get("query", args.get("work_id", ""))}
+            result = await self.java(
+                principal, name,
+                {**args, "conversation_id": run["conversation_id"], "run_id": run["id"]}
+                if name == "literature_acquire" else args,
+                run["id"],
+            )
+            if name == "literature_acquire":
+                return await acquired_source(self.runtime, principal, run, result, args["work_id"])
+            return result
         raise HTTPException(400, "Unknown tool")
 
     async def ensure_research_topic(self, principal, run, scope):

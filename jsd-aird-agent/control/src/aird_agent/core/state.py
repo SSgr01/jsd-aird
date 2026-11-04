@@ -17,6 +17,7 @@ def initial_run_state(principal):
         "checkpoint": None,
         "assistant_messages": [],
         "registered_outputs": [],
+        "required_artifacts": [],
         "checkpoint_message_seq": 0,
         "started_at": None,
         "last_text": "",

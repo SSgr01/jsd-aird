@@ -12,6 +12,46 @@ import org.junit.jupiter.api.Test;
 class ContextCompressionServiceTest {
 
     @Test
+    void preservesTableRowsAndSeparatesEvidenceFromTheSamePage() {
+        var document = UUID.randomUUID();
+        var version = UUID.randomUUID();
+        var table = "样品\t强度\t条件\r\nA\t12 kPa\t25 °C\r\nB\t8 kPa\t40 °C";
+        var first = new KnowledgeSearchFacade.SearchHit(UUID.randomUUID(), document, version,
+                "试验", "study.pdf", 1, "结果", table, 0.9);
+        var second = new KnowledgeSearchFacade.SearchHit(UUID.randomUUID(), document, version,
+                "试验", "study.pdf", 1, "结果", "另一次试验。\n\n条件不同，不可直接比较。", 0.8);
+        var data = new DataSourceFileSearchFacade.SourceFileHit(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                12, "B", "实验.xlsx", table, 0.7, "EXPERIMENT:Sheet1:B12");
+
+        var context = new ContextCompressionService().compress(List.of(first, second), List.of(data), 4000);
+
+        assertThat(context.text()).contains("样品\t强度\t条件\nA\t12 kPa\t25 °C\nB\t8 kPa\t40 °C")
+                .contains("40 °C\n\n[source=knowledge")
+                .contains("另一次试验。\n\n条件不同，不可直接比较。");
+        assertThat(context.evidenceRefs()).containsExactly("K1", "K2", "D1");
+        assertThat(context.characterCount()).isEqualTo(context.text().length()).isLessThanOrEqualTo(4000);
+    }
+
+    @Test
+    void lowerRankedChunksFromTheSamePageCannotDisplaceADirectAnswer() {
+        var doc = UUID.randomUUID();
+        var version = UUID.randomUUID();
+        var overview = new KnowledgeSearchFacade.SearchHit(UUID.randomUUID(), doc, version,
+                "Study", "study.pdf", 1, "Results", "Overview.", 0.9);
+        var method = new KnowledgeSearchFacade.SearchHit(UUID.randomUUID(), doc, version,
+                "Study", "study.pdf", 2, "Method", "Contact for 3 min, mount for several minutes, then wait another 2 min.", 0.8);
+        var longContext = new KnowledgeSearchFacade.SearchHit(UUID.randomUUID(), doc, version,
+                "Study", "study.pdf", 1, "Results", "Background. ".repeat(500), 0.1);
+
+        var context = new ContextCompressionService().compress(List.of(overview, method, longContext), List.of(), 450);
+
+        assertThat(context.text()).contains(method.content());
+        assertThat(context.evidenceRefs()).startsWith("K1", "K2");
+        assertThat(context.text().indexOf("evidenceRef=K2")).isLessThan(context.text().indexOf("evidenceRef=K3"));
+        assertThat(context.characterCount()).isEqualTo(context.text().length()).isLessThanOrEqualTo(450);
+    }
+
+    @Test
     void keepsSafeSourceMetadataAndAppliesBudget() {
         var hit = new KnowledgeSearchFacade.SearchHit(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                 "材料规范", "spec.pdf", 4, "性能", "a".repeat(500), 0.8);

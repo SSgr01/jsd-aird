@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { agentApi, type LiteratureReport, type PrivateSource } from '@/services/agents/agent-api';
 import { ConversationSources } from './ConversationSources';
 import { ResearchOperations } from './ResearchOperations';
+import { ResearchQualityPanel } from './ResearchQualityPanel';
 import { reportAssessment } from './research-presentation';
 
 it('requires old passing reports to be reviewed under the current source policy', () => {
@@ -19,6 +20,17 @@ it('requires old passing reports to be reviewed under the current source policy'
   expect(reportAssessment(report)).toMatchObject({ label: '待重新核查', passed: false });
   report.quality_review!.quality_check_version = 3;
   expect(reportAssessment(report)).toMatchObject({ label: 'AI 核查通过', passed: true });
+});
+
+it('keeps inherited sources without claiming an existing report is unchecked on an answer-only turn', () => {
+  const matrix = { revision: 1, questions: {} };
+  const view = render(
+    <ResearchQualityPanel matrix={matrix} reportExpected={false} onQuote={vi.fn()} />,
+  );
+  expect(screen.getByRole('region', { name: '已找到的依据' })).toBeInTheDocument();
+  expect(screen.queryByText('报告尚未完成检查，请先核对相关内容。')).not.toBeInTheDocument();
+  view.rerender(<ResearchQualityPanel matrix={matrix} onQuote={vi.fn()} />);
+  expect(screen.getByText('报告尚未完成检查，请先核对相关内容。')).toBeVisible();
 });
 
 const source: PrivateSource = {
@@ -67,7 +79,7 @@ it('allows failed sources to be detached and blocks scope changes during executi
   expect(detach).toHaveBeenCalledWith('source-1');
   view.rerender(<ConversationSources {...props} active />);
   expect(screen.getByRole('button', { name: '移出本会话' })).toBeDisabled();
-  expect(screen.getByRole('button', { name: '上传资料（最多 10 MiB）' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '上传文件' })).toBeDisabled();
 });
 
 it('only accepts an exact PMC identifier for explicit open-access acquisition', () => {
@@ -88,6 +100,23 @@ it('only accepts an exact PMC identifier for explicit open-access acquisition', 
   fireEvent.change(input, { target: { value: 'pmc10530767' } });
   fireEvent.click(screen.getByRole('button', { name: '获取开放全文' }));
   expect(acquire).toHaveBeenCalledWith('PMC10530767');
+});
+
+it('distinguishes loading and failure from an empty upload list', () => {
+  const props = {
+    sources: [],
+    busy: false,
+    active: false,
+    onUpload: vi.fn(),
+    onAcquire: vi.fn(),
+    onDetach: vi.fn(),
+  };
+  const view = render(<ConversationSources {...props} loading />);
+  expect(screen.queryByText('还没有上传文件')).toBeNull();
+  view.rerender(<ConversationSources {...props} failed />);
+  expect(screen.queryByText('还没有上传文件')).toBeNull();
+  view.rerender(<ConversationSources {...props} />);
+  expect(screen.getByText('还没有上传文件')).toBeVisible();
 });
 
 it('reconciles an unknown operation without offering a write replay', async () => {
@@ -111,10 +140,10 @@ it('reconciles an unknown operation without offering a write replay', async () =
       </App>
     </QueryClientProvider>,
   );
-  fireEvent.click(await screen.findByRole('button', { name: '核对回执' }));
+  fireEvent.click(await screen.findByRole('button', { name: '检查结果' }));
   await waitFor(() => expect(reconcile).toHaveBeenCalledWith('run-1', 'uncertain-1'));
-  expect(await screen.findByText('仍未取得权威回执，继续保留结果待核实状态。')).toBeInTheDocument();
-  expect(screen.getByText('结果待核实')).toBeInTheDocument();
+  expect(await screen.findByText('结果仍在确认，请稍后再检查。')).toBeInTheDocument();
+  expect(screen.getByText('结果还在确认，请先不要重复提交。')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /重试|重新执行/ })).not.toBeInTheDocument();
   expect(operations.mock.calls.length).toBeGreaterThanOrEqual(2);
   queries.clear();

@@ -1,4 +1,4 @@
-import { assistantEvidence } from '@/services/evidence/adapters';
+import { assistantEvidence, type EvidenceView } from '@/services/evidence/adapters';
 import {
   ArrowLeftOutlined,
   DatabaseOutlined,
@@ -8,7 +8,7 @@ import {
   FolderOpenOutlined,
   GlobalOutlined,
 } from '@ant-design/icons';
-import { App, Button, Checkbox, Collapse, Space, Tag, Typography } from 'antd';
+import { App, Button, Checkbox, Collapse, Drawer, Space, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -17,13 +17,10 @@ import {
   type ConversationItem,
   type ConversationMessage,
 } from '@/components/ai-conversation-workspace';
-import {
-  FilePreviewModal,
-  downloadPreviewFile,
-  type FilePreviewDescriptor,
-} from '@/components/file-preview';
+import { downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
 import { ConversationBody } from '@/components/ai-conversation-workspace/ConversationBody';
-import { EvidenceDetailsButton } from '@/components/ai-conversation-workspace/EvidenceDetails';
+import { ConversationIconButton } from '@/components/ai-conversation-workspace/ConversationIconButton';
+import { EvidenceReader } from '@/components/ai-conversation-workspace/EvidenceDetails';
 import {
   AssistantRequestError,
   assistantApi,
@@ -213,7 +210,7 @@ function LiveAssistantAnswer({ runId }: { runId: string }) {
 function renderAssistantContent(
   message: ChatMessage,
   navigate: ReturnType<typeof useNavigate>,
-  onPreview: (citation: AssistantCitation) => void,
+  onPreview: (citation: AssistantCitation, passages?: AssistantCitation[]) => void,
   onDownload: (citation: AssistantCitation) => void,
   hasOriginalFile: (citation: AssistantCitation) => boolean,
   onSelectDataFile: (citation: AssistantCitation) => void,
@@ -251,7 +248,7 @@ function renderAssistantContent(
               const citation = group.citation;
               const external = citation.sourceType === 'EXTERNAL_REFERENCE';
               return (
-                <div className="ai-message-citation-row" key={group.key}>
+                <div className="ai-message-citation-row conversation-file-card" key={group.key}>
                   {external ? (
                     <GlobalOutlined aria-hidden="true" />
                   ) : (
@@ -262,8 +259,8 @@ function renderAssistantContent(
                     className="ai-message-citation-title"
                     disabled={!citation.documentId && !citation.fileObjectId && !citation.url}
                     onClick={() => {
-                      if (citation.documentId)
-                        navigate(`/knowledge/documents/${citation.documentId}`);
+                      if (hasOriginalFile(citation) || citation.source)
+                        onPreview(citation, group.citations);
                       else if (citation.experimentId)
                         navigate(`/experiments/${citation.experimentId}`);
                       else if (citation.fileObjectId) navigate('/data/view');
@@ -282,16 +279,13 @@ function renderAssistantContent(
                         : `${citationPagesLabel(group.pages)}${citationEvidenceLabel(group.evidenceCount)}`}
                     </span>
                   </button>
-                  {citation.source && (
-                    <EvidenceDetailsButton evidence={assistantEvidence(citation)} />
-                  )}
                   {hasOriginalFile(citation) && (
                     <div className="ai-message-citation-actions">
                       <Button
                         size="small"
                         type="text"
                         icon={<EyeOutlined />}
-                        onClick={() => onPreview(citation)}
+                        onClick={() => onPreview(citation, group.citations)}
                       >
                         预览
                       </Button>
@@ -330,7 +324,7 @@ export function AssistantPage() {
   const [dataCategories, setDataCategories] = useState<DataCategory[]>([]);
   const [selectedKnowledge, setSelectedKnowledge] = useState<string[]>([]);
   const [selectedData, setSelectedData] = useState<string[]>([]);
-  const [previewFile, setPreviewFile] = useState<FilePreviewDescriptor>();
+  const [previewEvidence, setPreviewEvidence] = useState<EvidenceView>();
   const [citationSources, setCitationSources] = useState<Record<string, boolean>>({});
   const [webSearchAvailable, setWebSearchAvailable] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
@@ -626,9 +620,19 @@ export function AssistantPage() {
     throw new Error('当前引用没有可定位的原始文件');
   };
 
-  const previewCitation = (citation: AssistantCitation) => {
+  const previewCitation = (citation: AssistantCitation, passages?: AssistantCitation[]) => {
     try {
-      setPreviewFile(resolveCitationFile(citation));
+      let original: FilePreviewDescriptor | undefined;
+      try {
+        original = resolveCitationFile(citation);
+      } catch (error) {
+        if (!citation.source) throw error;
+      }
+      setPreviewEvidence({
+        ...assistantEvidence(citation),
+        original,
+        passages: passages?.map(assistantEvidence),
+      });
     } catch (error) {
       void toast.error(error instanceof Error ? error.message : '原始文件加载失败');
     }
@@ -656,6 +660,7 @@ export function AssistantPage() {
       id: item.id,
       role: item.role,
       editableText: item.role === 'USER' ? item.content : undefined,
+      copyText: item.role === 'ASSISTANT' && !live ? displayAnswer(item.content) : undefined,
       pending: item.role === 'ASSISTANT' && streaming && !item.content && !live,
       content:
         item.role === 'ASSISTANT' ? (
@@ -665,7 +670,7 @@ export function AssistantPage() {
             renderAssistantContent(
               item,
               navigate,
-              (citation) => void previewCitation(citation),
+              (citation, passages) => void previewCitation(citation, passages),
               (citation) => void downloadCitation(citation),
               (citation) =>
                 Boolean(
@@ -813,21 +818,13 @@ export function AssistantPage() {
 
   const composerScopeContent = (
     <div className="ai-composer-scope-summary">
-      <Typography.Text type="secondary">当前检索范围：</Typography.Text>
-      <Space size={[6, 6]} wrap>
-        {allAuthorizedSelected ? (
-          <Tag className="ai-composer-scope-tag">全部已授权资料</Tag>
-        ) : composerScopeGroups.length ? (
-          composerScopeGroups.map((item) => (
-            <Tag key={item.key} className="ai-composer-scope-tag">
-              {item.label}
-              <b>{item.count}</b>
-            </Tag>
-          ))
-        ) : (
-          <Typography.Text type="secondary">未选择资料范围</Typography.Text>
-        )}
-      </Space>
+      <Typography.Text type="secondary">
+        {allAuthorizedSelected
+          ? '全部资料'
+          : composerScopeGroups.length
+            ? '已选资料'
+            : '请选择资料'}
+      </Typography.Text>
     </div>
   );
 
@@ -858,20 +855,41 @@ export function AssistantPage() {
         conversations={conversationItems}
         activeConversationId={conversationId}
         messages={viewMessages}
+        hideEmptyList
         scopeContent={scopeContent}
-        composerTopContent={composerScopeContent}
+        scopePlacement="composer"
+        compactComposer
+        welcomeTitle="有什么想了解的？"
+        welcomeDescription="选好资料，直接提问。"
+        welcomeContent={
+          <div className="conversation-starters">
+            {['这份文献的主要结论是什么？', '比较所选资料中的实验方法。'].map((text) => (
+              <button key={text} onClick={() => setQuestion(text)}>
+                {text}
+                <span aria-hidden="true">↗</span>
+              </button>
+            ))}
+          </div>
+        }
         composerActions={
-          <Button
-            icon={<GlobalOutlined />}
-            type={webSearchEnabled ? 'primary' : 'default'}
-            className={`ai-composer-web-toggle${webSearchEnabled ? ' is-active' : ''}`}
-            aria-pressed={webSearchEnabled}
-            disabled={!webSearchAvailable || loading || streaming}
-            title={webSearchAvailable ? '联网搜索公开资料' : '联网搜索尚未配置'}
-            onClick={() => setWebSearchEnabled((current) => !current)}
-          >
-            联网搜索
-          </Button>
+          <>
+            <ConversationIconButton
+              label="联网搜索"
+              name="search"
+              className={`ai-composer-web-toggle${webSearchEnabled ? ' is-active' : ''}`}
+              aria-pressed={webSearchEnabled}
+              disabled={!webSearchAvailable || loading || streaming}
+              tooltip={
+                webSearchAvailable
+                  ? webSearchEnabled
+                    ? '关闭联网搜索'
+                    : '联网搜索公开资料'
+                  : '联网搜索尚未配置'
+              }
+              onClick={() => setWebSearchEnabled((current) => !current)}
+            />
+            {composerScopeContent}
+          </>
         }
         pendingLabel={streamStage}
         question={question}
@@ -896,11 +914,21 @@ export function AssistantPage() {
         onQuestionChange={setQuestion}
         onSubmit={() => void send()}
       />
-      <FilePreviewModal
-        open={Boolean(previewFile)}
-        file={previewFile}
-        onClose={() => setPreviewFile(undefined)}
-      />
+      <Drawer
+        className="conversation-reader-drawer"
+        closable={false}
+        width="min(820px, 100vw)"
+        open={Boolean(previewEvidence)}
+        onClose={() => setPreviewEvidence(undefined)}
+        destroyOnClose
+      >
+        {previewEvidence && (
+          <EvidenceReader
+            evidence={previewEvidence}
+            onClose={() => setPreviewEvidence(undefined)}
+          />
+        )}
+      </Drawer>
     </div>
   );
 }

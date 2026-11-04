@@ -1,6 +1,6 @@
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import { Button, Spin, Tabs, Typography } from 'antd';
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useLayoutEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { PagePermissionGate } from '@/routes/route-guards';
@@ -20,8 +20,29 @@ export function AssistantHubPage() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const mode = params.get('mode') === 'research' ? 'research' : 'qa';
+  const hub = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const root = hub.current;
+    if (!root) return;
+    const update = () => {
+      const canvas = root.querySelector('.ant-tabs-tabpane-active .ai-conversation-workspace');
+      if (canvas)
+        root.style.setProperty(
+          '--assistant-workspace-height',
+          `${Math.max(240, window.innerHeight - canvas.getBoundingClientRect().top - 12)}px`,
+        );
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(root);
+    window.addEventListener('resize', update);
+    update();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', update);
+    };
+  }, [mode]);
   return (
-    <div className="business-page assistant-hub">
+    <div ref={hub} className="business-page assistant-hub">
       <header className="assistant-hub-heading">
         <Button
           type="text"
@@ -33,8 +54,8 @@ export function AssistantHubPage() {
           <Typography.Title level={1}>AI问答</Typography.Title>
           <Typography.Text type="secondary">
             {mode === 'qa'
-              ? '基于已授权资料回答，也可按需补充公开互联网信息。'
-              : '查找文献、核对证据、比较研究并形成可追溯报告。'}
+              ? '结合企业资料，为你解答工作中的问题。'
+              : '阅读文献、分析数据，整理你需要的研究结果。'}
           </Typography.Text>
         </div>
       </header>

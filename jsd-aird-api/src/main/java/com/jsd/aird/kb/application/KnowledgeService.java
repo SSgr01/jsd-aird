@@ -59,6 +59,10 @@ public class KnowledgeService implements KnowledgeSearchFacade {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeService.class);
 
+    private org.springframework.context.ApplicationEventPublisher bibliographyEvents;
+    @Autowired
+    void bibliographyEvents(org.springframework.context.ApplicationEventPublisher publisher) { this.bibliographyEvents=publisher; }
+
     private final KnowledgeRepository repository;
     private final KnowledgeGovernanceRepository governance;
     private final FileStorageFacade storage;
@@ -1188,6 +1192,10 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             appendIngestAudit(organizationId, actorId, "KB_PARSE_FAILED", documentId,
                     objectMapper.createObjectNode().put("versionId", versionId.toString()).put("error", safeError(exception)));
             throw exception instanceof RuntimeException runtime ? runtime : new IllegalStateException(exception);
+        }
+        if (bibliographyEvents != null) {
+            try { bibliographyEvents.publishEvent(new BibliographyService.Parsed(organizationId,actorId,documentId,versionId,activeParseRunId)); }
+            catch (RuntimeException failure) { log.error("Bibliography scheduling failed for version {} ({})",versionId,failure.getClass().getSimpleName()); }
         }
     }
 

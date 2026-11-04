@@ -1,37 +1,17 @@
-import { describe, expect, it } from 'vitest';
-import fixture from '../../../../jsd-aird-agent/contracts/evidence.json';
-import type { AssistantCitation } from '@/services/assistant/assistant-api';
-import { assistantEvidence, researchEvidence } from './adapters';
+import { groupEvidence } from './adapters';
 import type { SourceRef } from './protocol';
+import fixture from '../../../../jsd-aird-agent/contracts/evidence.json';
 
-describe('independent profile adapters', () => {
-  it('adapts legacy citations without inventing source identity or interpreting URLs as a mode', () => {
-    const citation = {
-      title: 'old',
-      originalName: 'old.pdf',
-      snippet: 'preview',
-      documentId: 'known',
-      url: '/research',
-    } as AssistantCitation;
-    expect(assistantEvidence(citation)).toEqual({
-      title: 'old',
-      excerpt: 'preview',
-      evidenceId: undefined,
-      source: undefined,
-    });
-  });
-  it('uses the same source display model for both profiles without sharing session state', () => {
-    const item = fixture.cases[0]!;
-    const source = item.source as SourceRef;
-    const qa = assistantEvidence({
-      title: source.title,
-      source,
-      evidenceId: item.evidence_id,
-      snippet: item.text,
-    } as AssistantCitation);
-    const research = researchEvidence(source, item.text);
-    expect(qa.source).toEqual(research.source);
-    expect(qa.excerpt).toBe(research.excerpt);
-    expect(research.evidenceId).toBeUndefined();
-  });
+it('groups paragraphs by immutable file identity while retaining every citation', () => {
+  const source = fixture.cases[0]!.source as SourceRef;
+  const passages = [
+    { source, text: 'first' },
+    { source: { ...source, source_node_key: 'next', content_sha256: 'other' }, text: 'second' },
+    { source: { ...source, version_id: 'new-version' }, text: 'revised' },
+    { source: { ...source, resource_id: 'different-permission-scope' }, text: 'other' },
+  ];
+  const groups = groupEvidence(passages);
+  expect(groups).toHaveLength(3);
+  expect(groups[0]!.passages).toEqual(passages.slice(0, 2));
+  expect(groups[1]!.source.version_id).toBe('new-version');
 });

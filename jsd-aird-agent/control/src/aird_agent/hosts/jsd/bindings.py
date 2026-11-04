@@ -1,8 +1,6 @@
 """JSD host and capability policy; the reusable coordinator imports none of these bindings."""
 
-import base64
 import contextlib
-import hashlib
 import json
 import re
 
@@ -10,13 +8,16 @@ from fastapi import HTTPException
 
 from aird_agent.capabilities.definitions import INITIAL_TOOLS, SKILL, TOOLS
 from aird_agent.capabilities.fast_qa.history import answer_context, qa_history
+from aird_agent.capabilities.files.handler import FILE_TOOL_NAMES, FileTools
+from aird_agent.capabilities.literature.export import validate_literature_export
 from aird_agent.capabilities.literature.handler import LiteratureTools
 from aird_agent.capabilities.literature.quality import matrix_summary
-from aird_agent.capabilities.registry import FAST_QA_INSTRUCTIONS
+from aird_agent.capabilities.registry import ANSWER_INSTRUCTIONS, FAST_QA_INSTRUCTIONS
 from aird_agent.core.bindings import RuntimeBindings
 from aird_agent.core.contracts import digest
 from aird_agent.core.workspace import Workspace
 from aird_agent.evidence.citations import normalize_citations, validate_generated, validate_report
+from aird_agent.evidence.exports import LITERATURE_KINDS, export_sources
 from aird_agent.evidence.registry import register_candidates
 from aird_agent.hosts.jsd.task_state import (
     ACTIVITIES,
@@ -24,6 +25,7 @@ from aird_agent.hosts.jsd.task_state import (
     check_plan,
     read_progress,
     scope_digest,
+    source_catalog,
 )
 from aird_agent.sandbox.client import Sandbox
 
@@ -46,6 +48,11 @@ class JsdBindings(RuntimeBindings):
         )
         self.literature.runtime = runtime
         self.sandbox = Sandbox(self.settings)
+        self.files = FileTools(
+            self.settings, self.store, host_call=self.java, sandbox=self.sandbox,
+            character_budget=lambda: runtime.tool_character_budget,
+            source_policy=self.file_source_policy,
+        )
 
     @property
     def tool_character_budget(self):
@@ -142,11 +149,9 @@ class JsdBindings(RuntimeBindings):
 
     def tools_for(self, run):
         tools = self.packs.tools(run["pack_ids"]) if run.get("pack_versions") else TOOLS
-        return [
-            tool
-            for tool in tools
-            if run.get("private_source_ids") or not tool["name"].startswith("private_document_")
-        ]
+        # The native catalog must already contain readers before an approved acquisition
+        # adds its first source. Initial activation is still limited; readers enforce membership.
+        return tools
 
     def mutation_tools(self, run):
         base = {
@@ -157,10 +162,19 @@ class JsdBindings(RuntimeBindings):
             "report_save",
             "artifact_save",
             "matrix_record",
+            "literature_acquire",
         }
         return base | (self.packs.mutations(run["pack_ids"]) if run.get("pack_versions") else set())
 
     def bounded_result(self, principal, run, result, call_id):
+        if "report_hash" in result and "quality_check_version" in result and "units" in result:
+            # The full independent review remains in the run. The author needs
+            # the failed assertions, not dozens of already supported verdicts.
+            result = {
+                **{key: value for key, value in result.items() if key != "units"},
+                "checked_unit_count": len(result["units"]),
+                "units": [unit for unit in result["units"] if unit["verdict"] not in {"SUPPORTED", "NON_FACTUAL"}],
+            }
         if (
             result.get("trace", {}).get("profile") == "research"
             or result.get("trace", {}).get("mode") == "search"
@@ -242,10 +256,6 @@ class JsdBindings(RuntimeBindings):
         return result
 
     async def dispatch(self, principal, run, topic, name, args, call_id):
-        workspace = Workspace(
-            self.settings.storage_root / "workspaces", str(principal.organization_id), run["id"]
-        )
-        workspace.prepare()
         if name == "tool_search":
             words = re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]+", args["query"].lower())
             aliases = {
@@ -291,8 +301,11 @@ class JsdBindings(RuntimeBindings):
                 current = await self.active(principal, run["id"], run["epoch"], conn)
                 if name == "plan_update":
                     current["plan"] = check_plan(args)
+                    current["required_artifacts"] = sorted(
+                        set(current.get("required_artifacts", [])) | set(args.get("file_names", []))
+                    )
                     current.pop("completion", None)
-                    kind, value = "task.plan", args
+                    kind, value = "task.plan", current["plan"]
                 else:
                     if args["outcome"] == "COMPLETE":
                         executions = await (
@@ -318,113 +331,22 @@ class JsdBindings(RuntimeBindings):
                 ids = [args["name"]] if args.get("name") else run["pack_ids"]
                 if set(ids) - set(run["pack_ids"]):
                     raise HTTPException(403, "SKILL_NOT_IN_RUN_CAPABILITIES")
-                return {"name": ",".join(ids), "instructions": self.packs.instructions(ids)}
+                instructions = self.packs.instructions(ids)
+                if args.get("name") == "files":
+                    instructions += "\n\n" + self.packs.select(ids)[0].resources["formats"]
+                return {"name": ",".join(ids), "instructions": instructions}
             return {"name": "literature-research", "version": "1", "instructions": SKILL}
-        if name == "workspace_list":
-            return workspace.manifest()
-        if name == "workspace_read":
-            return workspace.read(
-                args["path"], args.get("offset", 0), min(12000, self.tool_character_budget // 2)
-            )
-        if name == "workspace_write":
-            return workspace.write(args["path"], args["content"])
-        if name == "artifact_save":
-            path = workspace.resolve(args["path"], writable=True)
-            if (
-                not args["path"].startswith("output/")
-                or not path.is_file()
-                or path.stat().st_size > 10 * 1024 * 1024
-            ):
-                raise HTTPException(400, "Register a bounded file from output")
-            content = path.read_bytes()
-            execution_receipt = None
-            async with self.store.pool.connection() as conn:
-                receipts = await (
-                    await conn.execute(
-                        "SELECT call_id,payload FROM agent_runtime.harness_receipts WHERE run_id=%s AND organization_id=%s AND actor_id=%s ORDER BY created_at DESC",
-                        (run["id"], *principal.key),
-                    )
-                ).fetchall()
-            for item in receipts:
-                payload = item["payload"]
-                if payload.get("receipt", {}).get("status") != "SUCCEEDED" or payload.get("exit_code") != 0:
-                    continue
-                if any(
-                    a.get("path") == args["path"] and a.get("sha256") == hashlib.sha256(content).hexdigest()
-                    for a in payload.get("artifacts", [])
-                ):
-                    execution_receipt = {
-                        "call_id": item["call_id"],
-                        **payload["receipt"],
-                        "inputs": payload.get("inputs"),
-                        "artifact_sha256": hashlib.sha256(content).hexdigest(),
-                    }
-                    break
-            source_quotes = []
-            if execution_receipt and (
-                args.get("source_quotes")
-                or any(
-                    c.get("source", {}).get("kind") in {"KB_PUBLICATION", "RUN_UPLOAD", "EXTERNAL_FULLTEXT"}
-                    for c in run.get("evidence", {}).values()
-                )
-            ):
-                from aird_agent.evidence.quotes import quotes
-
-                available = {
-                    q["quote_id"]: {**q, "source": c["source"]}
-                    for c in run["evidence"].values()
-                    for q in quotes(c)
-                }
-                mentioned = set(ref["quote_id"] for ref in args.get("source_quotes", []))
-                mentioned.update((execution_receipt.get("inputs") or {}).get("quote_ids", []))
-                for entry in (execution_receipt.get("inputs") or {}).get("files", []):
-                    original = workspace.resolve(entry["path"]).read_bytes()
-                    if hashlib.sha256(original).hexdigest() != entry["sha256"]:
-                        continue
-                    mentioned.update(
-                        re.findall(
-                            r"(?<![a-zA-Z0-9_-])q[0-9a-f]{24}(?![a-zA-Z0-9_-])",
-                            original.decode("utf8", errors="ignore"),
-                        )
-                    )
-                if not mentioned or not mentioned <= available.keys():
-                    raise HTTPException(
-                        422,
-                        "ANALYSIS_SOURCE_QUOTES_REQUIRED: preserve exact quote IDs in selected extraction inputs or source_quotes",
-                    )
-                for ref in args.get("source_quotes", []):
-                    if available[ref["quote_id"]]["evidence_id"] != ref["evidence_id"]:
-                        raise HTTPException(422, "QUOTE_HANDLE_INVALID_OR_WRONG_EVIDENCE")
-                source_quotes = [available[qid] for qid in sorted(mentioned)]
-            return await self.java(
-                principal,
-                "artifact_save",
-                {
-                    "topic_id": run.get("topic_id"),
-                    "conversation_id": run["conversation_id"],
-                    "source_refs": list({digest(q["source"]): q["source"] for q in source_quotes}.values())
-                    if source_quotes
-                    else run.get("source_refs", []),
-                    "source_quotes": source_quotes,
-                    "run_id": run["id"],
-                    "name": path.name,
-                    **({"execution_receipt": execution_receipt} if execution_receipt else {}),
-                    "base64": base64.b64encode(content).decode(),
-                    "key": digest([run["id"], call_id]),
-                },
-                run["id"],
-            )
-        if name == "sandbox_prepare":
-            return self.sandbox.prepare(workspace, args["input_paths"])
-        if name == "sandbox_execute":
-            return await self.sandbox.execute(
-                workspace,
-                args["script"],
-                args["language"],
-                digest([run["id"], run["epoch"], call_id])[:32],
-                args["input_paths"],
-            )
+        if name in FILE_TOOL_NAMES:
+            return await self.files.dispatch(principal, run, name, args, call_id)
         return await self.literature.dispatch(principal, run, topic, name, args, call_id)
+
+    @staticmethod
+    def file_source_policy(run, args, inputs, input_contents, parsed):
+        source_quotes, source_refs = export_sources(run, args.get("source_quotes", []), inputs, input_contents)
+        validate_literature_export(
+            args["path"], parsed, [q for q in source_quotes if q["source"].get("kind") in LITERATURE_KINDS]
+        )
+        return {"source_quotes": source_quotes, "source_refs": source_refs}
 
     async def prepare_fast_qa(self, principal, run):
         conversation = await self.store.get(principal, "conversation", run["conversation_id"])
@@ -481,8 +403,9 @@ class JsdBindings(RuntimeBindings):
                 return (
                     run["prepared_qa"]["instructions"]
                     + "\n固定生成配置：仅回答本轮问题，不使用工具或执行操作。"
+                    + "\n\n" + ANSWER_INSTRUCTIONS
                 )
-            return FAST_QA_INSTRUCTIONS
+            return FAST_QA_INSTRUCTIONS + "\n\n" + ANSWER_INSTRUCTIONS
         instructions = self.packs.instructions(run["pack_ids"])
         if run.get("research_requirements"):
             instructions += "\n\n平台强制全文要求（不能通过修改计划或改成 GENERAL 绕过）：" + json.dumps(
@@ -492,7 +415,7 @@ class JsdBindings(RuntimeBindings):
             instructions += "\n阅读覆盖不等于研究结论。针对每个研究子问题进行 knowledge_search、evidence_score 和关键原文回读，随读保存证据摘要/笔记，不要等全文结束才尝试从会话记忆拼凑事实。压缩摘要不是原文，不能因摘要里没有数值就声称正文缺失，更不能依赖参考文献猜测本文结果。证据卡字段可提交 evidence_id、name、original、excerpt、value、unit、qualifiers，由平台补齐固定来源；excerpt 必须逐字来自对应证据，不要自行标为人工已核对。"
             instructions += "\n读取范围 ranges 使用半开区间 [start,end)，如 [0,3) 与 [4,6) 之间仍缺 offset=3。直接按 gate 的 missing_ranges 和 next_unread_offset 补读，不能把相邻数字误当成已覆盖。"
             instructions += "\n先evidence_read获取原文quote_id，保存卡片时提交name、evidence_id、quote_id；原文和来源由服务端补齐，无须抄写公式。针对每个研究子问题matrix_record，记录采用的具体原文句柄、条件和本次证据缺口。矩阵先于报告，不能用累积聊天摘要写报告。先report_check核查，再以完全相同title/text调用report_save；改文或改矩阵后须重查。核查是AI辅助，不是人工确认。"
-        return instructions
+        return instructions + "\n\n" + ANSWER_INSTRUCTIONS
 
     async def authorize_history(self, principal, conversation):
         await self.authorize_conversation(principal, conversation)
@@ -538,7 +461,7 @@ class JsdBindings(RuntimeBindings):
             existing = await self.store.get(principal, "conversation", str(request.conversation_id))
             if "private_source_ids" not in request.model_fields_set and existing.get("private_source_ids"):
                 payload["private_source_ids"] = existing.get("private_source_ids", [])
-            elif set(payload.get("private_source_ids", [])) - set(existing.get("private_source_ids", [])):
+            elif set(payload.get("private_source_ids", [])) - set(existing.get("private_source_ids") or []):
                 raise HTTPException(403, "PRIVATE_SOURCE_NOT_IN_CONVERSATION")
             if existing.get("pack_versions"):
                 legacy = False
@@ -666,6 +589,8 @@ class JsdBindings(RuntimeBindings):
                 "kind": {"evidence_save": "card", "report_save": "report", "artifact_save": "artifact"}[name],
                 "title": result.get("title", result.get("name", result.get("instance", "研究成果"))),
             }
+            if name == "artifact_save":
+                registered_output["path"] = arguments["path"]
             sources = []
             if name == "evidence_save":
                 sources = [
@@ -709,19 +634,23 @@ class JsdBindings(RuntimeBindings):
 
     def gate_state(self, run):
         return {
-            key: read_progress(run.get(key, {}))
-            if key == "read_coverage"
-            else matrix_summary(run)
-            if key == "research_matrix"
-            else run.get(key)
-            for key in (
-                "research_requirements",
-                "research_matrix",
-                "read_coverage",
-                "plan",
-                "completion",
-                "registered_outputs",
-            )
+            "source_catalog": source_catalog(run),
+            **{
+                key: read_progress(run.get(key, {}))
+                if key == "read_coverage"
+                else matrix_summary(run)
+                if key == "research_matrix"
+                else run.get(key)
+                for key in (
+                    "research_requirements",
+                    "research_matrix",
+                    "read_coverage",
+                    "plan",
+                    "completion",
+                    "registered_outputs",
+                    "required_artifacts",
+                )
+            },
         }
 
     def evidence_summaries(self, run):

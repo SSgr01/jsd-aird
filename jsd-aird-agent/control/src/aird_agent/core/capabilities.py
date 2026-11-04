@@ -38,6 +38,7 @@ class CapabilityPack:
     initial_tools: tuple[str, ...] = ()
     handlers: dict[str, Handler] = field(default_factory=dict)
     mutations: frozenset[str] = frozenset()
+    resources: dict[str, str] = field(default_factory=dict)
 
 
 class CapabilityRegistry:
@@ -68,6 +69,7 @@ class CapabilityRegistry:
             tuple(pack.initial_tools),
             dict(pack.handlers),
             frozenset(pack.mutations),
+            dict(pack.resources),
         )
 
     def select(self, ids):
@@ -94,6 +96,7 @@ class CapabilityRegistry:
                         "tools": pack.tools,
                         "initial_tools": pack.initial_tools,
                         "mutations": sorted(pack.mutations),
+                        **({"resources": pack.resources} if pack.resources else {}),
                     }
                 ),
             }

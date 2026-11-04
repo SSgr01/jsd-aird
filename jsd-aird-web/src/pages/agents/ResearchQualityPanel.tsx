@@ -1,191 +1,118 @@
-import { Alert, Button, Collapse, Empty, List, Space, Typography } from 'antd';
+import { Button, Space } from 'antd';
 import type { ResearchMatrix, ReportQualityReview, SourceQuote } from '@/services/agents/agent-api';
+import { reviewProblem } from './research-presentation';
 
 const verdicts: Record<string, string> = {
   SUPPORTED: '原文支持',
-  CONTRADICTED: '与原文矛盾',
-  INSUFFICIENT: '证据不足',
-  NON_FACTUAL: '非事实性文字',
-  COVERED: '已覆盖',
-  EXPLICIT_GAP: '已说明本次缺口',
-  MISSING: '未覆盖',
+  CONTRADICTED: '与原文不一致',
+  INSUFFICIENT: '缺少原文依据',
+  NON_FACTUAL: '说明文字',
+  COVERED: '已回答',
+  EXPLICIT_GAP: '已说明缺少的资料',
+  MISSING: '尚未回答',
 };
-
+const findings: Record<string, string> = {
+  DOCUMENT_WIDE_ABSENCE_NOT_ESTABLISHED_BY_SOURCE_SPANS:
+    '目前阅读的段落不足以证明整篇文献没有相关数据，请补充依据或缩小结论范围。',
+  SOURCE_UNCERTAINTY_NOT_PRESERVED: '原文中的不确定性没有完整保留，请调整对应结论。',
+};
 export function ResearchQualityPanel({
   matrix,
   review,
   onQuote,
   frozen = false,
+  reportExpected = true,
 }: {
   matrix?: ResearchMatrix;
   review?: ReportQualityReview;
   onQuote: (quote: SourceQuote) => void;
   frozen?: boolean;
+  reportExpected?: boolean;
 }) {
   const rows = Object.values(matrix?.questions || {});
-  const legacyReview = review && review.quality_check_version !== 3;
-  const prescreen = review?.verification === 'DETERMINISTIC_PRESCREEN_NOT_AI_OR_HUMAN_VERIFICATION';
   const spans = new Map(
     rows.flatMap((row) => row.claims.flatMap((claim) => claim.quotes)).map((q) => [q.quote_id, q]),
   );
+  const current =
+    review?.quality_check_version === 3 && review.matrix_revision === matrix?.revision;
+  const passed =
+    current &&
+    review?.passed &&
+    !review.blocking_findings?.length &&
+    review.verification === 'AI_REVIEW_NOT_HUMAN_VERIFICATION';
   return (
-    <section
-      className="research-quality"
-      aria-label={frozen ? '报告冻结证据与核查' : '本次证据矩阵与核查'}
-    >
-      <Typography.Title level={5}>{frozen ? '报告冻结证据' : '子问题证据矩阵'}</Typography.Title>
-      <Typography.Paragraph type="secondary">
-        {frozen ? '生成时的矩阵快照' : '本次运行的持久化证据'} · 修订 {matrix?.revision ?? 0} ·{' '}
-        {rows.length} 个子问题。 AI 候选抽取不是人工核对；本次证据缺口不代表文献未报告。
-      </Typography.Paragraph>
-      {!rows.length ? (
-        <Empty
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description="尚未建立证据矩阵；旧报告不会自动补写核查记录"
-        />
-      ) : (
-        <Collapse
-          size="small"
-          items={rows.map((row) => ({
-            key: row.question_id,
-            label: `${row.question} · ${row.claims.length ? '候选证据' : '本次证据缺口'}`,
-            children: (
-              <>
-                {row.claims.length > 0 && (
-                  <List
-                    size="small"
-                    locale={{ emptyText: null }}
-                    dataSource={row.claims}
-                    renderItem={(claim) => (
-                      <List.Item>
-                        <div>
-                          <Typography.Paragraph>{claim.claim}</Typography.Paragraph>
-                          {claim.qualifiers && (
-                            <Typography.Paragraph type="secondary">
-                              {Object.entries(claim.qualifiers)
-                                .map(([k, v]) => `${k}：${v}`)
-                                .join('；')}
-                            </Typography.Paragraph>
-                          )}
-                          {claim.quotes.map((quote) => (
-                            <div key={quote.quote_id} className="research-quality-quote">
-                              <Typography.Paragraph>{quote.text}</Typography.Paragraph>
-                              <Typography.Paragraph type="secondary">
-                                {quote.source.title} · 发布 {quote.source.publication_id} · 位置{' '}
-                                {quote.start}–{quote.end}
-                              </Typography.Paragraph>
-                              <Space wrap>
-                                <Button size="small" onClick={() => onQuote(quote)}>
-                                  定位原文
-                                </Button>
-                                <Typography.Text copyable={{ text: quote.quote_id }}>
-                                  句柄 {quote.quote_id.slice(-8)}
-                                </Typography.Text>
-                              </Space>
-                            </div>
-                          ))}
-                        </div>
-                      </List.Item>
-                    )}
-                  />
-                )}
-                {row.gap_note && (
-                  <Typography.Paragraph>本次缺口：{row.gap_note}</Typography.Paragraph>
-                )}
-              </>
-            ),
-          }))}
-        />
+    <section className="research-quality" aria-label={reportExpected ? '报告检查' : '已找到的依据'}>
+      {reportExpected && <h3>{passed ? '报告检查' : '需要补充的内容'}</h3>}
+      {reportExpected && (
+        <p>
+          {passed
+            ? '已完成 AI 辅助检查，使用前仍需人工复核。'
+            : !current
+              ? '报告尚未完成检查，请先核对相关内容。'
+              : reviewProblem(review) + '。'}
+        </p>
       )}
-      <Typography.Title level={5}>报告事实核查</Typography.Title>
-      {!review ? (
-        <Typography.Paragraph type="secondary">
-          暂无对应此矩阵的 AI 核查记录；修改正文或矩阵后须重新核查。
-        </Typography.Paragraph>
-      ) : (
-        <>
-          <Alert
-            type={review.passed && !legacyReview ? 'info' : 'warning'}
-            showIcon
-            message={
-              legacyReview
-                ? '旧版 AI 核查记录，须按新协议重新核查'
-                : prescreen
-                  ? '报告规则预检未通过，尚未调用 AI 核查'
-                  : review.passed
-                    ? 'AI 原文核查通过，仍需人工复核'
-                    : frozen
-                      ? '这份报告的核查未通过，请先修订'
-                      : 'AI 原文核查未通过，报告保存已受阻'
-            }
-            description={`矩阵修订 ${review.matrix_revision}；AI 核查不是独立实验复现或人工已核对。`}
-          />
-          {!!review.blocking_findings?.length && (
-            <List
-              size="small"
-              dataSource={review.blocking_findings}
-              renderItem={(finding) => (
-                <List.Item>
-                  {finding.unit_id}
-                  ：原文片段不能证明全文未报告。请补充依据或明确表述为本次证据缺口。
-                </List.Item>
+      {current &&
+        review?.blocking_findings?.map((finding, index) => (
+          <p key={index}>{findings[finding.reason] || '这段内容尚未通过检查，请核对相关原文。'}</p>
+        ))}
+      {current &&
+        review?.units
+          .filter((unit) => !['SUPPORTED', 'NON_FACTUAL'].includes(unit.verdict))
+          .map((unit, index) => (
+            <div className="research-check-item" key={unit.unit_id}>
+              <strong>
+                第 {index + 1} 项 · {verdicts[unit.verdict] || '需要核对'}
+              </strong>
+              <p>{unit.reason}</p>
+              <Space wrap>
+                {unit.quote_ids.map(
+                  (id) =>
+                    spans.has(id) && (
+                      <Button key={id} onClick={() => onQuote(spans.get(id)!)}>
+                        预览相关段落
+                      </Button>
+                    ),
+                )}
+              </Space>
+            </div>
+          ))}
+      {current &&
+        review?.questions
+          .filter((item) => item.verdict === 'MISSING')
+          .map((item) => (
+            <div key={item.question_id} className="research-check-item">
+              <strong>{matrix?.questions[item.question_id]?.question || '尚未回答的问题'}</strong>
+              <p>{item.reason}</p>
+            </div>
+          ))}
+      {!!rows.length && <h3>{frozen ? '报告参考内容' : '已找到的依据'}</h3>}
+      {rows.map((row) => (
+        <section className="research-check-item" key={row.question_id}>
+          <h4>{row.question}</h4>
+          {row.claims.map((claim, index) => (
+            <div key={index}>
+              <p>{claim.claim}</p>
+              {claim.qualifiers && (
+                <p className="harness-muted">
+                  {Object.entries(claim.qualifiers)
+                    .map(([k, v]) => `${k}：${v}`)
+                    .join('；')}
+                </p>
               )}
-            />
-          )}
-          <Collapse
-            size="small"
-            items={[
-              {
-                key: 'review',
-                label: `查看逐段与子问题核查（${review.units.length} 段）`,
-                children: (
-                  <>
-                    <List
-                      size="small"
-                      dataSource={review.units}
-                      renderItem={(unit) => (
-                        <List.Item>
-                          <div>
-                            <Typography.Text strong>
-                              {unit.unit_id} · {verdicts[unit.verdict] || unit.verdict}
-                            </Typography.Text>
-                            <Typography.Paragraph>{unit.reason}</Typography.Paragraph>
-                            <Space wrap>
-                              {unit.quote_ids.map(
-                                (id) =>
-                                  spans.has(id) && (
-                                    <Button
-                                      key={id}
-                                      size="small"
-                                      onClick={() => onQuote(spans.get(id)!)}
-                                    >
-                                      原文 {id.slice(-6)}
-                                    </Button>
-                                  ),
-                              )}
-                            </Space>
-                          </div>
-                        </List.Item>
-                      )}
-                    />
-                    <List
-                      size="small"
-                      dataSource={review.questions}
-                      renderItem={(question) => (
-                        <List.Item>
-                          {matrix?.questions[question.question_id]?.question ||
-                            question.question_id}
-                          ：{verdicts[question.verdict] || question.verdict}。{question.reason}
-                        </List.Item>
-                      )}
-                    />
-                  </>
-                ),
-              },
-            ]}
-          />
-        </>
-      )}
+              {claim.quotes.map((quote) => (
+                <div key={quote.quote_id} className="research-quality-quote">
+                  <blockquote>{quote.text}</blockquote>
+                  <Button type="link" onClick={() => onQuote(quote)}>
+                    预览 · {quote.source.title}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ))}
+          {row.gap_note && <p>还需补充：{row.gap_note}</p>}
+        </section>
+      ))}
     </section>
   );
 }

@@ -14,6 +14,11 @@ public interface OpsAsyncFacade {
 
     UUID enqueue(UUID organizationId, String jobType, JsonNode payload, String idempotencyKey, int priority);
 
+    default UUID enqueueAt(UUID organizationId, String jobType, JsonNode payload, String idempotencyKey,
+                           int priority, Instant notBefore) {
+        return enqueue(organizationId, jobType, payload, idempotencyKey, priority);
+    }
+
     default UUID enqueue(UUID organizationId, String jobType, JsonNode payload, String idempotencyKey,
                          int priority, int maxAttempts) {
         return enqueue(organizationId, jobType, payload, idempotencyKey, priority);

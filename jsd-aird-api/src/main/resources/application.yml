@@ -93,6 +93,9 @@ mybatis-plus:
       id-type: assign_uuid
 
 app:
+  scholarly:
+    openalex:
+      api-key: ${JSD_AIRD_OPENALEX_API_KEY:}
   web:
     allowed-origins: ${JSD_AIRD_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
   security:

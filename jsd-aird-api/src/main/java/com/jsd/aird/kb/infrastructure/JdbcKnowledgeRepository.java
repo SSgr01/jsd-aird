@@ -87,7 +87,10 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         var projectClause = documentIdClause(allowedDocumentIds);
         var sql = documentQuery("""
                 WHERE d.organization_id = ?
-                  AND (CAST(? AS text) IS NULL OR d.title ILIKE '%' || ? || '%' OR v.original_name ILIKE '%' || ? || '%')
+                  AND (CAST(? AS text) IS NULL OR d.title ILIKE '%' || ? || '%' OR v.original_name ILIKE '%' || ? || '%'
+                    OR EXISTS (SELECT 1 FROM kb.document_bibliography b WHERE b.organization_id=d.organization_id
+                        AND b.version_id=v.id AND concat_ws(' ',b.accepted_jsonb->>'title',b.accepted_jsonb->>'authors',
+                            b.accepted_jsonb->>'doi',b.accepted_jsonb->>'patent_number') ILIKE '%' || ? || '%'))
                   AND (CAST(? AS text) IS NULL OR d.status = ?)
                   AND (CAST(? AS text) IS NULL OR d.library_scope = ?)
                   AND (CAST(? AS uuid) IS NULL OR d.category_id = ?)
@@ -98,7 +101,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 LIMIT ? OFFSET ?
                 """);
         var args = new java.util.ArrayList<Object>(java.util.Arrays.asList(organizationId, normalizedKeyword, normalizedKeyword,
-                normalizedKeyword, normalizedStatus, normalizedStatus,
+                normalizedKeyword, normalizedKeyword, normalizedStatus, normalizedStatus,
                 blankToNull(scope), blankToNull(scope), categoryId, categoryId,
                 blankToNull(lifecycleStatus), blankToNull(lifecycleStatus),
                 blankToNull(reviewStatus), blankToNull(reviewStatus)));
@@ -123,7 +126,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         var normalizedKeyword = blankToNull(keyword);
         var normalizedStatus = blankToNull(status);
         var args = new java.util.ArrayList<Object>(java.util.Arrays.asList(organizationId, normalizedKeyword, normalizedKeyword,
-                normalizedKeyword, normalizedStatus, normalizedStatus,
+                normalizedKeyword, normalizedKeyword, normalizedStatus, normalizedStatus,
                 blankToNull(scope), blankToNull(scope), categoryId, categoryId,
                 blankToNull(lifecycleStatus), blankToNull(lifecycleStatus),
                 blankToNull(reviewStatus), blankToNull(reviewStatus)));
@@ -132,7 +135,10 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 SELECT count(*) FROM kb.document d
                 JOIN kb.document_version v ON v.document_id = d.id AND v.version_no = d.current_version_no
                 WHERE d.organization_id = ?
-                  AND (CAST(? AS text) IS NULL OR d.title ILIKE '%' || ? || '%' OR v.original_name ILIKE '%' || ? || '%')
+                  AND (CAST(? AS text) IS NULL OR d.title ILIKE '%' || ? || '%' OR v.original_name ILIKE '%' || ? || '%'
+                    OR EXISTS (SELECT 1 FROM kb.document_bibliography b WHERE b.organization_id=d.organization_id
+                        AND b.version_id=v.id AND concat_ws(' ',b.accepted_jsonb->>'title',b.accepted_jsonb->>'authors',
+                            b.accepted_jsonb->>'doi',b.accepted_jsonb->>'patent_number') ILIKE '%' || ? || '%'))
                   AND (CAST(? AS text) IS NULL OR d.status = ?)
                   AND (CAST(? AS text) IS NULL OR d.library_scope = ?)
                   AND (CAST(? AS uuid) IS NULL OR d.category_id = ?)
@@ -636,6 +642,11 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                     OR search_terms.normalized = lower(regexp_replace(regexp_replace(normalize(v.original_name, NFKC),
                        '\\.[^.]+$', ''), '[^a-z0-9一-龥]', '', 'g'))
                     OR search_terms.normalized = lower(regexp_replace(normalize(v.original_name, NFKC), '[^a-z0-9一-龥]', '', 'g'))
+                    OR EXISTS (SELECT 1 FROM kb.document_bibliography b
+                        WHERE b.organization_id=d.organization_id AND b.version_id=v.id
+                          AND lower(regexp_replace(normalize(concat_ws(' ', b.accepted_jsonb->>'title',
+                              b.accepted_jsonb->>'authors',b.accepted_jsonb->>'doi',b.accepted_jsonb->>'patent_number'), NFKC),
+                              '[^a-z0-9一-龥]', '', 'g')) LIKE '%' || search_terms.normalized || '%')
                 WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
                 """ + aiClause + categoryClause(categoryIds) + documentClause(allowedDocumentIds) + """
                 GROUP BY c.id, c.document_id, c.document_version_id,

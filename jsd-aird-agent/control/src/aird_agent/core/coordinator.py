@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import time
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 from fastapi import HTTPException
@@ -14,6 +14,7 @@ from psycopg.types.json import Jsonb
 
 from aird_agent.core.capabilities import ExecutionContext
 from aird_agent.core.contracts import digest
+from aird_agent.core.messages import record_replies, requeue_unconsumed
 from aird_agent.core.receipts import receipt
 from aird_agent.core.state import initial_run_state
 from aird_agent.core.workspace import Workspace
@@ -558,6 +559,15 @@ class Coordinator:
                         continue
                     current.update(status="FAILED", error="RUNTIME_OR_AUTHORIZATION_UNAVAILABLE")
                     await self.store.update(principal, "run", current, conn)
+                    conversation = await self.store.get(
+                        principal, "conversation", current["conversation_id"], conn
+                    )
+                    requeue_unconsumed(current, conversation)
+                    record_replies(current, conversation)
+                    conversation.update(queue_paused=True, last_run=current["id"])
+                    if conversation.get("active_run") == current["id"]:
+                        conversation["active_run"] = None
+                    await self.store.update(principal, "conversation", conversation, conn)
                     await self.store.event(
                         principal, run["id"], "run.failed", {"code": current["error"]}, conn
                     )
@@ -648,13 +658,18 @@ class Coordinator:
                 raise HTTPException(409, "RUN_INACTIVE_OR_LEASE_LOST")
             run["lease_until"] = time.time() + 180
             if action == "review":
+                output_valid = "text" not in body or self.bindings.validate_output(run, body["text"])[1]
                 return {
+                    "messages": run["messages"],
                     "ready": (
                         bool(run.get("completion"))
                         and len(run["messages"]) <= run.get("checkpoint_message_seq", 0)
+                        and output_valid
                     )
                     or run["status"] == "WAITING_APPROVAL",
-                    "hint": "交付前用 finish_task 检查需求和成果；有缺口时如实标记 PARTIAL/NEEDS_INPUT。",
+                    "repair_output": not output_valid,
+                    "hint": "最终回复缺少有效来源引用。只修正交付摘要，使用本次已获授权的真实[E:evidence_id]引用；保留已保存成果，不重复检索、计算、保存报告或执行自检。"
+                    if not output_valid else "交付前用 finish_task 检查需求和成果；有缺口时如实标记 PARTIAL/NEEDS_INPUT。",
                 }
             if action == "auxiliary":
                 if run["status"] != "RUNNING" or run["model_calls"] >= self.settings.max_model_calls:
@@ -696,15 +711,28 @@ class Coordinator:
                 if not re.fullmatch(r"[a-z.]+", kind):
                     raise HTTPException(400, "Invalid event type")
                 if kind == "message.completed":
+                    after_message_seq = body["payload"].get("after_message_seq", 0)
+                    if not isinstance(after_message_seq, int) or not 0 <= after_message_seq <= len(
+                        run["messages"]
+                    ):
+                        raise HTTPException(422, "Invalid assistant message sequence")
                     run["last_text"] = self.bindings.normalize_output(
                         body["payload"].get("text", ""), run["evidence"]
                     )
                     body["payload"]["text"] = run["last_text"]
-                    body["payload"]["id"] = str(uuid4())
+                    # Current workers keep one identity from start through completion.
+                    # Older workers omit it and still receive a generated identity.
+                    body["payload"]["id"] = (
+                        str(UUID(body["payload"]["id"])) if body["payload"].get("id") else str(uuid4())
+                    )
                     if run["last_text"].strip():
                         run["assistant_messages"] = [
                             *run.get("assistant_messages", [])[-19:],
-                            {"id": body["payload"]["id"], "text": run["last_text"]},
+                            {
+                                "id": body["payload"]["id"],
+                                "text": run["last_text"],
+                                "after_message_seq": after_message_seq,
+                            },
                         ]
                 elif kind == "message.applied":
                     mid = body["payload"].get("message_id")
@@ -750,21 +778,11 @@ class Coordinator:
                 conversation["checkpoint"] = run["checkpoint"]
                 conversation["evidence"] = run["evidence"]
                 conversation["last_run"] = rid
-                conversation["messages"].append(
-                    {"id": str(uuid4()), "role": "assistant", "text": run.get("result", ""), "run_id": rid}
-                )
                 if conversation.get("active_run") == rid:
                     conversation["active_run"] = None
                 # A steer arriving after the last model boundary must not disappear.
-                for pending in run["messages"]:
-                    if pending["seq"] > run.get("checkpoint_message_seq", 0) and not any(
-                        item["id"] == pending["id"] for item in conversation["queued"]
-                    ):
-                        pending = {**pending, "delivery": "follow_up", "status": "QUEUED"}
-                        conversation["queued"].append(pending)
-                        for message in conversation["messages"]:
-                            if message["id"] == pending["id"]:
-                                message.update(pending)
+                requeue_unconsumed(run, conversation)
+                record_replies(run, conversation)
                 if run["status"] == "FAILED":
                     conversation["queue_paused"] = True
                 if (
@@ -793,6 +811,10 @@ class Coordinator:
                                     "retrieval_trace",
                                 }
                             },
+                            **initial_run_state(principal),
+                            "engine_version": run["engine_version"],
+                            "evidence": run["evidence"],
+                            "checkpoint": run.get("checkpoint"),
                             "request": follow_up["text"],
                             "queued_from_run_id": rid,
                             "status": "QUEUED",
@@ -813,9 +835,12 @@ class Coordinator:
                         conn,
                     )
                     conversation["active_run"] = next_run["id"]
-                    for message in conversation["messages"]:
-                        if message["id"] == follow_up["id"]:
-                            message.update(status="DISPATCHED", run_id=next_run["id"])
+                    conversation["messages"] = [
+                        message for message in conversation["messages"] if message["id"] != follow_up["id"]
+                    ]
+                    conversation["messages"].append(
+                        {**follow_up, "status": "DISPATCHED", "run_id": next_run["id"]}
+                    )
                     await self.store.event(
                         principal, next_run["id"], "run.queued", {"follow_up_to": rid}, conn
                     )

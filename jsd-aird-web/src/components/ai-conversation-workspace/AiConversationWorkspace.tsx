@@ -9,9 +9,15 @@ import {
   RobotOutlined,
   SendOutlined,
 } from '@ant-design/icons';
-import { Button, Empty, Input, List, Modal, Popconfirm, Space, Typography } from 'antd';
+import { Button, Drawer, Empty, Input, List, Modal, Popconfirm, Space, Typography } from 'antd';
 import { ConversationFeedback } from './ConversationFeedback';
+import {
+  ConversationIcon,
+  ConversationIconButton,
+  CopyAnswerButton,
+} from './ConversationIconButton';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
+import './conversation-workspace.css';
 import {
   useCallback,
   useEffect,
@@ -34,6 +40,7 @@ export interface ConversationMessage {
   content: ReactNode;
   editableText?: string;
   pending?: boolean;
+  copyText?: string;
 }
 
 interface AiConversationWorkspaceProps {
@@ -43,12 +50,14 @@ interface AiConversationWorkspaceProps {
   /** Opt-in reading position for a newly published long plan; normal chat still follows latest. */
   initialScrollMessageId?: string;
   scopeContent?: ReactNode;
+  scopePlacement?: 'sidebar' | 'composer';
   question: string;
   loading?: boolean;
   streaming?: boolean;
   scopeSummary?: ReactNode;
   composerTopContent?: ReactNode;
   composerActions?: ReactNode;
+  compactComposer?: boolean;
   submitAction?: ReactNode;
   inputDisabled?: boolean;
   inputRef?: Ref<TextAreaRef>;
@@ -93,12 +102,14 @@ export function AiConversationWorkspace({
   messages,
   initialScrollMessageId,
   scopeContent,
+  scopePlacement = 'sidebar',
   question,
   loading,
   streaming,
   scopeSummary,
   composerTopContent,
   composerActions,
+  compactComposer = false,
   submitAction,
   inputDisabled = false,
   inputRef,
@@ -107,7 +118,7 @@ export function AiConversationWorkspace({
   pendingLabel = '正在阅读资料并整理依据',
   scopeTitle = '选择检索范围',
   welcomeTitle = '从研发资料开始提问',
-  welcomeDescription = '选择左侧资料范围，输入问题后开始受控检索和问答。',
+  welcomeDescription = '提出问题，我会结合所选资料帮你解答。',
   welcomeContent,
   inputLabel = '输入问题',
   inputPlaceholder = '输入你的问题…',
@@ -127,6 +138,7 @@ export function AiConversationWorkspace({
   const [editingTitle, setEditingTitle] = useState('');
   const [renameLoading, setRenameLoading] = useState(false);
   const [sideOpen, setSideOpen] = useState(false);
+  const [scopeOpen, setScopeOpen] = useState(false);
   const [editingMessage, setEditingMessage] = useState<ConversationMessage>();
   const [editingValue, setEditingValue] = useState('');
   const [confirmEditOpen, setConfirmEditOpen] = useState(false);
@@ -135,6 +147,7 @@ export function AiConversationWorkspace({
   const composerRef = useRef<HTMLDivElement>(null);
   const customSubmit = Boolean(submitAction);
   const followLatestRef = useRef(true);
+  const followingFrameRef = useRef<number>();
   const activeConversationRef = useRef<string>();
   const readingAnchorRef = useRef<string>();
 
@@ -245,20 +258,45 @@ export function AiConversationWorkspace({
     if (hideEmptyList && !messages.length) return;
     const content = messagesRef.current?.querySelector('.ant-list-items');
     if (!content || typeof ResizeObserver === 'undefined') return;
-    let frame: number | undefined;
+    let previousTime: number | undefined;
+    const follow = (time: number) => {
+      followingFrameRef.current = undefined;
+      const element = messagesRef.current;
+      if (!element || !followLatestRef.current) return;
+      const target = Math.max(0, element.scrollHeight - element.clientHeight);
+      const distance = target - element.scrollTop;
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)')?.matches;
+      if (Math.abs(distance) <= 1 || reduceMotion) {
+        element.scrollTop = target;
+        previousTime = undefined;
+        return;
+      }
+      const elapsed = Math.min(32, time - (previousTime ?? time - 16));
+      previousTime = time;
+      element.scrollTop +=
+        Math.sign(distance) *
+        Math.min(
+          Math.abs(distance),
+          Math.max(1, Math.abs(distance) * (1 - Math.exp(-elapsed / 55))),
+        );
+      followingFrameRef.current = window.requestAnimationFrame(follow);
+    };
     const observer = new ResizeObserver(() => {
-      if (!followLatestRef.current || frame !== undefined) return;
-      frame = window.requestAnimationFrame(() => {
-        frame = undefined;
-        if (followLatestRef.current) scrollToLatest('auto');
-      });
+      if (!followLatestRef.current) {
+        setShowJumpToLatest(!isNearBottom());
+        return;
+      }
+      if (followingFrameRef.current !== undefined) return;
+      followingFrameRef.current = window.requestAnimationFrame(follow);
     });
     observer.observe(content);
     return () => {
       observer.disconnect();
-      if (frame !== undefined) window.cancelAnimationFrame(frame);
+      if (followingFrameRef.current !== undefined)
+        window.cancelAnimationFrame(followingFrameRef.current);
+      followingFrameRef.current = undefined;
     };
-  }, [activeConversationId, hideEmptyList, messages.length, scrollToLatest]);
+  }, [activeConversationId, hideEmptyList, isNearBottom, messages.length]);
 
   useEffect(() => {
     if (!messages.length) {
@@ -387,14 +425,14 @@ export function AiConversationWorkspace({
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无历史对话" />
           )}
         </div>
-        {scopeContent ? (
+        {scopeContent && scopePlacement === 'sidebar' && (
           <>
             <Typography.Text strong className="ai-conversation-section-title">
               {scopeTitle}
             </Typography.Text>
             <div className="ai-conversation-scope">{scopeContent}</div>
           </>
-        ) : null}
+        )}
       </aside>
       <button
         className="ai-conversation-scrim"
@@ -405,14 +443,24 @@ export function AiConversationWorkspace({
       <main className="ai-conversation-main">
         <div className="ai-conversation-mobile-bar">
           <Button type="text" icon={<MenuOutlined />} onClick={() => setSideOpen(true)}>
-            {scopeContent ? '对话与范围' : '对话列表'}
+            对话列表
           </Button>
         </div>
         <div
           ref={messagesRef}
           className="ai-conversation-messages"
           aria-live="polite"
+          onWheel={(event) => {
+            if (event.deltaY < 0) {
+              followLatestRef.current = false;
+              setShowJumpToLatest(messages.length > 0);
+            }
+          }}
+          onPointerDown={() => {
+            followLatestRef.current = false;
+          }}
           onScroll={() => {
+            if (followLatestRef.current && followingFrameRef.current !== undefined) return;
             const nearBottom = isNearBottom();
             followLatestRef.current = nearBottom;
             setShowJumpToLatest(!nearBottom && messages.length > 0);
@@ -469,6 +517,9 @@ export function AiConversationWorkspace({
                           <div className="ai-message-body ai-message-assistant-body">
                             {messageBody}
                           </div>
+                          {item.copyText && !item.pending && (
+                            <CopyAnswerButton text={item.copyText} />
+                          )}
                         </>
                       ) : isEditingMessage ? (
                         <div className="ai-message-editor">
@@ -511,17 +562,14 @@ export function AiConversationWorkspace({
                           <div className="ai-message-body">{messageBody}</div>
                           {item.editableText && onEditMessage ? (
                             <div className="ai-message-actions">
-                              <Button
+                              <ConversationIconButton
+                                label="编辑并重新发送这条问题"
+                                name="edit"
                                 className="ai-message-edit-button"
-                                type="text"
                                 size="small"
-                                icon={<EditOutlined />}
-                                aria-label="编辑并重新发送这条问题"
                                 disabled={Boolean(loading || streaming)}
                                 onClick={() => startEditingMessage(item)}
-                              >
-                                编辑
-                              </Button>
+                              />
                             </div>
                           ) : null}
                         </>
@@ -543,12 +591,22 @@ export function AiConversationWorkspace({
             onClick={() => scrollToLatest('smooth')}
           />
         ) : null}
-        <div ref={composerRef} className="ai-conversation-composer">
-          {composerTopContent || composerActions ? (
+        <div
+          ref={composerRef}
+          className={`ai-conversation-composer${compactComposer ? ' is-compact' : ''}`}
+        >
+          {composerTopContent || (!compactComposer && (composerActions || scopeContent)) ? (
             <div className="ai-conversation-composer-top">
               <div className="ai-conversation-composer-context">{composerTopContent}</div>
-              {composerActions ? (
-                <div className="ai-conversation-composer-actions">{composerActions}</div>
+              {!compactComposer && (composerActions || scopeContent) ? (
+                <div className="ai-conversation-composer-actions">
+                  {scopeContent && scopePlacement === 'composer' && (
+                    <Button type="text" onClick={() => setScopeOpen(true)}>
+                      选择资料
+                    </Button>
+                  )}
+                  {composerActions}
+                </div>
               ) : null}
             </div>
           ) : null}
@@ -557,11 +615,13 @@ export function AiConversationWorkspace({
               ref={inputRef}
               disabled={inputDisabled}
               aria-label={inputLabel}
-              autoSize={{ minRows: 3, maxRows: 6 }}
+              autoSize={{ minRows: compactComposer ? 2 : 3, maxRows: 6 }}
               maxLength={inputMaxLength}
-              showCount={{
-                formatter: ({ count, maxLength }) => `${count}/${maxLength || inputMaxLength}`,
-              }}
+              showCount={
+                !compactComposer && {
+                  formatter: ({ count, maxLength }) => `${count}/${maxLength || inputMaxLength}`,
+                }
+              }
               placeholder={inputPlaceholder}
               value={question}
               onChange={(event) => onQuestionChange(event.target.value)}
@@ -579,11 +639,23 @@ export function AiConversationWorkspace({
                 }
               }}
             />
+            {compactComposer && (
+              <div className="ai-conversation-composer-tools">
+                {scopeContent && scopePlacement === 'composer' && (
+                  <ConversationIconButton
+                    label="选择资料"
+                    name="sources"
+                    onClick={() => setScopeOpen(true)}
+                  />
+                )}
+                {composerActions}
+              </div>
+            )}
             {submitAction ?? (
               <Button
                 type="primary"
                 size="large"
-                icon={<SendOutlined />}
+                icon={compactComposer ? <ConversationIcon name="send" /> : <SendOutlined />}
                 aria-label={submitLabel}
                 title={submitLabel}
                 loading={streaming}
@@ -594,6 +666,14 @@ export function AiConversationWorkspace({
           </div>
         </div>
       </main>
+      <Drawer
+        title={scopeTitle === '选择检索范围' ? '选择资料' : scopeTitle}
+        open={scopePlacement === 'composer' && scopeOpen}
+        onClose={() => setScopeOpen(false)}
+        width="min(480px, 100vw)"
+      >
+        {scopeContent}
+      </Drawer>
       <Modal
         title="确认编辑并重新发送？"
         open={confirmEditOpen}

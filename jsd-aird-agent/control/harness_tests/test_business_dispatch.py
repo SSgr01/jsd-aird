@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import json
 import time
 from uuid import uuid4
 
@@ -222,18 +223,30 @@ async def test_document_absence_prescreen_does_not_reserve_a_model_call(setup, p
 
 
 @pytest.mark.parametrize("decision", [None, "REJECTED", "APPROVED"])
-async def test_external_queries_require_exact_unexpired_approval(setup, principal, store, decision):
+@pytest.mark.parametrize("tool,args", [
+    ("external_search", {"query": "synthetic polymer"}),
+    ("bibliography_lookup", {"query": "10.1234/synthetic"}),
+    ("literature_search", {"query": "synthetic polymer"}),
+    ("literature_expand", {"work_id": "W123"}),
+    ("literature_acquire", {"work_id": "W123"}),
+])
+async def test_external_queries_require_exact_unexpired_approval(setup, principal, store, decision, tool, args):
     service, host, run, _ = setup
-    args = {"query": "synthetic polymer"}
-    key = digest({"tool": "external_search", "arguments": args})
+    if tool == "literature_acquire":
+        host.scope["pack_ids"].append("private-literature")
+        async with store.transaction(principal, run["id"]) as conn:
+            run["pack_ids"] = host.scope["pack_ids"]
+            run["pack_versions"] = service.packs.pin(host.scope["pack_ids"])
+            await store.update(principal, "run", run, conn)
+    key = digest({"tool": tool, "arguments": args})
     if decision:
         async with store.transaction(principal, run["id"]) as conn:
             current = await store.get(principal, "run", run["id"], conn)
             # Even an old rejection stays final; an old approval cannot authorize a new request.
             current["approvals"][key] = {"decision": decision, "expires_at": time.time() - 1}
             await store.update(principal, "run", current, conn)
-    result = await invoke(service, principal, run, "external_search", args)
-    assert not any(action == "external_search" for action, _, _ in host.calls)
+    result = await invoke(service, principal, run, tool, args)
+    assert not any(action == tool for action, _, _ in host.calls)
     if decision == "REJECTED":
         assert result["error"] == "EXTERNAL_QUERY_REJECTED"
     else:
@@ -241,6 +254,41 @@ async def test_external_queries_require_exact_unexpired_approval(setup, principa
         current = await store.get(principal, "run", run["id"])
         assert current["status"] == "WAITING_APPROVAL"
         assert current["pending_approval"]["arguments"] == args
+
+
+async def test_unknown_acquisition_is_reconciled_by_inspection_without_a_second_download(setup, principal, store):
+    service, host, run, _ = setup
+    args = {"work_id": "W123"}
+    host.scope["pack_ids"].append("private-literature")
+    async with store.transaction(principal, run["id"]) as conn:
+        run["pack_ids"] = host.scope["pack_ids"]
+        run["pack_versions"] = service.packs.pin(run["pack_ids"])
+        run["approvals"][digest({"tool": "literature_acquire", "arguments": args})] = {
+            "decision": "APPROVED", "expires_at": time.time() + 900,
+        }
+        await store.update(principal, "run", run, conn)
+    original = host.call
+    downloads = []
+
+    async def call(principal, action, arguments, run_id=None):
+        if action == "literature_acquire":
+            downloads.append(arguments)
+            raise httpx.ReadTimeout("Synthetic lost submission response")
+        if action == "literature_acquire_status":
+            return {"id": "source", "conversation_id": run["conversation_id"], "work_id": "W123",
+                    "kind": "EXTERNAL_FULLTEXT", "status": "PARSING"}
+        return await original(principal, action, arguments, run_id)
+
+    host.call = call
+    result = await invoke(service, principal, run, "literature_acquire", args, "acquire-1")
+    assert result["requires_reconciliation"] is True
+    with pytest.raises(HTTPException, match="TOOL_RESULT_UNKNOWN"):
+        await invoke(service, principal, run, "literature_acquire", args, "acquire-2")
+    reconciled = await reconcile(service, principal, run["id"], "acquire-1")
+    assert reconciled["outcome"] == "CONFIRMED_SUCCEEDED" and not reconciled["replayed"]
+    status = await invoke(service, principal, run, "literature_acquire_status", args)
+    assert status["status"] == "PARSING" and "activate_tools" not in status
+    assert len(downloads) == 1
 
 
 async def test_unknown_write_blocks_changed_arguments_and_linked_runs(setup, principal, store):
@@ -406,7 +454,8 @@ async def test_review_format_repair_is_bounded_and_reserves_a_second_model_call(
     class Reviewer:
         calls = 0
 
-        async def review(self, prepared, *, repair=None):
+        async def review(self, prepared, *, repair=None, reserve_model_call=None):
+            await reserve_model_call()
             self.calls += 1
             if self.calls == 1:
                 raise ReviewOutputInvalid("Incomplete review coverage", {"units": [], "questions": []})
@@ -449,6 +498,7 @@ async def test_navigation_cache_reuses_original_body_and_rechecks_access(setup, 
     assert sum(action == "document_read" for action, *_ in host.calls) == 1
     assert any(action == "validate_cached_evidence" for action, *_ in host.calls)
     current = await store.get(principal, "run", run["id"])
+
     def contains_body(value):
         if isinstance(value, dict):
             return "text" in value or any(contains_body(item) for item in value.values())
@@ -458,6 +508,40 @@ async def test_navigation_cache_reuses_original_body_and_rechecks_access(setup, 
     host.denied = True
     with pytest.raises(HTTPException):
         await invoke(service, principal, run, "document_read", host.document)
+
+
+async def test_unchanged_report_reuses_failed_check_until_text_or_matrix_changes_and_rechecks_access(
+    setup, principal, store
+):
+    service, host, run, _ = setup
+    candidate, matrix = await save_matrix(service, host, principal, run)
+
+    class Reviewer:
+        calls = 0
+
+        async def review(self, prepared, *, repair=None, reserve_model_call=None):
+            await reserve_model_call()
+            self.calls += 1
+            return {"passed": False, "report_hash": prepared["report_hash"],
+                    "matrix_revision": prepared["matrix_revision"], "quality_check_version": 3,
+                    "verification": "TEST_UNSUPPORTED", "units": [], "questions": []}
+
+    reviewer = Reviewer()
+    service.literature.report_auditor = reviewer
+    args = {"title": "Test", "text": "Modulus: 12 kPa. [E:" + candidate["evidence_id"] + "]"}
+    first = await invoke(service, principal, run, "report_check", args)
+    repeated = await invoke(service, principal, run, "report_check", args)
+    assert not first["passed"] and not repeated["passed"]
+    assert repeated["unchanged_report"] and reviewer.calls == 1
+    assert (await store.get(principal, "run", run["id"]))["model_calls"] == 1
+    await invoke(service, principal, run, "report_check", {**args, "title": "Revised"})
+    assert reviewer.calls == 2
+    await invoke(service, principal, run, "matrix_record", matrix)
+    await invoke(service, principal, run, "report_check", args)
+    assert reviewer.calls == 3
+    host.denied = True
+    with pytest.raises(HTTPException):
+        await invoke(service, principal, run, "report_check", args)
 
 
 async def test_artifact_lineage_matches_immutable_execution_output_hash(setup, principal, store):
@@ -482,7 +566,167 @@ async def test_artifact_lineage_matches_immutable_execution_output_hash(setup, p
     assert result["execution_receipt"]["artifact_sha256"] == output["sha256"]
     workspace.write("output/result.json", '{"modified": true}')
     changed = await invoke(service, principal, run, "artifact_save", {"path": "output/result.json"})
-    assert "execution_receipt" not in changed
+    assert changed["error"].startswith("ARTIFACT_EXECUTION_HASH_MISMATCH")
+
+
+@pytest.mark.parametrize("filename,content", [
+    ("note.txt", "User supplied summary"),
+    ("result.csv", "name,value\nwater,0.81\n"),
+    ("result.json", '{"water": 0.81}'),
+    ("report.md", "# Project summary\nNot a literature report."),
+])
+async def test_core_files_register_without_topic_or_literature(setup, principal, store, filename, content):
+    service, host, run, _ = setup
+    async with store.transaction(principal, run["id"]) as conn:
+        current = await store.get(principal, "run", run["id"], conn)
+        current.pop("topic_id", None)
+        current["pack_ids"] = ["core", "files"]
+        current["pack_versions"] = service.packs.pin(current["pack_ids"])
+        await store.update(principal, "run", current, conn)
+    path = "output/" + filename
+    await invoke(service, principal, run, "workspace_write", {"path": path, "content": content})
+    result = await invoke(service, principal, run, "artifact_save", {"path": path})
+    assert result["name"] == filename and not result.get("topic_id")
+    assert not result["source_quotes"] and not result["source_refs"]
+    assert "execution_receipt" not in result
+    assert not any(name in {"report_save", "research_topic_ensure"} for name, _, _ in host.calls)
+
+
+async def test_unrelated_read_does_not_force_citations_on_computation(setup, principal, store):
+    from aird_agent.core.receipts import receipt
+    from aird_agent.core.workspace import Workspace
+
+    service, host, run, _ = setup
+    await read_source(service, host, principal, run)
+    workspace = Workspace(service.settings.storage_root / "workspaces", str(principal.organization_id), run["id"])
+    workspace.prepare()
+    output = workspace.write("output/user.csv", "value\n42\n")
+    execution = {
+        "exit_code": 0, "artifacts": [output], "inputs": {"quote_ids": [], "files": []},
+        "receipt": {"status": "SUCCEEDED", "execution_id": "x", "request_hash": "hash", "finished_at": 1},
+    }
+    async with store.transaction(principal, run["id"]) as conn:
+        await receipt(store, principal, run["id"], "user-computation", "tool-result", execution, conn)
+    result = await invoke(service, principal, run, "artifact_save", {"path": "output/user.csv"})
+    assert result["id"] and result["execution_receipt"]
+    assert not result["source_refs"] and not result["source_quotes"]
+
+
+async def test_pdf_header_cannot_bypass_real_sandbox_validation(setup, principal):
+    service, host, run, _ = setup
+    await invoke(service, principal, run, "workspace_write", {
+        "path": "output/fake.pdf", "content": "%PDF-1.7\n%%EOF\n",
+    })
+    result = await invoke(service, principal, run, "artifact_save", {"path": "output/fake.pdf"})
+    assert result["error"].startswith("ARTIFACT_FORMAT_REQUIRES_SANDBOX")
+    assert not any(name == "artifact_save" for name, _, _ in host.calls)
+
+
+async def test_changed_inputs_and_unknown_executions_block_registration(setup, principal, store):
+    from aird_agent.core.receipts import receipt
+    from aird_agent.core.workspace import Workspace
+
+    service, host, run, _ = setup
+    workspace = Workspace(service.settings.storage_root / "workspaces", str(principal.organization_id), run["id"])
+    workspace.prepare()
+    selected = workspace.write("scratch/user.json", '{"value": 1}')
+    output = workspace.write("output/user.json", '{"value": 2}')
+    execution = {
+        "exit_code": 0, "artifacts": [output], "inputs": {"files": [selected]},
+        "receipt": {"status": "SUCCEEDED", "execution_id": "x", "request_hash": "hash", "finished_at": 1},
+    }
+    async with store.transaction(principal, run["id"]) as conn:
+        await receipt(store, principal, run["id"], "selected-input", "tool-result", execution, conn)
+    workspace.write("scratch/user.json", '{"value": 3}')
+    result = await invoke(service, principal, run, "artifact_save", {"path": "output/user.json"})
+    assert result["error"].startswith("ARTIFACT_INPUT_CHANGED")
+    async with store.transaction(principal, run["id"]) as conn:
+        await conn.execute(
+            "INSERT INTO agent_runtime.harness_calls(run_id,call_id,request_hash,status,tool_name) "
+            "VALUES(%s,'unknown-execution','unknown','UNKNOWN','sandbox_execute')", (run["id"],),
+        )
+    with pytest.raises(HTTPException, match="TOOL_RESULT_UNKNOWN"):
+        await invoke(service, principal, run, "artifact_save", {"path": "output/user.json"})
+    assert not any(name == "artifact_save" for name, _, _ in host.calls)
+
+
+async def test_plan_updates_keep_undelivered_files_and_export_rejection_precedes_authority_write(setup, principal, store):
+    from aird_agent.core.workspace import Workspace
+
+    service, host, run, _ = setup
+    plan = {
+        "goal": "Export results", "summary": "Deliver both formats", "task_type": "GENERAL",
+        "presentation": "research_plan_v1",
+        "deliverables": ["analysis_file"], "file_names": ["result.csv", "result.json"],
+        "steps": [{"id": "export", "title": "Export", "status": "in_progress"}],
+    }
+    first = await invoke(service, principal, run, "plan_update", plan)
+    assert first["saved"] and "presentation" not in first
+    await invoke(service, principal, run, "plan_update", {**plan, "file_names": ["result.json"]})
+    current = await store.get(principal, "run", run["id"])
+    assert current["required_artifacts"] == ["result.csv", "result.json"]
+    assert "presentation" not in current["plan"]
+    candidate = (await read_source(service, host, principal, run))["candidates"][0]
+    ref = {"evidence_id": candidate["evidence_id"], "quote_id": quotes(candidate)[0]["quote_id"]}
+    workspace = Workspace(service.settings.storage_root / "workspaces", str(principal.organization_id), run["id"])
+    workspace.prepare()
+    workspace.write("output/result.csv", "value,unit\n15,kPa\n")
+    rejected = await invoke(service, principal, run, "artifact_save", {"path": "output/result.csv", "source_quotes": [ref]})
+    assert rejected["error"].startswith("EXPORT_CITATIONS_MISSING")
+    assert not any(name == "artifact_save" for name, _, _ in host.calls)
+    workspace.write("output/result.csv", f"value,unit,evidence_id,quote_id\n15,kPa,{ref['evidence_id']},{ref['quote_id']}\n")
+    accepted = await invoke(service, principal, run, "artifact_save", {"path": "output/result.csv", "source_quotes": [ref]})
+    assert accepted["id"]
+    current = await store.get(principal, "run", run["id"])
+    assert current["registered_outputs"][-1]["path"] == "output/result.csv"
+
+
+async def test_report_projection_keeps_failure_details_without_mutating_full_audit(setup, principal, store):
+    service, host, run, _ = setup
+    full = {
+        "report_hash": "report", "quality_check_version": 3, "passed": False,
+        "units": [
+            {"unit_id": "u1", "verdict": "SUPPORTED", "quote_ids": ["q1"], "reason": "Supported"},
+            {"unit_id": "u2", "verdict": "INSUFFICIENT", "quote_ids": [], "reason": "Purpose not stated"},
+        ],
+        "findings": [{"unit_id": "u2", "text": "Waiting for thermal equilibration", "reason": "Purpose not stated"}],
+        "questions": [{"question_id": "method", "verdict": "MISSING", "reason": "Not answered"}],
+    }
+    projected = service.bounded_result(principal, run, full, "review")
+    assert projected["checked_unit_count"] == 2
+    assert [unit["unit_id"] for unit in projected["units"]] == ["u2"]
+    assert projected["findings"] == full["findings"] and projected["questions"] == full["questions"]
+    assert len(full["units"]) == 2
+
+
+async def test_delivery_review_detects_missing_citation_before_settlement_and_preserves_saved_work(setup, principal, store):
+    service, host, run, _ = setup
+    candidate = (await read_source(service, host, principal, run))["candidates"][0]
+    async with store.transaction(principal, run["id"]) as conn:
+        current = await store.get(principal, "run", run["id"], conn)
+        current.update(completion={"outcome": "COMPLETE"}, messages=[], checkpoint_message_seq=0)
+        await store.update(principal, "run", current, conn)
+    denied = await service.callback(principal, run["id"], "review", {"epoch": 1, "text": "Report saved."})
+    assert not denied["ready"] and denied["repair_output"]
+    accepted = await service.callback(principal, run["id"], "review", {
+        "epoch": 1, "text": "Report saved. [E:" + candidate["evidence_id"] + "]"
+    })
+    assert accepted["ready"] and not accepted["repair_output"]
+    assert (await store.get(principal, "run", run["id"]))["completion"]["outcome"] == "COMPLETE"
+
+
+async def test_invalid_final_citation_still_fails_after_delivery_review(setup, principal, store):
+    service, host, run, _ = setup
+    await read_source(service, host, principal, run)
+    async with store.transaction(principal, run["id"]) as conn:
+        current = await store.get(principal, "run", run["id"], conn)
+        current.update(completion={"outcome": "COMPLETE"}, messages=[], checkpoint_message_seq=0, checkpoint=None)
+        await store.update(principal, "run", current, conn)
+    review = await service.callback(principal, run["id"], "review", {"epoch": 1, "text": "Report saved."})
+    assert review["repair_output"]
+    await service.callback(principal, run["id"], "settled", {"epoch": 1, "text": "Report saved."})
+    final = await store.get(principal, "run", run["id"])
+    assert final["status"] == "FAILED" and final["error"] == "CITATION_INVALID"
 
 
 async def test_failed_script_cannot_be_claimed_complete(setup, principal, store):
@@ -556,7 +800,11 @@ async def test_artifact_freezes_only_registered_quote_handles_from_execution_inp
         service.settings.storage_root / "workspaces", str(principal.organization_id), run["id"]
     )
     workspace.prepare()
-    output = workspace.write("output/provenance.json", '{"derived":15}')
+    output = workspace.write(
+        "output/provenance.json", json.dumps({"derived": 15, "source_quotes": [
+            {"evidence_id": candidate["evidence_id"], "quote_id": quote["quote_id"]}
+        ]})
+    )
     execution = {
         "exit_code": 0,
         "artifacts": [output],

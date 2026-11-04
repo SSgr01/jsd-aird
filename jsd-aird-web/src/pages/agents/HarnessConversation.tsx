@@ -1,5 +1,5 @@
-import { Alert, Button, Space, Typography } from 'antd';
-import { ArrowUpOutlined } from '@ant-design/icons';
+import { Alert, Button, Space } from 'antd';
+import { DownloadOutlined, FileTextOutlined } from '@ant-design/icons';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { QueuedMessages } from './QueuedMessages';
 import {
@@ -9,6 +9,10 @@ import {
 } from '@/components/ai-conversation-workspace';
 import { ConversationBody } from '@/components/ai-conversation-workspace/ConversationBody';
 import {
+  ConversationIconButton,
+  CopyAnswerButton,
+} from '@/components/ai-conversation-workspace/ConversationIconButton';
+import {
   agentApi,
   citedMarkdown,
   type AgentRun,
@@ -17,10 +21,17 @@ import {
   type LiteratureReport,
   type QueueChange,
 } from '@/services/agents/agent-api';
-import { useRef, type MouseEvent } from 'react';
+import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { ResearchPlan } from './ResearchPlan';
 import { ResearchRunSummary } from './ResearchRunSummary';
-import { ResearchRunStatus } from './ResearchStatus';
-import { reportAssessment, reportOutputs, researchText } from './research-presentation';
+import { ResearchOperations } from './ResearchOperations';
+import {
+  deliveryProblems,
+  operationUnknown,
+  reportAssessment,
+  reportOutputs,
+  researchText,
+} from './research-presentation';
 
 interface Props {
   run?: AgentRun;
@@ -31,6 +42,8 @@ interface Props {
   onSelectTask?: (id: string) => void;
   conversation?: Conversation;
   draft: string;
+  draftId?: string;
+  draftAfterMessageSeq?: number;
   request: string;
   busy: boolean;
   ready: boolean;
@@ -47,216 +60,252 @@ interface Props {
   onQueue: (change: QueueChange) => Promise<boolean>;
   onApproval: (decision: 'APPROVED' | 'REJECTED') => void;
   onMaterials: (tab: string) => void;
+  onUpload?: () => void;
+  onChoose?: () => void;
   onCitation: (event: MouseEvent<HTMLDivElement>, runId?: string) => void;
 }
 
 const examples = [
-  '帮我找 PDMS 在有机溶剂中溶胀的研究，对比测试条件，形成带引用的报告。',
-  '找出与高延展、快速自愈水凝胶相关的内部文献，比较机理、测试方法和证据缺口。',
+  '比较文献中水凝胶的自愈效果，并整理成报告。',
+  '阅读我上传的论文，提取关键数据，生成计算表。',
 ];
 
 export function HarnessConversation(props: Props) {
   const inputRef = useRef<TextAreaRef>(null);
+  const [focusRestoredMessage, setFocusRestoredMessage] = useState(false);
+  useEffect(() => {
+    if (!focusRestoredMessage || props.busy || props.restoring) return;
+    inputRef.current?.focus({ cursor: 'end', preventScroll: true });
+    setFocusRestoredMessage(false);
+  }, [focusRestoredMessage, props.busy, props.restoring]);
   const { run, conversation, draft, busy } = props;
   const active = Boolean(run && ['QUEUED', 'RUNNING'].includes(run.status));
   const waiting = run?.status === 'WAITING_APPROVAL';
+  const unknown = Boolean(run && operationUnknown(run));
   const stopAction = Boolean(run && (waiting || (active && !props.request.trim())));
-  const submitLabel = active ? '排队发送' : run ? '发送' : '开始任务';
   const history = (conversation?.messages || []).filter(
     (item) =>
       !(conversation?.queued || []).some((queued) => queued.id === item.id) &&
-      (item.role !== 'assistant' || item.run_id !== run?.id),
+      (!run || item.run_id !== run.id),
   );
-  const segments = run?.assistant_messages?.length
-    ? run.assistant_messages
-    : !active && !draft && (run?.result || run?.last_text)
-      ? [{ id: 'last', text: run.result || run.last_text || '' }]
-      : [];
-  const savedReports = reportOutputs(run);
-  const primaryOutput = savedReports[0];
+  const primaryOutput = reportOutputs(run)[0];
   const primaryReport = props.reports?.find((item) => item.id === primaryOutput?.id);
-  const assessment = reportAssessment(primaryReport);
-  const evidenceCount = new Set(
-    (run?.registered_outputs || []).filter((item) => item.kind === 'card').map((item) => item.id),
-  ).size;
-  const files = (run?.registered_outputs || []).filter((item) => item.kind === 'artifact');
-  const markdown = (text: string, runId?: string) => (
+  const files = [
+    ...new Map(
+      (run?.registered_outputs || [])
+        .filter((item) => item.kind === 'artifact')
+        .map((item) => [item.id, item]),
+    ).values(),
+  ];
+  const markdown = (text: string, runId?: string, streaming = false) => (
     <div onClick={(event) => props.onCitation(event, runId)}>
-      <ConversationBody text={citedMarkdown(researchText(text))} streaming={active} />
+      <ConversationBody text={citedMarkdown(researchText(text))} streaming={streaming} />
     </div>
   );
   const messages: ConversationMessage[] = history.map((item) => ({
     id: 'history-' + item.id,
     role: item.role === 'user' ? 'USER' : 'ASSISTANT',
-    content:
-      item.role === 'user' ? (
-        <>
-          {item.text}
-          {item.status === 'PENDING' && (
-            <p className="harness-muted">已接收 · 等待下一安全执行边界</p>
-          )}
-          {item.status === 'DELIVERED' && <p className="harness-muted">已交给助手</p>}
-        </>
-      ) : item.text.length > 400 ||
-        /\b(?:finish_task|report_save|plan_update)\b/.test(item.text) ? (
-        <details className="research-process">
-          <summary>查看此前回复</summary>
-          {markdown(item.text, item.run_id)}
-        </details>
-      ) : (
-        markdown(item.text, item.run_id)
-      ),
+    content: item.role === 'user' ? item.text : markdown(item.text, item.run_id),
+    copyText: item.role === 'assistant' ? researchText(item.text) : undefined,
   }));
-  if (run?.request && !history.some((item) => item.role === 'user' && item.run_id === run.id))
-    messages.push({ id: 'request-' + run.id, role: 'USER', content: run.request });
-  const currentStart = messages.length;
-  if (run)
-    messages.push({
-      id: 'progress-' + run.id,
-      role: 'ASSISTANT',
-      content: (
-        <ResearchRunSummary run={run} progress={props.progress} busy={busy} onRetry={props.onRetry}>
-          {segments.slice(0, -1).map((item) => (
-            <div key={item.id} className="research-process-message">
-              {markdown(item.text, run.id)}
-            </div>
-          ))}
-        </ResearchRunSummary>
-      ),
-    });
-  segments.slice(-1).forEach((item) =>
-    messages.push({
-      id: 'segment-' + item.id,
-      role: 'ASSISTANT',
-      content:
-        active ||
-        waiting ||
-        run?.status === 'CANCELLED' ||
-        run?.status === 'FAILED' ||
-        (primaryOutput && item.text.length > 400) ? (
-          <details className="research-process">
-            <summary>查看助手说明</summary>
-            {markdown(item.text, run?.id)}
-          </details>
-        ) : (
-          markdown(item.text, run?.id)
-        ),
-    }),
+  if (run?.request) messages.push({ id: 'request-' + run.id, role: 'USER', content: run.request });
+  const queuedIds = new Set((conversation?.queued || []).map((item) => item.id));
+  const conversationSteering = (conversation?.messages || []).filter(
+    (item) => item.run_id === run?.id && ['PENDING', 'DELIVERED'].includes(item.status || ''),
   );
-  if (draft)
-    messages.push({
-      id: 'draft',
-      role: 'ASSISTANT',
-      content: (
-        <>
-          {markdown(draft, run?.id)}
-          <p className="harness-muted">引用与结论尚待交付检查。</p>
-        </>
-      ),
-    });
+  const steering = [
+    ...new Map(
+      [...conversationSteering, ...(run?.messages || [])].map((item) => [item.id, item]),
+    ).values(),
+  ]
+    .filter((item) => !queuedIds.has(item.id))
+    .map((item, index) => ({
+      ...item,
+      status:
+        item.status === 'DELIVERED' ||
+        conversationSteering.some((saved) => saved.id === item.id && saved.status === 'DELIVERED')
+          ? 'DELIVERED'
+          : item.status,
+      seq: item.seq ?? index + 1,
+    }))
+    .sort((left, right) => left.seq - right.seq);
+  const deliveredSeq = Math.max(
+    0,
+    ...steering.filter((item) => item.status === 'DELIVERED').map((item) => item.seq),
+  );
+  // Assistant speech stays in the conversation, including streamed updates. Tool activity
+  // is represented separately by one status line, never by a stack of execution events.
+  const replies: Array<{
+    id: string;
+    text: string;
+    streaming?: boolean;
+    after_message_seq?: number;
+  }> = (run?.assistant_messages || []).filter(
+    (reply, index, all) =>
+      reply.text.trim() && (index === 0 || reply.text.trim() !== all[index - 1]?.text.trim()),
+  );
+  const finalText = !active && !waiting ? run?.result || run?.last_text : undefined;
+  if (finalText && replies.at(-1)?.text.trim() !== finalText.trim())
+    replies.push({ id: 'result', text: finalText, after_message_seq: deliveredSeq });
   if (
-    run &&
-    (active ||
-      waiting ||
-      run.error ||
-      run.status === 'CANCELLED' ||
-      run.registered_outputs?.length ||
-      props.progress.length)
+    draft.trim() &&
+    !replies.some((reply) => reply.id === props.draftId) &&
+    draft.trim() !== replies.at(-1)?.text.trim()
   )
-    messages.push({
-      id: 'state-' + run.id,
-      role: 'ASSISTANT',
-      content: (
-        <>
-          {' '}
-          {waiting && run?.pending_approval && (
-            <Alert
-              type="info"
-              message="需要你确认外部检索"
-              description={
-                <div>
-                  <p>只发送以下检索词；拒绝后助手可继续处理内部资料。</p>
-                  <Typography.Paragraph copyable>
-                    {run.pending_approval.arguments.query}
-                  </Typography.Paragraph>
-                  <Space wrap>
-                    <Button loading={busy} onClick={() => props.onApproval('APPROVED')}>
-                      允许此检索词
-                    </Button>
-                    <Button disabled={busy} onClick={() => props.onApproval('REJECTED')}>
-                      仅用内部资料
-                    </Button>
-                  </Space>
-                </div>
-              }
-            />
-          )}
-          {primaryOutput && (
-            <section className="research-report-entry" aria-label="当前报告">
-              <p className="research-report-entry-meta">
-                本轮最新保存 · 报告草稿 · {assessment.label}
-              </p>
-              <h3 title={primaryOutput.title}>{primaryOutput.title}</h3>
-              <p>{assessment.detail}</p>
-              <Space wrap>
-                <Button
-                  type="primary"
-                  onClick={() =>
-                    props.onReport ? props.onReport(primaryOutput.id) : props.onMaterials('reports')
-                  }
-                >
-                  打开报告
-                </Button>
-                <Button type="text" onClick={() => props.onMaterials('reports')}>
-                  查看保存历史
-                </Button>
-              </Space>
-            </section>
-          )}
-          {evidenceCount > 0 && (
-            <div className="research-secondary-output">
-              <span>{evidenceCount} 条实例证据 · 抽取核对状态见证据区</span>
-              <Button type="link" onClick={() => props.onMaterials('evidence')}>
-                查看证据与比较
-              </Button>
-            </div>
-          )}
-          {!!files.length && (
-            <details className="research-process">
-              <summary>分析文件（{files.length}）</summary>
-              {files.map((item) => (
-                <div className="harness-delivery" key={item.id}>
-                  <span>{item.title}</span>
-                  <Button href={agentApi.artifactUrl(item.id)}>下载文件</Button>
-                </div>
-              ))}
-            </details>
-          )}
-        </>
-      ),
+    replies.push({
+      id: props.draftId || 'draft-' + run?.id,
+      text: draft,
+      streaming: active,
+      after_message_seq: props.draftAfterMessageSeq ?? deliveredSeq,
     });
-  if (run && messages.length > currentStart) {
-    const currentMessages = messages.splice(currentStart);
-    messages.push({
-      id: 'turn-' + run.id,
-      role: 'ASSISTANT',
-      content: (
-        <div className="research-current-turn">
-          {currentMessages.map((item) => (
-            <div key={item.id}>{item.content}</div>
-          ))}
-        </div>
-      ),
-    });
-  }
+  const replyBody = (reply: (typeof replies)[number]) => (
+    <div
+      className={`research-assistant-reply${reply.streaming ? ' is-streaming' : ''}`}
+      key={reply.id}
+    >
+      {markdown(reply.text, run?.id, reply.streaming)}
+    </div>
+  );
+  const groups = [
+    ...new Set([
+      0,
+      ...steering.map((item) => item.seq),
+      ...replies.map((reply) => reply.after_message_seq ?? deliveredSeq),
+    ]),
+  ].sort((left, right) => left - right);
+  if (run)
+    for (const seq of groups) {
+      const supplement = steering.find((item) => item.seq === seq);
+      if (supplement)
+        messages.push({
+          id: 'history-' + supplement.id,
+          role: 'USER',
+          content: (
+            <>
+              {supplement.text}
+              {active && (
+                <span className="research-message-delivery" role="status">
+                  {supplement.status === 'DELIVERED' ? '已加入当前任务' : '等待当前步骤结束后接收'}
+                </span>
+              )}
+            </>
+          ),
+        });
+      const groupReplies = replies.filter(
+        (reply) => (reply.after_message_seq ?? deliveredSeq) === seq,
+      );
+      const last = seq === groups.at(-1);
+      messages.push({
+        id: 'turn-' + run.id + (seq ? '-' + seq : ''),
+        role: 'ASSISTANT',
+        content: (
+          <div className="research-current-turn">
+            {groupReplies[0] && replyBody(groupReplies[0])}
+            {seq === 0 && <ResearchPlan key="plan" run={run} />}
+            {groupReplies.slice(1).map(replyBody)}
+            {last && (
+              <>
+                <ResearchRunSummary
+                  run={run}
+                  progress={props.progress}
+                  busy={busy}
+                  onRetry={props.onRetry}
+                />
+                <ResearchOperations runId={run.id} active={active} showNotice={!unknown} />
+                {waiting && run.pending_approval && (
+                  <Alert
+                    type="info"
+                    message={
+                      run.pending_approval.tool === 'literature_acquire'
+                        ? '允许获取论文全文吗？'
+                        : '要到互联网上查找文献吗？'
+                    }
+                    description={
+                      <div>
+                        <p>
+                          {run.pending_approval.description ||
+                            (run.pending_approval.arguments.query
+                              ? `将搜索：${run.pending_approval.arguments.query}`
+                              : '查找与已选论文相关的文献。')}
+                        </p>
+                        <Space wrap>
+                          <Button loading={busy} onClick={() => props.onApproval('APPROVED')}>
+                            {run.pending_approval.tool === 'literature_acquire'
+                              ? '允许获取全文'
+                              : '允许本次查询'}
+                          </Button>
+                          <Button disabled={busy} onClick={() => props.onApproval('REJECTED')}>
+                            只用已有资料
+                          </Button>
+                        </Space>
+                      </div>
+                    }
+                  />
+                )}
+                {!!files.length && (
+                  <section className="research-delivery-files" aria-label="生成的文件">
+                    <h3>生成的文件</h3>
+                    {files.map((file) => (
+                      <div className="harness-delivery conversation-file-card" key={file.id}>
+                        <span>
+                          {file.title}
+                          <small>{file.title.split('.').at(-1)?.toUpperCase()}</small>
+                        </span>
+                        <Button
+                          type="text"
+                          icon={<DownloadOutlined />}
+                          href={agentApi.artifactUrl(file.id)}
+                        >
+                          下载
+                        </Button>
+                      </div>
+                    ))}
+                  </section>
+                )}
+                {primaryOutput && (
+                  <section className="research-report-entry" aria-label="当前报告">
+                    <h3>{primaryOutput.title}</h3>
+                    <p>{reportAssessment(primaryReport).detail}</p>
+                    <Button
+                      icon={<FileTextOutlined />}
+                      onClick={() => props.onReport?.(primaryOutput.id)}
+                    >
+                      阅读报告
+                    </Button>
+                  </section>
+                )}
+                {!active &&
+                  deliveryProblems(run).map((problem) => (
+                    <p key={problem} className="research-delivery-problem">
+                      {problem}
+                    </p>
+                  ))}
+                {!active && Object.keys(run.report_checks || {}).length > 0 && !primaryOutput && (
+                  <Button
+                    type="link"
+                    className="research-problem-link"
+                    onClick={() => props.onMaterials('checks')}
+                  >
+                    查看需要补充的内容
+                  </Button>
+                )}
+                {!active && replies.length > 0 && (
+                  <CopyAnswerButton
+                    text={replies.map((reply) => researchText(reply.text)).join('\n\n')}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        ),
+      });
+    }
   return (
     <AiConversationWorkspace
       conversations={props.topics || []}
       activeConversationId={props.activeTopicId}
       messages={messages}
-      initialScrollMessageId={
-        active && run?.plan?.presentation === 'research_plan_v1' ? 'turn-' + run.id : undefined
-      }
+      compactComposer
       question={props.request}
       inputRef={inputRef}
       inputDisabled={busy || props.restoring}
@@ -266,46 +315,30 @@ export function HarnessConversation(props: Props) {
       assistantLabel="研究助手"
       inputLabel="交代任务或继续交流"
       inputMaxLength={12000}
-      inputPlaceholder={
-        active
-          ? '补充要求，发送后加入队列…'
-          : run?.status === 'CANCELLED'
-            ? '输入“继续”，或补充调整后的要求…'
-            : '直接交代研究目标，不用先建主题或找齐资料。'
-      }
-      submitLabel={submitLabel}
+      inputPlaceholder={active ? '补充要求，当前任务完成后依次处理…' : '描述你想研究的问题…'}
+      submitLabel={active ? '排队发送' : '发送'}
       submitAction={
-        <Button
+        <ConversationIconButton
+          label={stopAction ? '停止当前任务' : active ? '排队发送' : '发送'}
+          tooltip={
+            stopAction ? '停止当前任务' : active ? '加入待发送队列，当前任务完成后处理' : '发送'
+          }
+          name={stopAction ? 'stop' : 'send'}
           type="primary"
           size="large"
           shape="circle"
-          icon={
-            stopAction ? (
-              <span className="harness-stop-symbol" aria-hidden="true" />
-            ) : (
-              <ArrowUpOutlined />
-            )
-          }
-          aria-label={stopAction ? '停止当前任务' : submitLabel}
-          title={
-            stopAction
-              ? '停止当前执行并暂停待发送队列；已完成操作不会撤销'
-              : active
-                ? '排队发送：本轮完成后处理'
-                : submitLabel
-          }
           loading={busy}
           disabled={
             busy ||
             props.restoring ||
-            (!stopAction && (!props.request.trim() || !props.ready || waiting))
+            (!stopAction && (!props.request.trim() || !props.ready || waiting || unknown))
           }
           onClick={stopAction ? props.onCancel : props.onSend}
         />
       }
-      submitDisabled={busy || !props.ready || props.restoring || waiting}
-      welcomeTitle="把研究任务交给我"
-      welcomeDescription="我会查找授权资料、阅读证据，交付可追溯的结果。"
+      submitDisabled={busy || !props.ready || props.restoring || waiting || unknown}
+      welcomeTitle="今天想研究什么？"
+      welcomeDescription="提出问题，或上传文献，我会帮你分析并整理结果。"
       welcomeContent={
         <div className="harness-examples">
           {examples.map((text) => (
@@ -315,37 +348,38 @@ export function HarnessConversation(props: Props) {
           ))}
         </div>
       }
-      scopeTitle="资料与成果"
-      scopeContent={
-        <Space direction="vertical">
-          <span>{props.scope || '自动查找授权知识库'}</span>
-          <span className="harness-muted">外部检索需确认</span>
-          <Button onClick={() => props.onMaterials('documents')}>文献与阅读</Button>
-          <Button onClick={() => props.onMaterials('sources')}>私有资料与执行回执</Button>
-          <Button onClick={() => props.onMaterials('evidence')}>证据核对与比较</Button>
-          <Button onClick={() => props.onMaterials('reports')}>研究报告</Button>
+      composerActions={
+        <Space wrap size={4}>
+          <ConversationIconButton
+            label="选择资料"
+            name="sources"
+            onClick={props.onChoose}
+            disabled={busy || active || waiting}
+          />
+          <ConversationIconButton
+            label="上传文件"
+            name="attach"
+            onClick={props.onUpload}
+            disabled={busy || active || waiting}
+          />
+          <ConversationIconButton
+            label="资料与文件"
+            name="files"
+            onClick={() => props.onMaterials('references')}
+          />
+          {active && !stopAction && (
+            <ConversationIconButton
+              label="停止当前任务"
+              name="stop"
+              disabled={busy || props.restoring}
+              onClick={props.onCancel}
+            />
+          )}
         </Space>
       }
       composerTopContent={
-        <div>
-          <div className="harness-composer-status">
-            <span className="harness-muted">
-              {run ? (
-                <>
-                  <ResearchRunStatus run={run} prefix="状态：" />
-                  <span className="research-composer-hint">
-                    {active
-                      ? '发送后排队'
-                      : run.status === 'CANCELLED'
-                        ? '输入“继续”可接着处理'
-                        : ''}
-                  </span>
-                </>
-              ) : (
-                props.scope || '自动查找授权知识库'
-              )}
-            </span>
-          </div>
+        <>
+          {props.scope && <span className="harness-muted">{props.scope}</span>}
           <QueuedMessages
             items={conversation?.queued || []}
             paused={conversation?.queue_paused}
@@ -353,17 +387,16 @@ export function HarnessConversation(props: Props) {
             canSteer={active && props.ready}
             canRestore={!props.request.trim()}
             onRestore={async (item) => {
-              if (await props.onRestoreQueued(item)) inputRef.current?.focus({ cursor: 'end' });
+              if (await props.onRestoreQueued(item)) setFocusRestoredMessage(true);
             }}
             onChange={props.onQueue}
           />
           {!props.ready && (
             <p className="harness-muted">
-              {props.readinessMessage || '执行服务尚未就绪；可以先阅读已保存资料。'}
+              {props.readinessMessage || '服务暂不可用，请稍后再试。'}
             </p>
           )}
-          {waiting && <p className="harness-muted">请先确认上方外部检索请求，或停止本轮任务。</p>}
-        </div>
+        </>
       }
       onNewConversation={() => props.onNewTask?.()}
       onSelectConversation={(id) => props.onSelectTask?.(id)}

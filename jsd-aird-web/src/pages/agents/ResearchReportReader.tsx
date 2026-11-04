@@ -1,16 +1,18 @@
 import { Alert, Button, Empty, Select, Space, Spin, Tabs } from 'antd';
 import { CloseOutlined } from '@ant-design/icons';
 import { useLayoutEffect, useRef, useState, type MouseEvent } from 'react';
-import { MarkdownContent } from '@/components/markdown/MarkdownContent';
+import { ConversationBody } from '@/components/ai-conversation-workspace/ConversationBody';
 import {
   agentApi,
   citedMarkdown,
   type Candidate,
   type LiteratureReport,
   type SourceRef,
+  type SourceQuote,
 } from '@/services/agents/agent-api';
 import { ResearchQualityPanel } from './ResearchQualityPanel';
 import { reportAssessment } from './research-presentation';
+import { groupEvidence, sourceLabel } from '@/services/evidence/adapters';
 
 export function ResearchReportReader({
   report,
@@ -30,7 +32,7 @@ export function ResearchReportReader({
   onRetry: () => void;
   onClose: () => void;
   onSelect: (id: string) => void;
-  onSource: (source: SourceRef) => void;
+  onSource: (source: SourceRef, quote?: SourceQuote) => void;
   onCitation: (event: MouseEvent<HTMLElement>, evidence: Record<string, Candidate>) => void;
 }) {
   const [tab, setTab] = useState('body');
@@ -52,21 +54,7 @@ export function ResearchReportReader({
     if (scroll) scroll.scrollTop = 0;
   }, [report?.id, report?.text, tab]);
   // Count cited documents, not chunks. Two publications of one document remain distinguishable.
-  const sources = [
-    ...new Map(
-      Object.values(report?.evidence || {}).map((item) => [
-        JSON.stringify([
-          item.source.kind,
-          item.source.document_id,
-          item.source.publication_id,
-          item.source.version_id,
-          item.source.url,
-          item.source.resource_id,
-        ]),
-        item,
-      ]),
-    ).values(),
-  ];
+  const sources = groupEvidence(Object.values(report?.evidence || {}));
   return (
     <aside className="research-report-reader" aria-label="报告阅读区">
       <header className="research-report-reader-toolbar">
@@ -97,7 +85,7 @@ export function ResearchReportReader({
           <div className="research-report-reader-heading">
             <h2 title={report.title}>{report.title}</h2>
             <div className="research-report-reader-meta">
-              <span>报告草稿 · 保存修订 {report.revision}</span>
+              <span>第 {report.revision} 版</span>
               <span>{assessment.label}</span>
             </div>
             <p className="research-report-notice" role="note">
@@ -125,7 +113,7 @@ export function ResearchReportReader({
             items={[
               { key: 'body', label: '正文' },
               { key: 'sources', label: `来源（${sources.length}）` },
-              { key: 'quality', label: '证据与核查' },
+              { key: 'quality', label: '内容检查' },
             ]}
           />
           <div className="research-report-reader-content">
@@ -154,28 +142,21 @@ export function ResearchReportReader({
                   aria-label="报告正文"
                   onClick={(event) => onCitation(event, report.evidence)}
                 >
-                  <MarkdownContent value={citedMarkdown(displayText)} />
+                  <ConversationBody text={citedMarkdown(displayText)} />
                 </article>
               </>
             )}
             {tab === 'sources' && (
               <section aria-label="报告来源">
-                <p className="harness-muted">
-                  点击查看固定版本原文。正文中的引用可直接定位到采用的片段。
-                </p>
                 {!sources.length && (
                   <Empty description="此报告未登记来源，请勿作为有原文依据的结论使用。" />
                 )}
                 {sources.map((item) => (
-                  <div key={item.evidence_id} className="research-report-source">
+                  <div key={item.key} className="research-report-source">
                     <strong>{item.source.title}</strong>
                     <Space>
-                      <span className="harness-muted">
-                        {item.source.kind === 'KB_PUBLICATION'
-                          ? '知识库固定发布版本'
-                          : '读取时来源快照'}
-                      </span>
-                      <Button onClick={() => onSource(item.source)}>查看原文</Button>
+                      <span className="harness-muted">{sourceLabel(item.source)}</span>
+                      <Button onClick={() => onSource(item.source)}>预览</Button>
                     </Space>
                   </div>
                 ))}
@@ -186,7 +167,7 @@ export function ResearchReportReader({
                 frozen
                 matrix={report.evidence_matrix}
                 review={report.quality_review}
-                onQuote={(quote) => onSource(quote.source)}
+                onQuote={(quote) => onSource(quote.source, quote)}
               />
             )}
           </div>

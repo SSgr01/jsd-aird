@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from aird_files import check_file
+
 
 def main():
     body = json.loads(base64.b64decode(sys.argv[1], validate=True))
@@ -32,6 +34,8 @@ def main():
             total += size
             if total > 10 * 1024 * 1024 or len(files) >= 50:
                 raise RuntimeError("Artifact export quota exceeded")
+            if path.suffix.lower() in {".docx", ".xlsx", ".pdf"}:
+                check_file(path)
             files.append({"path": path.relative_to("/work/output").as_posix(), "base64": base64.b64encode(path.read_bytes()).decode()})
     print(json.dumps({"exit_code": code, "output": output.decode(errors="replace")[:12000], "truncated": truncated or len(output) > 12000, "files": files}))
 

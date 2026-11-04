@@ -1,30 +1,16 @@
-import { researchEvidence } from '@/services/evidence/adapters';
+import {
+  groupEvidence,
+  researchEvidence,
+  sourceLabel,
+  type EvidenceView,
+} from '@/services/evidence/adapters';
 import { applyTextUpdate } from '@/services/evidence/identity';
-import {
-  AuthorizedEvidence,
-  EvidenceViewDetails,
-} from '@/components/ai-conversation-workspace/EvidenceDetails';
-import {
-  App,
-  Alert,
-  Button,
-  Drawer,
-  Input,
-  List,
-  Modal,
-  Space,
-  Spin,
-  Table,
-  Tabs,
-  Tag,
-  Typography,
-} from 'antd';
+import { EvidenceReader } from '@/components/ai-conversation-workspace/EvidenceDetails';
+import { App, Alert, Button, Drawer, Input, List, Space, Table, Tabs, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { Link } from 'react-router-dom';
-import { OriginalDocumentViewer } from '@/components/knowledge-document/OriginalDocumentViewer';
-import { StructuredDocumentRenderer } from '@/components/knowledge-document/StructuredDocumentRenderer';
 import {
   agentApi,
   type AgentEvent,
@@ -34,22 +20,18 @@ import {
   type EvidenceCard,
   type SourceRef,
   type SourceQuote,
+  type PrivateSource,
   type QueueChange,
 } from '@/services/agents/agent-api';
-import {
-  knowledgeApi,
-  type KnowledgeDocument,
-  type PublishedContent,
-  type SourceAnchor,
-} from '@/services/knowledge/knowledge-api';
+import { knowledgeApi, type KnowledgeDocument } from '@/services/knowledge/knowledge-api';
 import { useAuthStore } from '@/stores/auth-store';
 import { HarnessConversation } from './HarnessConversation';
 import { ResearchQualityPanel } from './ResearchQualityPanel';
 import { ResearchReportReader } from './ResearchReportReader';
 import { ConversationSources } from './ConversationSources';
-import { ResearchOperations } from './ResearchOperations';
-import { reportAssessment, reportOutputs } from './research-presentation';
+import { deliveryProblems, reportAssessment } from './research-presentation';
 import { generateUUID } from '@/utils/uuid';
+import { triggerNativeDownload } from '@/services/files';
 import './research-workspace.css';
 
 const activeStatuses = ['QUEUED', 'RUNNING'];
@@ -65,18 +47,42 @@ export function ResearchWorkspacePage() {
   const [conversation, setConversation] = useState<Conversation>();
   const [request, setRequest] = useState('');
   const [draft, setDraft] = useState('');
+  const [draftId, setDraftId] = useState<string>();
+  const [draftAfterMessageSeq, setDraftAfterMessageSeq] = useState(0);
   const [progress, setProgress] = useState<Array<{ key: number; text: string }>>([]);
-  const [source, updateSource] = useState<SourceRef>();
-  const [sourceQuote, setSourceQuote] = useState<SourceQuote>();
-  const setSource = (value?: SourceRef, quote?: SourceQuote) => {
-    updateSource(value);
-    setSourceQuote(quote);
+  const [sourceView, setSourceView] = useState<EvidenceView>();
+  const uploadInput = useRef<HTMLInputElement>(null);
+  const workspace = useRef<HTMLDivElement>(null);
+  const [wide, setWide] = useState(false);
+  useEffect(() => {
+    const element = workspace.current;
+    if (!element) return;
+    const update = () => setWide(element.getBoundingClientRect().width >= 1200);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const setSource = (value?: SourceRef, quote?: SourceQuote, excerpt?: string) => {
+    const candidate = Object.values(run?.evidence || {}).find(
+      (item) =>
+        item.source.kind === value?.kind &&
+        item.source.document_id === value?.document_id &&
+        item.source.version_id === value?.version_id &&
+        item.source.publication_id === value?.publication_id &&
+        item.source.content_sha256 === value?.content_sha256 &&
+        item.source.source_node_key === value?.source_node_key,
+    );
+    setSourceView(value ? researchEvidence(value, excerpt || candidate?.text, quote) : undefined);
+    if (value) {
+      setResourcesOpen(false);
+      setReportOpen(false);
+    }
   };
   const [resourcesOpen, setResourcesOpen] = useState(false);
-  const [resourcesTab, setResourcesTab] = useState('documents');
+  const [resourcesTab, setResourcesTab] = useState('references');
   const [reportOpen, setReportOpen] = useState(false);
   const [selectedReportId, setSelectedReportId] = useState<string>();
-  const openedReportRun = useRef<string>();
   const [restoring, setRestoring] = useState(false);
   const startKey = useRef(generateUUID());
   const [documentsOpen, setDocumentsOpen] = useState(false);
@@ -89,6 +95,8 @@ export function ResearchWorkspacePage() {
   const queueAttempt = useRef<{ signature: string; conversation: Conversation; key: string }>();
   const sourceAttempt = useRef<{ signature: string; key: string }>();
   const [note, setNote] = useState('');
+  const [uploadingName, setUploadingName] = useState<string>();
+  const [uploadFailed, setUploadFailed] = useState(false);
   useEffect(() => {
     if (!owner) return;
     setTopicId(sessionStorage.getItem('harness-topic:' + owner) || undefined);
@@ -100,7 +108,6 @@ export function ResearchWorkspacePage() {
     setDraft('');
     setReportOpen(false);
     setSelectedReportId(undefined);
-    openedReportRun.current = undefined;
     sourceAttempt.current = undefined;
     setSource(undefined);
     setResourcesOpen(false);
@@ -165,20 +172,6 @@ export function ResearchWorkspacePage() {
   });
 
   useEffect(() => {
-    const latest = reportOutputs(run)[0];
-    if (
-      !run ||
-      observedStatuses.includes(run.status) ||
-      !latest ||
-      openedReportRun.current === run.id
-    )
-      return;
-    openedReportRun.current = run.id;
-    setSelectedReportId(latest.id);
-    setReportOpen(true);
-  }, [run]);
-
-  useEffect(() => {
     if (
       !conversation?.id ||
       (!observedStatuses.includes(run?.status || '') &&
@@ -192,18 +185,32 @@ export function ResearchWorkspacePage() {
       void agentApi
         .conversation(cid)
         .then(async (next) => {
-          if (
-            current &&
-            run &&
-            !observedStatuses.includes(run.status) &&
-            next.active_run &&
-            next.active_run !== run.id
-          ) {
-            const successor = await agentApi.run(next.active_run);
+          const target = next.active_run || next.last_run;
+          if (current && target) {
+            const snapshot = await agentApi.run(target);
             if (!current) return;
-            setRun(successor);
-            setDraft('');
-            setProgress([]);
+            setRun((previous) => {
+              if (previous?.id !== run?.id) return previous;
+              if (previous?.id === snapshot.id) {
+                if ((previous.revision ?? 0) > (snapshot.revision ?? 0)) return previous;
+                return {
+                  ...snapshot,
+                  assistant_messages: [
+                    ...new Map(
+                      [
+                        ...(previous.assistant_messages || []),
+                        ...(snapshot.assistant_messages || []),
+                      ].map((item) => [item.id, item]),
+                    ).values(),
+                  ].slice(-20),
+                };
+              }
+              return snapshot;
+            });
+            if (target !== run?.id) {
+              setDraft('');
+              setProgress([]);
+            }
           }
           if (current)
             setConversation((previous) =>
@@ -234,7 +241,10 @@ export function ResearchWorkspacePage() {
 
   useEffect(() => {
     if (!selectedTask) return;
-    if (conversation?.id === selectedTask) return;
+    if (conversation?.id === selectedTask) {
+      setRestoring(false);
+      return;
+    }
     let current = true;
     setRestoring(true);
     void agentApi
@@ -277,8 +287,10 @@ export function ResearchWorkspacePage() {
     if (!run?.id || !observedStatuses.includes(run.status)) return;
     const rid = run.id;
     let observing = true;
+    const completedIds = new Set((run.assistant_messages || []).map((item) => item.id));
     const acceptRun = (value: AgentRun) => {
-      if (observing)
+      if (observing) {
+        for (const item of value.assistant_messages || []) completedIds.add(item.id);
         setRun((previous) => {
           // A slow in-flight snapshot must not undo a stop or overwrite its successor.
           if (previous && previous.id !== value.id) return previous;
@@ -288,14 +300,44 @@ export function ResearchWorkspacePage() {
             observedStatuses.includes(value.status)
           )
             return previous;
-          return value;
+          if (previous && (previous.revision ?? 0) > (value.revision ?? 0)) return previous;
+          return previous
+            ? {
+                ...value,
+                assistant_messages: [
+                  ...new Map(
+                    [
+                      ...(previous.assistant_messages || []),
+                      ...(value.assistant_messages || []),
+                    ].map((item) => [item.id, item]),
+                  ).values(),
+                ].slice(-20),
+              }
+            : value;
         });
+      }
     };
     const unsubscribe = agentApi.subscribe(
       rid,
       (event: AgentEvent) => {
         if (!observing) return;
-        if (event.type === 'message.started') setDraft('');
+        const messageId = typeof event.payload.id === 'string' ? event.payload.id : undefined;
+        if (event.type === 'message.started' && (!messageId || !completedIds.has(messageId))) {
+          setDraftId(messageId || 'event-' + event.seq);
+          setDraftAfterMessageSeq(Number(event.payload.after_message_seq) || 0);
+          setDraft('');
+        }
+        if (event.type === 'message.applied')
+          setRun((value) =>
+            value?.id === rid
+              ? {
+                  ...value,
+                  messages: (value.messages || []).map((item) =>
+                    item.id === event.payload.message_id ? { ...item, status: 'DELIVERED' } : item,
+                  ),
+                }
+              : value,
+          );
         if (
           ['conversation.queue', 'message.applied', 'run.cancelled', 'run.failed'].includes(
             event.type,
@@ -313,17 +355,29 @@ export function ResearchWorkspacePage() {
             .catch(() => {});
         }
         if (event.type === 'message.delta' && typeof event.payload.delta === 'string') {
+          if (messageId && completedIds.has(messageId)) return;
+          if (messageId) setDraftId(messageId);
           const delta = event.payload.delta;
           setDraft((value) => applyTextUpdate(value, delta));
         }
         if (event.type === 'message.completed' && typeof event.payload.text === 'string') {
           const text = event.payload.text;
           const id = typeof event.payload.id === 'string' ? event.payload.id : 'event-' + event.seq;
+          completedIds.add(id);
           setRun((value) =>
-            value && text.trim() && !(value.assistant_messages || []).some((item) => item.id === id)
+            value?.id === rid &&
+            text.trim() &&
+            !(value.assistant_messages || []).some((item) => item.id === id)
               ? {
                   ...value,
-                  assistant_messages: [...(value.assistant_messages || []), { id, text }],
+                  assistant_messages: [
+                    ...(value.assistant_messages || []),
+                    {
+                      id,
+                      text,
+                      after_message_seq: Number(event.payload.after_message_seq) || 0,
+                    },
+                  ],
                 }
               : value,
           );
@@ -331,11 +385,13 @@ export function ResearchWorkspacePage() {
         }
         if (event.type === 'task.plan')
           setRun((value) =>
-            value ? { ...value, plan: event.payload as unknown as AgentRun['plan'] } : value,
+            value?.id === rid
+              ? { ...value, plan: event.payload as unknown as AgentRun['plan'] }
+              : value,
           );
         if (event.type === 'task.review')
           setRun((value) =>
-            value
+            value?.id === rid
               ? { ...value, completion: event.payload as unknown as AgentRun['completion'] }
               : value,
           );
@@ -390,7 +446,7 @@ export function ResearchWorkspacePage() {
                   ? previous
                   : detail,
               );
-              setRun(next);
+              setRun((previous) => (previous?.id !== rid ? previous : next));
               setDraft('');
               setProgress([]);
               refreshResearch();
@@ -420,7 +476,8 @@ export function ResearchWorkspacePage() {
       await operation();
       return true;
     } catch (error) {
-      if (isAxiosError(error) && error.response?.status === 409) {
+      let failureMessage = error instanceof Error ? error.message : '操作失败，请刷新后重试';
+      if (isAxiosError<{ detail?: unknown }>(error) && error.response?.status === 409) {
         sendAttempt.current = undefined;
         queueAttempt.current = undefined;
         startKey.current = generateUUID();
@@ -429,8 +486,15 @@ export function ResearchWorkspacePage() {
             .conversation(conversation.id)
             .then(setConversation)
             .catch(() => {});
+        const detail = error.response.data?.detail;
+        if (detail === 'MESSAGE_ALREADY_DISPATCHED_OR_REMOVED')
+          failureMessage = '这条消息已开始处理或已移除，正在刷新队列。';
+        else if (detail === 'Conversation revision changed')
+          failureMessage = '消息状态刚刚有变化，正在刷新，请稍后再操作。';
+        else if (detail === 'RUN_NOT_ACCEPTING_STEERING')
+          failureMessage = '当前任务已结束，这条要求仍保留在待发送列表。';
       }
-      void message.error(error instanceof Error ? error.message : '操作失败，请刷新后重试');
+      void message.error(failureMessage);
       return false;
     } finally {
       actionLock.current = false;
@@ -530,7 +594,7 @@ export function ResearchWorkspacePage() {
     if (href?.startsWith('#research-evidence-')) {
       event.preventDefault();
       const item = evidence[href.slice('#research-evidence-'.length)];
-      if (item) setSource(item.source);
+      if (item) setSource(item.source, undefined, item.text);
     }
   };
 
@@ -547,9 +611,10 @@ export function ResearchWorkspacePage() {
     }
     setRestoring(false);
     setResourcesOpen(false);
+    setSourceView(undefined);
+    setDocumentsOpen(false);
     setReportOpen(false);
     setSelectedReportId(undefined);
-    openedReportRun.current = undefined;
     setRequest('');
     startKey.current = generateUUID();
     setRun(undefined);
@@ -572,7 +637,9 @@ export function ResearchWorkspacePage() {
     ...new Set((cards.data || []).flatMap((card) => card.fields.map((field) => field.name))),
   ];
   const showMaterials = (tab: string) => {
-    setResourcesTab(tab);
+    setResourcesTab(['reports', 'files', 'checks'].includes(tab) ? 'files' : 'references');
+    setSourceView(undefined);
+    setReportOpen(false);
     setResourcesOpen(true);
   };
   const ensureSourceConversation = async () => {
@@ -585,7 +652,9 @@ export function ResearchWorkspacePage() {
     return created;
   };
   const attachSource = async (file?: File, pmcid?: string) => {
-    await act(async () => {
+    setUploadingName(file?.name || pmcid);
+    setUploadFailed(false);
+    const success = await act(async () => {
       if (file && file.size > 10 * 1024 * 1024) throw new Error('单份私有资料不能超过 10 MiB。');
       const signature = file
         ? JSON.stringify([file.name, file.size, file.lastModified])
@@ -615,8 +684,11 @@ export function ResearchWorkspacePage() {
       void conversationList.refetch();
       void message.success('资料已接收，解析就绪后可开始研究。');
     });
+    setUploadingName(undefined);
+    setUploadFailed(!success);
   };
   const openReport = (id: string) => {
+    setSourceView(undefined);
     setSelectedReportId(id);
     setReportOpen(true);
     setResourcesOpen(false);
@@ -666,11 +738,15 @@ export function ResearchWorkspacePage() {
       onNewTask={() => selectTask(undefined)}
       onSelectTask={selectTask}
       scope={
-        topic && topic.scope_mode !== 'AUTOMATIC' ? '仅指定文献' : '按权限使用知识库与只读业务工具'
+        topic && topic.scope_mode !== 'AUTOMATIC'
+          ? `已选 ${topic.documents.length} 篇文献`
+          : undefined
       }
       run={run}
       conversation={conversation}
       draft={draft}
+      draftAfterMessageSeq={draftAfterMessageSeq}
+      draftId={draftId}
       request={request}
       busy={busy}
       ready={
@@ -681,7 +757,7 @@ export function ResearchWorkspacePage() {
       }
       readinessMessage={
         privateSources.data?.some((item) => item.status !== 'READY')
-          ? '私有资料仍在解析或解析失败；请等待就绪，或在“资料与成果”中移出失败文件。'
+          ? '文件仍在解析或解析失败，请在“资料与文件”中查看。'
           : undefined
       }
       restoring={restoring || Boolean(topicId && topicQuery.isFetching && !topic)}
@@ -699,6 +775,12 @@ export function ResearchWorkspacePage() {
       onQueue={changeQueue}
       onSend={() => void start()}
       onMaterials={showMaterials}
+      onUpload={() => uploadInput.current?.click()}
+      onChoose={() => {
+        setSelectedDocs(topic?.documents.map((item) => item.document_id) || []);
+        setDocumentsOpen(true);
+        showMaterials('references');
+      }}
       onCancel={() =>
         void act(async () => {
           if (run) {
@@ -736,262 +818,349 @@ export function ResearchWorkspacePage() {
               ? (await agentApi.run(runId)).evidence
               : (await agentApi.run(run!.id)).evidence;
           if (!evidence[id]) throw new Error('该引用暂时不可用，请在资料区核对来源。');
-          setSource(evidence[id].source);
+          setSource(evidence[id].source, undefined, evidence[id].text);
         });
       }}
     />
   );
 
-  return (
-    <main className="research-workspace harness-workspace">
-      {capability.isError && (
-        <Alert
-          type="error"
-          message="工作区状态加载失败"
-          action={<Button onClick={() => void capability.refetch()}>重试</Button>}
-        />
-      )}
-      {capability.data && !capability.data.enabled && (
-        <Alert
-          type="info"
-          message="研究工作区尚未启用"
-          description="管理员启用后，可直接交代任务，由助手查找授权资料。"
-        />
-      )}
-      {capability.data?.enabled && capability.data.available === false && (
-        <Alert
-          type="warning"
-          message="执行服务暂不可用，仍可阅读已保存的研究资料"
-          action={<Button onClick={() => void capability.refetch()}>重新检查</Button>}
-        />
-      )}
-      <div className={`research-session-layout${reportOpen ? ' has-report' : ''}`}>
-        <div className="research-session-chat">{task}</div>
-        {reportOpen && (
-          <ResearchReportReader
-            report={(reports.data || []).find((item) => item.id === selectedReportId)}
-            reports={reports.data || []}
-            loading={reports.isFetching}
-            error={reports.isError}
-            onRetry={() => void reports.refetch()}
-            onClose={() => setReportOpen(false)}
-            onSelect={setSelectedReportId}
-            onSource={setSource}
-            onCitation={clickCitation}
-          />
-        )}
-      </div>
-      <Drawer
-        title="资料与成果"
-        className="research-materials"
-        open={resourcesOpen}
-        onClose={() => setResourcesOpen(false)}
-        width="min(1060px, 96vw)"
-      >
-        <ConversationSources
-          sources={privateSources.data || []}
-          busy={busy}
-          active={Boolean(run && observedStatuses.includes(run.status))}
-          onUpload={(file) => attachSource(file)}
-          onAcquire={(pmcid) => attachSource(undefined, pmcid)}
-          onDetach={async (id) => {
-            if (!conversation) return;
-            await act(async () => {
-              await agentApi.detachPrivateSource(conversation.id, id);
-              setConversation(await agentApi.conversation(conversation.id));
-              await privateSources.refetch();
-            });
-          }}
-        />
-        {privateSources.isError && (
-          <Alert
-            type="error"
-            message="私有资料状态暂时无法读取"
-            action={<Button onClick={() => void privateSources.refetch()}>刷新</Button>}
-          />
-        )}
-        <ResearchOperations
-          runId={run?.id}
-          owner={owner}
-          active={Boolean(run && observedStatuses.includes(run.status))}
-        />
-        {!topic ? (
-          <>
-            <ResearchQualityPanel
-              matrix={run?.research_matrix}
-              review={matrixReview}
-              onQuote={(quote) => setSource(quote.source, quote)}
-            />
-            <Typography.Paragraph>
-              本次任务按需获取授权资料；保存文献证据和研究报告时才建立研究主题。
-            </Typography.Paragraph>
-            <List
-              header="本次任务来源"
-              dataSource={Object.values(run?.evidence || {})}
-              locale={{ emptyText: '尚未读取来源' }}
-              renderItem={(item) => (
-                <List.Item
-                  actions={[
+  const readPrivate = (file: PrivateSource) => {
+    const passages = Object.values(run?.evidence || {}).filter(
+      (item) => item.source.document_id === file.id && item.source.version_id === file.version_id,
+    );
+    const candidate = passages[0];
+    setSourceView({
+      ...(candidate ? researchEvidence(candidate.source, candidate.text) : { title: file.name }),
+      passages: passages.map((item) => researchEvidence(item.source, item.text)),
+      original: {
+        fileName: file.name,
+        contentType: file.content_type,
+        downloadUrl: agentApi.privateSourceUrl(file.id),
+        load: async () => {
+          const response = await fetch(agentApi.privateSourceUrl(file.id), {
+            credentials: 'include',
+          });
+          if (!response.ok) throw new Error('文件暂不可用');
+          return response.blob();
+        },
+      },
+    });
+    setResourcesOpen(false);
+    setReportOpen(false);
+  };
+  const references = groupEvidence(Object.values(run?.evidence || {})).filter(
+    (group) =>
+      !(privateSources.data || []).some(
+        (file) =>
+          file.id === group.source.document_id && file.version_id === group.source.version_id,
+      ),
+  );
+  const previewReference = (group: (typeof references)[number]) => {
+    setSourceView({
+      ...researchEvidence(group.source, group.passages[0]?.text),
+      passages: group.passages.map((item) => researchEvidence(item.source, item.text)),
+    });
+    setResourcesOpen(false);
+  };
+  const panelOpen = resourcesOpen || reportOpen || Boolean(sourceView);
+  const closePanel = () => {
+    setResourcesOpen(false);
+    setReportOpen(false);
+    setSourceView(undefined);
+  };
+  const saveSelection = () =>
+    void act(async () => {
+      const found = new Map([
+        ...selectedDocumentCache.current,
+        ...(documents.data?.items || []).map((item) => [item.id, item] as const),
+      ]);
+      const selected = selectedDocs.map((id) => {
+        const existing = topic?.documents.find((item) => item.document_id === id);
+        if (existing) return existing;
+        const document = found.get(id);
+        if (!document?.currentPublicationId) throw new Error('所选文献状态已变化，请重新选择。');
+        return {
+          document_id: document.id,
+          publication_id: document.currentPublicationId,
+          title: document.title,
+        };
+      });
+      const currentTopic =
+        topic || (await agentApi.createTopic('文献研究', request.trim() || '研究所选文献'));
+      await agentApi.updateTopic(currentTopic, selected, 'SELECTED');
+      setTopicId(currentTopic.id);
+      setDocumentsOpen(false);
+      if (!conversation) {
+        setSelectedTask('topic:' + currentTopic.id);
+        if (owner) sessionStorage.setItem('harness-topic:' + owner, currentTopic.id);
+      }
+      await topics.refetch();
+      void queries.invalidateQueries({ queryKey: ['research-topic', owner, currentTopic.id] });
+    });
+  const materials = (
+    <section className="research-materials-panel" aria-label="资料与文件">
+      <header className="conversation-reader-toolbar">
+        <strong>资料与文件</strong>
+        <Button type="text" onClick={closePanel}>
+          返回对话
+        </Button>
+      </header>
+      <div className="research-materials-content">
+        <Tabs
+          activeKey={resourcesTab}
+          onChange={setResourcesTab}
+          items={[
+            {
+              key: 'references',
+              label: '参考资料',
+              children: documentsOpen ? (
+                <section>
+                  <div className="research-section-heading">
+                    <h3>选择文献</h3>
+                    <Button type="text" onClick={() => setDocumentsOpen(false)}>
+                      返回资料
+                    </Button>
+                  </div>
+                  <Input.Search
+                    aria-label="查找文献"
+                    placeholder="搜索文献标题"
+                    onSearch={setKeyword}
+                    enterButton
+                  />
+                  {documents.isError && (
+                    <Alert
+                      type="error"
+                      message="文献加载失败"
+                      action={<Button onClick={() => void documents.refetch()}>重试</Button>}
+                    />
+                  )}
+                  <Table<KnowledgeDocument>
+                    rowKey="id"
+                    size="small"
+                    loading={documents.isFetching}
+                    dataSource={documents.data?.items || []}
+                    pagination={false}
+                    rowSelection={{
+                      selectedRowKeys: selectedDocs,
+                      preserveSelectedRowKeys: true,
+                      onChange: (keys, rows) => {
+                        for (const row of rows)
+                          if (row) selectedDocumentCache.current.set(row.id, row);
+                        setSelectedDocs(keys.map(String));
+                      },
+                      getCheckboxProps: (item) => ({
+                        disabled: item.aiStatus !== 'APPROVED' || !item.currentPublicationId,
+                      }),
+                    }}
+                    columns={[
+                      { title: '文献', dataIndex: 'title' },
+                      { title: '版本', dataIndex: 'currentPublicationNo', width: 60 },
+                    ]}
+                  />
+                  <div className="research-selection-actions">
+                    <span>已选 {selectedDocs.length} 篇</span>
                     <Button
-                      key="read"
+                      type="primary"
+                      disabled={!selectedDocs.length}
+                      loading={busy}
+                      onClick={saveSelection}
+                    >
+                      使用所选资料
+                    </Button>
+                  </div>
+                </section>
+              ) : (
+                <>
+                  <Space wrap>
+                    <Button
+                      disabled={busy || active}
                       onClick={() => {
-                        if (run)
-                          void act(async () => {
-                            const latest = await agentApi.run(run.id);
-                            const evidence = latest.evidence[item.evidence_id];
-                            if (evidence) setSource(evidence.source);
-                          });
+                        setSelectedDocs(topic?.documents.map((item) => item.document_id) || []);
+                        setDocumentsOpen(true);
                       }}
                     >
-                      查看来源
-                    </Button>,
-                  ]}
-                >
-                  <List.Item.Meta title={item.source.title} description={item.source.kind} />
-                </List.Item>
-              )}
-            />
-            <List
-              header="已保存文件"
-              dataSource={(run?.registered_outputs || []).filter(
-                (item) => item.kind === 'artifact',
-              )}
-              locale={{ emptyText: '尚未保存文件' }}
-              renderItem={(file) => (
-                <List.Item
-                  actions={[
-                    <Button key="download" href={agentApi.artifactUrl(file.id)}>
-                      下载
-                    </Button>,
-                  ]}
-                >
-                  {file.title}
-                </List.Item>
-              )}
-            />
-          </>
-        ) : (
-          <>
-            <div className="research-topic-heading">
-              <Typography.Title level={3}>{topic.title}</Typography.Title>
-              <Typography.Paragraph>{topic.goal.slice(0, 240)}</Typography.Paragraph>
-            </div>
-            {Boolean(artifacts.data?.length) && (
-              <List
-                size="small"
-                header="已登记分析文件 · AI 生成，使用前请核对"
-                dataSource={artifacts.data}
-                renderItem={(file) => (
-                  <List.Item
-                    actions={[
-                      <Button key="download" href={agentApi.artifactUrl(file.id)}>
-                        下载
-                      </Button>,
-                    ]}
-                  >
-                    <List.Item.Meta
-                      title={file.name}
-                      description={`${file.bytes.toLocaleString()} 字节`}
+                      选择知识库资料
+                    </Button>
+                    {topic?.scope_mode === 'SELECTED' && (
+                      <Button
+                        disabled={busy || active}
+                        onClick={() =>
+                          void act(async () => {
+                            await agentApi.updateTopic(topic, [], 'AUTOMATIC');
+                            await topicQuery.refetch();
+                          })
+                        }
+                      >
+                        使用全部资料
+                      </Button>
+                    )}
+                    <Link to="/knowledge/library">管理知识库</Link>
+                  </Space>
+                  {privateSources.isError && (
+                    <Alert
+                      type="error"
+                      message="上传文件列表加载失败"
+                      action={<Button onClick={() => void privateSources.refetch()}>重试</Button>}
                     />
-                  </List.Item>
-                )}
-              />
-            )}
-            <Tabs
-              activeKey={resourcesTab}
-              onChange={setResourcesTab}
-              items={[
-                {
-                  key: 'matrix',
-                  label: `证据矩阵 (${Object.keys(run?.research_matrix?.questions || {}).length})`,
-                  children: (
-                    <ResearchQualityPanel
-                      matrix={run?.research_matrix}
-                      review={matrixReview}
-                      onQuote={(quote) => setSource(quote.source, quote)}
-                    />
-                  ),
-                },
-                {
-                  key: 'documents',
-                  label: `文献与阅读 (${visibleDocuments.length})`,
-                  children: (
-                    <section>
-                      <Space wrap>
-                        <Typography.Text>
-                          {topic.scope_mode === 'AUTOMATIC' ? '自动发现授权文献' : '仅使用指定文献'}
-                        </Typography.Text>
-                        {topic.scope_mode !== 'AUTOMATIC' && (
-                          <Button
-                            disabled={Boolean(run && observedStatuses.includes(run.status))}
-                            onClick={() =>
-                              void act(async () => {
-                                await agentApi.updateTopic(topic, [], 'AUTOMATIC');
-                                await topicQuery.refetch();
-                                await topics.refetch();
-                              })
-                            }
-                          >
-                            恢复自动找资料
-                          </Button>
-                        )}
-                        <Button
-                          disabled={Boolean(run && observedStatuses.includes(run.status))}
-                          onClick={() => {
-                            setSelectedDocs(topic.documents.map((item) => item.document_id));
-                            setDocumentsOpen(true);
-                          }}
+                  )}
+                  {uploadingName && <p role="status">正在上传 {uploadingName}…</p>}
+                  {uploadFailed && (
+                    <Alert type="error" message="文件未能上传，请重新选择文件再试。" />
+                  )}
+                  <ConversationSources
+                    sources={privateSources.data || []}
+                    loading={privateSources.isFetching && !privateSources.data}
+                    failed={privateSources.isError}
+                    busy={busy}
+                    active={Boolean(run && observedStatuses.includes(run.status))}
+                    onUpload={(file) => attachSource(file)}
+                    onAcquire={(pmcid) => attachSource(undefined, pmcid)}
+                    onRead={readPrivate}
+                    onDetach={async (id) => {
+                      if (conversation)
+                        await act(async () => {
+                          await agentApi.detachPrivateSource(conversation.id, id);
+                          setConversation(await agentApi.conversation(conversation.id));
+                          await privateSources.refetch();
+                        });
+                    }}
+                  />
+                  {references.length > 0 && (
+                    <List
+                      dataSource={references}
+                      locale={{
+                        emptyText:
+                          references.length ||
+                          privateSources.data?.length ||
+                          visibleDocuments.length
+                            ? null
+                            : '助手阅读的资料会显示在这里',
+                      }}
+                      renderItem={(group) => (
+                        <List.Item
+                          actions={[
+                            <Button
+                              key="preview"
+                              type="link"
+                              onClick={() => previewReference(group)}
+                            >
+                              预览
+                            </Button>,
+                            ...(['RUN_UPLOAD', 'EXTERNAL_FULLTEXT'].includes(group.source.kind) ||
+                            (group.source.kind === 'KB_PUBLICATION' && group.source.version_id)
+                              ? [
+                                  <Button
+                                    key="download"
+                                    type="link"
+                                    href={
+                                      group.source.kind === 'KB_PUBLICATION'
+                                        ? knowledgeApi.contentUrl(
+                                            group.source.document_id,
+                                            group.source.version_id,
+                                          )
+                                        : agentApi.privateSourceUrl(group.source.document_id)
+                                    }
+                                  >
+                                    下载
+                                  </Button>,
+                                ]
+                              : []),
+                          ]}
                         >
-                          选择知识库文献
-                        </Button>
-                        <Link to="/knowledge/library">上传与解析文献</Link>
-                      </Space>
-                      <List
-                        dataSource={visibleDocuments}
-                        locale={{
-                          emptyText:
-                            topic.scope_mode === 'AUTOMATIC'
-                              ? '开始任务后，助手找到并阅读的授权资料会出现在这里'
-                              : '选择已发布并允许 AI 使用的文献',
-                        }}
-                        renderItem={(item) => (
-                          <List.Item
-                            actions={[
-                              <Button
-                                key="read"
-                                type="link"
-                                onClick={() =>
-                                  setSource({
-                                    kind: 'KB_PUBLICATION',
-                                    document_id: item.document_id,
-                                    publication_id: item.publication_id,
-                                    version_id: '',
-                                    source_node_key: '',
-                                    content_sha256: '',
-                                    title: item.title || '文献',
-                                    anchor: {},
-                                  })
-                                }
+                          <List.Item.Meta
+                            title={
+                              <button
+                                className="research-file-name"
+                                onClick={() => previewReference(group)}
                               >
-                                阅读原文
-                              </Button>,
-                            ]}
-                          >
-                            <List.Item.Meta
-                              title={item.title || item.document_id}
-                              description={`固定发布版本：${item.publication_id}`}
-                            />
-                          </List.Item>
-                        )}
-                      />
-                      <Typography.Title level={4}>研究笔记</Typography.Title>
+                                {group.source.title}
+                              </button>
+                            }
+                            description={sourceLabel(group.source)}
+                          />
+                        </List.Item>
+                      )}
+                    />
+                  )}
+                  {visibleDocuments.some(
+                    (doc) =>
+                      !references.some(
+                        (group) =>
+                          group.source.document_id === doc.document_id &&
+                          group.source.publication_id === doc.publication_id,
+                      ),
+                  ) && (
+                    <List
+                      dataSource={visibleDocuments.filter(
+                        (doc) =>
+                          !references.some(
+                            (group) =>
+                              group.source.document_id === doc.document_id &&
+                              group.source.publication_id === doc.publication_id,
+                          ),
+                      )}
+                      locale={{ emptyText: null }}
+                      renderItem={(doc) => (
+                        <List.Item
+                          actions={[
+                            <Button
+                              key="preview"
+                              type="link"
+                              onClick={() =>
+                                setSource({
+                                  kind: 'KB_PUBLICATION',
+                                  document_id: doc.document_id,
+                                  publication_id: doc.publication_id,
+                                  version_id: '',
+                                  source_node_key: '',
+                                  content_sha256: '',
+                                  title: doc.title || '文献',
+                                  anchor: {},
+                                })
+                              }
+                            >
+                              预览
+                            </Button>,
+                            <Button
+                              key="download"
+                              type="link"
+                              onClick={() =>
+                                void act(async () => {
+                                  const published = await knowledgeApi.publishedContent(
+                                    doc.document_id,
+                                    doc.publication_id,
+                                  );
+                                  triggerNativeDownload(
+                                    knowledgeApi.contentUrl(
+                                      doc.document_id,
+                                      published.publication.versionId,
+                                    ),
+                                    published.originalName,
+                                  );
+                                })
+                              }
+                            >
+                              下载
+                            </Button>,
+                          ]}
+                        >
+                          <List.Item.Meta title={doc.title || '文献'} description="知识库资料" />
+                        </List.Item>
+                      )}
+                    />
+                  )}
+                  {topic && (
+                    <details className="research-extra">
+                      <summary>笔记与批注</summary>
                       <Input.TextArea
                         aria-label="研究笔记"
+                        placeholder="记录你的想法…"
                         value={note}
                         onChange={(event) => setNote(event.target.value)}
                       />
                       <Button
                         disabled={!note.trim()}
+                        loading={busy}
                         onClick={() =>
                           void act(async () => {
                             await agentApi.annotate(topic.id, note);
@@ -1002,19 +1171,27 @@ export function ResearchWorkspacePage() {
                       >
                         保存笔记
                       </Button>
+                      {annotations.isError && (
+                        <Alert
+                          type="error"
+                          message="笔记加载失败"
+                          action={<Button onClick={() => void annotations.refetch()}>重试</Button>}
+                        />
+                      )}
                       <List
                         dataSource={annotations.data || []}
+                        locale={{ emptyText: '暂无笔记' }}
                         renderItem={(item) => (
                           <List.Item
                             actions={
                               item.source
                                 ? [
                                     <Button
-                                      key="source"
+                                      key="read"
                                       type="link"
                                       onClick={() => setSource(item.source)}
                                     >
-                                      定位批注原文
+                                      预览
                                     </Button>,
                                   ]
                                 : []
@@ -1024,426 +1201,306 @@ export function ResearchWorkspacePage() {
                           </List.Item>
                         )}
                       />
-                    </section>
-                  ),
-                },
-                {
-                  key: 'evidence',
-                  label: `证据与比较 (${fields.length})`,
-                  children: (
-                    <section>
-                      <div className="research-section-heading">
-                        <Typography.Text>
-                          核对表示抽取与原文一致；独立复现需另行判断。
-                        </Typography.Text>
-                        <Button href={agentApi.comparisonUrl(topic.id)} disabled={!fields.length}>
-                          导出比较表
-                        </Button>
-                      </div>
-                      <Typography.Title level={4}>按研究实例比较</Typography.Title>
-                      <Typography.Paragraph type="secondary">
-                        每行一个具体实例；指标口径、规模和条件不一致时不能直接排名。
-                      </Typography.Paragraph>
-                      <Table<EvidenceCard>
-                        rowKey="id"
-                        dataSource={cards.data || []}
-                        pagination={false}
-                        scroll={{ x: 340 + comparisonFields.length * 220 }}
-                        columns={[
-                          { title: '研究实例', dataIndex: 'instance', width: 180, fixed: 'left' },
-                          { title: '目标', dataIndex: 'target', width: 160 },
-                          ...comparisonFields.map((name) => ({
-                            title: name,
-                            key: name,
-                            width: 220,
-                            render: (_value: unknown, card: EvidenceCard) => {
-                              const field = card.fields.find((item) => item.name === name);
-                              if (!field)
-                                return <Typography.Text type="secondary">未提取</Typography.Text>;
-                              return (
-                                <Space direction="vertical" size={4}>
-                                  <Typography.Text>
-                                    {field.value ?? field.original ?? '未报告'} {field.unit || ''}
-                                  </Typography.Text>
-                                  <Typography.Text type="secondary">
+                    </details>
+                  )}
+                  {topic && fields.length > 0 && (
+                    <details className="research-extra">
+                      <summary>数据比较与人工核对</summary>
+                      <section>
+                        <div className="research-section-heading">
+                          <Typography.Text>
+                            核对表示抽取与原文一致；独立复现需另行判断。
+                          </Typography.Text>
+                          <Button href={agentApi.comparisonUrl(topic.id)} disabled={!fields.length}>
+                            导出比较表
+                          </Button>
+                        </div>
+                        <Typography.Title level={4}>按研究实例比较</Typography.Title>
+                        <Typography.Paragraph type="secondary">
+                          每行一个具体实例；指标口径、规模和条件不一致时不能直接排名。
+                        </Typography.Paragraph>
+                        <Table<EvidenceCard>
+                          rowKey="id"
+                          dataSource={cards.data || []}
+                          pagination={false}
+                          scroll={{ x: 340 + comparisonFields.length * 220 }}
+                          columns={[
+                            { title: '研究实例', dataIndex: 'instance', width: 180, fixed: 'left' },
+                            { title: '目标', dataIndex: 'target', width: 160 },
+                            ...comparisonFields.map((name) => ({
+                              title: name,
+                              key: name,
+                              width: 220,
+                              render: (_value: unknown, card: EvidenceCard) => {
+                                const field = card.fields.find((item) => item.name === name);
+                                if (!field)
+                                  return <Typography.Text type="secondary">未提取</Typography.Text>;
+                                return (
+                                  <Space direction="vertical" size={4}>
+                                    <Typography.Text>
+                                      {field.value ?? field.original ?? '未报告'} {field.unit || ''}
+                                    </Typography.Text>
+                                    <Typography.Text type="secondary">
+                                      {field.status === 'EXTRACTION_VERIFIED'
+                                        ? '已核对'
+                                        : field.status === 'REJECTED'
+                                          ? '已排除，不参与判断'
+                                          : '待核对'}
+                                    </Typography.Text>
+                                    <Typography.Text type="secondary">
+                                      {Object.entries(field.qualifiers || {})
+                                        .map(([key, value]) => `${key}：${value}`)
+                                        .join('；')}
+                                    </Typography.Text>
+                                    <Button
+                                      type="link"
+                                      size="small"
+                                      onClick={() => setSource(field.source)}
+                                    >
+                                      预览
+                                    </Button>
+                                  </Space>
+                                );
+                              },
+                            })),
+                          ]}
+                        />
+                        <Typography.Title level={4}>逐字段核对</Typography.Title>
+                        <Table
+                          rowKey="key"
+                          dataSource={fields}
+                          pagination={false}
+                          scroll={{ x: 1000 }}
+                          columns={[
+                            { title: '研究实例', dataIndex: ['card', 'instance'], width: 160 },
+                            { title: '目标', dataIndex: ['card', 'target'], width: 140 },
+                            { title: '字段', dataIndex: 'name', width: 110 },
+                            { title: '原文值', dataIndex: 'original', width: 140 },
+                            {
+                              title: '标准化值',
+                              render: (_, field) =>
+                                `${field.value ?? '未报告'} ${field.unit || ''}`,
+                              width: 120,
+                            },
+                            {
+                              title: '限定条件',
+                              render: (_, field) =>
+                                Object.entries(field.qualifiers || {})
+                                  .map(([key, value]) => `${key}：${value}`)
+                                  .join('；') || '—',
+                              width: 180,
+                            },
+                            {
+                              title: '核对状态',
+                              render: (_, field) => (
+                                <Space direction="vertical">
+                                  <Tag>
                                     {field.status === 'EXTRACTION_VERIFIED'
-                                      ? '抽取已核对'
+                                      ? '已核对'
                                       : field.status === 'REJECTED'
-                                        ? '已排除，不参与判断'
+                                        ? '已排除'
                                         : '待核对'}
-                                  </Typography.Text>
-                                  <Typography.Text type="secondary">
-                                    {Object.entries(field.qualifiers || {})
-                                      .map(([key, value]) => `${key}：${value}`)
-                                      .join('；')}
-                                  </Typography.Text>
+                                  </Tag>
+                                  <Button size="small" onClick={() => setSource(field.source)}>
+                                    预览
+                                  </Button>
                                   <Button
-                                    type="link"
                                     size="small"
-                                    onClick={() => setSource(field.source)}
+                                    loading={busy}
+                                    onClick={() =>
+                                      void verify(field.card, field.name, 'EXTRACTION_VERIFIED')
+                                    }
                                   >
-                                    定位原文
+                                    与原文一致
+                                  </Button>
+                                  <Button
+                                    size="small"
+                                    onClick={() => void verify(field.card, field.name, 'REJECTED')}
+                                  >
+                                    排除此字段
                                   </Button>
                                 </Space>
-                              );
+                              ),
+                              width: 140,
                             },
-                          })),
-                        ]}
-                      />
-                      <Typography.Title level={4}>逐字段核对</Typography.Title>
-                      <Table
-                        rowKey="key"
-                        dataSource={fields}
-                        pagination={false}
-                        scroll={{ x: 1000 }}
-                        columns={[
-                          { title: '研究实例', dataIndex: ['card', 'instance'], width: 160 },
-                          { title: '目标', dataIndex: ['card', 'target'], width: 140 },
-                          { title: '字段', dataIndex: 'name', width: 110 },
-                          { title: '原文值', dataIndex: 'original', width: 140 },
-                          {
-                            title: '标准化值',
-                            render: (_, field) => `${field.value || '未报告'} ${field.unit || ''}`,
-                            width: 120,
-                          },
-                          {
-                            title: '限定条件',
-                            render: (_, field) =>
-                              Object.entries(field.qualifiers || {})
-                                .map(([key, value]) => `${key}：${value}`)
-                                .join('；') || '—',
-                            width: 180,
-                          },
-                          {
-                            title: '核对状态',
-                            render: (_, field) => (
-                              <Space direction="vertical">
-                                <Tag>
-                                  {field.status === 'EXTRACTION_VERIFIED'
-                                    ? '抽取已核对'
-                                    : field.status === 'REJECTED'
-                                      ? '已排除'
-                                      : '待核对'}
-                                </Tag>
-                                <Button size="small" onClick={() => setSource(field.source)}>
-                                  定位原文
-                                </Button>
-                                <Button
-                                  size="small"
-                                  loading={busy}
-                                  onClick={() =>
-                                    void verify(field.card, field.name, 'EXTRACTION_VERIFIED')
-                                  }
-                                >
-                                  与原文一致
-                                </Button>
-                                <Button
-                                  size="small"
-                                  onClick={() => void verify(field.card, field.name, 'REJECTED')}
-                                >
-                                  排除此字段
-                                </Button>
-                              </Space>
-                            ),
-                            width: 140,
-                          },
-                        ]}
-                      />
-                    </section>
-                  ),
-                },
-                {
-                  key: 'reports',
-                  label: `报告 (${reports.data?.length || 0})`,
-                  children: (
-                    <List
-                      dataSource={reports.data || []}
-                      locale={{ emptyText: '研究任务生成并登记报告后，将保存在这里' }}
-                      renderItem={(report) => (
-                        <List.Item>
-                          <List.Item.Meta
-                            title={report.title}
-                            description={`报告草稿 · 保存修订 ${report.revision} · ${reportAssessment(report).label}`}
-                          />
-                          <Button onClick={() => openReport(report.id)}>打开报告</Button>
-                        </List.Item>
-                      )}
-                    />
-                  ),
-                },
-              ]}
-            />
-          </>
-        )}
-      </Drawer>
-      <Modal
-        title="选择文献"
-        open={documentsOpen}
-        width={760}
-        confirmLoading={busy}
-        onCancel={() => setDocumentsOpen(false)}
-        onOk={() =>
-          void act(async () => {
-            if (!topic) return;
-            const found = new Map([
-              ...selectedDocumentCache.current,
-              ...(documents.data?.items || []).map((item) => [item.id, item] as const),
-            ]);
-            const selected = selectedDocs.map((id) => {
-              const existing = topic.documents.find((item) => item.document_id === id);
-              if (existing) return existing;
-              const document = found.get(id);
-              if (!document?.currentPublicationId)
-                throw new Error('所选文献状态已变化，请重新选择。');
-              return {
-                document_id: document.id,
-                publication_id: document.currentPublicationId,
-                title: document.title,
-              };
-            });
-            await agentApi.updateTopic(topic, selected, 'SELECTED');
-            setDocumentsOpen(false);
-            await topicQuery.refetch();
-            await topics.refetch();
-          })
-        }
-      >
-        <Input.Search
-          aria-label="查找文献"
-          placeholder="按标题或编号查找"
-          onSearch={setKeyword}
-          enterButton
-        />
-        <Table<KnowledgeDocument>
-          rowKey="id"
-          size="small"
-          loading={documents.isFetching}
-          dataSource={documents.data?.items || []}
-          pagination={false}
-          rowSelection={{
-            selectedRowKeys: selectedDocs,
-            onChange: (keys, rows) => {
-              for (const row of rows) if (row) selectedDocumentCache.current.set(row.id, row);
-              setSelectedDocs(keys.map(String));
+                          ]}
+                        />
+                      </section>
+                    </details>
+                  )}
+                </>
+              ),
             },
-            preserveSelectedRowKeys: true,
-            getCheckboxProps: (item) => ({
-              disabled: item.aiStatus !== 'APPROVED' || !item.currentPublicationId,
-            }),
-          }}
-          columns={[
-            { title: '文献', dataIndex: 'title' },
-            { title: 'AI 使用', dataIndex: 'aiStatus', width: 120 },
-            { title: '发布版本', dataIndex: 'currentPublicationNo', width: 90 },
+            {
+              key: 'files',
+              label: '文件和报告',
+              children: (
+                <>
+                  {(artifacts.isError || reports.isError) && (
+                    <Alert
+                      type="error"
+                      message="部分文件或报告加载失败"
+                      action={
+                        <Button
+                          onClick={() => {
+                            void artifacts.refetch();
+                            void reports.refetch();
+                          }}
+                        >
+                          重试
+                        </Button>
+                      }
+                    />
+                  )}
+                  <List
+                    loading={artifacts.isFetching && !artifacts.data}
+                    locale={{ emptyText: artifacts.isError ? null : '尚未生成文件' }}
+                    dataSource={[
+                      ...new Map([
+                        ...(conversation?.registered_outputs || [])
+                          .filter((file) => file.kind === 'artifact')
+                          .map((file) => [file.id, { id: file.id, name: file.title }] as const),
+                        ...(run?.registered_outputs || [])
+                          .filter((file) => file.kind === 'artifact')
+                          .map((file) => [file.id, { id: file.id, name: file.title }] as const),
+                        ...(artifacts.data || []).map((file) => [file.id, file] as const),
+                      ]).values(),
+                    ]}
+                    renderItem={(file) => (
+                      <List.Item
+                        actions={[
+                          <Button key="download" href={agentApi.artifactUrl(file.id)}>
+                            下载
+                          </Button>,
+                        ]}
+                      >
+                        <List.Item.Meta
+                          title={file.name}
+                          description={file.name.split('.').at(-1)?.toUpperCase()}
+                        />
+                      </List.Item>
+                    )}
+                  />
+                  <List
+                    loading={reports.isFetching && !reports.data}
+                    locale={{ emptyText: reports.isError ? null : '尚未生成报告' }}
+                    dataSource={reports.data || []}
+                    renderItem={(report) => (
+                      <List.Item
+                        actions={[
+                          <Button key="read" onClick={() => openReport(report.id)}>
+                            阅读报告
+                          </Button>,
+                        ]}
+                      >
+                        <List.Item.Meta
+                          title={report.title}
+                          description={reportAssessment(report).label}
+                        />
+                      </List.Item>
+                    )}
+                  />
+                  {run &&
+                    deliveryProblems(run).map((problem) => (
+                      <p key={problem} className="research-delivery-problem">
+                        {problem}
+                      </p>
+                    ))}
+                  {(matrixReview || run?.research_matrix) && (
+                    <ResearchQualityPanel
+                      matrix={run?.research_matrix}
+                      review={matrixReview}
+                      reportExpected={Boolean(
+                        matrixReview || run?.plan?.deliverables.includes('report'),
+                      )}
+                      onQuote={(quote) => setSource(quote.source, quote)}
+                    />
+                  )}
+                </>
+              ),
+            },
           ]}
         />
-      </Modal>
-      <SourceReader
-        source={source}
-        quote={sourceQuote}
-        snapshot={
-          [
-            ...Object.values(run?.evidence || {}),
-            ...(reports.data || []).flatMap((report) => Object.values(report.evidence)),
-          ].find(
-            (item) =>
-              item.source.kind === source?.kind &&
-              item.source.document_id === source?.document_id &&
-              item.source.version_id === source?.version_id &&
-              item.source.publication_id === source?.publication_id &&
-              item.source.content_sha256 === source?.content_sha256 &&
-              item.source.source_node_key === source?.source_node_key,
-          )?.text
-        }
-        close={() => setSource(undefined)}
-        onAnnotate={async (text, reference) => {
-          if (!topicId) throw new Error('请先选择研究主题');
-          await agentApi.annotate(topicId, text, reference);
-          refreshResearch();
+      </div>
+    </section>
+  );
+  const panel = sourceView ? (
+    <EvidenceReader
+      key={JSON.stringify([sourceView.source, sourceView.title])}
+      evidence={sourceView}
+      onClose={closePanel}
+      onAnnotate={
+        topicId
+          ? async (text, reference) => {
+              await agentApi.annotate(topicId, text, reference);
+              refreshResearch();
+            }
+          : undefined
+      }
+    />
+  ) : reportOpen ? (
+    <ResearchReportReader
+      report={(reports.data || []).find((item) => item.id === selectedReportId)}
+      reports={reports.data || []}
+      loading={reports.isFetching}
+      error={reports.isError}
+      onRetry={() => void reports.refetch()}
+      onClose={closePanel}
+      onSelect={setSelectedReportId}
+      onSource={setSource}
+      onCitation={clickCitation}
+    />
+  ) : (
+    materials
+  );
+  return (
+    <main ref={workspace} className="research-workspace harness-workspace">
+      <input
+        ref={uploadInput}
+        type="file"
+        hidden
+        accept=".pdf,.docx,.xlsx,.csv,.md,.txt"
+        aria-label="上传研究文件"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = '';
+          if (file) {
+            showMaterials('references');
+            void attachSource(file);
+          }
         }}
       />
-    </main>
-  );
-}
-
-function SourceReader({
-  source,
-  quote,
-  snapshot,
-  close,
-  onAnnotate,
-}: {
-  source?: SourceRef;
-  quote?: SourceQuote;
-  snapshot?: string;
-  close: () => void;
-  onAnnotate: (text: string, source: SourceRef) => Promise<void>;
-}) {
-  const { message } = App.useApp();
-  const [annotation, setAnnotation] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [published, setPublished] = useState<PublishedContent>();
-  const [error, setError] = useState<string>();
-  useEffect(() => {
-    if (source?.kind !== 'KB_PUBLICATION' || !source.publication_id) return;
-    setAnnotation('');
-    let current = true;
-    setPublished(undefined);
-    setError(undefined);
-    void knowledgeApi
-      .publishedContent(source.document_id, source.publication_id)
-      .then((value) => {
-        if (current) setPublished(value);
-      })
-      .catch(() => {
-        if (current) setError('原文加载失败或访问权限已变化');
-      });
-    return () => {
-      current = false;
-    };
-  }, [source]);
-  const load = useCallback(
-    () => knowledgeApi.contentBlob(source!.document_id, published!.publication.versionId),
-    [source, published],
-  );
-  const loadPrivate = useCallback(async () => {
-    const response = await fetch(agentApi.privateSourceUrl(source!.document_id), {
-      credentials: 'include',
-    });
-    if (!response.ok) throw new Error('原文件加载失败或访问权限已变化');
-    return response.blob();
-  }, [source?.document_id]);
-  const anchorKeys = source?.anchor.sourceNodeKeys;
-  const selectedKey =
-    Array.isArray(anchorKeys) && typeof anchorKeys[0] === 'string'
-      ? anchorKeys[0]
-      : source?.source_node_key;
-  return (
-    <Drawer
-      title={source?.title || '原文与证据'}
-      width="90vw"
-      open={Boolean(source)}
-      onClose={close}
-      destroyOnClose
-    >
-      {source && (
-        <AuthorizedEvidence key={JSON.stringify(source)} source={source}>
-          <EvidenceViewDetails evidence={researchEvidence(source, snapshot, quote)} />
-          {source && (source.kind === 'RUN_UPLOAD' || source.kind === 'EXTERNAL_FULLTEXT') ? (
-            <>
-              <Typography.Paragraph type="secondary">
-                会话私有来源 · 固定文件版本 {source.version_id}
-              </Typography.Paragraph>
-              {snapshot && (
-                <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
-                  {snapshot}
-                </Typography.Paragraph>
-              )}
-              <OriginalDocumentViewer
-                fileName={source.title}
-                contentType={
-                  source.title.toLowerCase().endsWith('.pdf')
-                    ? 'application/pdf'
-                    : 'application/octet-stream'
-                }
-                contentUrl={agentApi.privateSourceUrl(source.document_id)}
-                load={loadPrivate}
-                sourceNodes={[
-                  {
-                    sourceNodeKey: source.source_node_key,
-                    nodeNo: 0,
-                    nodeType: 'paragraph',
-                    rawText: snapshot || '',
-                    sourceAnchor: source.anchor as unknown as SourceAnchor,
-                    confidence: {},
-                  },
-                ]}
-                selectedSourceNodeKey={source.source_node_key}
-              />
-            </>
-          ) : source && source.kind !== 'KB_PUBLICATION' ? (
-            <>
-              <Alert
-                type="info"
-                message={
-                  source.kind === 'BUSINESS_RECORD'
-                    ? '这是读取时的业务记录快照，不是实时状态。'
-                    : '该来源不使用知识库 PDF 阅读器。'
-                }
-              />
-              <Typography.Paragraph>
-                版本：{source.version_id} · 来源位置：{source.source_node_key}
-              </Typography.Paragraph>
-              <Typography.Paragraph copyable>{JSON.stringify(source.anchor)}</Typography.Paragraph>
-              {snapshot && (
-                <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
-                  {snapshot}
-                </Typography.Paragraph>
-              )}
-              {source.kind === 'WEB_RESULT' && source.url && /^https?:\/\//.test(source.url) && (
-                <a href={source.url} target="_blank" rel="noreferrer">
-                  打开原始网页
-                </a>
-              )}
-            </>
-          ) : error ? (
-            <Alert type="error" message={error} />
-          ) : !source || !published ? (
-            <Spin />
-          ) : (
-            <>
-              <Typography.Paragraph type="secondary">
-                发布 #{published.publication.publicationNo} ·
-                文件版本固定；文件页序与印刷页码可能不同。
-              </Typography.Paragraph>
-              {source?.source_node_key && source.content_sha256 && (
-                <Space.Compact style={{ width: '100%', marginBottom: 16 }}>
-                  <Input
-                    aria-label="原文位置批注"
-                    placeholder="为当前来源位置添加批注"
-                    value={annotation}
-                    onChange={(event) => setAnnotation(event.target.value)}
-                    maxLength={6000}
-                  />
-                  <Button
-                    loading={saving}
-                    disabled={!annotation.trim()}
-                    onClick={() => {
-                      setSaving(true);
-                      void onAnnotate(annotation, source)
-                        .then(() => {
-                          setAnnotation('');
-                          void message.success('原文批注已保存');
-                        })
-                        .catch(() => void message.error('批注保存失败，原文版本或权限可能已变化'))
-                        .finally(() => setSaving(false));
-                    }}
-                  >
-                    保存批注
-                  </Button>
-                </Space.Compact>
-              )}
-              <div className="research-reader">
-                <OriginalDocumentViewer
-                  fileName={published.originalName}
-                  contentType={published.contentType}
-                  sourceNodes={published.sourceNodes}
-                  selectedSourceNodeKey={selectedKey}
-                  load={load}
-                  contentUrl={knowledgeApi.contentUrl(
-                    source.document_id,
-                    published.publication.versionId,
-                  )}
-                />
-                <StructuredDocumentRenderer
-                  value={published.confirmedDocument}
-                  selectedSourceNodeKey={selectedKey}
-                />
-              </div>
-            </>
-          )}
-        </AuthorizedEvidence>
+      {capability.isError && (
+        <Alert
+          type="error"
+          message="工作区加载失败"
+          action={<Button onClick={() => void capability.refetch()}>重试</Button>}
+        />
       )}
-    </Drawer>
+      {capability.data && !capability.data.enabled && (
+        <Alert type="info" message="研究功能尚未启用" />
+      )}
+      {capability.data?.enabled && capability.data.available === false && (
+        <Alert
+          type="warning"
+          message="服务暂不可用，仍可阅读已保存资料"
+          action={<Button onClick={() => void capability.refetch()}>重新检查</Button>}
+        />
+      )}
+      <div className={`research-session-layout${wide && panelOpen ? ' has-panel' : ''}`}>
+        <div className="research-session-chat">{task}</div>
+        {wide && panelOpen && <aside className="research-workspace-panel">{panel}</aside>}
+      </div>
+      <Drawer
+        className="research-panel-drawer"
+        closable={false}
+        width="min(820px, 100vw)"
+        open={!wide && panelOpen}
+        onClose={closePanel}
+        destroyOnClose
+      >
+        {!wide && panelOpen && panel}
+      </Drawer>
+    </main>
   );
 }

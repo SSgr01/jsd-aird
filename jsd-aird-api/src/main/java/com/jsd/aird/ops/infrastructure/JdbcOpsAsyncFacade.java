@@ -84,6 +84,14 @@ public class JdbcOpsAsyncFacade implements OpsAsyncFacade {
                 """, organizationId, jobId);
     }
 
+    @Override @Transactional
+    public UUID enqueueAt(UUID org, String type, JsonNode payload, String key, int priority, Instant notBefore) {
+        UUID id=enqueue(org,type,payload,key,priority);
+        jdbc.update("UPDATE ops.async_job SET next_attempt_at=greatest(next_attempt_at,?) WHERE id=? AND status='READY'",
+            Timestamp.from(notBefore),id);
+        return id;
+    }
+
     /**
      * Progress is deliberately committed independently from the business
      * transaction executed by a worker.  Image/OCR parsing can take minutes;

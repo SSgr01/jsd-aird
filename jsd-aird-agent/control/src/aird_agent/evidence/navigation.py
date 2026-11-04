@@ -6,6 +6,25 @@ from aird_agent.core.contracts import digest
 from aird_agent.evidence.models import SourceRef
 
 
+def retrieval_progress(result, known):
+    def version(item):
+        source = item["source"]
+        return (
+            source.get("kind"),
+            source.get("document_id"),
+            source.get("publication_id"),
+            source.get("version_id"),
+        )
+
+    candidates = result.get("candidates", []) + result.get("context_candidates", [])
+    return {
+        "new_evidence_count": len({item["evidence_id"] for item in candidates} - known.keys()),
+        "new_source_versions": len(
+            {version(item) for item in candidates} - {version(item) for item in known.values()}
+        ),
+    }
+
+
 async def invalidate_search(runtime, principal, run, key):
     async with runtime.store.transaction(principal, run["id"]) as conn:
         active = await runtime.active(principal, run["id"], run["epoch"], conn)
@@ -43,14 +62,16 @@ async def cached_host(runtime, principal, run, action, args):
             args.get("relation", "neighbors"),
         ]
     )
-    if current.get("navigation_stalls", {}).get(progress_key, 0) >= 3:
+    entry = current.get("navigation_cache", {}).get(signature)
+    # A stalled page cannot be replayed indefinitely. An unseen query/window
+    # still reaches the host: it may produce new evidence and resolve the stall.
+    if entry and current.get("navigation_stalls", {}).get(progress_key, 0) >= 3:
         from fastapi import HTTPException
 
         raise HTTPException(
             409, "READ_NO_PROGRESS: switch to outline/context, read new quote spans or advance offset/window"
         )
     known_ids = set(current.get("evidence", {}))
-    entry = current.get("navigation_cache", {}).get(signature)
     # Library reuse always goes through the host to verify the authorized window revision, without re-ranking.
     if (
         entry
@@ -84,6 +105,8 @@ async def cached_host(runtime, principal, run, action, args):
         result.setdefault("trace", {}).update(
             cache_hit=True, rewrite_model_calls=0, rerank_calls=0, embedding_calls=0
         )
+        if search:
+            result["trace"].update(retrieval_progress(result, current["evidence"]))
         if not candidates and "outline" not in action:
             from fastapi import HTTPException
 
@@ -123,11 +146,14 @@ async def cached_host(runtime, principal, run, action, args):
             ids.append(candidate["evidence_id"])
             locations.append({k: candidate[k] for k in ("node_offset", "role", "score") if k in candidate})
         groups[name] = {"ids": ids, "locations": locations}
+    if search:
+        result.setdefault("trace", {}).update(retrieval_progress(result, current.get("evidence", {})))
     await runtime.remember_sources(principal, run, result)
     ids = set(eid for group in groups.values() for eid in group["ids"])
     async with runtime.store.transaction(principal, run["id"]) as conn:
         current = await runtime.active(principal, run["id"], run["epoch"], conn)
         stalls = current.setdefault("navigation_stalls", {})
+        blocked = stalls.get(progress_key, 0) >= 3 and not (ids - known_ids) and "outline" not in action
         stalls[progress_key] = (
             stalls.get(progress_key, 0) + 1 if not (ids - known_ids) and "outline" not in action else 0
         )
@@ -144,6 +170,12 @@ async def cached_host(runtime, principal, run, action, args):
             while len(snapshots) > 16:
                 del snapshots[next(iter(snapshots))]
         await runtime.store.update(principal, "run", current, conn)
+    if blocked:
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            409, "READ_NO_PROGRESS: no new evidence; read existing source quotes or advance the source window"
+        )
     return result
 
 

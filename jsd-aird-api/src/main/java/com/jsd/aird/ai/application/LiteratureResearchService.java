@@ -21,11 +21,12 @@ public class LiteratureResearchService {
     private final ResearchKnowledgeFacade knowledge;
     private final AuthorizationService authorization;
     private final AgentSourceAuthorization sources;
+    private final AgentArtifactStore artifacts;
     private static final Set<String> KINDS = Set.of("topic", "annotation", "card", "report", "bibliography", "artifact");
 
-    public LiteratureResearchService(JdbcTemplate jdbc, ObjectMapper mapper, ResearchKnowledgeFacade knowledge, AuthorizationService authorization, AgentSourceAuthorization sources) {
+    public LiteratureResearchService(JdbcTemplate jdbc, ObjectMapper mapper, ResearchKnowledgeFacade knowledge, AuthorizationService authorization, AgentSourceAuthorization sources, AgentArtifactStore artifacts) {
         this.jdbc = jdbc; this.mapper = mapper; this.knowledge = knowledge; this.authorization = authorization;
-        this.sources = sources;
+        this.sources = sources; this.artifacts = artifacts;
     }
 
     public void requireUse() {
@@ -34,6 +35,7 @@ public class LiteratureResearchService {
     }
 
     public ObjectNode get(String kind, UUID id) {
+        if ("artifact".equals(kind)) return artifacts.get(id);
         requireUse();
         if (!KINDS.contains(kind)) throw new ApiException(ApiErrorCode.BAD_REQUEST);
         var actor = ActorContext.required();
@@ -50,14 +52,9 @@ public class LiteratureResearchService {
             .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND));
         if ("topic".equals(kind)) knowledge.authorize(documents(record));
         else {
-            if (!"artifact".equals(kind) || record.hasNonNull("topic_id"))
-                get("topic", UUID.fromString(record.path("topic_id").asText()));
+            get("topic", UUID.fromString(record.path("topic_id").asText()));
             if ("card".equals(kind)) for (var field : record.path("fields")) authorizeSource(field.path("source"));
             if ("report".equals(kind)) for (var evidence : record.path("evidence")) authorizeSource(evidence.path("source"));
-            if ("artifact".equals(kind)) {
-                knowledge.authorize(documents(record));
-                if (record.has("source_refs")) sources.authorize(record.path("source_refs"));
-            }
             if ("annotation".equals(kind) && record.hasNonNull("source")) authorizeSource(record.path("source"));
         }
         return record;
@@ -83,6 +80,7 @@ public class LiteratureResearchService {
 
     @Transactional
     public ObjectNode create(String kind, ObjectNode payload, String key) {
+        if ("artifact".equals(kind)) return artifacts.create(payload, key);
         requireUse();
         if (!KINDS.contains(kind) || key == null || key.isBlank() || key.length() > 128 || payload.toString().length() > 1000000)
             throw new ApiException(ApiErrorCode.BAD_REQUEST);
@@ -97,12 +95,6 @@ public class LiteratureResearchService {
             if (!Set.of("SELECTED", "AUTOMATIC").contains(payload.path("scope_mode").asText()))
                 throw new ApiException(ApiErrorCode.BAD_REQUEST);
             knowledge.authorize(documents(payload));
-        } else if ("artifact".equals(kind) && !payload.hasNonNull("topic_id")) {
-            // Generic outputs retain owned run/conversation provenance, without
-            // inventing a research topic. Only the internal tool can create artifacts.
-            UUID.fromString(payload.path("conversation_id").asText());
-            UUID.fromString(payload.path("run_id").asText());
-            sources.authorize(payload.path("source_refs"));
         } else {
             var topic = get("topic", UUID.fromString(payload.path("topic_id").asText()));
             knowledge.authorize(documents(topic));

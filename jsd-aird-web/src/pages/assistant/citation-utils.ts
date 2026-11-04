@@ -1,3 +1,4 @@
+import { sourceFileKey } from '@/services/evidence/adapters';
 import type { AssistantCitation } from '@/services/assistant/assistant-api';
 
 export interface AssistantCitationGroup {
@@ -36,6 +37,7 @@ export function dataFileSelectionQuestion(fileName: string, originalQuestion: st
 }
 
 function citationDocumentKey(citation: AssistantCitation): string {
+  if (citation.source) return sourceFileKey(citation.source);
   if (citation.sourceType === 'EXTERNAL_REFERENCE' && citation.url) {
     try {
       const url = new URL(citation.url);
@@ -45,8 +47,10 @@ function citationDocumentKey(citation: AssistantCitation): string {
       return `external:${citation.url}`;
     }
   }
-  if (citation.documentId) return `knowledge-document:${citation.documentId}`;
-  if (citation.fileObjectId) return `source-file:${citation.fileObjectId}`;
+  if (citation.documentId)
+    return `knowledge-document:${citation.documentId}:${citation.versionId || ''}`;
+  if (citation.fileObjectId)
+    return `source-file:${citation.fileObjectId}:${citation.versionId || ''}`;
   if (citation.importJobId) return `import-job:${citation.importJobId}`;
   return `source:${citation.sourceType}:${citation.title || citation.originalName || citation.chunkId}`;
 }
@@ -60,7 +64,12 @@ export function groupAssistantCitations(
 ): AssistantCitationGroup[] {
   const grouped = new Map<
     string,
-    { citation: AssistantCitation; citations: AssistantCitation[]; pages: Set<number>; evidence: Set<string> }
+    {
+      citation: AssistantCitation;
+      citations: AssistantCitation[];
+      pages: Set<number>;
+      evidence: Set<string>;
+    }
   >();
   for (const citation of citations || []) {
     const key = citationDocumentKey(citation);
@@ -75,7 +84,11 @@ export function groupAssistantCitations(
     if (citation.anchors?.length) {
       citation.anchors.forEach((anchor) => current.evidence.add(evidenceKey(anchor)));
     } else {
-      current.evidence.add(citation.contentHash ? `content:${citation.contentHash}` : `chunk:${citation.chunkId || citation.url || key}`);
+      current.evidence.add(
+        citation.contentHash
+          ? `content:${citation.contentHash}`
+          : `chunk:${citation.chunkId || citation.url || key}`,
+      );
     }
     grouped.set(key, current);
   }

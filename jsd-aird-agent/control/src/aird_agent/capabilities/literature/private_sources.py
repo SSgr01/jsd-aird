@@ -57,7 +57,7 @@ async def list_sources(service, principal, cid):
     await service.authorize_conversation(principal, conversation)
     return [
         await service.java(principal, "private_source_get", {"document_id": sid})
-        for sid in conversation.get("private_source_ids", [])
+        for sid in (conversation.get("private_source_ids") or [])
     ]
 
 
@@ -70,7 +70,7 @@ async def upload(service, principal, cid, request, key, *, provenance=None):
         active = await service.store.get(principal, "run", conversation["active_run"])
         if active["status"] in {"RUNNING", "QUEUED", "WAITING_APPROVAL", "WAITING_CLARIFICATION"}:
             raise HTTPException(409, "Stop the active run before changing its source scope")
-    if len(conversation.get("private_source_ids", [])) >= 20:
+    if len((conversation.get("private_source_ids") or [])) >= 20:
         raise HTTPException(413, "PRIVATE_SOURCE_COUNT_EXCEEDED")
     if not key or len(key) > 100:
         raise HTTPException(422, "INVALID_UPLOAD_KEY")
@@ -86,7 +86,7 @@ async def upload(service, principal, cid, request, key, *, provenance=None):
                 # The immutable owner file may exist, but it cannot expand an already-started run.
                 raise HTTPException(409, "SOURCE_SCOPE_CHANGED_DURING_UPLOAD")
         current["private_source_ids"] = list(
-            dict.fromkeys([*current.get("private_source_ids", []), result["id"]])
+            dict.fromkeys([*(current.get("private_source_ids") or []), result["id"]])
         )
         if "private-literature" not in current["pack_ids"]:
             # Explicit source attachment enables only its new read capability. Existing pins
@@ -126,7 +126,7 @@ async def detach(service, principal, cid, sid):
             if active["status"] in {"RUNNING", "QUEUED", "WAITING_APPROVAL", "WAITING_CLARIFICATION"}:
                 raise HTTPException(409, "Stop the active run before changing its source scope")
         current["private_source_ids"] = [
-            value for value in current.get("private_source_ids", []) if value != sid
+            value for value in (current.get("private_source_ids") or []) if value != sid
         ]
         await service.store.update(principal, "conversation", current, conn)
     return {"detached": True, "authority_file_deleted": False}
@@ -136,7 +136,7 @@ def private_pack():
     async def navigate(context, args, mode):
         runtime = context.runtime
         sid = str(UUID(args["document_id"]))
-        if sid not in context.run.get("private_source_ids", []):
+        if sid not in (context.run.get("private_source_ids") or []):
             raise HTTPException(403, "PRIVATE_SOURCE_NOT_IN_CONVERSATION")
         signature = digest([mode, sid, args])
         async with runtime.store.transaction(context.principal, context.run["id"]) as conn:

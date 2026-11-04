@@ -84,3 +84,15 @@ def test_citations_share_the_legacy_contract_and_reject_unregistered_ids():
     assert normalize_citations("[e" + "b" * 24 + "]", evidence) == "[e" + "b" * 24 + "]"
     with pytest.raises(HTTPException, match="unknown evidence"):
         validate_report("[E:unknown]", evidence)
+
+
+def test_citation_spacing_preserves_exact_identity_and_rejects_unknown_sources():
+    evidence = {EID: {}}
+    text = f"A [ E:{EID} ] B [E: {EID}] C [ {EID} ]"
+    assert normalize_citations(text, evidence) == f"A [E:{EID}] B [E:{EID}] C [E:{EID}]"
+    assert validate_report(text, evidence) == [EID]
+    unknown = "e" + "b" * 24
+    for value in (f"[ E:{unknown} ]", f"[ {unknown} ]"):
+        assert normalize_citations(value, evidence) == value
+        with pytest.raises(HTTPException, match="unknown evidence"):
+            validate_report(value, evidence)

@@ -1,0 +1,454 @@
+/* Quiet conversation surfaces, shared by answers and research. */
+.conversation-icon {
+  display: block;
+  flex: none;
+}
+.conversation-icon-button.ant-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 10px;
+  color: #60656d;
+  box-shadow: none;
+}
+.conversation-icon-button.ant-btn-primary {
+  color: #fff;
+}
+.conversation-answer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0 -10px;
+}
+.conversation-copy-notice {
+  color: #60656d;
+  font-size: 12px;
+}
+/* Inline code is typography here; it must not read as a blue status badge. */
+.assistant-hub .ai-markdown :not(pre) > code,
+.research-report-reader .ai-markdown :not(pre) > code {
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0 1px;
+}
+.assistant-hub .ai-conversation-workspace,
+.assistant-page .ai-conversation-workspace {
+  --conversation-content-width: 1200px;
+  --conversation-gutter: clamp(24px, 4vw, 64px);
+  grid-template-columns: 230px minmax(0, 1fr);
+  box-shadow: none;
+  border-radius: 10px;
+}
+.assistant-hub .has-panel .ai-conversation-workspace {
+  grid-template-columns: minmax(0, 1fr);
+}
+.assistant-hub .ai-conversation-side,
+.assistant-page .ai-conversation-side {
+  grid-template-rows: auto auto minmax(0, 1fr);
+  background: #f8f8f8;
+  padding: 20px 12px;
+  gap: 16px;
+  box-shadow: none;
+}
+.assistant-hub .ai-conversation-side-head > .ant-btn-primary,
+.assistant-page .ai-conversation-side-head > .ant-btn-primary {
+  background: transparent;
+  color: #17202a;
+  border-color: transparent;
+  font-weight: 500;
+  box-shadow: none;
+  min-height: 40px;
+}
+.assistant-hub .ai-conversation-section-title {
+  font-size: 12px;
+  color: #60656d;
+  padding-inline: 12px;
+  font-weight: 400;
+}
+.assistant-hub .ai-conversation-list .ant-list-item {
+  border: 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+.assistant-hub .ai-conversation-list .ant-list-item.is-active {
+  color: #17202a;
+  background: #eaecee;
+  box-shadow: none;
+}
+.assistant-hub .ai-conversation-list .ant-list-item > .anticon,
+.assistant-hub .ai-conversation-date {
+  display: none;
+}
+.assistant-hub .ai-conversation-name {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.assistant-hub .ai-conversation-messages {
+  padding: 24px var(--conversation-gutter) 20px;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  scrollbar-gutter: stable both-edges;
+  scrollbar-width: thin;
+  scrollbar-color: #d5d8dd transparent;
+}
+.assistant-hub .ai-conversation-messages > .ant-list {
+  width: 100%;
+  max-width: var(--conversation-content-width);
+  margin-inline: auto;
+}
+.assistant-hub .ai-message-assistant-body {
+  border: 0;
+  padding-left: 0;
+  margin-left: 0;
+  font-size: 16px;
+  line-height: 1.7;
+}
+.assistant-hub .ai-message-assistant-body .ai-markdown p {
+  line-height: 1.7;
+}
+.assistant-hub .ai-message-assistant-heading {
+  display: none;
+}
+.assistant-hub .ai-message-assistant {
+  padding-top: 20px;
+  padding-bottom: 28px;
+}
+.assistant-hub .ai-message-user .ai-message-content {
+  max-width: min(680px, 88%);
+  position: relative;
+}
+.assistant-hub .ai-message-user {
+  padding-block: 12px 20px;
+}
+.assistant-hub .ai-message-user .ai-message-actions {
+  position: absolute;
+  bottom: -42px;
+  right: 0;
+  margin: 0;
+  z-index: 1;
+}
+.assistant-hub .ai-message-assistant-body .ai-markdown > :last-child {
+  margin-bottom: 0;
+}
+.assistant-hub .ai-message-assistant-icon {
+  display: none;
+}
+.assistant-hub .ai-message-user .ai-message-body {
+  background: #f3f4f6;
+  border: 0;
+  box-shadow: none;
+  border-radius: 18px;
+  color: #17202a;
+  font-size: 16px;
+}
+.assistant-hub .ai-message-user-heading {
+  display: none;
+}
+.assistant-hub .ai-conversation-welcome {
+  min-height: 0;
+  text-align: left;
+  justify-items: start;
+  max-width: 600px;
+  margin-inline: auto;
+  padding-block: clamp(32px, 10vh, 100px) 32px;
+}
+.assistant-hub .ai-conversation-welcome h3 {
+  font-size: 28px;
+  font-weight: 600;
+  margin: 0;
+}
+.assistant-hub .ai-conversation-welcome .ant-typography {
+  max-width: 100%;
+}
+.assistant-hub .ai-conversation-welcome-mark {
+  display: none;
+}
+.assistant-hub .ai-conversation-composer {
+  margin: 0;
+  padding: 8px var(--conversation-gutter) 16px;
+  border: 0;
+  background: #fff;
+}
+.assistant-hub .ai-conversation-composer-top {
+  flex-wrap: wrap;
+  padding: 0 0 10px;
+  gap: 8px;
+  max-width: var(--conversation-content-width);
+  width: 100%;
+  margin-inline: auto;
+}
+.assistant-hub .ai-conversation-composer.is-compact {
+  gap: 8px;
+  padding: 4px var(--conversation-gutter) 12px;
+}
+.assistant-hub .is-compact .ai-conversation-composer-top {
+  min-height: 0;
+  padding: 0;
+}
+.assistant-hub
+  .is-compact
+  .ai-conversation-composer-top:has(> .ai-conversation-composer-context:empty) {
+  display: none;
+}
+.assistant-hub .ai-conversation-composer-context {
+  min-width: 0;
+  flex: 1;
+}
+.assistant-hub .ai-conversation-composer-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.assistant-hub .ai-conversation-composer-actions .ant-btn {
+  box-shadow: none;
+  font-size: 13px;
+}
+.assistant-hub .ai-conversation-composer-row {
+  background: #f7f8fa;
+  border: 1px solid #dfe3e8;
+  border-radius: 12px;
+  box-shadow: none;
+  max-width: var(--conversation-content-width);
+  width: 100%;
+  box-sizing: border-box;
+  margin-inline: auto;
+  padding: 16px;
+}
+.assistant-hub .ai-conversation-composer-row:focus-within {
+  border-color: #a6b9d6;
+  box-shadow: 0 0 0 2px rgb(22 119 255 / 5%);
+}
+.assistant-hub .ai-conversation-composer-row .ant-input {
+  font-size: 16px;
+  line-height: 1.7;
+  background: transparent;
+}
+.assistant-hub .ai-conversation-composer-row textarea.ant-input {
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  min-height: 64px;
+}
+.assistant-hub .ai-conversation-composer-row .ant-input-textarea-affix-wrapper {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+}
+.assistant-hub .ai-conversation-composer-row > .ant-btn-primary:not(:disabled) {
+  background: #1677ff;
+  border-color: #1677ff;
+  box-shadow: none;
+}
+.assistant-hub .ai-conversation-composer-row > .ant-btn {
+  box-shadow: none;
+}
+.assistant-hub .ai-conversation-composer-row > .ant-btn-circle {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+}
+.assistant-hub .ai-conversation-composer-row .ant-input-data-count {
+  display: none;
+}
+.assistant-hub .is-compact .ai-conversation-composer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 6px;
+  padding: 10px 12px 8px;
+  border-radius: 18px;
+  background: #fafafa;
+}
+.assistant-hub .is-compact .ai-conversation-composer-row > .ant-input,
+.assistant-hub .is-compact .ai-conversation-composer-row > .ant-input-textarea,
+.assistant-hub .is-compact .ai-conversation-composer-row > .ant-input-textarea-affix-wrapper {
+  grid-column: 1 / -1;
+  width: 100%;
+  padding-inline: 6px;
+}
+.assistant-hub .is-compact .ai-conversation-composer-row textarea.ant-input {
+  min-height: 54px;
+}
+.assistant-hub .ai-conversation-composer-tools {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.assistant-hub .is-compact .ai-conversation-composer-row > .ant-btn {
+  align-self: end;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  border-radius: 50%;
+}
+.assistant-hub .ai-conversation-composer-tools .ai-composer-web-toggle.is-active {
+  background: #eaf2ff;
+  color: #0958d9;
+  border-color: transparent;
+}
+body:has(.assistant-hub) .operation-assistant-launcher {
+  display: none;
+}
+.assistant-hub button:active {
+  transform: none;
+}
+.conversation-starters {
+  display: grid;
+  gap: 4px;
+  margin-top: 20px;
+  width: min(100%, 480px);
+}
+.conversation-starters button,
+.assistant-hub .harness-examples button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 0;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-left: -14px;
+  background: transparent;
+  color: #626971;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.conversation-starters button:hover,
+.assistant-hub .harness-examples button:hover {
+  background: #f5f6f7;
+  color: #1f2328;
+}
+.assistant-hub .ai-message-citations {
+  margin-top: 20px;
+}
+.ai-conversation-workspace .conversation-file-card,
+.ai-conversation-workspace .conversation-file-card:hover {
+  padding: 12px 16px;
+  background: #fff;
+  border: 1px solid #e7e9ed;
+  border-radius: 12px;
+  box-shadow: none;
+}
+.assistant-hub .ai-message-citation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+}
+.assistant-hub .ai-message-citation-row > .anticon {
+  display: none;
+}
+.assistant-hub .ai-message-citation-title {
+  color: #17202a;
+  text-align: left;
+  line-height: 1.6;
+}
+.assistant-hub .ai-message-citation-name {
+  overflow: visible;
+  white-space: normal;
+}
+.assistant-hub .ai-message-citation-summary {
+  color: #60656d;
+  font-size: 13px;
+}
+.assistant-hub .ai-message-citation-actions {
+  display: flex;
+  border: 0;
+  align-self: center;
+  padding: 0;
+  grid-column: auto;
+}
+.assistant-hub .ai-thinking {
+  background: transparent;
+  padding: 0;
+  border: 0;
+}
+.assistant-hub .ai-thinking-bars {
+  display: none;
+}
+@media (max-width: 1100px) {
+  .assistant-hub .ai-conversation-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .assistant-hub .ai-conversation-side {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    width: min(84vw, 280px);
+    transform: translateX(-102%);
+  }
+  .assistant-hub .ai-conversation-workspace.is-side-open .ai-conversation-side {
+    transform: translateX(0);
+  }
+  .assistant-hub .ai-conversation-mobile-bar,
+  .assistant-hub .ai-conversation-side-close {
+    display: flex;
+  }
+  .assistant-hub .ai-conversation-main {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+  .assistant-hub .ai-conversation-scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    border: 0;
+    opacity: 0;
+    pointer-events: none;
+    background: rgb(0 0 0 / 15%);
+  }
+  .assistant-hub .ai-conversation-workspace.is-side-open .ai-conversation-scrim {
+    opacity: 1;
+    pointer-events: auto;
+    visibility: visible;
+  }
+}
+@media (max-width: 640px) {
+  .conversation-icon-button.ant-btn,
+  .assistant-hub .is-compact .ai-conversation-composer-row > .ant-btn {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+  .assistant-hub .ai-conversation-messages {
+    padding: 20px 16px;
+  }
+  .assistant-hub .ai-conversation-composer {
+    padding: 8px 16px 16px;
+  }
+  .assistant-hub .ai-conversation-composer.is-compact {
+    padding-inline: 16px;
+  }
+  .assistant-hub .is-compact .ai-conversation-composer-row {
+    gap: 4px;
+  }
+  .assistant-hub .ai-conversation-composer-actions .ant-btn {
+    min-height: 40px;
+    padding-inline: 10px;
+  }
+  .assistant-hub .ai-conversation-composer-context:empty {
+    display: none;
+  }
+  .assistant-hub .ai-conversation-welcome h3 {
+    font-size: 22px;
+  }
+  .assistant-hub .ai-message-citation-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .assistant-hub .ai-message-citation-actions {
+    justify-content: flex-end;
+  }
+}

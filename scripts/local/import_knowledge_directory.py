@@ -2,9 +2,10 @@
 """Import a server directory through the existing knowledge document APIs.
 
 Requires Python 3.10+ and curl. The script creates ordinary knowledge documents,
-so every file appears in the normal knowledge list. It does not create upload-task
-records or add application tables/pages. Progress and resume state stay in a local
-JSONL manifest beside the selected source directory (or --manifest).
+so every file appears in the normal knowledge list. Metadata enrichment uses the
+shared backend task APIs; the script does not create upload-task records. Progress
+and resume state stay in a local JSONL manifest beside the selected source directory
+(or --manifest), with body, metadata and vector status tracked separately.
 
 Example (Linux):
   export JSD_AIRD_URL=http://127.0.0.1:8080
@@ -257,9 +258,6 @@ def copy_document_state(record: dict[str, Any], document: dict[str, Any]) -> Non
             record[field] = document[field]
         else:
             record.pop(field, None)
-    # Remove states written by older script iterations; they are not application states.
-    for field in ("vectorIndexStatus", "vectorIndexError"):
-        record.pop(field, None)
 
 
 def refresh_document_state(api: ApiClient, record: dict[str, Any], document_id: str) -> dict[str, Any]:
@@ -469,17 +467,118 @@ def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_s
     return document
 
 
+METADATA_FINAL = {"ACCEPTED", "NEEDS_REVIEW", "NO_MATCH", "MISSING_PARSE", "FAILED", "STALE"}
+
+
+def sync_enrichment(api: ApiClient, record: dict[str, Any], *, retry_failed: bool = False) -> None:
+    """Never upload, parse, publish, or fabricate vector completion in this phase."""
+    base = f"{api_path_document(record['documentId'])}/versions/{record['versionId']}"
+    try:
+        bibliography = api.json("GET", base + "/bibliography")
+        record["metadataStatus"] = bibliography["status"]
+        record["metadataRevision"] = bibliography["revision"]
+        record["metadataError"] = bibliography.get("message")
+        if bibliography["status"] not in {"ACCEPTED", "NEEDS_REVIEW", "NO_MATCH"}:
+            if not record.get("metadataTaskId"):
+                task = api.json("POST", "/api/v1/knowledge/bibliography-tasks", {
+                    "documentIds": [record["documentId"]], "requestKey": "directory-import:" + record["versionId"],
+                })
+                record["metadataTaskId"] = task["id"]
+            task = api.json("GET", f"/api/v1/knowledge/bibliography-tasks/{record['metadataTaskId']}")
+            item = next((v for v in task["items"] if v["versionId"] == record["versionId"]), None)
+            if not item:
+                raise ImportErrorWithMessage("补全任务中没有当前文件版本，请核对权限与文件版本")
+            record["metadataStatus"] = item["status"]
+            record["metadataError"] = item.get("errorCode") or bibliography.get("message")
+            record["metadataRetryAt"] = item.get("retryAt")
+            if retry_failed and item["status"] in {"FAILED", "MISSING_PARSE", "STALE"}:
+                api.json("POST", f"/api/v1/knowledge/bibliography-tasks/{task['id']}/items/{item['id']}/retry", {})
+                record["metadataStatus"] = "PENDING"
+    except Exception as error:
+        record["metadataStatus"] = "CHECK_FAILED"
+        record["metadataError"] = str(error)
+    try:
+        vector = api.json("GET", base + "/vector-status")
+        record["vectorIndexStatus"] = vector["status"]
+        record["vectorIndexDetail"] = vector
+        record.pop("vectorIndexError", None)
+    except Exception as error:
+        record["vectorIndexStatus"] = "CHECK_FAILED"
+        record["vectorIndexError"] = str(error)
+    # PRESENT describes stored vectors, not compatibility with a new model.
+    record["importStatus"] = ("COMPLETED" if record.get("bodyImportStatus") == "COMPLETED"
+                              and record.get("metadataStatus") == "ACCEPTED"
+                              and record.get("vectorIndexStatus") == "PRESENT" else "PARTIAL")
+
+
+def summarize(records: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "bodyCompleted": sum(r.get("bodyImportStatus") == "COMPLETED" for r in records),
+        "metadataAccepted": sum(r.get("metadataStatus") == "ACCEPTED" for r in records),
+        "metadataNeedsReview": sum(r.get("metadataStatus") in {"NEEDS_REVIEW", "NO_MATCH"} for r in records),
+        "metadataMissingParse": sum(r.get("metadataStatus") == "MISSING_PARSE" for r in records),
+        "metadataFailed": sum(r.get("metadataStatus") in {"FAILED", "CHECK_FAILED", "STALE"} for r in records),
+        "metadataPending": sum(r.get("metadataStatus") in {"PENDING", "WAITING_PROVIDER"} for r in records),
+        "vectorIncomplete": sum(r.get("vectorIndexStatus") != "PRESENT" for r in records),
+    }
+
+
+def enrich_existing(args: argparse.Namespace) -> int:
+    """Server-side backfill: no source PDFs, re-upload, or OCR required."""
+    username = args.username or os.environ.get("JSD_AIRD_USERNAME")
+    password = os.environ.get("JSD_AIRD_PASSWORD")
+    curl = shutil.which("curl")
+    if not username or not password or not curl:
+        raise ImportErrorWithMessage("需要 curl、JSD_AIRD_USERNAME 和 JSD_AIRD_PASSWORD")
+    with tempfile.TemporaryDirectory(prefix="jsd-kb-enrich-") as temp_dir:
+        api = ApiClient(args.base_url, Path(temp_dir) / "cookies.txt", curl)
+        api.login(username, password)
+        selection = {"categoryId": args.category_id, "requestKey": args.request_key or str(uuid.uuid4())}
+        try:
+            preview = api.json("POST", "/api/v1/knowledge/bibliography-tasks/preview", selection)
+            print(f"可补全 {preview['total']} 份已入库资料（预览不访问外部书目服务）。")
+            if args.dry_run:
+                return 0
+            task = api.json("POST", "/api/v1/knowledge/bibliography-tasks", selection)
+            print(f"补全任务：{task['id']}；重复提交请沿用 --request-key {selection['requestKey']}")
+            deadline = time.monotonic() + args.metadata_wait_seconds
+            while True:
+                result = api.json("GET", f"/api/v1/knowledge/bibliography-tasks/{task['id']}")
+                print(json.dumps(result['counts'], ensure_ascii=False))
+                if result['finished'] or time.monotonic() >= deadline:
+                    return 1 if result['counts'].get('FAILED') else 0
+                time.sleep(min(3, max(0, deadline - time.monotonic())))
+        finally:
+            api.json("POST", "/api/v1/auth/logout", {})
+
+
+def collect_files(source: Path, manifest: Path, included: list[str] | None = None) -> list[Path]:
+    """An explicit selection stays inside the source directory and never follows links."""
+    if included is None:
+        return sorted(path for path in source.rglob("*")
+                      if path.is_file() and not path.is_symlink() and path.resolve() != manifest.resolve())
+    selected: set[Path] = set()
+    for name in included:
+        relative = Path(name)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ImportErrorWithMessage("选择的文件必须是来源目录内的相对路径")
+        path = source / relative
+        if any(part.is_symlink() for part in (path, *path.parents) if part != source and source in part.parents):
+            raise ImportErrorWithMessage("选择的文件不能经过符号链接")
+        resolved = path.resolve(strict=True)
+        if not resolved.is_relative_to(source) or not resolved.is_file() or resolved == manifest.resolve():
+            raise ImportErrorWithMessage("选择的文件不是来源目录内的普通文件")
+        selected.add(path)
+    return sorted(selected)
+
+
 def import_directory(args: argparse.Namespace) -> int:
     source = Path(args.source_dir).expanduser().resolve(strict=True)
     if not source.is_dir():
         raise ImportErrorWithMessage("来源路径不是文件夹")
     manifest = Path(args.manifest).expanduser().resolve() if args.manifest else source / ".knowledge-import.jsonl"
     previous = read_manifest(manifest)
-    manifest_key = manifest.resolve()
-    files = sorted(
-        path for path in source.rglob("*")
-        if path.is_file() and not path.is_symlink() and path.resolve() != manifest_key
-    )
+    files = collect_files(source, manifest, args.include)
     category_mode = args.category_mode or ("fixed" if args.category_id else "first-directory")
     if category_mode == "fixed" and not args.category_id:
         raise ImportErrorWithMessage("固定分类模式需要 --category-id")
@@ -515,6 +614,7 @@ def import_directory(args: argparse.Namespace) -> int:
     completed = 0
     failed = 0
     pending: deque[dict[str, Any]] = deque()
+    finished_records: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="jsd-kb-import-") as temp_dir:
         api = ApiClient(args.base_url, Path(temp_dir) / "cookies.txt", curl)
         api.login(username, password)
@@ -544,7 +644,9 @@ def import_directory(args: argparse.Namespace) -> int:
                                            queue_timeout_seconds)
                 copy_document_state(record, document)
                 record["message"] = "已发布并授权 AI" + ("（关联已有文档）" if record.get("duplicate") else "")
-                record["importStatus"] = "COMPLETED"
+                record["bodyImportStatus"] = "COMPLETED"
+                sync_enrichment(api, record, retry_failed=args.retry_failed)
+                finished_records.append(record)
                 record["documentUrl"] = f"{api.base_url}/knowledge/documents/{document_id}"
                 record["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
                 append_manifest(manifest, record)
@@ -581,8 +683,6 @@ def import_directory(args: argparse.Namespace) -> int:
                     "importStatus": "PENDING",
                     "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 }
-                for field in ("vectorIndexStatus", "vectorIndexError"):
-                    record.pop(field, None)
                 if record.get("status") not in DOCUMENT_STATUSES:
                     record.pop("status", None)
                 if size > max_file_bytes:
@@ -697,14 +797,27 @@ def import_directory(args: argparse.Namespace) -> int:
 
         while pending:
             finish_next()
+        deadline = time.monotonic() + args.metadata_wait_seconds
+        while True:
+            for record in finished_records:
+                sync_enrichment(api, record)
+                record["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+                append_manifest(manifest, record)
+            if (all(r.get("metadataStatus") not in {"PENDING", "WAITING_PROVIDER"} for r in finished_records)
+                    or time.monotonic() >= deadline):
+                break
+            time.sleep(min(3, max(0, deadline - time.monotonic())))
+        api.json("POST", "/api/v1/auth/logout", {})
 
-    print(f"处理完成：已发布/已关联 {completed}，失败或待人工处理 {failed}。明细：{manifest}")
+    summary = summarize(finished_records)
+    print("分阶段结果：" + json.dumps(summary, ensure_ascii=False))
+    print(f"正文已发布/已关联 {completed}，正文失败或待人工处理 {failed}。补全与向量状态请查看明细：{manifest}")
     return 1 if failed else 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="把服务器文件夹中的资料导入正常知识库文档列表")
-    parser.add_argument("source_dir", help="服务器上的资料文件夹")
+    parser.add_argument("source_dir", nargs="?", help="服务器上的资料文件夹")
     parser.add_argument("--base-url", default=os.environ.get("JSD_AIRD_URL", "http://127.0.0.1:8080"),
                         help="系统 API 地址，默认读取 JSD_AIRD_URL")
     parser.add_argument("--username", help="登录账号；密码只从 JSD_AIRD_PASSWORD 环境变量读取")
@@ -713,6 +826,7 @@ def main() -> int:
                         help="first-directory：一级目录分类、下级目录标签；fixed：统一分类。未指定时，传 category-id 用 fixed，否则按目录分类")
     parser.add_argument("--scope", choices=("INTERNAL", "EXTERNAL"), default="INTERNAL")
     parser.add_argument("--manifest", help="断点续跑清单 JSONL，默认写在来源目录内")
+    parser.add_argument("--include", action="append", help="只导入指定相对路径，可重复；不传时扫描全部来源文件")
     parser.add_argument("--parse-timeout-minutes", type=int, default=24 * 60)
     parser.add_argument("--max-in-flight", type=int, default=8,
                         help="同时处于解析/发布流程的最大文件数，默认 8，并自动受组织队列容量限制")
@@ -720,11 +834,20 @@ def main() -> int:
                         help="单次等待任务队列容量的最长分钟数，默认 1440")
     parser.add_argument("--retry-failed", action="store_true", help="重试解析失败的文档，以及解析完成但发布或索引失败的文档")
     parser.add_argument("--dry-run", action="store_true", help="只扫描并统计文件，不登录、不上传")
+    parser.add_argument("--enrich-existing", action="store_true", help="仅补全服务器已有资料；按 category-id 或全部，不上传和重新 OCR")
+    parser.add_argument("--request-key", help="已有资料补全任务的幂等请求标识，重跑可复用")
+    parser.add_argument("--metadata-wait-seconds", type=int, default=0, help="等候异步补全的秒数，默认提交后记录状态即退出；断点续跑可重新检查")
     args = parser.parse_args()
     try:
         if args.parse_timeout_minutes < 1 or args.max_in_flight < 1 or args.queue_wait_timeout_minutes < 1:
             raise ValueError("超时和并行参数必须为正整数")
         uuid.UUID(args.category_id) if args.category_id else None
+        if args.metadata_wait_seconds < 0:
+            raise ValueError("等候秒数不能为负数")
+        if args.enrich_existing:
+            return enrich_existing(args)
+        if not args.source_dir:
+            raise ValueError("请指定来源目录，或使用 --enrich-existing 补全已入库资料")
         return import_directory(args)
     except (ImportErrorWithMessage, OSError, ValueError) as error:
         print(f"错误：{error}", file=sys.stderr)

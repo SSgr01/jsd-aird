@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.iam.api.AuthorizationService;
 import com.jsd.aird.iam.api.PermissionCheck;
 import com.jsd.aird.kb.api.PrivateDocumentParsingFacade;
+import com.jsd.aird.kb.api.ScholarlyLiteratureFacade;
 import com.jsd.aird.ops.api.FileStorageFacade;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
@@ -57,6 +58,10 @@ public class PrivateResearchSourceService {
         jdbc.update("UPDATE ai.agent_private_source SET payload=jsonb_set(jsonb_set(payload,'{status}','\"FAILED\"'),"
             + "'{error}','\"PRIVATE_SOURCE_PARSE_INTERRUPTED\"'),updated_at=now() WHERE id=? AND organization_id=? AND owner_id=?"
             + " AND payload->>'status'='PARSING' AND updated_at < now()-interval '30 minutes'",
+            id, actor.organizationId(), actor.userId());
+        jdbc.update("UPDATE ai.agent_private_source SET payload=jsonb_set(jsonb_set(payload,'{status}','\"UNKNOWN\"'),"
+            + "'{error}','\"OPENALEX_REQUEST_OUTCOME_UNKNOWN\"'),updated_at=now() WHERE id=? AND organization_id=? AND owner_id=?"
+            + " AND payload->>'status'='ACQUIRING' AND updated_at < now()-interval '30 minutes'",
             id, actor.organizationId(), actor.userId());
         return jdbc.query("SELECT payload FROM ai.agent_private_source WHERE id=? AND organization_id=? AND owner_id=?",
             (rs, row) -> { try { return (ObjectNode) mapper.readTree(rs.getString(1)); }
@@ -138,6 +143,90 @@ public class PrivateResearchSourceService {
 
     public ObjectNode metadata(UUID id) {
         var value = get(id); value.remove("parsed"); return value;
+    }
+
+    /** Reserve before any metered download. Repeated calls only inspect the same durable operation. */
+    public ObjectNode acquisitionStatus(ObjectNode args) {
+        requireUse();
+        var actor = ActorContext.required();
+        var cid = UUID.fromString(args.path("conversation_id").asText());
+        var workId = args.path("work_id").asText();
+        if (!workId.matches("W[1-9][0-9]{0,20}")) throw new ApiException(ApiErrorCode.BAD_REQUEST);
+        var rows = jdbc.queryForList("SELECT id FROM ai.agent_private_source WHERE organization_id=? AND owner_id=? AND conversation_id=? AND idempotency_key=?",
+            actor.organizationId(), actor.userId(), cid, "openalex:" + cid + ":" + workId);
+        if (rows.isEmpty()) return mapper.createObjectNode().put("status", "NOT_STARTED").put("work_id", workId);
+        return metadata((UUID) rows.getFirst().get("id"));
+    }
+
+    public ObjectNode acquire(ObjectNode args, ScholarlyLiteratureFacade scholarly) {
+        requireUse();
+        var actor = ActorContext.required();
+        var cid = UUID.fromString(args.path("conversation_id").asText());
+        var workId = args.path("work_id").asText();
+        if (!workId.matches("W[1-9][0-9]{0,20}")) throw new ApiException(ApiErrorCode.BAD_REQUEST);
+        var key = "openalex:" + cid + ":" + workId;
+        var created = new java.util.concurrent.atomic.AtomicBoolean();
+        var source = transactions.execute(transaction -> {
+            jdbc.queryForObject("SELECT pg_advisory_xact_lock(hashtextextended(?,0))", String.class,
+                "private-source:" + actor.organizationId() + ":" + actor.userId());
+            var existing = jdbc.queryForList("SELECT id FROM ai.agent_private_source WHERE organization_id=? AND owner_id=? AND idempotency_key=?",
+                actor.organizationId(), actor.userId(), key);
+            if (!existing.isEmpty()) return metadata((UUID) existing.getFirst().get("id"));
+            var count = jdbc.queryForObject("SELECT count(*) FROM ai.agent_private_source WHERE organization_id=? AND owner_id=? AND conversation_id=?",
+                Integer.class, actor.organizationId(), actor.userId(), cid);
+            if (count != null && count >= 20) throw new ApiException(ApiErrorCode.BAD_REQUEST, "单个会话最多二十份资料");
+            var id = UUID.randomUUID();
+            var version = UUID.randomUUID(); // Reservation only; replaced by the actual file ID before READY.
+            var value = mapper.createObjectNode().put("id", id.toString()).put("conversation_id", cid.toString())
+                .put("version_id", version.toString()).put("name", "正在获取论文全文.pdf").put("status", "ACQUIRING")
+                .put("kind", "EXTERNAL_FULLTEXT").put("content_type", "application/pdf").put("work_id", workId)
+                .put("acquired_by_run", args.path("run_id").asText());
+            jdbc.update("INSERT INTO ai.agent_private_source(id,organization_id,owner_id,conversation_id,version_id,idempotency_key,request_hash,payload) "
+                + "VALUES(?,?,?,?,?,?,?,?::jsonb)", id, actor.organizationId(), actor.userId(), cid, version, key, sha(key), value.toString());
+            created.set(true);
+            return value;
+        });
+        if (!created.get()) return source;
+        var id = UUID.fromString(source.path("id").asText());
+        var result = source.deepCopy();
+        try {
+            executor.execute(() -> {
+                ActorContext.set(actor);
+                try {
+                    var fulltext = scholarly.download(workId);
+                    var bytes = fulltext.content();
+                    if (bytes.length == 0 || bytes.length > 10 * 1024 * 1024
+                            || !sha(bytes).equals(fulltext.provenance().path("sha256").asText()))
+                        throw new ScholarlyLiteratureFacade.Unavailable("OPENALEX_FULLTEXT_HASH_MISMATCH", 0);
+                    var staged = files.stageFile(fulltext.name(), "application/pdf", "KNOWLEDGE_DOCUMENT", new ByteArrayInputStream(bytes));
+                    files.activate(staged.fileId());
+                    source.put("name", fulltext.name()).put("version_id", staged.fileId().toString())
+                        .put("bytes", bytes.length).put("sha256", sha(bytes)).put("status", "PARSING");
+                    source.set("provenance", fulltext.provenance());
+                    int updated = jdbc.update("UPDATE ai.agent_private_source SET version_id=?,payload=?::jsonb,updated_at=now() WHERE id=? AND organization_id=? AND owner_id=? AND payload->>'status'='ACQUIRING'",
+                        staged.fileId(), source.toString(), id, actor.organizationId(), actor.userId());
+                    if (updated != 1) return; // A timed-out reservation cannot be revived by a late worker.
+                    var parsed = parsing.parse(actor.organizationId(), actor.userId(), staged.fileId(), fulltext.name(),
+                        "application/pdf", bytes.length, new ByteArrayInputStream(bytes));
+                    source.set("parsed", parsed); source.put("status", "READY");
+                } catch (ScholarlyLiteratureFacade.Unavailable error) {
+                    source.put("status", error.code().contains("OUTCOME_UNKNOWN") ? "UNKNOWN" : "FAILED")
+                        .put("error", error.code()).put("retry_after_seconds", error.retryAfter());
+                } catch (Exception error) {
+                    source.put("status", "FAILED").put("error", "EXTERNAL_SOURCE_PROCESSING_FAILED");
+                } finally {
+                    try {
+                        jdbc.update("UPDATE ai.agent_private_source SET payload=?::jsonb,updated_at=now() WHERE id=? AND organization_id=? AND owner_id=? AND payload->>'status' IN ('ACQUIRING','PARSING')",
+                            source.toString(), id, actor.organizationId(), actor.userId());
+                    } finally { ActorContext.clear(); }
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException error) {
+            source.put("status", "FAILED").put("error", "PRIVATE_SOURCE_CAPACITY_EXCEEDED");
+            jdbc.update("UPDATE ai.agent_private_source SET payload=?::jsonb,updated_at=now() WHERE id=?", source.toString(), id);
+            return source;
+        }
+        return result;
     }
 
     public ObjectNode read(ObjectNode args) { return navigate(args, "read"); }

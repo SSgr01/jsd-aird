@@ -56,11 +56,11 @@ def validate_generated(text, evidence, allowed_aliases=None):
 
 
 def normalize_citations(text, evidence):
-    """Repair only omitted prefixes for real canonical IDs; never invent sources."""
+    """Normalize citation spacing/prefixes for exact known IDs, never guess a source."""
     import re
 
     return re.sub(
-        r"\[(e[0-9a-f]{24})\]",
+        r"\[\s*(?:E:\s*)?(e[0-9a-f]{24})\s*\]",
         lambda match: "[E:" + match[1] + "]" if match[1] in evidence else match[0],
         text,
     )
@@ -69,7 +69,9 @@ def normalize_citations(text, evidence):
 def validate_report(text, evidence):
     import re
 
-    cited = set(re.findall(r"\[E:([a-zA-Z0-9_-]+)\]", text)) | set(re.findall(r"\[(e[0-9a-f]{24})\]", text))
+    cited = set(re.findall(r"\[\s*E:\s*([a-zA-Z0-9_-]+)\s*\]", text)) | set(
+        re.findall(r"\[\s*(e[0-9a-f]{24})\s*\]", text)
+    )
     missing = cited - set(evidence)
     if missing:
         raise HTTPException(422, "Report references unknown evidence IDs")

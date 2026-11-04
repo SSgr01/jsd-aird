@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ai.application.AgentDelegation;
 import com.jsd.aird.ai.application.LiteratureResearchService;
-import com.jsd.aird.ai.application.ResearchArtifactService;
+import com.jsd.aird.ai.application.AgentArtifactService;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ResponseFactory;
 import com.jsd.aird.shared.error.ApiErrorCode;
@@ -34,9 +34,9 @@ public class AgentController {
     private final HttpClient http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(Duration.ofSeconds(5)).build();
     private final String controlUrl;
     private final boolean enabled;
-    private final ResearchArtifactService artifacts;
+    private final AgentArtifactService artifacts;
 
-    public AgentController(LiteratureResearchService research, AgentDelegation delegation, ObjectMapper mapper, ResearchArtifactService artifacts,
+    public AgentController(LiteratureResearchService research, AgentDelegation delegation, ObjectMapper mapper, AgentArtifactService artifacts,
             @Value("${app.ai.harness.control-url:http://127.0.0.1:8093}") String controlUrl,
             @Value("${app.ai.harness.enabled:false}") boolean enabled) {
         this.research = research; this.delegation = delegation; this.mapper = mapper;
@@ -46,7 +46,7 @@ public class AgentController {
 
     @GetMapping("/capabilities")
     public Object capabilities() {
-        research.requireUse();
+        artifacts.requireUse();
         var value = mapper.createObjectNode().put("enabled", enabled).put("engine", "pi-v1").put("available", false);
         if (enabled) try {
             var request = HttpRequest.newBuilder(URI.create(controlUrl + "/internal/v1/harness/capabilities"))
@@ -237,7 +237,7 @@ public class AgentController {
     }
 
     private void requireEnabled() {
-        research.requireUse();
+        artifacts.requireUse();
         if (!enabled) throw new ApiException(ApiErrorCode.AI_NOT_CONFIGURED, "Agent 工作区尚未启用");
     }
 }

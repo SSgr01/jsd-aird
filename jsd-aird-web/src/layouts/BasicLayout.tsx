@@ -30,7 +30,7 @@ import {
 import { ProLayout, type MenuDataItem } from '@ant-design/pro-components';
 import { Avatar, Button, Dropdown, Input, Result, Tooltip, Typography, type InputRef } from 'antd';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { ContentBoundary } from '@/components/loading/ContentBoundary';
 import { PrefetchLink } from '@/components/loading/PrefetchLink';
@@ -276,6 +276,9 @@ export function BasicLayout() {
   const isWorkspace = isTemplateWorkspace || isExperimentWorkspace || isDataWorkspace;
   const collapsed = useAppStore((state) => state.sidebarCollapsed);
   const setCollapsed = useAppStore((state) => state.setSidebarCollapsed);
+  const isAssistant = location.pathname === '/assistant';
+  const [assistantNavExpanded, setAssistantNavExpanded] = useState(false);
+  const layoutCollapsed = isAssistant ? !assistantNavExpanded : collapsed;
   const user = useAuthStore((state) => state.user);
   const permissions = user?.permissions ?? [];
   const menuKeys = user?.menuKeys ?? [];
@@ -284,7 +287,7 @@ export function BasicLayout() {
 
   return (
     <AuthGate>
-      <div className={`app-shell${collapsed ? ' app-shell-sidebar-collapsed' : ''}${isPermissionManagement ? ' permission-management-shell' : ''}`}>
+      <div className={`app-shell${layoutCollapsed ? ' app-shell-sidebar-collapsed' : ''}${isAssistant ? ' app-shell-assistant' : ''}${isPermissionManagement ? ' permission-management-shell' : ''}`}>
       <div className="app-topbar" aria-label="全局工具区">
         <AppHeaderTools permissions={permissions} menuKeys={menuKeys} />
       </div>
@@ -294,8 +297,9 @@ export function BasicLayout() {
         route={visibleRoute}
         location={{ pathname: location.pathname }}
         selectedKeys={[location.pathname.startsWith('/assistant/model-center') ? '/assistant/model-center' : location.pathname]}
-        collapsed={collapsed}
-        onCollapse={setCollapsed}
+        collapsed={layoutCollapsed}
+        onCollapse={isAssistant ? () => undefined : setCollapsed}
+        collapsedButtonRender={isAssistant ? () => <Tooltip title={layoutCollapsed ? '展开导航' : '收起导航'}><Button type="text" aria-label={layoutCollapsed ? '展开导航' : '收起导航'} icon={<UnorderedListOutlined />} onClick={(event) => { event.stopPropagation(); setAssistantNavExpanded((value) => !value); }} /></Tooltip> : undefined}
         layout="side"
         fixedHeader
         fixSiderbar
@@ -307,7 +311,7 @@ export function BasicLayout() {
         menuItemRender={(item: MenuDataItem & { isUrl: boolean; onClick: () => void }, dom: React.ReactNode, menuProps: { isMobile?: boolean }) => (item.path ? <PrefetchLink to={item.path} onClick={menuProps.isMobile ? item.onClick : undefined}>{dom}</PrefetchLink> : dom)}
       >
         <main
-          className={`app-content${isWorkspace ? ' app-content-workspace' : ''}${isProjectDocumentWorkspace ? ' app-content-project-document-workspace' : ''}${isKnowledgeWorkbench ? ' app-content-knowledge-workbench' : ''}${isPermissionManagement ? ' app-content-permission-management' : ''}`}
+          className={`app-content${isAssistant ? ' app-content-assistant' : ''}${isWorkspace ? ' app-content-workspace' : ''}${isProjectDocumentWorkspace ? ' app-content-project-document-workspace' : ''}${isKnowledgeWorkbench ? ' app-content-knowledge-workbench' : ''}${isPermissionManagement ? ' app-content-permission-management' : ''}`}
           id="main-content"
         >
           {requiredPermission && !canViewPathWithMenus(location.pathname, permissions, menuKeys) ? <AccessDenied permissions={permissions} menuKeys={menuKeys} /> : <ContentBoundary><Outlet /><RouteScrollRestoration /></ContentBoundary>}

@@ -1,7 +1,6 @@
 package com.jsd.aird.ai.application;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -57,44 +56,28 @@ public class ContextCompressionService {
             if (parentReserved+part.length()+2 > Math.min(6000,knowledgeBudget/3)) continue;
             parentParts.put(label,part);parentReserved+=part.length()+2;
         }
-        var knowledgeRefs = new HashMap<java.util.UUID, String>();
+        // Preserve the retrieval ranking when allocating the context budget.
+        // Grouping by page used to move low-ranked long chunks ahead of more
+        // relevant hits, cutting off the very passage that answered the question.
         for (var index = 0; index < safeKnowledge.size(); index++) {
-            knowledgeRefs.put(safeKnowledge.get(index).chunkId(), "K" + (index + 1));
-        }
-        var groupedKnowledge = new LinkedHashMap<String, List<KnowledgeSearchFacade.SearchHit>>();
-        for (var hit : safeKnowledge) {
-            var key = String.join("|", String.valueOf(hit.documentId()), String.valueOf(hit.versionId()),
-                    String.valueOf(hit.pageNo()), String.valueOf(hit.section()));
-            groupedKnowledge.computeIfAbsent(key, ignored -> new ArrayList<>()).add(hit);
-        }
-        for (var group : groupedKnowledge.values()) {
+            var hit = safeKnowledge.get(index);
             var remaining = Math.max(0, knowledgeBudget - parentReserved - used);
-            var groupParts = new ArrayList<String>();
-            var groupRefs = new ArrayList<String>();
-            for (var hit : group) {
-                var text = normalized(hit.content());
-                var image = imageMarkdown(hit);
-                if (text.isBlank() && image.isBlank()) continue;
-                var evidenceRef = knowledgeRefs.get(hit.chunkId());
-                groupRefs.add(evidenceRef);
-                groupParts.add("[evidenceRef=" + evidenceRef + "] " + text
-                        + (image.isBlank() ? "" : " " + image));
-            }
-            if (groupParts.isEmpty()) continue;
-            var groupText = String.join(" ", groupParts);
-            var first = group.get(0);
-            var prefix = "[source=knowledge,file=" + first.title()
-                    + ",page=" + first.pageNo() + ",section=" + first.section() + "] ";
+            var text = normalized(hit.content());
+            var image = imageMarkdown(hit);
+            if (text.isBlank() && image.isBlank()) continue;
+            var evidenceRef = "K" + (index + 1);
+            var evidenceText = "[evidenceRef=" + evidenceRef + "] " + text
+                    + (image.isBlank() ? "" : " " + image);
+            var prefix = "[source=knowledge,file=" + hit.title()
+                    + ",page=" + hit.pageNo() + ",section=" + hit.section() + "] ";
             var separatorLength = chunks.isEmpty() ? 0 : 2;
             var contentBudget = remaining - prefix.length() - separatorLength;
-            var firstEvidenceRef = "[evidenceRef=" + groupRefs.getFirst() + "]";
+            var firstEvidenceRef = "[evidenceRef=" + evidenceRef + "]";
             if (contentBudget < firstEvidenceRef.length()) break;
-            var excerpt = groupText.length() <= contentBudget ? groupText
-                    : groupText.substring(0, Math.max(0, contentBudget - 1)) + "…";
+            var excerpt = evidenceText.length() <= contentBudget ? evidenceText
+                    : evidenceText.substring(0, Math.max(0, contentBudget - 1)) + "…";
             chunks.add(prefix + excerpt);
-            for (var evidenceRef : groupRefs) {
-                if (excerpt.contains("[evidenceRef=" + evidenceRef + "]")) includedEvidenceRefs.add(evidenceRef);
-            }
+            if (excerpt.contains(firstEvidenceRef)) includedEvidenceRefs.add(evidenceRef);
             used += prefix.length() + excerpt.length() + separatorLength;
         }
         for (var entry : parentParts.entrySet()) {
@@ -105,7 +88,7 @@ public class ContextCompressionService {
         for (var index = 0; index < safeDataFiles.size(); index++) {
             var hit = safeDataFiles.get(index);
             var remaining = Math.max(0, budget - used);
-            var text = hit.content() == null ? "" : hit.content().replaceAll("[\\r\\n\\t]+", " ").strip();
+            var text = normalized(hit.content());
             var evidenceRef = "D" + (index + 1);
             var sourceContent = hit.content() == null ? "" : hit.content();
             var evidenceText = "[evidenceRef=" + evidenceRef + "] "
@@ -137,7 +120,7 @@ public class ContextCompressionService {
     }
 
     private String normalized(String value) {
-        return value == null ? "" : value.replaceAll("[\\r\\n\\t]+", " ").strip();
+        return value == null ? "" : value.replace("\r\n", "\n").replace('\r', '\n').strip();
     }
 
     private String cleanValue(String value) {

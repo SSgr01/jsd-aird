@@ -121,6 +121,7 @@ function renderBlocks(value: string): ReactNode[] {
   let index = 0;
 
   while (index < lines.length) {
+    const blockStart = index;
     const line = lines[index] ?? '';
     if (!line.trim()) {
       index += 1;
@@ -141,7 +142,7 @@ function renderBlocks(value: string): ReactNode[] {
         }
         if (index < lines.length) index += 1;
       }
-      blocks.push(<MathExpression key={`math-${index}`} value={mathLines.join('\n')} displayMode />);
+      blocks.push(<MathExpression key={`math-${blockStart}`} value={mathLines.join('\n')} displayMode />);
       continue;
     }
 
@@ -154,20 +155,20 @@ function renderBlocks(value: string): ReactNode[] {
         index += 1;
       }
       if (index < lines.length) index += 1;
-      blocks.push(<pre key={`code-${index}`} className="ai-markdown-code"><code data-language={fence[1] || undefined}>{codeLines.join('\n')}</code></pre>);
+      blocks.push(<pre key={`code-${blockStart}`} className="ai-markdown-code"><code data-language={fence[1] || undefined}>{codeLines.join('\n')}</code></pre>);
       continue;
     }
 
     const heading = /^\s*(#{1,6})\s+(.+?)\s*$/.exec(line);
     if (heading) {
       const level = heading[1] || '';
-      const text = parseInline(heading[2] || '', `heading-${index}`);
-      if (level.length === 1) blocks.push(<h1 key={`heading-${index}`}>{text}</h1>);
-      else if (level.length === 2) blocks.push(<h2 key={`heading-${index}`}>{text}</h2>);
-      else if (level.length === 3) blocks.push(<h3 key={`heading-${index}`}>{text}</h3>);
-      else if (level.length === 4) blocks.push(<h4 key={`heading-${index}`}>{text}</h4>);
-      else if (level.length === 5) blocks.push(<h5 key={`heading-${index}`}>{text}</h5>);
-      else blocks.push(<h6 key={`heading-${index}`}>{text}</h6>);
+      const text = parseInline(heading[2] || '', `heading-${blockStart}`);
+      if (level.length === 1) blocks.push(<h1 key={`heading-${blockStart}`}>{text}</h1>);
+      else if (level.length === 2) blocks.push(<h2 key={`heading-${blockStart}`}>{text}</h2>);
+      else if (level.length === 3) blocks.push(<h3 key={`heading-${blockStart}`}>{text}</h3>);
+      else if (level.length === 4) blocks.push(<h4 key={`heading-${blockStart}`}>{text}</h4>);
+      else if (level.length === 5) blocks.push(<h5 key={`heading-${blockStart}`}>{text}</h5>);
+      else blocks.push(<h6 key={`heading-${blockStart}`}>{text}</h6>);
       index += 1;
       continue;
     }
@@ -180,7 +181,7 @@ function renderBlocks(value: string): ReactNode[] {
         rows.push(tableCells(lines[index] ?? ''));
         index += 1;
       }
-      blocks.push(<div key={`table-${index}`} className="ai-markdown-table-wrap"><table className="ai-markdown-table"><thead><tr>{headers.map((cell, cellIndex) => <th key={`table-head-${cellIndex}`}>{parseInline(cell, `table-head-${index}-${cellIndex}`)}</th>)}</tr></thead><tbody>{rows.map((row, rowIndex) => <tr key={`table-row-${rowIndex}`}>{headers.map((_, cellIndex) => <td key={`table-cell-${rowIndex}-${cellIndex}`}>{parseInline(row[cellIndex] || '', `table-cell-${index}-${rowIndex}-${cellIndex}`)}</td>)}</tr>)}</tbody></table></div>);
+      blocks.push(<div key={`table-${blockStart}`} className="ai-markdown-table-wrap"><table className="ai-markdown-table"><thead><tr>{headers.map((cell, cellIndex) => <th key={`table-head-${cellIndex}`}>{parseInline(cell, `table-head-${blockStart}-${cellIndex}`)}</th>)}</tr></thead><tbody>{rows.map((row, rowIndex) => <tr key={`table-row-${rowIndex}`}>{headers.map((_, cellIndex) => <td key={`table-cell-${rowIndex}-${cellIndex}`}>{parseInline(row[cellIndex] || '', `table-cell-${blockStart}-${rowIndex}-${cellIndex}`)}</td>)}</tr>)}</tbody></table></div>);
       continue;
     }
 
@@ -193,7 +194,7 @@ function renderBlocks(value: string): ReactNode[] {
         items.push(item[1] || '');
         index += 1;
       }
-      blocks.push(<ul key={`unordered-${index}`}>{items.map((item, itemIndex) => <li key={`unordered-${index}-${itemIndex}`}>{parseInline(item, `unordered-${index}-${itemIndex}`)}</li>)}</ul>);
+      blocks.push(<ul key={`unordered-${blockStart}`}>{items.map((item, itemIndex) => <li key={`unordered-${blockStart}-${itemIndex}`}>{parseInline(item, `unordered-${blockStart}-${itemIndex}`)}</li>)}</ul>);
       continue;
     }
 
@@ -232,10 +233,10 @@ function renderBlocks(value: string): ReactNode[] {
 
       index = cursor;
       blocks.push(
-        <ol key={`ordered-${index}`} start={items[0]?.number}>
+        <ol key={`ordered-${blockStart}`} start={items[0]?.number}>
           {items.map((item, itemIndex) => (
-            <li key={`ordered-${index}-${itemIndex}`} value={item.number}>
-              {parseInline(item.text, `ordered-${index}-${itemIndex}`)}
+            <li key={`ordered-${blockStart}-${itemIndex}`} value={item.number}>
+              {parseInline(item.text, `ordered-${blockStart}-${itemIndex}`)}
             </li>
           ))}
         </ol>,
@@ -252,12 +253,12 @@ function renderBlocks(value: string): ReactNode[] {
         quoteLines.push(item[1] || '');
         index += 1;
       }
-      blocks.push(<blockquote key={`quote-${index}`}>{renderParagraph(quoteLines, `quote-${index}`)}</blockquote>);
+      blocks.push(<blockquote key={`quote-${blockStart}`}>{renderParagraph(quoteLines, `quote-${blockStart}`)}</blockquote>);
       continue;
     }
 
     if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
-      blocks.push(<hr key={`rule-${index}`} />);
+      blocks.push(<hr key={`rule-${blockStart}`} />);
       index += 1;
       continue;
     }
@@ -267,7 +268,7 @@ function renderBlocks(value: string): ReactNode[] {
       for (let end = Math.min(lines.length, index + 160); end > index; end -= 1) {
         try {
           const parsed = JSON.parse(lines.slice(index, end).join('\n')) as unknown;
-          blocks.push(<JsonBlock key={`json-${index}`} value={parsed} className={`json-${index}`} />);
+          blocks.push(<JsonBlock key={`json-${blockStart}`} value={parsed} className={`json-${blockStart}`} />);
           index = end;
           jsonRendered = true;
           break;
@@ -284,7 +285,7 @@ function renderBlocks(value: string): ReactNode[] {
       paragraphLines.push(lines[index] ?? '');
       index += 1;
     }
-    blocks.push(renderParagraph(paragraphLines, `paragraph-${index}`));
+    blocks.push(renderParagraph(paragraphLines, `paragraph-${blockStart}`));
   }
 
   return blocks;

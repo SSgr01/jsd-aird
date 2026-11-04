@@ -82,6 +82,7 @@ export interface Conversation {
   queued?: ConversationEntry[];
   queue_paused?: boolean;
   private_source_ids?: string[];
+  registered_outputs?: AgentRun['registered_outputs'];
 }
 
 export interface PrivateSource {
@@ -111,6 +112,8 @@ export interface ConversationEntry {
   role: string;
   text: string;
   run_id?: string;
+  seq?: number;
+  delivery?: 'steer' | 'follow_up';
   status?: 'QUEUED' | 'PENDING' | 'DISPATCHED' | 'DELIVERED';
 }
 export interface QueueChange {
@@ -120,6 +123,7 @@ export interface QueueChange {
   position?: number;
 }
 export interface AgentRun {
+  revision?: number;
   id: string;
   conversation_id: string;
   topic_id?: string | null;
@@ -133,10 +137,18 @@ export interface AgentRun {
   error?: string;
   retryable?: boolean;
   request?: string;
-  assistant_messages?: Array<{ id: string; text: string }>;
+  messages?: ConversationEntry[];
+  checkpoint_message_seq?: number;
+  assistant_messages?: Array<{ id: string; text: string; after_message_seq?: number }>;
   plan?: TaskPlan;
   completion?: TaskCompletion;
-  registered_outputs?: Array<{ id: string; kind: 'report' | 'card' | 'artifact'; title: string }>;
+  required_artifacts?: string[];
+  registered_outputs?: Array<{
+    id: string;
+    kind: 'report' | 'card' | 'artifact';
+    title: string;
+    path?: string;
+  }>;
   source_documents?: Array<{ document_id: string; publication_id: string }>;
   evidence: Record<string, Candidate>;
   research_matrix?: ResearchMatrix;
@@ -144,7 +156,8 @@ export interface AgentRun {
   pending_approval?: {
     id: string;
     tool: string;
-    arguments: { query?: string };
+    arguments: { query?: string; work_id?: string; direction?: string };
+    description?: string;
     expires_at: number;
   };
 }
@@ -155,6 +168,7 @@ export interface TaskPlan {
   presentation?: 'research_plan_v1';
   scope?: string;
   deliverables: Array<'answer' | 'report' | 'comparison' | 'analysis_file'>;
+  file_names?: string[];
   steps: Array<{
     id: string;
     title: string;

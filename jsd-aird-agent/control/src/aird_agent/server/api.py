@@ -32,6 +32,7 @@ from aird_agent.server.contracts import (
     RunRequest,
     retryable_failure,
 )
+from aird_agent.server.event_stream import EventNotifications, stream_events
 from aird_agent.server.security import verify
 
 PREFIX = "/internal/v1/harness"
@@ -41,17 +42,22 @@ def create_app(settings=None, store=None, service=None):
     settings = settings or HarnessSettings()
     store = store or Store(settings.database_url.get_secret_value())
     service = service or Service(settings, store)
+    notifications = EventNotifications()
 
     @asynccontextmanager
     async def lifespan(app):
         await store.pool.open(wait=True, timeout=10)
         worker = asyncio.create_task(service.worker())
+        listener = asyncio.create_task(notifications.listen(settings.database_url.get_secret_value()))
         try:
             yield
         finally:
             worker.cancel()
+            listener.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await worker
+            with contextlib.suppress(asyncio.CancelledError):
+                await listener
             await service.http.aclose()
             await store.pool.close()
 
@@ -163,6 +169,16 @@ def create_app(settings=None, store=None, service=None):
             }
             for message in result.get("messages", [])
         ]
+        # File registration can precede creation of a research topic. Preserve
+        # those downloads across later turns using already authorized history;
+        # this is a response projection, not inherited work or completion.
+        outputs = {}
+        for rid in dict.fromkeys(message.get("run_id") for message in result["messages"]):
+            for output in snapshots.get(rid, {}).get("registered_outputs", []):
+                outputs[(output["kind"], output["id"])] = {
+                    key: output[key] for key in ("id", "kind", "title", "path") if key in output
+                }
+        result["registered_outputs"] = list(outputs.values())
         return {k: v for k, v in result.items() if k not in {"checkpoint", "evidence"}}
 
     @app.post(PREFIX + "/conversations/{cid}/messages", status_code=202)
@@ -230,13 +246,12 @@ def create_app(settings=None, store=None, service=None):
                 conversation["last_run"] = run["id"]
                 conversation["checkpoint"] = run.get("checkpoint")
                 conversation["evidence"] = run.get("evidence", {})
-                for pending in run.get("messages", []):
-                    if pending["seq"] > run.get("checkpoint_message_seq", 0) and not any(
-                        item["id"] == pending["id"] for item in conversation["queued"]
-                    ):
-                        conversation["queued"].append(
-                            {**pending, "status": "QUEUED", "delivery": "follow_up"}
-                        )
+                from aird_agent.core.messages import record_replies, requeue_unconsumed
+
+                requeue_unconsumed(run, conversation)
+                record_replies(run, conversation)
+                if conversation.get("active_run") == run["id"]:
+                    conversation["active_run"] = None
                 run.pop("pending_approval", None)
                 await store.update(user, "run", run, conn)
                 await store.event(user, run["id"], "run.cancelled", {}, conn)
@@ -322,22 +337,8 @@ def create_app(settings=None, store=None, service=None):
             raise HTTPException(400, "Invalid event cursor") from None
         await store.events(user, str(rid), cursor)
 
-        async def stream():
-            nonlocal cursor
-            while not await request.is_disconnected():
-                run = await store.get(user, "run", str(rid))
-                await service.authorized_topic(user, run, execution=False)
-                batch = await store.events(user, str(rid), cursor)
-                for event in batch:
-                    cursor = event["seq"]
-                    yield f"id: {cursor}\nevent: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
-                if not batch and run["status"] in {"SUCCEEDED", "FAILED", "CANCELLED"}:
-                    return
-                yield ": keepalive\n\n"
-                await asyncio.sleep(0.5)
-
         return StreamingResponse(
-            stream(),
+            stream_events(store, service, notifications, user, str(rid), request, cursor),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )

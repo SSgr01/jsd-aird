@@ -117,6 +117,7 @@ class Store:
             "VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT(run_id,event_key) DO NOTHING",
             (run_id, *principal.key, key or str(uuid4()), kind, Jsonb(payload)),
         )
+        await conn.execute("SELECT pg_notify('aird_harness_events', %s)", (str(run_id),))
 
     async def checkpoint(self, principal, reference):
         if reference is None or isinstance(reference, str):

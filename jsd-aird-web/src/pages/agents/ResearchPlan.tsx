@@ -1,52 +1,61 @@
 import { useState } from 'react';
+import { CheckOutlined, LoadingOutlined } from '@ant-design/icons';
 import type { AgentRun } from '@/services/agents/agent-api';
 import { researchText } from './research-presentation';
-import { ResearchStepStatus } from './ResearchStatus';
 
 export function ResearchPlan({ run }: { run: AgentRun }) {
   const [disclosure, setDisclosure] = useState<{ runId: string; open: boolean }>();
   const plan = run.plan;
-  if (plan?.presentation !== 'research_plan_v1' || plan.task_type !== 'RESEARCH') return null;
+  if (!plan?.steps.length) return null;
   const active = ['QUEUED', 'RUNNING'].includes(run.status);
-  const open = disclosure?.runId === run.id ? disclosure.open : active;
+  const completed = plan.steps.filter((step) => step.status === 'completed').length;
+  const current = plan.steps.find((step) => step.status === 'in_progress');
+  const open = disclosure?.runId === run.id ? disclosure.open : completed < plan.steps.length;
   return (
-    <section className="research-plan" aria-label="研究计划">
-      <details className="research-process" open={open}>
-        <summary
-          onClick={(event) => {
-            event.preventDefault();
-            setDisclosure({ runId: run.id, open: !open });
-          }}
-        >
-          研究计划
-        </summary>
-        <div>
-          <h4>{researchText(plan.goal)}</h4>
-          <p>{researchText(plan.summary)}</p>
-          {plan.scope && (
-            <p className="research-plan-scope">资料范围：{researchText(plan.scope)}</p>
-          )}
-          <ol>
-            {plan.steps.map((step) => (
-              <li
-                key={step.id}
-                aria-current={
-                  run.status === 'RUNNING' && step.status === 'in_progress' ? 'step' : undefined
-                }
-              >
-                <div className="research-plan-step-heading">
-                  <strong>{researchText(step.title)}</strong>
-                  <ResearchStepStatus run={run} status={step.status} />
-                </div>
-                {step.description && <p>{researchText(step.description)}</p>}
-              </li>
-            ))}
-          </ol>
-          <p className="research-plan-note">
-            可在下方输入框调整研究方向；步骤完成不代表结论已核实。
-          </p>
-        </div>
-      </details>
-    </section>
+    <details className="research-plan" aria-label="研究计划" open={open}>
+      <summary
+        onClick={(event) => {
+          event.preventDefault();
+          setDisclosure({ runId: run.id, open: !open });
+        }}
+      >
+        <span>研究计划</span>
+        <span className="research-plan-count">
+          {completed} / {plan.steps.length} 步
+        </span>
+        {!open && active && current && (
+          <span className="research-plan-current">{researchText(current.title)}</span>
+        )}
+      </summary>
+      <ol>
+        {plan.steps.map((step, index) => (
+          <li
+            key={step.id}
+            className={
+              step.status === 'completed'
+                ? 'is-complete'
+                : active && step.status === 'in_progress'
+                  ? 'is-current'
+                  : ''
+            }
+            aria-current={active && step.status === 'in_progress' ? 'step' : undefined}
+          >
+            <span className="research-plan-marker" aria-hidden="true">
+              {step.status === 'completed' ? (
+                <CheckOutlined />
+              ) : active && step.status === 'in_progress' ? (
+                <LoadingOutlined spin />
+              ) : (
+                index + 1
+              )}
+            </span>
+            <div>
+              <strong>{researchText(step.title)}</strong>
+              {step.description && <p>{researchText(step.description)}</p>}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </details>
   );
 }

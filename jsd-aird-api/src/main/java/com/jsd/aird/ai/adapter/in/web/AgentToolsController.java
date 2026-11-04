@@ -5,20 +5,20 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ai.application.AgentDelegation;
 import com.jsd.aird.ai.application.LiteratureResearchService;
-import com.jsd.aird.ai.application.ResearchArtifactService;
+import com.jsd.aird.ai.application.AgentArtifactService;
 import com.jsd.aird.ai.application.AgentHostService;
 import com.jsd.aird.ai.application.SharedRetrievalService;
 import com.jsd.aird.ai.application.PrivateResearchSourceService;
 import com.jsd.aird.mdm.api.AgentProjectFacade;
 import com.jsd.aird.ai.application.port.WebSearchProvider;
 import com.jsd.aird.kb.api.ResearchKnowledgeFacade;
+import com.jsd.aird.kb.api.ScholarlyLiteratureFacade;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
 import java.util.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.client.RestClient;
 
 @RestController
 public class AgentToolsController {
@@ -31,18 +31,21 @@ public class AgentToolsController {
     private final AgentProjectFacade projects;
     private final ObjectMapper mapper;
     private final boolean enabled;
-    private final ResearchArtifactService artifacts;
+    private final AgentArtifactService artifacts;
     private final PrivateResearchSourceService privateSources;
+    private final ScholarlyLiteratureFacade scholarly;
 
     public AgentToolsController(AgentDelegation delegation, LiteratureResearchService research,
-            ResearchKnowledgeFacade knowledge, WebSearchProvider web, ObjectMapper mapper, ResearchArtifactService artifacts,
+            ResearchKnowledgeFacade knowledge, WebSearchProvider web, ObjectMapper mapper, AgentArtifactService artifacts,
             AgentHostService host, SharedRetrievalService retrieval, AgentProjectFacade projects,
-            @Value("${app.ai.harness.enabled:false}") boolean enabled, PrivateResearchSourceService privateSources) {
+            @Value("${app.ai.harness.enabled:false}") boolean enabled, PrivateResearchSourceService privateSources,
+            ScholarlyLiteratureFacade scholarly) {
         this.delegation = delegation; this.research = research; this.knowledge = knowledge;
         this.web = web; this.mapper = mapper; this.enabled = enabled;
         this.host = host; this.retrieval = retrieval; this.projects = projects;
         this.artifacts = artifacts;
         this.privateSources = privateSources;
+        this.scholarly = scholarly;
     }
 
     public record ToolRequest(String action, ObjectNode arguments) { }
@@ -53,7 +56,7 @@ public class AgentToolsController {
         var previous = ActorContext.current();
         try {
             ActorContext.set(delegation.verify(ticket));
-            research.requireUse();
+            artifacts.requireUse();
             var args = command.arguments();
             if (args == null || args.toString().length() > 16000000) throw new ApiException(ApiErrorCode.BAD_REQUEST);
             return switch (command.action()) {
@@ -93,14 +96,11 @@ public class AgentToolsController {
                 case "report_save" -> research.create("report", args.deepCopy(), args.path("key").asText());
                 case "artifact_save" -> artifacts.save(args);
                 case "external_search" -> web.search(new WebSearchProvider.SearchQuery(args.path("query").asText(), "general", null));
-                case "bibliography_lookup" -> {
-                    var factory = new org.springframework.http.client.SimpleClientHttpRequestFactory();
-                    factory.setConnectTimeout(java.time.Duration.ofSeconds(5)); factory.setReadTimeout(java.time.Duration.ofSeconds(20));
-                    var result = RestClient.builder().baseUrl("https://api.crossref.org").requestFactory(factory).build().get().uri(builder -> builder.path("/works")
-                        .queryParam("query.bibliographic", args.path("query").asText()).queryParam("rows", 10).build())
-                        .header("User-Agent", "JSD-AIRD-Research/1.0").retrieve().body(JsonNode.class);
-                    yield Map.of("metadata_only", true, "result", result == null ? mapper.createObjectNode() : result);
-                }
+                case "bibliography_lookup" -> scholarly.lookup(args);
+                case "literature_search" -> scholarly.search(args);
+                case "literature_expand" -> scholarly.expand(args);
+                case "literature_acquire" -> privateSources.acquire(args, scholarly);
+                case "literature_acquire_status" -> privateSources.acquisitionStatus(args);
                 default -> throw new ApiException(ApiErrorCode.BAD_REQUEST, "未知 Agent 工具");
             };
         } finally {

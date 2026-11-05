@@ -96,6 +96,35 @@ describe('RecognitionReviewPanel', () => {
     vi.clearAllMocks();
   });
 
+  it('shows a field conflict even when there are no pending fields or structure conflicts', () => {
+    const field = { ...review.items[0]!, status: 'CONFLICT' as const };
+    render(
+      <RecognitionReviewPanel
+        review={{
+          ...review,
+          items: [field],
+          summary: { ...review.summary, pending: 0, conflict: 1 },
+          regions: [{
+            regionId: 'region-1', blockId: 'region-1', kind: 'FORM_REGION',
+            sheetId: 'sheet-1', sheetName: 'Sheet1', range: 'A1:B4',
+            fieldName: '基础信息', status: 'CONFIRMED',
+            canonicalStatus: 'CONFIRMED', structureStatus: 'CONFIRMED',
+            alternatives: [], fields: [field], auditSuggestions: [],
+          }],
+          statistics: {
+            regionCount: 1, structureAlternativeCount: 0, structureConflictGroups: 0,
+            fieldCount: 1, pendingFieldCount: 0, auditSuggestionCount: 0,
+          },
+        }}
+        editable
+        {...handlers}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /需要处理 1/ }));
+    expect(screen.getAllByText('产品名称').length).toBeGreaterThan(0);
+  });
+
   it('Word 候选从识别确认直接插入正文，不显示字段修改入口', () => {
     const candidate = {
       ...review.items[0]!,

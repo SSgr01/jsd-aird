@@ -68,6 +68,12 @@ export const permissionLabels: Record<string, string> = {
   'production.submit': '提交生产单（production.submit）',
   'production.cancel': '取消生产单（production.cancel）',
   'production.export': '导出生产单（production.export）',
+  'quotation.view': '查看报价记录',
+  'quotation.create': '上传报价记录（quotation.create）',
+  'quotation.edit': '编辑报价记录（quotation.edit）',
+  'quotation.submit': '提交报价审核（quotation.submit）',
+  'quotation.review': '审核报价记录（quotation.review）',
+  'quotation.delete': '删除报价记录（quotation.delete）',
   'inventory.view': '查看库存（inventory.view）',
   'inventory.create': '新增库存业务（inventory.create）',
   'inventory.update': '维护库存策略（inventory.update）',
@@ -162,6 +168,8 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   if (path === '/templates/upload') return 'template.upload';
   if (path.startsWith('/templates') || path.startsWith('/render/import')) return 'template.view';
   if (path.startsWith('/production-orders')) return 'production.view';
+  if (path === '/quotations/upload') return 'quotation.create';
+  if (path.startsWith('/quotations')) return 'quotation.view';
   if (path.startsWith('/inventory')) return 'inventory.view';
   if (path.startsWith('/data')) return 'data.view';
   if (path.startsWith('/spectrum')) return 'spectrum.view';
@@ -198,6 +206,8 @@ export function requiredMenuForPath(pathname: string): string | undefined {
   if (path.startsWith('/quality')) return 'quality.view';
   if (path.startsWith('/production-orders/upload')) return 'production.upload';
   if (path.startsWith('/production-orders')) return 'production.view';
+  if (path.startsWith('/quotations/upload')) return 'quotation.upload';
+  if (path.startsWith('/quotations')) return 'quotation.view';
   if (path.startsWith('/inventory/query')) return 'inventory.query';
   if (path.startsWith('/inventory/rnd')) return 'inventory.rnd';
   if (path.startsWith('/inventory/production')) return 'inventory.production';
@@ -257,6 +267,9 @@ export function hasPermission(required: string, permissions: string[]): boolean 
       'production.submit', 'production.cancel', 'production.export',
     ].includes(permission));
   }
+  if (required === 'quotation.view') {
+    return permissions.some((permission) => ['quotation.create', 'quotation.edit', 'quotation.delete'].includes(permission));
+  }
   if (required === 'research-test.report.view') return permissions.some((permission) => permission.startsWith('research-test.report.'));
   if (required === 'research-test.standard.view') return permissions.some((permission) => permission.startsWith('research-test.standard.'));
   return false;
@@ -278,6 +291,7 @@ export function firstAccessiblePath(permissions: string[], menuKeys: string[] = 
     ['/experiments/list', 'experiment.view'],
     ['/research-test/reports', 'research-test.report.view'],
     ['/production-orders/list', 'production.view'],
+    ['/quotations/list', 'quotation.view'],
     ['/data/view', 'data.view'],
     ['/quality/view', 'quality.view'],
     ['/spectrum/view', 'spectrum.view'],

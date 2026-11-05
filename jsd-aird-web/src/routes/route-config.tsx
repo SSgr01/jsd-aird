@@ -33,6 +33,9 @@ const KnowledgeLibraryPage = routePage(async () => ({ default: (await import('@/
 const KnowledgeReviewPage = routePage(async () => ({ default: (await import('@/pages/knowledge/KnowledgeReviewPage')).KnowledgeReviewPage }));
 const KnowledgeSearchPage = routePage(async () => ({ default: (await import('@/pages/knowledge/KnowledgeSearchPage')).KnowledgeSearchPage }));
 const KnowledgeViewPage = routePage(async () => ({ default: (await import('@/pages/knowledge/KnowledgeViewPage')).KnowledgeViewPage }));
+const QuotationUploadPage = routePage(async () => ({ default: (await import('@/pages/quotations/QuotationUploadPage')).QuotationUploadPage }));
+const QuotationListPage = routePage(async () => ({ default: (await import('@/pages/quotations/QuotationListPage')).QuotationListPage }));
+const QuotationWorkspacePage = routePage(async () => ({ default: (await import('@/pages/quotations/QuotationWorkspacePage')).QuotationWorkspacePage }));
 const ProductionOrderListPage = routePage(async () => ({ default: (await import('@/pages/production-orders/ProductionOrderListPage')).ProductionOrderListPage }));
 const ProductionOrderUploadPage = routePage(async () => ({ default: (await import('@/pages/production-orders/ProductionOrderUploadPage')).ProductionOrderUploadPage }));
 const ProductionUploadWorkspacePage = routePage(async () => ({ default: (await import('@/pages/production-orders/ProductionUploadWorkspacePage')).ProductionUploadWorkspacePage }));
@@ -128,6 +131,10 @@ const applicationRoutes: RouteObject[] = [
         path: 'production-orders/uploads/:uploadId/workspace',
         element: <ProductionUploadWorkspacePage />,
       },
+      { path: 'quotations', element: <Navigate to="/quotations/list" replace /> },
+      { path: 'quotations/upload', element: <QuotationUploadPage /> },
+      { path: 'quotations/list', element: <QuotationListPage /> },
+      { path: 'quotations/:id', element: <QuotationWorkspacePage /> },
       { path: 'data', element: <Navigate to="/data/upload" replace /> },
       { path: 'data/upload', element: <PagePermissionGate permission="data.create"><DataUploadPage /></PagePermissionGate> },
       { path: 'data/import-jobs/:id', element: <DataImportJobPage /> },
@@ -225,6 +232,9 @@ registerRoutePreload('/assistant/model-center', ModelCenterPage.preload);
 registerRoutePreload('/templates/upload', TemplateUploadPage.preload);
 registerRoutePreload('/templates/library', TemplatesPage.preload);
 registerRoutePreload('/templates/:versionId/workspace', TemplateWorkspacePage.preload);
+registerRoutePreload('/quotations/upload', QuotationUploadPage.preload);
+registerRoutePreload('/quotations/list', QuotationListPage.preload);
+registerRoutePreload('/quotations/:id', QuotationWorkspacePage.preload);
 registerRoutePreload('/production-orders/upload', ProductionOrderUploadPage.preload);
 registerRoutePreload('/production-orders/list', ProductionOrderListPage.preload);
 registerRoutePreload('/production-orders/uploads/:uploadId/workspace', ProductionUploadWorkspacePage.preload);

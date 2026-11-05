@@ -224,6 +224,14 @@
   text-decoration: none;
 }
 
+.quotation-list-page .quotation-customer-name {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .pm-unified-list-page .ant-btn-link.ant-btn-dangerous {
   color: var(--app-danger);
 }

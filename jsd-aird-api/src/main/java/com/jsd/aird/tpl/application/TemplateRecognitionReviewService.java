@@ -313,7 +313,8 @@ public class TemplateRecognitionReviewService {
         // customer. Historical model generations and unbound semantic
         // duplicates remain in the audit rows, but must not keep a template
         // open after every visible field has been confirmed.
-        var openItems = review.statistics().pendingFieldCount() > 0;
+        var openItems = review.statistics().pendingFieldCount() > 0
+                || review.summary().conflict() > 0;
         var openBlocker = importRepository.listQualityIssues(organizationId, run.id()).stream()
                 .anyMatch(issue -> "BLOCKER".equals(issue.severity())
                         && !Set.of("AUTO_APPLIED", "CONFIRMED", "IGNORED").contains(issue.status()));
@@ -1116,6 +1117,7 @@ public class TemplateRecognitionReviewService {
         var decisions = new java.util.HashMap<UUID, String>();
         var acceptedBindingIds = new java.util.HashSet<String>();
         var acceptedRelationIds = new java.util.HashSet<String>();
+        var confirmedFieldSuggestionIds = new java.util.HashSet<UUID>();
         if (run != null) {
             importRepository.listSuggestions(organizationId, run.id()).forEach(item -> {
                 decisions.put(item.id(), item.decision());
@@ -1127,6 +1129,9 @@ public class TemplateRecognitionReviewService {
                     if (!relationId.isBlank()) acceptedRelationIds.add(relationId);
                 }
             });
+            assemble(organizationId, workspace).items().stream()
+                    .filter(item -> "CONFIRMED".equals(item.status()) && !isStructuralCandidate(item))
+                    .forEach(item -> confirmedFieldSuggestionIds.addAll(item.suggestionIds()));
         }
         for (JsonNode binding : mapping) {
             var recognitionItemId = binding.path("diagnostic").path("recognitionItemId").asText("");
@@ -1138,7 +1143,8 @@ public class TemplateRecognitionReviewService {
             if (acceptedByStableIdentity) continue;
             try {
                 var decision = decisions.get(UUID.fromString(recognitionItemId));
-                if (!"ACCEPTED".equals(decision)) {
+                if (!"ACCEPTED".equals(decision)
+                        && !confirmedFieldSuggestionIds.contains(UUID.fromString(recognitionItemId))) {
                     throw new ApiException(ApiErrorCode.BINDING_INVALID,
                             "请先在识别确认中确认该字段，再保存为正式模板字段");
                 }
@@ -1406,11 +1412,10 @@ public class TemplateRecognitionReviewService {
     public boolean hasIncompleteRecognition(UUID organizationId, UUID versionId) {
         var workspace = requireWorkspace(organizationId, versionId);
         var run = importRepository.findLatestForVersion(organizationId, workspace.versionId()).orElse(null);
-        // A data-center template can be authored directly in the workspace without an
-        // AI recognition run. Such bindings have already passed the normal draft/publish
-        // mapping validation and must not be blocked by a recognition gate that only
-        // applies to recognition-derived candidates.
-        if (run == null) return !hasOnlyManualMappings(workspace.mapping());
+        // Revision and manually authored drafts can retain recognition diagnostics
+        // without an import run of their own. Their formal schema and mappings are
+        // validated by the normal publish checks.
+        if (run == null) return false;
         if (run.result() == null) return true;
         var review = assemble(organizationId, workspace);
         // Publication follows the effective customer-facing review items. The
@@ -1429,16 +1434,6 @@ public class TemplateRecognitionReviewService {
             }
         }
         return false;
-    }
-
-    private boolean hasOnlyManualMappings(JsonNode mapping) {
-        if (mapping == null || !mapping.isArray() || mapping.isEmpty()) return true;
-        for (JsonNode binding : mapping) {
-            if (!binding.path("diagnostic").path("recognitionItemId").asText("").isBlank()) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private com.fasterxml.jackson.databind.node.ArrayNode compileDiagnostics(
@@ -2196,7 +2191,7 @@ public class TemplateRecognitionReviewService {
             for (var field : region.path("fields")) {
                 if (!field.path("fieldName").asText("").isBlank()
                         && !field.path("payload").path("runtimeInputOnly").asBoolean(false)
-                        && Set.of("PENDING", "CONFLICT").contains(field.path("status").asText(""))) pendingFields++;
+                        && "PENDING".equals(field.path("status").asText(""))) pendingFields++;
             }
             audit += region.path("auditSuggestions").size();
         }

@@ -123,6 +123,15 @@ const route = {
       ],
     },
     {
+      path: '/quotations-root',
+      name: '报价记录',
+      icon: <FileTextOutlined />,
+      routes: [
+        { path: '/quotations/upload', name: '报价上传', icon: <UploadOutlined /> },
+        { path: '/quotations/list', name: '报价查看', icon: <EyeOutlined /> },
+      ],
+    },
+    {
       path: '/ai-assistant',
       name: 'AI研发助手',
       icon: <RobotOutlined />,
@@ -270,10 +279,12 @@ export function BasicLayout() {
   const isExperimentWorkspace = /^\/experiments\/template-imports\/[^/]+$/.test(location.pathname)
     || /^\/experiments\/(?!imports\/)[^/]+$/.test(location.pathname) && !isExperimentPage;
   const isDataWorkspace = /^\/data\/(?:import-jobs|assets)\/[^/]+$/.test(location.pathname);
+  const isQuotationWorkspace = /^\/quotations\/[^/]+$/.test(location.pathname)
+    && !['/quotations/list', '/quotations/upload'].includes(location.pathname);
   const isProjectDocumentWorkspace = /^\/projects\/[^/]+\/documents\/[^/]+$/.test(location.pathname);
   const isKnowledgeWorkbench = location.pathname.startsWith('/knowledge/review/') || location.pathname.startsWith('/knowledge/documents/');
   const isPermissionManagement = location.pathname.startsWith('/system/user-permissions');
-  const isWorkspace = isTemplateWorkspace || isExperimentWorkspace || isDataWorkspace;
+  const isWorkspace = isTemplateWorkspace || isExperimentWorkspace || isDataWorkspace || isQuotationWorkspace;
   const collapsed = useAppStore((state) => state.sidebarCollapsed);
   const setCollapsed = useAppStore((state) => state.setSidebarCollapsed);
   const isAssistant = location.pathname === '/assistant';

@@ -2,6 +2,7 @@ import { App } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { readFieldModel } from '@/features/template-workspace/field-model';
+import { readExperimentImport } from '@/features/template-workspace/experiment-semantics';
 import { mergeRecognitionReview } from '@/features/template-workspace/recognition-review';
 import {
   TemplateFieldManager,
@@ -13,7 +14,7 @@ type ManagerProps = React.ComponentProps<typeof TemplateFieldManager>;
 type RecognitionItem = NonNullable<ManagerProps['recognitionReview']>['items'][number];
 
 /** The experiment tab only exists for experiment templates, which uploads never are. */
-const EMPTY_EXPERIMENT_CONFIG = {} as ManagerProps['experimentConfiguration'];
+const EMPTY_EXPERIMENT_CONFIG = readExperimentImport({});
 
 /**
  * Field review for a recognized production order, rendered by the template

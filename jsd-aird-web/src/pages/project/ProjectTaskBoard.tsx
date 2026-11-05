@@ -38,7 +38,7 @@ interface TaskFormValues {
   name: string;
   owner?: string;
   priority: ProjectPriority;
-  plannedDate: dayjs.Dayjs;
+  dates: [dayjs.Dayjs, dayjs.Dayjs];
   status: string;
 }
 
@@ -182,7 +182,7 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
   const openNewTask = () => {
     setEditingTask(undefined);
     taskForm.resetFields();
-    taskForm.setFieldsValue({ stageId: stage.id, owner: '', priority: 'MEDIUM', plannedDate: dayjs(), status: 'PENDING' });
+    taskForm.setFieldsValue({ stageId: stage.id, owner: '', priority: 'MEDIUM', dates: [dayjs(), dayjs()], status: 'PENDING' });
     setTaskOpen(true);
   };
 
@@ -191,7 +191,7 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
     setEditingTask(data);
     taskForm.setFieldsValue({
       stageId: data.stageId, name: data.name, owner: data.owner,
-      priority: data.priority || 'MEDIUM', plannedDate: data.plannedDate ? dayjs(data.plannedDate) : dayjs(), status: data.status || 'PENDING',
+      priority: data.priority || 'MEDIUM', dates: [data.plannedDate ? dayjs(data.plannedDate) : dayjs(), data.plannedEnd ? dayjs(data.plannedEnd) : (data.plannedDate ? dayjs(data.plannedDate) : dayjs())], status: data.status || 'PENDING',
     });
     setTaskOpen(true);
   };
@@ -207,7 +207,7 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
     try {
       const payload = {
         stageId: values.stageId, name: values.name.trim(), owner: values.owner?.trim() || '',
-        priority: values.priority, plannedDate: values.plannedDate.format('YYYY-MM-DD'), status: values.status,
+        priority: values.priority, plannedDate: values.dates[0].format('YYYY-MM-DD'), plannedEnd: values.dates[1].format('YYYY-MM-DD'), status: values.status,
       };
       if (editingTask) {
         await updateProjectTask(editingTask.id, { ...payload, version: editingTask.version });
@@ -337,8 +337,8 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
           <Form.Item name="priority" label={<FieldLabel text="优先级" required />} rules={[{ required: true, message: '请选择优先级' }]}>
             <Select placeholder="请选择优先级" options={projectPriorities} />
           </Form.Item>
-          <Form.Item name="plannedDate" label={<FieldLabel text="计划日期" required />} rules={[{ required: true, message: '请选择计划日期' }]}>
-            <DatePicker style={{ width: '100%' }} format="YYYY/MM/DD" />
+          <Form.Item name="dates" label={<FieldLabel text="计划日期" required />} rules={[{ required: true, message: '请选择计划日期' }]}>
+            <DatePicker.RangePicker style={{ width: '100%' }} format="YYYY/MM/DD" />
           </Form.Item>
           <Form.Item name="status" label={<FieldLabel text="状态" required />} rules={[{ required: true }]}>
             <Select options={Object.entries(taskStatuses).map(([value, label]) => ({ value, label }))} />

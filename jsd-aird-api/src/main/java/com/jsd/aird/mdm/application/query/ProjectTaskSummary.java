@@ -17,6 +17,7 @@ public record ProjectTaskSummary(
         String owner,
         String priority,
         String plannedDate,
+        String plannedEnd,
         String status,
         long experimentCount,
         long version,

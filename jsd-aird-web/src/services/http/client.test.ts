@@ -113,6 +113,24 @@ describe('HTTP CSRF request lifecycle', () => {
     expect(adapter).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the session when the current password is wrong', async () => {
+    const { httpClient } = await import('./client');
+    const { subscribeAuthRequired } = await import('./auth-events');
+    const required = vi.fn();
+    const unsubscribe = subscribeAuthRequired(required);
+    httpClient.defaults.adapter = adapt(config => {
+      throw new AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config, undefined,
+        response(config, { code: 'AUTH_INVALID', message: '当前密码错误' }, 401));
+    });
+    try {
+      await expect(httpClient.post('/api/v1/auth/password/change', {}, { headers: { 'X-XSRF-TOKEN': 'explicit' } }))
+        .rejects.toMatchObject({ code: 'AUTH_INVALID', status: 401 });
+      expect(required).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('stops after one retry if the refreshed token is rejected', async () => {
     const { httpClient } = await import('./client');
     const writes = vi.fn();

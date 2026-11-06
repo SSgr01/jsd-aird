@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.sql.ResultSet;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
@@ -122,12 +123,20 @@ public class JdbcIamStore implements IamStore {
         revokeUserSessions(organizationId, userId);
     }
 
-    public void changePassword(UUID organizationId, UUID userId, String passwordHash) {
+    public void changePassword(UUID organizationId, UUID userId, UUID currentSessionId, String passwordHash) {
         jdbc.update("""
                 UPDATE iam.app_user SET password_hash = ?, auth_version = auth_version + 1,
                     failed_login_count = 0, locked_until = NULL
                 WHERE organization_id = ? AND id = ?
                 """, passwordHash, organizationId, userId);
+        jdbc.update("""
+                UPDATE iam.login_session SET revoked_at = now()
+                WHERE organization_id = ? AND user_id = ? AND id <> ? AND revoked_at IS NULL
+                """, organizationId, userId, currentSessionId);
+        jdbc.update("""
+                UPDATE iam.login_session SET auth_version = auth_version + 1
+                WHERE id = ? AND organization_id = ? AND user_id = ? AND revoked_at IS NULL
+                """, currentSessionId, organizationId, userId);
     }
 
     public void markLoginSuccess(UUID organizationId, UUID userId) {
@@ -137,13 +146,13 @@ public class JdbcIamStore implements IamStore {
                 """, organizationId, userId);
     }
 
-    public void markLoginFailure(UUID organizationId, UUID userId, boolean locked) {
+    public void markLoginFailure(UUID organizationId, UUID userId, boolean locked, Duration lockDuration) {
         jdbc.update("""
                 UPDATE iam.app_user
-                SET failed_login_count = failed_login_count + 1,
-                    locked_until = CASE WHEN ? THEN now() + interval '15 minutes' ELSE locked_until END
+                SET failed_login_count = CASE WHEN locked_until <= now() THEN 1 ELSE failed_login_count + 1 END,
+                    locked_until = CASE WHEN ? THEN now() + (? * interval '1 millisecond') ELSE NULL END
                 WHERE organization_id = ? AND id = ?
-                """, locked, organizationId, userId);
+                """, locked, lockDuration.toMillis(), organizationId, userId);
     }
 
     public boolean hasSystemAdmin(UUID organizationId) {
@@ -293,6 +302,14 @@ public class JdbcIamStore implements IamStore {
                 """, (rs, row) -> session(rs, row), hash(token)).stream().findFirst();
     }
 
+    @Override
+    public boolean wasReplaced(String token) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (SELECT 1 FROM iam.login_session
+                    WHERE token_hash = ? AND revocation_reason = 'REPLACED')
+                """, Boolean.class, hash(token)));
+    }
+
     public Session createSession(UUID organizationId, UUID userId, long authVersion, String tokenHash,
                                  Instant expiresAt, Instant absoluteExpiresAt, String ip, String userAgent,
                                  boolean rememberMe) {
@@ -307,9 +324,12 @@ public class JdbcIamStore implements IamStore {
                 absoluteExpiresAt, null, null);
     }
 
-    public void touchSession(UUID sessionId, Instant expiresAt) {
-        jdbc.update("UPDATE iam.login_session SET last_seen_at = now(), expires_at = ? WHERE id = ? AND revoked_at IS NULL",
-                Timestamp.from(expiresAt), sessionId);
+    public boolean touchSession(UUID sessionId, Instant expiresAt, long idleTimeoutMillis) {
+        return jdbc.update("""
+                UPDATE iam.login_session SET last_seen_at = now(), expires_at = ?
+                WHERE id = ? AND revoked_at IS NULL AND expires_at > now() AND absolute_expires_at > now()
+                  AND last_seen_at > now() - (? * interval '1 millisecond')
+                """, Timestamp.from(expiresAt), sessionId, idleTimeoutMillis) == 1;
     }
 
     public void revokeSession(UUID sessionId) {
@@ -329,6 +349,14 @@ public class JdbcIamStore implements IamStore {
     public void revokeUserSessions(UUID organizationId, UUID userId) {
         jdbc.update("UPDATE iam.login_session SET revoked_at = now() WHERE organization_id = ? AND user_id = ? AND revoked_at IS NULL",
                 organizationId, userId);
+    }
+
+    @Override
+    public void replaceUserSessions(UUID organizationId, UUID userId) {
+        jdbc.update("""
+                UPDATE iam.login_session SET revoked_at = now(), revocation_reason = 'REPLACED'
+                WHERE organization_id = ? AND user_id = ? AND revoked_at IS NULL
+                """, organizationId, userId);
     }
 
     public long recentFailures(UUID organizationId, String username, Instant since) {

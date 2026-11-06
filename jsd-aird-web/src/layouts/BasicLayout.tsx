@@ -28,7 +28,7 @@ import {
   AimOutlined,
 } from '@ant-design/icons';
 import { ProLayout, type MenuDataItem } from '@ant-design/pro-components';
-import { Avatar, Button, Dropdown, Input, Result, Tooltip, Typography, type InputRef } from 'antd';
+import { App, Avatar, Button, Dropdown, Input, Modal, Result, Tooltip, Typography, type InputRef } from 'antd';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -39,6 +39,8 @@ import { appEnv } from '@/app/config/env';
 import { AuthGate } from '@/components/auth/AuthGate';
 import { useAppStore } from '@/stores/app-store';
 import { useAuthStore } from '@/stores/auth-store';
+import { ChangePasswordForm, type PasswordValues } from '@/pages/auth/ChangePasswordForm';
+import { HttpError } from '@/services/http/errors';
 import { canViewPathWithMenus, filterMenuRoute, firstAccessiblePath, requiredPermissionForPath } from '@/routes/route-permissions';
 
 const route = {
@@ -191,8 +193,24 @@ const route = {
 
 function UserMenu() {
   const navigate = useNavigate();
+  const { message } = App.useApp();
+  const [passwordOpen, setPasswordOpen] = useState(false);
+  const [submittingPassword, setSubmittingPassword] = useState(false);
   const user = useAuthStore((state) => state.user);
   const logout = useAuthStore((state) => state.logout);
+  const changePassword = useAuthStore((state) => state.changePassword);
+  const submitPassword = async (values: PasswordValues) => {
+    setSubmittingPassword(true);
+    try {
+      await changePassword(values.currentPassword, values.newPassword);
+      setPasswordOpen(false);
+      message.success('密码修改成功');
+    } catch (error) {
+      message.error(error instanceof HttpError ? error.message : '密码修改失败');
+    } finally {
+      setSubmittingPassword(false);
+    }
+  };
   if (!user) return null;
   const initial = (user.displayName || user.username || '用').slice(0, 1);
   const items = [
@@ -201,11 +219,11 @@ function UserMenu() {
     { type: 'divider' as const },
     { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true },
   ];
-  return <Dropdown
+  return <><Dropdown
     trigger={['click']}
     menu={{ items, onClick: ({ key }: { key: string }) => {
       if (key === 'workbench') navigate('/dashboard');
-      if (key === 'change-password') navigate('/change-password');
+      if (key === 'change-password') setPasswordOpen(true);
       if (key === 'logout') void logout();
     } }}
     popupRender={(menu) => <div className="app-user-dropdown">
@@ -214,7 +232,10 @@ function UserMenu() {
     </div>}
   >
     <button type="button" className="app-user-trigger" aria-label="打开用户菜单"><Avatar size={34}>{initial}</Avatar></button>
-  </Dropdown>;
+  </Dropdown>
+    <Modal title="修改密码" open={passwordOpen} onCancel={() => { if (!submittingPassword) setPasswordOpen(false); }} footer={null} destroyOnHidden>
+      <ChangePasswordForm onSubmit={submitPassword} submitting={submittingPassword} onCancel={() => setPasswordOpen(false)} />
+    </Modal></>;
 }
 
 function AppHeaderTools({ permissions, menuKeys }: { permissions: string[]; menuKeys: string[] }) {

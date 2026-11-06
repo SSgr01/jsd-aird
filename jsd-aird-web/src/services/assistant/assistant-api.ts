@@ -258,10 +258,10 @@ export const assistantApi = {
             /* 保留 HTTP 状态提示 */
           }
           if (response.status === 401 || retryCode === 'AUTH_REQUIRED') {
-            notifyAuthRequired();
+            notifyAuthRequired(retryCode);
             throw new AssistantRequestError(
               retryMessage,
-              'AUTH_REQUIRED',
+              retryCode,
               response.status,
               retryTraceId,
             );
@@ -300,8 +300,8 @@ export const assistantApi = {
               : {};
           const errorCode =
             typeof errorPayload.code === 'string' ? errorPayload.code : 'AI_REQUEST_FAILED';
-          if (errorCode === 'AUTH_REQUIRED' || errorCode === 'CSRF_TOKEN_INVALID') {
-            notifyAuthRequired();
+          if (errorCode === 'AUTH_REQUIRED' || errorCode === 'SESSION_REPLACED' || errorCode === 'CSRF_TOKEN_INVALID') {
+            notifyAuthRequired(errorCode);
           }
           throw new AssistantRequestError(
             typeof errorPayload.message === 'string' ? errorPayload.message : 'AI 问答失败',

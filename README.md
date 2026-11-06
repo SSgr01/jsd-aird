@@ -87,6 +87,8 @@ jdbc:postgresql://localhost:5432/jsd_aird
 
 仅限本机开发时使用默认账号。若需要修改连接信息，请修改根目录 `.env` 中的 `JSD_AIRD_DATASOURCE_*` 变量，再运行 `dev-api.ps1`。如果 PostgreSQL 的 `bin` 目录未加入 PATH，可在 `.env` 设置 `JSD_AIRD_PSQL_PATH` 指向 `psql.exe`；Java 21 未加入 PATH 时，可设置 `JSD_AIRD_JAVA_HOME` 指向 JDK 根目录。
 
+登录会话的无操作超时时间由根目录 `.env` 的 `JSD_AIRD_SESSION_IDLE_TIMEOUT` 控制，默认 `30m`；修改后重启后端即可，前端会从后端读取相同的时长。普通 API 请求和后台轮询不会延长会话。
+
 Windows 开发不需要运行 `db-down.ps1`；该命令只输出说明并且不会删除数据。Docker Compose 是 Linux/CI 的可选工具，固定使用 PostgreSQL 18 基线。
 
 ## IntelliJ IDEA

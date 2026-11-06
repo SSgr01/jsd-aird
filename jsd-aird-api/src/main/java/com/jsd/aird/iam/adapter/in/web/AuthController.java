@@ -3,8 +3,10 @@ package com.jsd.aird.iam.adapter.in.web;
 import java.time.Duration;
 import java.util.List;
 
+import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import com.jsd.aird.iam.application.IamAuthService;
 import com.jsd.aird.iam.application.port.IamStore;
+import com.jsd.aird.iam.infrastructure.SessionAuthenticationFilter;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
@@ -53,14 +55,27 @@ public class AuthController {
         return ResponseFactory.success(new CsrfView(token == null ? null : token.getToken()), RequestIdHolder.currentOrUnknown());
     }
 
+    @GetMapping("/session-policy")
+    public ApiResponse<SessionPolicyView> sessionPolicy() {
+        return ResponseFactory.success(new SessionPolicyView(auth.sessionIdleTimeoutMillis()), RequestIdHolder.currentOrUnknown());
+    }
+
+    @PostMapping("/activity")
+    public ApiResponse<Void> activity(HttpServletRequest request) {
+        var session = (IamStore.Session) request.getAttribute(SessionAuthenticationFilter.SESSION_ATTRIBUTE);
+        if (session == null) throw new ApiException(ApiErrorCode.AUTH_REQUIRED);
+        auth.touch(session);
+        return ResponseFactory.success(null, RequestIdHolder.currentOrUnknown());
+    }
+
     @PostMapping("/login")
-    public ApiResponse<IamAuthService.MeView> login(@Valid @RequestBody LoginRequest request,
+    public ApiResponse<LoginView> login(@Valid @RequestBody LoginRequest request,
                                                      HttpServletRequest servletRequest,
                                                      HttpServletResponse response) {
         var result = auth.login(new IamAuthService.LoginCommand(request.username(), request.password(), request.rememberMe()),
                 clientIp(servletRequest), servletRequest.getHeader("User-Agent"));
         response.addHeader(HttpHeaders.SET_COOKIE, cookie(result.token(), result.rememberMe()).toString());
-        return ResponseFactory.success(result.profile(), RequestIdHolder.currentOrUnknown());
+        return ResponseFactory.success(new LoginView(result.profile(), result.firstLogin()), RequestIdHolder.currentOrUnknown());
     }
 
     @PostMapping("/logout")
@@ -76,8 +91,10 @@ public class AuthController {
     }
 
     @PostMapping("/password/change")
-    public ApiResponse<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
-        auth.changePassword(ActorContext.required(), request.currentPassword(), request.newPassword());
+    public ApiResponse<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request, HttpServletRequest servletRequest) {
+        var session = (IamStore.Session) servletRequest.getAttribute(SessionAuthenticationFilter.SESSION_ATTRIBUTE);
+        if (session == null) throw new ApiException(ApiErrorCode.AUTH_REQUIRED);
+        auth.changePassword(ActorContext.required(), session.id(), request.currentPassword(), request.newPassword());
         return ResponseFactory.success(null, RequestIdHolder.currentOrUnknown());
     }
 
@@ -115,6 +132,8 @@ public class AuthController {
     }
 
     public record CsrfView(String token) { }
+    public record SessionPolicyView(long idleTimeoutMillis) { }
+    public record LoginView(@JsonUnwrapped IamAuthService.MeView user, boolean firstLogin) { }
 
     /**
      * Login validates presence only. Password policy belongs to password

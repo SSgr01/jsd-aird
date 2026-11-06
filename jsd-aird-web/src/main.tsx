@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/auth-store';
 import { installBuildRecovery } from '@/services/release/build-recovery';
 import { markPerformance } from '@/services/performance/metrics';
 import { installSessionSync } from '@/app/session-sync';
+import { installIdleLogout } from '@/app/idle-logout';
 
 const rootElement = document.getElementById('root');
 
@@ -20,6 +21,7 @@ if (!rootElement) {
 markPerformance('boot-start');
 installBuildRecovery();
 installSessionSync();
+installIdleLogout();
 // Session check and application/route chunks start together. Keep the HTML
 // skeleton in place while modules load; AuthGate renders the same geometry.
 if (window.location.pathname !== '/login') void useAuthStore.getState().load();

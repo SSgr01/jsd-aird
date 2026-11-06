@@ -5,11 +5,12 @@ import { HttpError } from '@/services/http/errors';
 import { useAuthStore } from '@/stores/auth-store';
 import { testUser } from '@/test/auth-user';
 import { queryClient } from '@/services/query/query-client';
+import { confirmSessionReplacement, notifyAuthRequired } from '@/services/http/auth-events';
 
 describe('auth store session loading', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    useAuthStore.setState({ status: 'unknown', user: null });
+    useAuthStore.setState({ status: 'unknown', user: null, firstLoginPrompt: false });
   });
 
   it('keeps service failures out of the anonymous state', async () => {
@@ -20,12 +21,45 @@ describe('auth store session loading', () => {
     expect(useAuthStore.getState().status).toBe('error');
   });
 
+  it('shows a first-login prompt only for the login response and clears it on dismissal', async () => {
+    vi.spyOn(authApi, 'login').mockResolvedValue({ ...testUser, firstLogin: true });
+    await useAuthStore.getState().login({ username: 'test', password: 'password', rememberMe: false });
+    expect(useAuthStore.getState().firstLoginPrompt).toBe(true);
+    useAuthStore.getState().dismissFirstLoginPrompt();
+    expect(useAuthStore.getState().firstLoginPrompt).toBe(false);
+    vi.spyOn(authApi, 'me').mockResolvedValue(testUser);
+    await useAuthStore.getState().load();
+    expect(useAuthStore.getState().firstLoginPrompt).toBe(false);
+  });
+
+  it('keeps the current session after a successful password change', async () => {
+    useAuthStore.setState({ user: testUser, status: 'authenticated', firstLoginPrompt: true });
+    vi.spyOn(authApi, 'changePassword').mockResolvedValue();
+    const me = vi.spyOn(authApi, 'me').mockResolvedValue({ ...testUser, authVersion: testUser.authVersion + 1 });
+    await useAuthStore.getState().changePassword('old-password', 'new-password');
+    expect(me).toHaveBeenCalledOnce();
+    expect(useAuthStore.getState()).toMatchObject({ user: { authVersion: testUser.authVersion + 1 }, status: 'authenticated', firstLoginPrompt: false });
+  });
+
   it('marks the session anonymous for an authentication failure', async () => {
     vi.spyOn(authApi, 'me').mockRejectedValueOnce(new HttpError('请先登录', 'AUTH_REQUIRED', 401));
 
     await useAuthStore.getState().load();
 
     expect(useAuthStore.getState()).toMatchObject({ status: 'anonymous', user: null });
+  });
+
+  it('waits for confirmation before clearing a replaced session during startup', async () => {
+    vi.spyOn(authApi, 'me').mockImplementationOnce(() => {
+      notifyAuthRequired('SESSION_REPLACED');
+      return Promise.reject(new HttpError('账号已在其他地方登录', 'SESSION_REPLACED', 401));
+    });
+
+    await useAuthStore.getState().load();
+    expect(useAuthStore.getState().status).toBe('loading');
+
+    confirmSessionReplacement();
+    expect(useAuthStore.getState().status).toBe('anonymous');
   });
 
   it('shares the pending session promise across startup consumers', async () => {

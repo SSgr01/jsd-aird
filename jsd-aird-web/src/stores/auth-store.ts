@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { replaceEqualDeep } from '@tanstack/react-query';
 
 import { authApi, type AuthUser, type LoginRequest } from '@/services/auth/auth-api';
-import { advanceSessionEpoch, subscribeAuthRequired } from '@/services/http/auth-events';
+import { advanceSessionEpoch, isSessionReplacementPending, subscribeAuthRequired } from '@/services/http/auth-events';
 import { HttpError } from '@/services/http/errors';
 import { clearSessionQueries } from '@/services/query/query-client';
 import { clearSessionViewState } from '@/services/query/session-view-state';
@@ -15,6 +15,8 @@ let lastValidatedAt = 0;
 interface AuthState {
   user: AuthUser | null;
   status: 'unknown' | 'loading' | 'authenticated' | 'anonymous' | 'error';
+  firstLoginPrompt: boolean;
+  dismissFirstLoginPrompt: () => void;
   load: (background?: boolean) => Promise<AuthUser | null>;
   validate: () => Promise<AuthUser | null>;
   resync: () => Promise<AuthUser | null>;
@@ -27,6 +29,8 @@ interface AuthState {
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   status: 'unknown',
+  firstLoginPrompt: false,
+  dismissFirstLoginPrompt: () => set({ firstLoginPrompt: false }),
   load: (background = false) => {
     if (pendingLoad) return pendingLoad;
     const generation = sessionGeneration;
@@ -44,7 +48,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         return sharedUser;
       } catch (error) {
         if (generation !== sessionGeneration) return null;
-        if (!keepShell || (error instanceof HttpError && error.status === 401)) set({ user: null, status: error instanceof HttpError && error.status === 401 ? 'anonymous' : 'error' });
+        if (isSessionReplacementPending() && error instanceof HttpError && error.status === 401) return null;
+        if (!keepShell || (error instanceof HttpError && error.status === 401)) set({ user: null, firstLoginPrompt: false, status: error instanceof HttpError && error.status === 401 ? 'anonymous' : 'error' });
         return null;
       } finally {
         if (generation === sessionGeneration) pendingLoad = undefined;
@@ -61,6 +66,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     ++sessionGeneration;
     pendingLoad = undefined;
     lastValidatedAt = 0;
+    set({ firstLoginPrompt: false });
     advanceSessionEpoch();
     clearSessionQueries();
     // A shared-cookie notification may be a same-user login/password change.
@@ -71,9 +77,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const generation = ++sessionGeneration;
     pendingLoad = undefined;
     clearSessionQueries();
-    const user = await authApi.login(request);
+    const { firstLogin, ...user } = await authApi.login(request);
     if (generation !== sessionGeneration) throw new Error('登录状态已变更，请重新登录');
-    set({ user, status: 'authenticated' });
+    set({ user, status: 'authenticated', firstLoginPrompt: firstLogin });
     lastValidatedAt = Date.now();
     publishSessionChange('changed');
     return user;
@@ -82,18 +88,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const generation = ++sessionGeneration;
     pendingLoad = undefined;
     publishSessionChange('ended');
-    set({ user: null, status: 'anonymous' });
+    set({ user: null, status: 'anonymous', firstLoginPrompt: false });
     clearSessionQueries();
     try {
       await authApi.logout();
     } finally {
-      if (generation === sessionGeneration) set({ user: null, status: 'anonymous' });
+      if (generation === sessionGeneration) set({ user: null, status: 'anonymous', firstLoginPrompt: false });
     }
   },
   changePassword: async (currentPassword, newPassword) => {
     await authApi.changePassword({ currentPassword, newPassword });
     const user = await authApi.me();
-    set({ user, status: 'authenticated' });
+    set({ user, status: 'authenticated', firstLoginPrompt: false });
     lastValidatedAt = Date.now();
     publishSessionChange('changed');
   },
@@ -104,7 +110,7 @@ subscribeAuthRequired(() => {
   ++sessionGeneration;
   pendingLoad = undefined;
   clearSessionQueries();
-  useAuthStore.setState({ user: null, status: 'anonymous' });
+  useAuthStore.setState({ user: null, status: 'anonymous', firstLoginPrompt: false });
 });
 
 const identity = (user: AuthUser | null) => user ? JSON.stringify([user.organizationId, user.userId, user.authVersion, [...user.permissions].sort(), [...(user.menuKeys ?? [])].sort()]) : '';

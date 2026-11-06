@@ -24,7 +24,7 @@ it('preserves media conditions, selector specificity and transparent focus rings
   expect(media?.type).toBe('atrule');
   if (media?.type !== 'atrule') throw new Error('Missing media query');
   expect(media.nodes?.[1]?.type).toBe('atrule');
-  expect(css).toContain('rgb(36 72 216 / 60%)');
+  expect(css).toContain('rgb(53 111 200 / 60%)');
   expect(css.match(/\.panel:hover/g)).toHaveLength(2);
 });
 

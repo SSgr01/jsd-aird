@@ -196,12 +196,12 @@ class JdbcKnowledgeRepositoryTest {
         var sql = ArgumentCaptor.forClass(String.class);
         var args = ArgumentCaptor.forClass(Object[].class);
         verify(jdbc).query(sql.capture(), any(org.springframework.jdbc.core.RowMapper.class), args.capture());
-        assertThat(sql.getValue()).contains(
-                "d.current_version_no", "d.current_publication_id", "p.status = 'CURRENT'",
-                "c.review_revision_id = p.review_revision_id", "c.chunk_role = 'CHILD'",
-                "d.lifecycle_status = 'ACTIVE'", "f.status <> 'DELETED'",
-                "kb.document_ai_grant", "g.organization_id = d.organization_id", "g.status = 'APPROVED'",
-                "normalize(term, NFKC)",
+        assertThat(sql.getValue().replaceAll("\\s+", "")).contains(
+                "d.current_version_no", "d.current_publication_id", "p.status='CURRENT'",
+                "c.review_revision_id=p.review_revision_id", "c.chunk_role='CHILD'",
+                "d.lifecycle_status='ACTIVE'", "f.status<>'DELETED'",
+                "kb.document_ai_grant", "g.organization_id=d.organization_id", "g.status='APPROVED'",
+                "normalize(term,NFKC)",
                 "metadata_snapshot_jsonb->>'title'", "v.original_name");
         assertThat(args.getValue()).hasSize(5);
         assertThat(args.getValue()[1]).isEqualTo(organizationId);

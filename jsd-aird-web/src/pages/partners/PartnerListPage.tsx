@@ -1,3 +1,4 @@
+import { ListFeedback } from '@/components/loading/ListQueryFeedback';
 import { useRequestGuard } from '@/services/query/use-request-guard';
 import { AppstoreOutlined, CopyOutlined, DownloadOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, UnorderedListOutlined } from '@ant-design/icons';
 import { App, Button, Checkbox, Empty, Input, Pagination, Popconfirm, Select, Space, Tag, Tooltip, Typography } from 'antd';
@@ -79,6 +80,8 @@ export function PartnerListPage() {
     status: 'ACTIVE',
   }), [keyword, industry, level, cooperation, owner]);
   const beginListRequest = useRequestGuard(JSON.stringify([query,page,pageSize]));
+  const [listError, setListError] = useState<string>();
+  const [listLoaded, setListLoaded] = useState(false);
   const load = useCallback(async () => {
     const request = beginListRequest();
     setLoading(true);
@@ -86,13 +89,16 @@ export function PartnerListPage() {
       const result = await getPartners({ ...query, page, size: pageSize }, request.signal);
       if (!request.current()) return;
       setRows(result.items);
+      setListError(undefined);
+      setListLoaded(true);
       setTotal(result.total);
       setSelectedPartnersById((prev) => {
         const next = { ...prev };
         result.items.forEach((item) => { next[item.id] = item; });
         return next;
       });
-    } catch {
+    } catch (listFailure) {
+      if (request.current()) setListError(listFailure instanceof Error ? listFailure.message : '列表加载失败');
       // Keep the current list for failed or superseded reads.
     } finally {
       if (request.current()) setLoading(false);
@@ -377,6 +383,7 @@ export function PartnerListPage() {
         </Button>
       </div>
 
+      <ListFeedback loading={loading} hasData={listLoaded} error={listError} onRetry={() => void load()} />
       <div className="cm-table-card" aria-busy={loading}>
         {viewMode === 'table' ? (
           <div className="cm-table-wrap">
@@ -529,7 +536,7 @@ export function PartnerListPage() {
             </div>
           </div>
         )}
-        {!loading && !visible.length && (
+        {!loading && !listError && !visible.length && (
           <Empty className="cm-empty" description="没有符合筛选条件的公司" />
         )}
         <div className="cm-pagination">

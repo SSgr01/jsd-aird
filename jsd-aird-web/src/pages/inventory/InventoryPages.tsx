@@ -1,3 +1,4 @@
+import { FormModal } from '@/components/form-dialog/FormModal';
 import { ArrowLeftOutlined, CheckOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
 import {
   Alert,
@@ -251,7 +252,7 @@ export function InventoryQueryPage() {
           }}
         />
       </Card>
-      <Modal
+      <FormModal form={policyForm} resetKey={selected?.policyRevision}
         open={!!selected}
         onCancel={() => setSelected(undefined)}
         title="库存详情"
@@ -315,7 +316,7 @@ export function InventoryQueryPage() {
             </Form.Item>
           </Form>
         )}
-      </Modal>
+      </FormModal>
     </InventoryShell>
   );
 }
@@ -617,7 +618,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
           }}
         />
       </Card>
-      <Modal
+      <FormModal form={form}
         title={`${editing ? '编辑' : '新增'}${scopeLabels[scope]}变动`}
         open={open}
         width={640}
@@ -710,7 +711,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
             <Input.TextArea rows={3} placeholder="填写批次、用途等补充信息" />
           </Form.Item>
         </Form>
-      </Modal>
+      </FormModal>
       <Modal
         open={!!detail}
         title="库存流水详情"
@@ -927,8 +928,8 @@ function ShipmentHeaders() {
       </Space> },
     ]} pagination={{ current: page, pageSize: size, total: data?.total, showSizeChanger: true,
       onChange: (nextPage, nextSize) => { setPage(nextPage); setSize(nextSize); } }} />
-    <Modal title={editingHeader ? '编辑出货单' : '新增出货单'} open={open} confirmLoading={saving} onCancel={() => { setOpen(false); setEditingHeader(undefined); form.resetFields(); }}
-      onOk={() => { void saveHeader(); }}>
+    <FormModal form={form} title={editingHeader ? '编辑出货单' : '新增出货单'} open={open} confirmLoading={saving} onCancel={() => { setOpen(false); setEditingHeader(undefined); form.resetFields(); }}
+      onOk={() => saveHeader()}>
       <Form form={form} layout="vertical">
         <Form.Item name="shipmentNo" label="出货单号" rules={[{ required: true, whitespace: true }]}><Input disabled={!!editingHeader} /></Form.Item>
         <Form.Item name="businessDate" label="日期" rules={[{ required: true }]}>
@@ -936,7 +937,7 @@ function ShipmentHeaders() {
         </Form.Item>
         <Form.Item name="note" label="备注"><Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} maxLength={500} showCount /></Form.Item>
       </Form>
-    </Modal>
+    </FormModal>
   </InventoryShell>;
 }
 type BusinessFormValues = {
@@ -1728,7 +1729,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
         }}>
         确认将选中的 {selectedRecordIds.length} 条发样记录设为已完成？
       </Modal>}
-      <Modal
+      <FormModal form={form} draft={recipientText}
         width={650}
         className="inventory-entry-modal"
         title={`${editing ? '编辑' : '新增'}${sample ? '发样' : '出货明细'}`}
@@ -2089,7 +2090,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
             </>
           )}
         </Form>
-      </Modal>
+      </FormModal>
     </InventoryShell>
   );
 }

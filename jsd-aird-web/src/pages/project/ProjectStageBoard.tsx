@@ -1,5 +1,6 @@
+import { FormModal } from '@/components/form-dialog/FormModal';
 import { ArrowLeftOutlined, ArrowRightOutlined, DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
-import { Alert, Button, DatePicker, Empty, Form, Input, Modal, Popconfirm, Select, Skeleton, Space, Tag, message } from 'antd';
+import { Alert, Button, DatePicker, Empty, Form, Input, Popconfirm, Select, Skeleton, Space, Tag, message } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import dayjs from '@/utils/dayjs';
@@ -264,8 +265,8 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
         />
       ) : null}
 
-      <Modal title={editing ? '编辑阶段' : '新增阶段'} open={open} confirmLoading={saving}
-        onCancel={() => setOpen(false)} onOk={() => void submit()} okText="保存" cancelText="取消" destroyOnHidden>
+      <FormModal form={form} title={editing ? '编辑阶段' : '新增阶段'} open={open} confirmLoading={saving}
+        onCancel={() => setOpen(false)} onOk={() => submit()} okText="保存" cancelText="取消" destroyOnHidden>
         <Form form={form} layout="vertical" preserve={false}>
           <div className="pm-stage-form-grid">
             <Form.Item name="name" label="阶段名称" rules={[{ required: true, message: '请输入阶段名称' }, { max: 120 }]}><Input /></Form.Item>
@@ -277,7 +278,7 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
           {editing?.status === 'COMPLETED' ? <Form.Item name="transitionReason" label="重新打开原因"><Input.TextArea rows={2} /></Form.Item> : null}
           <Form.Item name="description" label="阶段说明"><Input.TextArea rows={4} maxLength={5000} showCount /></Form.Item>
         </Form>
-      </Modal>
+      </FormModal>
     </section>
   );
 }

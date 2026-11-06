@@ -1,3 +1,6 @@
+import { ListQueryFeedback } from '@/components/loading/ListQueryFeedback';
+import { FormModal } from '@/components/form-dialog/FormModal';
+import { ListFilterBar } from '@/components/list-controls/ListFilterBar';
 import { useListPageBounds } from '@/services/query/use-list-page-bounds';
 import { useBusinessQuery } from '@/services/query/use-business-query';
 import { useListKeyword, useListUrl } from '@/services/query/use-list-url';
@@ -8,7 +11,6 @@ import {
   DownloadOutlined,
   FileWordOutlined,
   PlusOutlined,
-  ReloadOutlined,
   SearchOutlined,
   UploadOutlined,
   UnorderedListOutlined,
@@ -133,6 +135,8 @@ export function ProjectListPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const copyInFlight = useRef(false);
   const [importing, setImporting] = useState(false);
   const [detail, setDetail] = useState<Project | null>(null);
   const [importedFileName, setImportedFileName] = useState<string>();
@@ -181,6 +185,14 @@ export function ProjectListPage() {
     () => [...new Set(rows.map((r) => r.owner).filter(Boolean))] as string[],
     [rows],
   );
+  const activeFilterCount = [from || to, owner, priority, status].filter(Boolean).length;
+  const filterSummary = [
+    (from || to) && `开始日期 ${from || '不限'} 至 ${to || '不限'}`,
+    owner && `负责人 ${owner}`,
+    priority && `优先级 ${formatProjectPriority(priority)}`,
+    status && `状态 ${formatProjectStatus(status)}`,
+  ].filter(Boolean).join(' · ');
+  const hasFilters = Boolean(keyword || activeFilterCount);
 
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const indeterminate = rows.some((r) => selected.has(r.id)) && !allSelected;
@@ -271,13 +283,19 @@ export function ProjectListPage() {
   };
 
   const handleCopy = async () => {
-    if (!selected.size) return;
+    if (!selected.size || copyInFlight.current) return;
+    copyInFlight.current = true;
+    setCopying(true);
     try {
       await copyProjects([...selected]);
+      clearSelection();
       msg.success('项目已复制');
       await load();
     } catch (error) {
       msg.error(error instanceof Error ? error.message : '复制失败');
+    } finally {
+      copyInFlight.current = false;
+      setCopying(false);
     }
   };
 
@@ -414,15 +432,15 @@ export function ProjectListPage() {
   };
 
   return (
-    <div className="pm-page pm-unified-list-page pm-project-list-page">
+    <div className="pm-page pm-unified-list-page pm-project-list-page" data-view={view}>
       {holder}
       <div className="page-heading">
         <div>
-          <h2>项目列表</h2>
-          <p>统一管理研发项目、项目阶段、任务及关联实验。</p>
+          <h1>项目列表</h1>
+          <p>研发项目、阶段、任务与关联实验。</p>
         </div>
         <div className="pm-page-actions">
-          <span className="pm-selected">已选 {selected.size} 项</span>
+          {selected.size > 0 && <span className="pm-selected" role="status">已选 {selected.size} 项</span>}
           {selected.size > 0 && (
             <Button type="link" size="small" onClick={clearSelection}>
               清除已选
@@ -445,12 +463,12 @@ export function ProjectListPage() {
           <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void handleExport()}>
             导出
           </Button>
-          <Button icon={<CopyOutlined />} disabled={!selected.size} onClick={handleCopy}>
+          {selected.size > 0 && <Button icon={<CopyOutlined />} loading={copying} onClick={handleCopy}>
             复制
-          </Button>
-          <Button danger disabled={!selected.size} onClick={handleDelete}>
+          </Button>}
+          {selected.size > 0 && <Button danger disabled={copying} onClick={handleDelete}>
             删除
-          </Button>
+          </Button>}
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             新建项目
           </Button>
@@ -458,6 +476,8 @@ export function ProjectListPage() {
             <Tooltip title="卡片视图">
               <Button
                 className={view === 'card' ? 'pm-view-btn active' : 'pm-view-btn'}
+                aria-label="卡片视图"
+                aria-pressed={view === 'card'}
                 icon={<AppstoreOutlined />}
                 onClick={() => setView('card')}
               />
@@ -465,6 +485,8 @@ export function ProjectListPage() {
             <Tooltip title="列表视图">
               <Button
                 className={view === 'list' ? 'pm-view-btn active' : 'pm-view-btn'}
+                aria-label="列表视图"
+                aria-pressed={view === 'list'}
                 icon={<UnorderedListOutlined />}
                 onClick={() => setView('list')}
               />
@@ -473,9 +495,12 @@ export function ProjectListPage() {
         </div>
       </div>
 
-      <div className="pm-filter-row">
-        <Input
+      <section className="pm-list-surface" aria-label="项目筛选与记录">
+      <ListFilterBar className="project-list-filters" activeCount={activeFilterCount}
+        summary={filterSummary} canReset={hasFilters} onReset={reset}
+        search={<Input
           className="pm-project-keyword-filter"
+          aria-label="搜索项目名称、编号或公司"
           prefix={<SearchOutlined />}
           placeholder="项目名称 / 项目编号 / 公司名称"
           value={keyword}
@@ -484,8 +509,10 @@ export function ProjectListPage() {
             setPage(1);
           }}
           allowClear
-        />
-        <DatePicker.RangePicker
+        />}
+        fields={[
+        { key: 'date', label: '开始日期', wide: true, control: <DatePicker.RangePicker
+          aria-label="项目开始日期范围"
           value={dateRange}
           onChange={(v) => {
             // Ant Design and the local dayjs barrel can resolve separate pnpm copies; the
@@ -494,8 +521,10 @@ export function ProjectListPage() {
             setPage(1);
           }}
           placeholder={['开始日期起', '开始日期止']}
-        />
-        <Select
+        /> },
+        { key: 'owner', label: '负责人', control: <Select
+          aria-label="负责人"
+          showSearch optionFilterProp="label"
           placeholder="全部负责人"
           value={owner}
           onChange={(v) => {
@@ -504,8 +533,9 @@ export function ProjectListPage() {
           }}
           allowClear
           options={owners.map((value) => ({ value, label: value }))}
-        />
-        <Select
+        /> },
+        { key: 'priority', label: '优先级', control: <Select
+          aria-label="优先级"
           placeholder="全部优先级"
           value={priority}
           onChange={(v) => {
@@ -514,8 +544,9 @@ export function ProjectListPage() {
           }}
           allowClear
           options={projectPriorities.map(({ value, label }) => ({ value, label }))}
-        />
-        <Select
+        /> },
+        { key: 'status', label: '项目状态', control: <Select
+          aria-label="项目状态"
           placeholder="全部状态"
           value={status}
           onChange={(v) => {
@@ -524,18 +555,18 @@ export function ProjectListPage() {
           }}
           allowClear
           options={projectStatuses.map(({ value, label }) => ({ value, label }))}
-        />
-        <Button className="pm-filter-reset" icon={<ReloadOutlined />} onClick={reset}>
-          重置
-        </Button>
-      </div>
+        /> },
+        ]}
+      />
 
-      <div className="pm-content" aria-busy={loading}>
+      <ListQueryFeedback query={listQuery} />
+      <div className="pm-content" aria-busy={listQuery.isFetching}>
         {view === 'card' ? (
           <>
             {rows.length > 0 && (
               <div className="pm-card-grid-head">
                 <Checkbox
+                  aria-label="全选当前页"
                   checked={allSelected}
                   indeterminate={indeterminate}
                   onChange={toggleSelectAll}
@@ -559,6 +590,7 @@ export function ProjectListPage() {
                       </div>
                     </div>
                     <Checkbox
+                      aria-label={`选择项目 ${row.name}`}
                       checked={selected.has(row.id)}
                       onChange={() => toggleSelect(row)}
                     />
@@ -594,12 +626,17 @@ export function ProjectListPage() {
             </div>
           </>
         ) : (
-          <div style={{ overflow: 'auto' }}>
-            <table className="pm-table">
+          <div className="pm-table-scroll" tabIndex={0} role="region" aria-label="项目列表">
+            <table className="pm-table" aria-label="项目列表">
+              <colgroup>
+                <col style={{ width: 44 }} /><col style={{ width: 144 }} /><col />
+                <col style={{ width: 80 }} /><col style={{ width: 112 }} /><col style={{ width: 64 }} />
+                <col style={{ width: 104 }} /><col style={{ width: 88 }} /><col style={{ width: 112 }} />
+              </colgroup>
               <thead>
                 <tr>
                   <th>
-                    <Checkbox checked={allSelected} indeterminate={indeterminate} onChange={toggleSelectAll} />
+                    <Checkbox aria-label="全选当前页" checked={allSelected} indeterminate={indeterminate} onChange={toggleSelectAll} />
                   </th>
                   <th className="pm-code-column">项目编号</th>
                   <th className="pm-name-column pm-project-name-column">项目名称</th>
@@ -607,15 +644,16 @@ export function ProjectListPage() {
                   <th>开始日期</th>
                   <th>优先级</th>
                   <th>状态</th>
-                  <th>团队成员</th>
+                  <th className="app-numeric">团队成员</th>
                   <th>操作</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((row) => (
-                  <tr key={row.id}>
+                  <tr key={row.id} aria-selected={selected.has(row.id)}>
                     <td>
                       <Checkbox
+                        aria-label={`选择项目 ${row.name}`}
                         checked={selected.has(row.id)}
                         onChange={() => toggleSelect(row)}
                       />
@@ -636,7 +674,7 @@ export function ProjectListPage() {
                     <td>
                       <span className={statusClass(row.status)}>{formatProjectStatus(row.status)}</span>
                     </td>
-                    <td>{(row.teamMembers ?? []).length} 人</td>
+                    <td className="app-numeric">{(row.teamMembers ?? []).length} 人</td>
                     <td>
                       <div className="cm-row-actions management-table-actions">
                         <Link to={`/projects/${row.id}`} state={{ returnTo: `/projects/list?${searchParams.toString()}` }}>查看</Link>
@@ -654,11 +692,13 @@ export function ProjectListPage() {
           </div>
         )}
 
-        {!loading && !rows.length && <Empty className="pm-empty" description="没有符合筛选条件的项目" />}
+        {!loading && !listQuery.isError && !rows.length && <Empty className="pm-empty" description={hasFilters ? '没有符合筛选条件的项目' : '暂无项目，创建第一个研发项目'}>
+          {hasFilters && <Button onClick={reset}>清除筛选</Button>}
+        </Empty>}
 
         <div className="pm-pagination">
           <div className="pm-pagination-right">
-            <span>共 {total} 个项目</span>
+            <span>{total > 0 ? `${Math.min((page - 1) * pageSize + 1, total)}–${Math.min(page * pageSize, total)} / ${total} 个项目` : '共 0 个项目'}</span>
             <Pagination
               current={page}
               pageSize={pageSize}
@@ -675,8 +715,9 @@ export function ProjectListPage() {
           </div>
         </div>
       </div>
+      </section>
 
-      <Modal
+      <FormModal form={form}
         title={importedFileName ? '确认 AI 导入的项目' : '新建项目'}
         open={drawerOpen}
         onCancel={closeDrawer}
@@ -750,7 +791,7 @@ export function ProjectListPage() {
               <Form.Item name="teamSize" label="团队人数">
                 <InputNumber min={0} precision={0} style={{ width: '100%' }} placeholder="请输入团队人数" />
               </Form.Item>
-              <Form.Item name="teamMembers" label="团队成员" className="pm-form-span-2">
+              <Form.Item name="teamMembers" label="团队成员">
                 <Select
                   mode="tags"
                   placeholder="输入姓名后按回车"
@@ -765,7 +806,7 @@ export function ProjectListPage() {
             </div>
             <div className="pm-form-desc">
               <Form.Item name="background" label="项目描述">
-                <Input.TextArea rows={4} placeholder="请输入项目描述" />
+                <Input.TextArea rows={3} placeholder="请输入项目描述" />
               </Form.Item>
             </div>
           </div>
@@ -806,7 +847,7 @@ export function ProjectListPage() {
             )}
           </Form.List>
         </Form>
-      </Modal>
+      </FormModal>
 
       <Drawer
         title={detail?.name}

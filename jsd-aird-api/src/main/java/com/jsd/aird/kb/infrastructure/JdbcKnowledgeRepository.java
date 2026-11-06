@@ -609,59 +609,67 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
-    public List<SearchRow> searchPublishedMetadata(UUID organizationId, List<String> queries, boolean aiOnly,
-                                                   List<UUID> categoryIds, java.util.Set<UUID> allowedDocumentIds,
-                                                   int limit) {
-        var terms = queries == null ? List.<String>of() : queries.stream().filter(value -> value != null && !value.isBlank())
+    public List<SearchRow> searchPublishedMetadata(UUID org, List<String> queries, boolean aiOnly,
+                                                   List<UUID> categories, java.util.Set<UUID> allowed, int limit) {
+        return publishedDiscovery(org, queries, aiOnly, categories, allowed, limit, false);
+    }
+
+    @Override
+    public List<SearchRow> searchPublishedTags(UUID org, List<String> queries, boolean aiOnly,
+                                               List<UUID> categories, java.util.Set<UUID> allowed, int limit) {
+        return publishedDiscovery(org, queries, aiOnly, categories, allowed, limit, true);
+    }
+
+    private List<SearchRow> publishedDiscovery(UUID organizationId, List<String> queries, boolean aiOnly,
+                                               List<UUID> categoryIds, java.util.Set<UUID> allowedDocumentIds,
+                                               int limit, boolean tags) {
+        var terms = queries == null ? List.<String>of() : queries.stream().filter(v -> v != null && !v.isBlank())
                 .map(String::strip).distinct().limit(16).toList();
         if (terms.isEmpty() || allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
         var aiClause = aiOnly ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g"
-                + " WHERE g.organization_id = d.organization_id AND g.document_id = d.id AND g.status = 'APPROVED')" : "";
+                + " WHERE g.organization_id=d.organization_id AND g.document_id=d.id AND g.status='APPROVED')" : "";
+        var match = tags ? """
+                EXISTS (SELECT 1 FROM jsonb_array_elements_text(coalesce(p.metadata_snapshot_jsonb->'tags','[]'::jsonb)) AS tag(name)
+                  WHERE lower(regexp_replace(normalize(tag.name,NFKC),'[^a-z0-9一-龥]','','g'))=search_terms.normalized
+                    OR (tag.name ~ '[一-龥]' AND length(tag.name)>=2 AND position(lower(regexp_replace(normalize(tag.name,NFKC),
+                          '[^a-z0-9一-龥]','','g')) in search_terms.normalized)>0)
+                    OR position(' ' || lower(tag.name) || ' ' in
+                         (' ' || regexp_replace(lower(normalize(search_terms.raw,NFKC)),'[^a-z0-9一-龥]+',' ','g') || ' '))>0)
+                """ : """
+                search_terms.normalized=lower(regexp_replace(normalize(coalesce(p.metadata_snapshot_jsonb->>'title',d.title),NFKC),'[^a-z0-9一-龥]','','g'))
+                OR search_terms.normalized=lower(regexp_replace(normalize(v.original_name,NFKC),'[^a-z0-9一-龥]','','g'))
+                OR search_terms.normalized=lower(regexp_replace(regexp_replace(normalize(v.original_name,NFKC),'\\.[^.]+$',''),'[^a-z0-9一-龥]','','g'))
+                OR EXISTS (SELECT 1 FROM kb.document_bibliography b WHERE b.organization_id=d.organization_id AND b.version_id=v.id
+                  AND lower(regexp_replace(normalize(concat_ws(' ',b.accepted_jsonb->>'title',b.accepted_jsonb->>'authors',
+                    b.accepted_jsonb->>'doi',b.accepted_jsonb->>'patent_number'),NFKC),'[^a-z0-9一-龥]','','g')) LIKE '%' || search_terms.normalized || '%')
+                """;
         var sql = """
                 WITH search_terms AS (
-                    SELECT DISTINCT lower(regexp_replace(regexp_replace(normalize(term, NFKC), '\\.[^.]+$', ''),
-                           '[^a-z0-9一-龥]', '', 'g')) AS normalized
+                    SELECT DISTINCT term AS raw,lower(regexp_replace(normalize(term,NFKC),'[^a-z0-9一-龥]','','g')) AS normalized
                     FROM unnest(?::text[]) AS input(term)
-                    WHERE length(regexp_replace(normalize(term, NFKC), '[^a-zA-Z0-9一-龥]', '', 'g')) >= 2
-                )
-                SELECT c.id, c.document_id, c.document_version_id,
-                       coalesce(p.metadata_snapshot_jsonb->>'title', d.title) AS title, v.original_name,
-                       c.page_no, c.section, c.content, c.chunk_no,
-                       max(CASE WHEN lower(regexp_replace(normalize(coalesce(p.metadata_snapshot_jsonb->>'title', d.title), NFKC),
-                                '[^a-z0-9一-龥]', '', 'g')) = search_terms.normalized THEN 12.0 ELSE 10.0 END) AS score
-                FROM kb.document d
-                JOIN kb.document_version v ON v.document_id = d.id AND v.version_no = d.current_version_no
-                JOIN ops.file_object f ON f.id = v.file_object_id
-                    AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
-                JOIN kb.publication p ON p.id = d.current_publication_id
-                    AND p.document_version_id = v.id AND p.status = 'CURRENT'
-                JOIN kb.document_chunk c ON c.document_id = d.id AND c.document_version_id = v.id
-                    AND c.review_revision_id = p.review_revision_id AND c.chunk_role = 'CHILD'
-                JOIN search_terms ON search_terms.normalized = lower(regexp_replace(
-                       normalize(coalesce(p.metadata_snapshot_jsonb->>'title', d.title), NFKC), '[^a-z0-9一-龥]', '', 'g'))
-                    OR search_terms.normalized = lower(regexp_replace(regexp_replace(normalize(v.original_name, NFKC),
-                       '\\.[^.]+$', ''), '[^a-z0-9一-龥]', '', 'g'))
-                    OR search_terms.normalized = lower(regexp_replace(normalize(v.original_name, NFKC), '[^a-z0-9一-龥]', '', 'g'))
-                    OR EXISTS (SELECT 1 FROM kb.document_bibliography b
-                        WHERE b.organization_id=d.organization_id AND b.version_id=v.id
-                          AND lower(regexp_replace(normalize(concat_ws(' ', b.accepted_jsonb->>'title',
-                              b.accepted_jsonb->>'authors',b.accepted_jsonb->>'doi',b.accepted_jsonb->>'patent_number'), NFKC),
-                              '[^a-z0-9一-龥]', '', 'g')) LIKE '%' || search_terms.normalized || '%')
-                WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
-                """ + aiClause + categoryClause(categoryIds) + documentClause(allowedDocumentIds) + """
-                GROUP BY c.id, c.document_id, c.document_version_id,
-                         coalesce(p.metadata_snapshot_jsonb->>'title', d.title), v.original_name,
-                         c.page_no, c.section, c.content, c.chunk_no
-                ORDER BY score DESC, c.chunk_no, c.id
-                LIMIT ?
+                    WHERE length(regexp_replace(normalize(term,NFKC),'[^a-zA-Z0-9一-龥]','','g'))>=2
+                ), matches AS (
+                    SELECT DISTINCT c.id,c.document_id,c.document_version_id,
+                      coalesce(p.metadata_snapshot_jsonb->>'title',d.title) AS title,v.original_name,
+                      c.page_no,c.section,c.content,c.chunk_no,10.0 AS score
+                    FROM kb.document d
+                    JOIN kb.document_version v ON v.document_id=d.id AND v.version_no=d.current_version_no
+                    JOIN ops.file_object f ON f.id=v.file_object_id AND f.organization_id=d.organization_id AND f.status<>'DELETED'
+                    JOIN kb.publication p ON p.id=d.current_publication_id AND p.document_version_id=v.id AND p.status='CURRENT'
+                    JOIN kb.document_chunk c ON c.document_id=d.id AND c.document_version_id=v.id
+                      AND c.review_revision_id=p.review_revision_id AND c.chunk_role='CHILD'
+                    JOIN search_terms ON (
+                """ + match + ") WHERE d.organization_id=? AND d.lifecycle_status='ACTIVE' "
+                + aiClause + categoryClause(categoryIds) + documentClause(allowedDocumentIds) + """
+                ), documents AS (
+                    SELECT DISTINCT ON (document_id) * FROM matches ORDER BY document_id,chunk_no,id
+                ) SELECT * FROM documents ORDER BY score DESC,chunk_no,id LIMIT ?
                 """;
-        var args = new java.util.ArrayList<Object>();
-        args.add(terms.toArray(String[]::new));
-        args.add(organizationId);
+        var args = new java.util.ArrayList<Object>(); args.add(terms.toArray(String[]::new)); args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
         if (allowedDocumentIds != null) args.addAll(allowedDocumentIds);
-        args.add(Math.min(100, Math.max(1, limit)));
-        return jdbc.query(sql, this::mapSearch, args.toArray());
+        args.add(Math.min(100,Math.max(1,limit)));
+        return jdbc.query(sql,this::mapSearch,args.toArray());
     }
 
     @Override

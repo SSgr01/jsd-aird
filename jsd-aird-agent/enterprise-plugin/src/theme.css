@@ -1,0 +1,186 @@
+/* Enterprise visual layer. Select native public data attributes and our own
+   slots only; upstream CSS-module names and interaction state stay untouched. */
+body[data-jsd-workbench] {
+  --dsh-font-family-text-default: 'Noto Sans SC Variable', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif;
+  --dsw-font-family-brand: var(--dsw-font-family);
+  --dsw-radius-panel: 20px;
+  --jsd-focus: #9b85a9;
+  --jsd-composer-shadow: rgb(76 48 65 / 5%);
+  /* The wash follows the explicitly requested UI-opz / SETO brand reference. */
+  --jsd-workspace-wash:
+    radial-gradient(ellipse 70% 68% at 54% 3%, rgb(221 207 238 / 22%), transparent 80%),
+    radial-gradient(ellipse 100% 78% at 0% 100%, rgb(247 206 176 / 34%), transparent 76%),
+    radial-gradient(ellipse 105% 72% at 100% 100%, rgb(238 198 213 / 30%), transparent 78%);
+}
+
+body[data-jsd-workbench][data-ds-dark-theme] {
+  --jsd-focus: #b9a3c9;
+  --jsd-composer-shadow: rgb(0 0 0 / 18%);
+  --jsd-workspace-wash:
+    radial-gradient(ellipse 70% 68% at 54% 3%, rgb(128 100 148 / 10%), transparent 80%),
+    radial-gradient(ellipse 100% 78% at 0% 100%, rgb(147 107 87 / 10%), transparent 76%);
+}
+
+body[data-jsd-workbench] [data-conversation-content] {
+  background-image: var(--jsd-workspace-wash);
+}
+
+body[data-jsd-workbench] [data-composer-card] {
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l2);
+  box-shadow: 0 4px 24px var(--jsd-composer-shadow), 0 0 0 1px var(--dsw-alias-border-l2);
+  transition: box-shadow 160ms ease;
+}
+
+body[data-jsd-workbench] [data-composer-card]:focus-within {
+  box-shadow: 0 4px 24px var(--jsd-composer-shadow), 0 0 0 1px var(--jsd-focus), 0 0 0 4px color-mix(in srgb, var(--jsd-focus) 12%, transparent);
+}
+
+.jsd-brand-mark {
+  display: inline-flex;
+  flex: none;
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.jsd-brand-mark svg { display: block; }
+.jsd-brand-name { font-weight: 600; letter-spacing: -.02em; }
+.jsd-page-title {
+  margin: 0 20px 0 0;
+  padding-inline-start: max(0px, calc(var(--dsh-frame-leading-clearance, 0px) - 20px));
+  font: 600 18px/30px var(--dsw-font-family);
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
+}
+
+.jsd-starters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-block: 12px;
+  margin-inline: var(--dsh-composer-side-clearance, 16px);
+}
+.jsd-starters button {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 20px 18px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+.jsd-starters button:hover {
+  border-color: var(--jsd-focus);
+  box-shadow: 0 3px 12px var(--jsd-composer-shadow);
+}
+.jsd-starters button:focus-visible {
+  outline: 2px solid var(--jsd-focus);
+  outline-offset: 3px;
+}
+.jsd-starters button:disabled { opacity: .5; cursor: default; }
+.jsd-starter-art { display: block; width: 36px; height: 36px; margin-bottom: 10px; }
+.jsd-starter-art svg { display: block; width: 100%; height: 100%; }
+.jsd-starters strong { font-size: 14px; line-height: 20px; font-weight: 500; }
+.jsd-starter-description { color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 20px; text-wrap: pretty; }
+
+.jsd-nav {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  width: 100%;
+  padding: 10px 4px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  box-sizing: border-box;
+}
+
+.jsd-nav a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 8px;
+  border-radius: var(--dsw-radius-sm);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 20px;
+  text-decoration: none;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.jsd-nav a:hover {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.jsd-nav a:focus-visible,
+.jsd-resource a:focus-visible,
+.jsd-inbox-actions :is(button, select):focus-visible {
+  outline: 2px solid var(--jsd-focus);
+  outline-offset: 2px;
+}
+
+.jsd-nav[data-wide='false'] { grid-template-columns: 1fr; padding-inline: 0; }
+.jsd-nav[data-wide='false'] a { justify-content: center; padding: 0; }
+.jsd-nav svg { flex: none; width: 16px; height: 16px; }
+
+.jsd-resource {
+  padding: 24px;
+  font: var(--dsh-content-font-size, 14px)/1.8 var(--dsw-font-family);
+  overflow: auto;
+  height: 100%;
+  box-sizing: border-box;
+  color: var(--dsw-alias-label-primary);
+}
+.jsd-resource h2 { margin: 0 0 12px; font-size: 20px; font-weight: 600; }
+.jsd-resource pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+.jsd-resource section { margin-block: 20px; }
+.jsd-resource a, .jsd-original-toolbar a { color: var(--dsw-alias-link); }
+.jsd-resource small { color: var(--dsw-alias-label-secondary); }
+.jsd-original { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.jsd-original-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-layer-1);
+  font-size: 13px;
+}
+.jsd-inbox-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 4px 12px;
+  font: 12px/1.5 var(--dsw-font-family);
+}
+.jsd-inbox-actions select { min-width: 0; max-width: 50%; }
+.jsd-inbox-actions :is(button, select) {
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font: inherit;
+}
+.jsd-inbox-actions button { cursor: pointer; }
+.jsd-inbox-actions button:disabled { opacity: .4; cursor: default; }
+
+@media (max-width: 767px) {
+  .jsd-starters { grid-template-columns: minmax(0, 1fr); gap: 8px; margin-block: 6px; }
+  .jsd-starters button { grid-template-columns: 32px minmax(0, 1fr); align-items: center; gap: 1px 12px; padding: 12px 14px; }
+  .jsd-starter-art { grid-row: span 2; width: 30px; height: 30px; margin: 0; }
+  .jsd-page-title { font-size: 16px; margin-right: 8px; }
+  .jsd-resource { padding: 16px; }
+  .jsd-nav a { min-height: 44px; }
+  .jsd-inbox-actions :is(button, select) { min-height: 36px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body[data-jsd-workbench] [data-composer-card], .jsd-nav a, .jsd-starters button { transition: none; }
+}

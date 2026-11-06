@@ -2,6 +2,8 @@
 
 from fastapi import HTTPException
 
+PAIRED_CITATION = r"\[\s*E:\s*([a-zA-Z0-9_-]+)\s*,\s*([a-zA-Z0-9_-]+)\s*\]"
+
 
 def project_aliases(text, aliases):
     """Map known canonical references to this answer's display aliases, never guess a source."""
@@ -52,13 +54,28 @@ def validate_generated(text, evidence, allowed_aliases=None):
             raise HTTPException(422, "PREPARED_ANSWER_INVALID") from None
     if used - set(allowed_aliases):
         raise HTTPException(422, "PREPARED_ANSWER_UNKNOWN_CITATION")
-    return cited
+    return sorted(set(cited) | {eid for eid, item in evidence.items() if item.get("label") in used})
 
 
 def normalize_citations(text, evidence):
     """Normalize citation spacing/prefixes for exact known IDs, never guess a source."""
     import re
 
+    from aird_agent.evidence.quotes import resolve_quote
+
+    def paired(match):
+        try:
+            resolve_quote(evidence, {"evidence_id": match[1], "quote_id": match[2]})
+        except HTTPException:
+            return match[0]  # Preserve invalid handles for the validator to reject.
+        return "[E:" + match[1] + "]"
+
+    text = re.sub(PAIRED_CITATION, paired, text)
+    text = re.sub(
+        r"\(\s*E:\s*(e[0-9a-f]{24})\s*\)",
+        lambda match: "[E:" + match[1] + "]" if match[1] in evidence else match[0],
+        text,
+    )
     return re.sub(
         r"\[\s*(?:E:\s*)?(e[0-9a-f]{24})\s*\]",
         lambda match: "[E:" + match[1] + "]" if match[1] in evidence else match[0],
@@ -69,9 +86,15 @@ def normalize_citations(text, evidence):
 def validate_report(text, evidence):
     import re
 
+    from aird_agent.evidence.quotes import resolve_quote
+
+    paired = set()
+    for match in re.finditer(PAIRED_CITATION, text):
+        resolve_quote(evidence, {"evidence_id": match[1], "quote_id": match[2]})
+        paired.add(match[1])
     cited = set(re.findall(r"\[\s*E:\s*([a-zA-Z0-9_-]+)\s*\]", text)) | set(
         re.findall(r"\[\s*(e[0-9a-f]{24})\s*\]", text)
-    )
+    ) | set(re.findall(r"\(\s*E:\s*([a-zA-Z0-9_-]+)\s*\)", text)) | paired
     missing = cited - set(evidence)
     if missing:
         raise HTTPException(422, "Report references unknown evidence IDs")

@@ -5,7 +5,6 @@ from psycopg.types.json import Jsonb
 
 from aird_agent.core.contracts import digest
 from aird_agent.core.receipts import receipt as receipt
-from aird_agent.core.workspace import Workspace
 
 
 async def list_operations(service, principal, rid):
@@ -60,13 +59,9 @@ async def reconcile(service, principal, rid, call_id):
             "operation_key": digest([rid, call_id]),
             "result": local_receipt["payload"],
         }
-    elif operation["tool_name"] == "sandbox_execute":
-        workspace = Workspace(
-            service.settings.storage_root / "workspaces", str(principal.organization_id), rid
-        )
-        authority = await service.bindings.sandbox.reconcile(
-            workspace, digest([rid, operation["execution_epoch"], call_id])[:32]
-        )
+    elif operation["tool_name"] == "dsh_execute":
+        from aird_agent.hosts.jsd.native_files import reconcile_native
+        authority = await reconcile_native(service, principal, run, operation)
         authority["operation_key"] = digest([rid, call_id])
     elif operation["tool_name"] == "literature_acquire":
         result = await service.java(
@@ -85,11 +80,13 @@ async def reconcile(service, principal, rid, call_id):
         authority = await service.java(
             principal,
             "operation_receipt",
-            {"tool": operation["tool_name"], "operation_key": digest([rid, call_id])},
+            {"tool": operation["tool_name"], "operation_key": digest([rid, call_id]),
+             "arguments": operation["arguments"],
+             **({"close_uncommitted": True} if operation["tool_name"] == "create_experiment_draft" else {})},
             rid,
         )
     confirmed = (
-        authority.get("status") == "SUCCEEDED"
+        authority.get("status") in {"SUCCEEDED", "FAILED"}
         and authority.get("operation_key") == digest([rid, call_id])
         and isinstance(authority.get("result"), dict)
         and (local_receipt or authority["result"].get("id"))
@@ -98,7 +95,7 @@ async def reconcile(service, principal, rid, call_id):
         service.bindings.output_receipt(
             run, operation["tool_name"], operation["arguments"], authority["result"]
         )
-        if confirmed
+        if confirmed and "error" not in authority["result"]
         else None
     )
     async with service.store.transaction(principal, rid) as conn:
@@ -112,7 +109,7 @@ async def reconcile(service, principal, rid, call_id):
             raise HTTPException(409, "Operation outcome already changed")
         rid_receipt = None
         if confirmed:
-            await receipt(service.store, principal, rid, call_id, "host-reconciled", authority, conn)
+            await receipt(service.store, principal, rid, call_id, "host-reconciled", authority["result"], conn)
             rid_receipt = (
                 await (
                     await conn.execute(
@@ -122,9 +119,9 @@ async def reconcile(service, principal, rid, call_id):
                 ).fetchone()
             )["receipt_id"]
             await conn.execute(
-                "UPDATE agent_runtime.harness_calls SET status='SUCCEEDED',result=%s,updated_at=now() "
+                "UPDATE agent_runtime.harness_calls SET status=%s,result=%s,updated_at=now() "
                 "WHERE run_id=%s AND call_id=%s",
-                (Jsonb(authority["result"]), rid, call_id),
+                ("FAILED" if "error" in authority["result"] else "SUCCEEDED", Jsonb(authority["result"]), rid, call_id),
             )
             if output:
                 current = await service.store.get(principal, "run", rid, conn)
@@ -135,7 +132,7 @@ async def reconcile(service, principal, rid, call_id):
                     outputs.append(output)
                     current.pop("completion", None)
                     await service.store.update(principal, "run", current, conn)
-        outcome = "CONFIRMED_SUCCEEDED" if confirmed else "STILL_UNKNOWN"
+        outcome = ("CONFIRMED_FAILED" if "error" in authority["result"] else "CONFIRMED_SUCCEEDED") if confirmed else "STILL_UNKNOWN"
         await conn.execute(
             "INSERT INTO agent_runtime.harness_reconciliation_audit(run_id,call_id,organization_id,actor_id,result,receipt_id) "
             "VALUES(%s,%s,%s,%s,%s,%s)",

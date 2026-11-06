@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from aird_agent.capabilities.export_quality import validate_export
-from aird_agent.hosts.jsd.task_state import check_completion
+from aird_agent.hosts.jsd.task_state import check_delivery
 
 REF = {"evidence_id": "e" + "1" * 24, "quote_id": "q" + "2" * 24}
 HEADER = "value,unit,formula,evidence_id,quote_id\r\n"
@@ -56,22 +56,16 @@ def test_user_given_basis_can_have_no_citation_but_source_rows_must_use_real_pai
         validate_export("output/result.csv", (HEADER + f"1,kg,source,{REF['evidence_id']},\n").encode(), [REF])
 
 
-def test_complete_requires_each_named_file_and_partial_keeps_missing_delivery_visible():
+def test_delivery_requires_each_explicitly_requested_file():
     run = {
         "evidence": {},
-        "plan": {"task_type": "GENERAL", "steps": [], "deliverables": ["analysis_file"]},
         "required_artifacts": ["result.json", "result.csv"],
         "registered_outputs": [{"kind": "artifact", "title": "result.json"}],
     }
-    body = {"outcome": "COMPLETE", "checks": [{"requirement": "export", "status": "covered"}], "gaps": []}
     with pytest.raises(HTTPException, match="DELIVERABLE_FILES_MISSING.*result.csv"):
-        check_completion(run, body)
+        check_delivery(run)
     run["registered_outputs"].append({"kind": "artifact", "title": "unrelated.csv"})
     with pytest.raises(HTTPException, match="DELIVERABLE_FILES_MISSING"):
-        check_completion(run, body)
-    assert (
-        check_completion(run, {**body, "outcome": "PARTIAL", "gaps": ["CSV not delivered"]})["outcome"]
-        == "PARTIAL"
-    )
+        check_delivery(run)
     run["registered_outputs"].append({"kind": "artifact", "path": "output/result.csv"})
-    assert check_completion(run, body)["outcome"] == "COMPLETE"
+    assert check_delivery(run) is None

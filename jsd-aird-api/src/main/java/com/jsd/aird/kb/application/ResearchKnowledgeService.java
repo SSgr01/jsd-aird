@@ -7,6 +7,7 @@ import com.jsd.aird.kb.api.KnowledgeEmbeddingFacade;
 import com.jsd.aird.kb.api.ResearchKnowledgeFacade;
 import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
 import com.jsd.aird.kb.application.port.KnowledgeRepository;
+import com.jsd.aird.kb.application.port.BibliographyRepository;
 import com.jsd.aird.kb.domain.LexicalAnalyzer;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
@@ -46,16 +47,86 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
 
     @Override
     public void authorize(List<DocumentRef> documents) {
+        authorizedViews(documents);
+    }
+
+    @Override public void authorizeHistoricalVersion(UUID documentId, UUID versionId) {
+        var actor = ActorContext.required();
+        authorization.require(new com.jsd.aird.iam.api.PermissionCheck(actor.organizationId(), actor.userId(), "knowledge.view", "KNOWLEDGE", documentId, "READ"));
+        var version = repository.findVersion(actor.organizationId(), versionId).orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND));
+        if (!version.documentId().equals(documentId)) throw new ApiException(ApiErrorCode.VERSION_CONFLICT);
+        if (!repository.isAiApproved(actor.organizationId(), documentId)) throw new ApiException(ApiErrorCode.AI_DOCUMENT_NOT_APPROVED);
+    }
+
+    private Map<DocumentRef, KnowledgeGovernanceRepository.PublishedContentView> authorizedViews(List<DocumentRef> documents) {
         var actor = ActorContext.required();
         authorization.require(new com.jsd.aird.iam.api.PermissionCheck(actor.organizationId(), actor.userId(), "ai.use", "AI", null, "READ"));
         if (documents == null || documents.size() > 100) throw new ApiException(ApiErrorCode.BAD_REQUEST);
-        for (var ref : documents) {
+        var views = new LinkedHashMap<DocumentRef, KnowledgeGovernanceRepository.PublishedContentView>();
+        for (var ref : new LinkedHashSet<>(documents)) {
             authorization.require(new com.jsd.aird.iam.api.PermissionCheck(actor.organizationId(), actor.userId(), "knowledge.view", "KNOWLEDGE", ref.document_id(), "READ"));
             var view = governance.publishedContent(ref.document_id(), ref.publication_id());
             if (!repository.isAiApproved(actor.organizationId(), ref.document_id()))
                 throw new ApiException(ApiErrorCode.AI_DOCUMENT_NOT_APPROVED);
             if (!view.publication().documentId().equals(ref.document_id())) throw new ApiException(ApiErrorCode.NOT_FOUND);
+            views.put(ref, view);
         }
+        return views;
+    }
+
+    @Override public List<JsonNode> documentMetadata(List<SourceRef> sources) {
+        if (sources == null || sources.size() > 200) throw new ApiException(ApiErrorCode.BAD_REQUEST);
+        var unique = new LinkedHashMap<String, SourceRef>();
+        for (var source : sources) if ("KB_PUBLICATION".equals(source.kind())) {
+            var previous = unique.putIfAbsent(source.version_id(), source);
+            if (previous != null && (!previous.document_id().equals(source.document_id())
+                    || !previous.publication_id().equals(source.publication_id())
+                    || !previous.anchor().path("bibliography_revision").equals(source.anchor().path("bibliography_revision"))))
+                throw new ApiException(ApiErrorCode.VERSION_CONFLICT, "同一文件版本的书目修订不一致");
+        }
+        var refs = unique.values().stream().map(s -> new DocumentRef(UUID.fromString(s.document_id()), UUID.fromString(s.publication_id()))).toList();
+        authorize(refs);
+        for (var source : unique.values())
+            if (!governance.publishedContent(UUID.fromString(source.document_id()), UUID.fromString(source.publication_id()))
+                    .publication().versionId().toString().equals(source.version_id()))
+                throw new ApiException(ApiErrorCode.VERSION_CONFLICT);
+        var keys = unique.values().stream().filter(s -> s.anchor().has("bibliography_revision"))
+            .map(s -> new BibliographyRepository.Lookup(UUID.fromString(s.version_id()), s.anchor().path("bibliography_revision").asInt())).toList();
+        var records = bibliography == null ? Map.<BibliographyRepository.Lookup, BibliographyRepository.Record>of()
+            : bibliography.findAll(ActorContext.required().organizationId(), keys);
+        var result = new ArrayList<JsonNode>();
+        for (var source : unique.values()) {
+            var item = mapper.createObjectNode().put("document_id", source.document_id()).put("version_id", source.version_id())
+                .put("publication_id", source.publication_id()).put("title", source.title())
+                .put("original_url", "/api/v1/knowledge/documents/" + source.document_id() + "/versions/" + source.version_id() + "/content");
+            if (source.anchor().has("bibliography_revision")) {
+                var revision = source.anchor().get("bibliography_revision");
+                var record = records.get(new BibliographyRepository.Lookup(UUID.fromString(source.version_id()), revision.asInt()));
+                if (!revision.isInt() || revision.asInt() < 1 || record == null || !record.documentId().toString().equals(source.document_id()))
+                    throw new ApiException(ApiErrorCode.VERSION_CONFLICT, "来源书目修订已不可读取");
+                item.put("bibliography_revision", record.revision()).put("document_type", record.documentType());
+                for (var field : List.of("title", "authors", "abstract", "venue", "publication_date", "publication_year", "doi", "openalex_id", "source_url"))
+                    if (record.accepted().hasNonNull(field)) item.set(field, record.accepted().get(field));
+            }
+            item.put("usage", "书目用于介绍与筛选；摘要不能替代原文方法、实验结果或工程验证。");
+            result.add(item);
+        }
+        return result;
+    }
+
+    private Map<UUID, BibliographyRepository.Record> currentBibliography(Collection<UUID> versions) {
+        if (bibliography == null || versions.isEmpty()) return Map.of();
+        var keys = versions.stream().distinct().map(v -> new BibliographyRepository.Lookup(v, null)).toList();
+        var result = new HashMap<UUID, BibliographyRepository.Record>();
+        bibliography.findAll(ActorContext.required().organizationId(), keys).forEach((key, value) -> result.put(key.versionId(), value));
+        return result;
+    }
+
+    private Result withMetadata(Result result) {
+        var sources = new ArrayList<SourceRef>(); result.candidates().forEach(c -> sources.add(c.source()));
+        result.context_candidates().forEach(c -> sources.add(c.source()));
+        return new Result(result.candidates(), result.trace(), result.next_offset(), result.next_cursor(),
+            result.context_candidates(), result.ranking_snapshot(), documentMetadata(sources));
     }
 
     @Override
@@ -68,7 +139,7 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
         var actor=ActorContext.required();
         authorize(List.of());
         var scope=authorization.resolveScope(new com.jsd.aird.iam.api.PermissionCheck(actor.organizationId(),actor.userId(),"knowledge.view","KNOWLEDGE",null,"READ"));
-        if(scope==null||!scope.allowed())throw new ApiException(ApiErrorCode.PERMISSION_DENIED);
+        if(scope==null||!scope.allowed())return Set.of();
         if("ALL".equals(scope.scopeType()))return null;
         if("SELECTED".equals(scope.scopeType()))return scope.targetIds();
         // Complex IAM scopes use the same per-document policy; never infer PROJECT/CATEGORY/SELF membership.
@@ -103,18 +174,18 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
         var trace = new LinkedHashMap<>(result.trace());
         trace.put("scope", "AUTHORIZED_LIBRARY");
         trace.put("coverage", page.size() > 500 ? "MORE_LIBRARY_WINDOWS_AVAILABLE" : "CURRENT_WINDOW_COMPLETE");
-        return new Result(result.candidates(), trace, result.next_offset(),
-            page.size() > 500 ? Integer.toString(after + 500) : null);
+        return withMetadata(new Result(result.candidates(), trace, result.next_offset(),
+            page.size() > 500 ? Integer.toString(after + 500) : null));
     }
 
     private Result searchAuthorized(List<DocumentRef> documents,String query,int offset,String mode) {
         var raw=recallAuthorized(documents,query,mode,new RecallOptions(true,true,true,48));
         var channels=raw.channels().stream().map(c->new com.jsd.aird.shared.retrieval.RankFusion.Channel<>(c.name(),c.weight(),c.candidates())).toList();
         var ranked=com.jsd.aird.shared.retrieval.RankFusion.fuse(channels,c->com.jsd.aird.shared.evidence.EvidenceProtocol.evidenceId(mapper.valueToTree(c.source())),60)
-            .stream().map(r->new Candidate(r.value().text(),r.value().source(),r.score(),r.value().node_offset(),r.value().role())).toList();
+            .stream().map(r->new Candidate(r.value().text(),r.value().source(),r.score(),r.value().node_offset(),r.value().role(),r.value().table_context())).toList();
         if(offset<0||offset>100000) throw new ApiException(ApiErrorCode.BAD_REQUEST);
         var trace=new LinkedHashMap<>(raw.trace());trace.put("offset",offset);trace.put("candidate_count",ranked.size());
-        return new Result(ranked.stream().skip(offset).limit(12).toList(),trace,offset+12<ranked.size()?offset+12:null);
+        return withMetadata(new Result(ranked.stream().skip(offset).limit(12).toList(),trace,offset+12<ranked.size()?offset+12:null));
     }
 
     @Override public Recall recall(List<DocumentRef> refs,String query,String mode,RecallOptions options) {
@@ -167,21 +238,23 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
                 new com.jsd.aird.kb.api.KnowledgeSearchFacade.RecallOptions(options.bm25(),options.vector(),options.metadata(),Math.max(1,options.limit()/2)),allowed));
             trace.put("queries",raw.trace().queries());trace.put("timings",raw.trace().timings());trace.put("fallbacks",raw.trace().fallbacks());
             trace.put("embedding_calls",raw.trace().queries().stream().filter(t->"EMBEDDING_BATCH".equals(t.channel())&&!"UNAVAILABLE".equals(t.status())).count());
+            // Discovery channels may return lightweight rows. Hydrate canonical anchors once before
+            // issuing evidence handles, so a later read/replay verifies the same source position.
+            var recalled = new LinkedHashMap<UUID, com.jsd.aird.kb.api.KnowledgeSearchFacade.SearchHit>();
+            raw.channels().forEach(c -> c.hits().forEach(h -> recalled.putIfAbsent(h.chunkId(), h)));
+            var canonicalSources = indexedSources(List.copyOf(recalled.values()));
             for(var entry:raw.channels()) {
                 var values=new ArrayList<Candidate>();
                 for(var row:entry.hits()) {
                     var ref=indexedRefs.get(row.documentId());
                     if(ref==null||!governance.publishedContent(ref.document_id(),ref.publication_id()).publication().versionId().equals(row.versionId()))continue;
-                    var locator=mapper.createObjectNode().put("chunkId",row.chunkId().toString());
-                    if(row.anchor()!=null&&row.anchor().isObject())locator.setAll((com.fasterxml.jackson.databind.node.ObjectNode)row.anchor());
-                    locator.set("sourceNodeKeys",mapper.valueToTree(row.sourceNodeKeys()));
-                    values.add(new Candidate(row.content(),source(ref,row.versionId(),row.chunkId().toString(),locator,row.title(),row.content()),row.retrievalScore()));
+                    values.add(new Candidate(row.content(),canonicalSources.get(row.chunkId()),row.retrievalScore()));
                 }
                 channels.add(new RecallChannel(entry.name(),entry.weight(),values));
             }
         } else {trace.put("bm25","NOT_APPLICABLE");trace.put("vector","NOT_APPLICABLE");}
         for(var ref:canonicalRefs) {
-            var values=project(ref).stream().map(c->new Candidate(c.text(),c.source(),com.jsd.aird.kb.api.ResearchTextMatch.score(c.text(),query,mode),c.node_offset(),null))
+            var values=project(ref).stream().map(c->new Candidate(c.text(),c.source(),com.jsd.aird.kb.api.ResearchTextMatch.score(c.text(),query,mode),c.node_offset(),null,c.table_context()))
                 .filter(c->c.score()>=0).sorted(Comparator.comparingDouble(Candidate::score).reversed().thenComparingInt(c->c.node_offset()==null?0:c.node_offset())).toList();
             channels.add(new RecallChannel("CANONICAL:"+ref.document_id()+":"+ref.publication_id(),1,values));
         }
@@ -194,23 +267,55 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
         authorize(List.of(ref));
         if (offset < 0 || limit < 1 || limit > 20) throw new ApiException(ApiErrorCode.BAD_REQUEST);
         var result=project(ref);
-        return new Result(result.stream().skip(offset).limit(limit).toList(),Map.of("total_nodes",result.size(),"publication_id",ref.publication_id()),offset+limit<result.size()?offset+limit:null);
+        return withMetadata(new Result(result.stream().skip(offset).limit(limit).toList(),Map.of("total_nodes",result.size(),"publication_id",ref.publication_id()),offset+limit<result.size()?offset+limit:null));
     }
 
     private List<Candidate> project(DocumentRef ref) {
         var view = governance.publishedContent(ref.document_id(), ref.publication_id());
         var nodes = codec.project(view.confirmedDocument(), view.excludedReviewNodeIds()).nodes();
+        var tableContexts = new HashMap<String, JsonNode>();
+        collectTableContexts(view.confirmedDocument(), new HashSet<>(view.excludedReviewNodeIds()), tableContexts);
         var sourceNodes = new HashMap<UUID, KnowledgeGovernanceRepository.SourceNodeView>();
         view.sourceNodes().forEach(node -> sourceNodes.put(node.sourceNodeKey(), node));
+        var book = currentBibliography(List.of(view.publication().versionId())).get(view.publication().versionId());
         var result = nodes.stream().map(node -> {
             var locator = mapper.createObjectNode().put("reviewNodeId", node.reviewNodeId().toString());
             locator.set("sourceNodeKeys", mapper.valueToTree(node.sourceNodeKeys()));
             if (!node.sourceNodeKeys().isEmpty() && sourceNodes.containsKey(node.sourceNodeKeys().getFirst()))
                 locator.set("original", sourceNodes.get(node.sourceNodeKeys().getFirst()).sourceAnchor());
             return new Candidate(node.text(), source(ref, view.publication().versionId(), node.reviewNodeId().toString(), locator,
-                view.originalName(), node.text()), 1, nodes.indexOf(node), null);
+                view.originalName(), node.text(), book), 1, nodes.indexOf(node), null, tableContexts.get(node.reviewNodeId().toString()));
         }).toList();
         return result;
+    }
+
+    // Table membership comes from the confirmed structure, never page proximity,
+    // repeated coordinates or a model's interpretation. Source identity is unchanged.
+    private void collectTableContexts(JsonNode node, Set<UUID> excluded, Map<String, JsonNode> contexts) {
+        if (node == null) return;
+        var key = node.path("attrs").path("reviewNodeId").asText();
+        if (!key.isBlank()) try { if (excluded.contains(UUID.fromString(key))) return; }
+        catch (IllegalArgumentException ignored) { }
+        if ("table".equals(node.path("type").asText())) {
+            var rows = new ArrayList<JsonNode>();
+            node.path("content").forEach(row -> {
+                if (!"tableRow".equals(row.path("type").asText())) return;
+                try {
+                    if (!excluded.contains(UUID.fromString(row.path("attrs").path("reviewNodeId").asText()))) rows.add(row);
+                } catch (IllegalArgumentException ignored) { }
+            });
+            var keys = mapper.createArrayNode(); var headers = mapper.createArrayNode();
+            for (var row : rows) {
+                var id = row.path("attrs").path("reviewNodeId").asText(); keys.add(id);
+                if (row.path("content").findValuesAsText("type").contains("tableHeader")) headers.add(id);
+            }
+            for (int i = 0; i < rows.size(); i++) {
+                var locator = mapper.createObjectNode().put("row_index", i).put("table_key", keys.get(0).asText());
+                locator.set("header_node_keys", headers);
+                contexts.put(keys.get(i).asText(), locator);
+            }
+        }
+        node.path("content").forEach(child -> collectTableContexts(child, excluded, contexts));
     }
 
     @Override public JsonNode outline(DocumentRef ref,int offset) {
@@ -223,7 +328,9 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
             var anchor=candidate.source().anchor();
             node.set("anchor",anchor.has("original")?anchor.path("original"):anchor);
         }
-        return com.jsd.aird.kb.api.ResearchDocumentOutline.outline(mapper,nodes,offset);
+        var result = com.jsd.aird.kb.api.ResearchDocumentOutline.outline(mapper,nodes,offset);
+        result.set("document_metadata", mapper.valueToTree(documentMetadata(candidates.stream().limit(1).map(Candidate::source).toList())));
+        return result;
     }
 
     @Override public Result context(SourceRef source,int before,int after,int cursor) {
@@ -238,14 +345,25 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
         if(hit.isEmpty()) throw new ApiException(ApiErrorCode.NOT_FOUND,"Source node mapping unavailable");
         var selected=new TreeSet<Integer>();
         for(int n:hit) for(int i=Math.max(0,n-before);i<=Math.min(nodes.size()-1,n+after);i++) selected.add(i);
+        var projected=project(ref);
+        // A distant data row still needs its own table's header. Other rows are
+        // available in the same bounded, paginated source context window.
+        var related = new HashSet<String>();
+        for (int n : hit) {
+            var table = projected.get(n).table_context();
+            if (table != null) related.add(table.path("table_key").asText());
+        }
+        for (int i = 0; i < projected.size(); i++) {
+            var table = projected.get(i).table_context();
+            if (table != null && related.contains(table.path("table_key").asText())) selected.add(i);
+        }
         var indices=new ArrayList<>(selected); if(cursor>indices.size()) throw new ApiException(ApiErrorCode.BAD_REQUEST);
         var result=new ArrayList<Candidate>();
-        var projected=project(ref);
         for(int i:indices.stream().skip(cursor).limit(5).toList()) {
             var value=projected.get(i);
-            result.add(new Candidate(value.text(),value.source(),value.score(),i,hit.contains(i)?"MATCH":"NEIGHBOR"));
+            result.add(new Candidate(value.text(),value.source(),value.score(),i,hit.contains(i)?"MATCH":"NEIGHBOR",value.table_context()));
         }
-        return new Result(result,Map.of("fulltext_coverage",false,"context_nodes",indices.size()),cursor+5<indices.size()?cursor+5:null);
+        return withMetadata(new Result(result,Map.of("fulltext_coverage",false,"context_nodes",indices.size()),cursor+5<indices.size()?cursor+5:null));
     }
 
     @Override
@@ -259,17 +377,56 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
         if(excerpt==null||!text.contains(excerpt))throw new ApiException(ApiErrorCode.VERSION_CONFLICT,"原文摘录不匹配");
     }
 
+    @Override public void validateAll(List<SourceExcerpt> excerpts) {
+        if (excerpts == null || excerpts.size() > 500) throw new ApiException(ApiErrorCode.BAD_REQUEST);
+        for (var item : excerpts) checkSourceShape(item.source());
+        var refs = excerpts.stream().map(item -> documentRef(item.source())).distinct().toList();
+        var views = authorizedViews(refs);
+        var nodes = new HashMap<DocumentRef, Map<String, StructuredDocumentCodec.ProjectedNode>>();
+        for (var item : excerpts) {
+            var text = authoritativeText(item.source(), views, nodes);
+            if (item.excerpt() == null || !text.contains(item.excerpt()))
+                throw new ApiException(ApiErrorCode.VERSION_CONFLICT, "原文摘录不匹配");
+        }
+    }
+
     @Override public List<Candidate> replay(List<Handle> handles) {
         if(handles.size()>30)throw new ApiException(ApiErrorCode.BAD_REQUEST);
-        return handles.stream().map(h->new Candidate(authoritativeText(h.source()),h.source(),h.score(),h.node_offset(),h.role())).toList();
+        var contexts = new HashMap<DocumentRef, Map<String, JsonNode>>();
+        return handles.stream().map(h -> {
+            var text = authoritativeText(h.source());
+            JsonNode table = null;
+            if (h.source().anchor().hasNonNull("reviewNodeId")) {
+                var ref = new DocumentRef(UUID.fromString(h.source().document_id()), UUID.fromString(h.source().publication_id()));
+                var tables = contexts.computeIfAbsent(ref, ignored -> {
+                    var values = new HashMap<String, JsonNode>();
+                    for (var row : project(ref)) if (row.table_context() != null) values.put(row.source().source_node_key(), row.table_context());
+                    return values;
+                });
+                table = tables.get(h.source().source_node_key());
+            }
+            return new Candidate(text,h.source(),h.score(),h.node_offset(),h.role(),table);
+        }).toList();
     }
 
     private String authoritativeText(SourceRef source) {
+        checkSourceShape(source);
+        return authoritativeText(source, authorizedViews(List.of(documentRef(source))), new HashMap<>());
+    }
+
+    private void checkSourceShape(SourceRef source) {
         if (!"KB_PUBLICATION".equals(source.kind()) || source.anchor() == null || source.url() != null)
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "Unsupported source authority");
-        var ref = new DocumentRef(UUID.fromString(source.document_id()), UUID.fromString(source.publication_id()));
-        authorize(List.of(ref));
-        var view = governance.publishedContent(ref.document_id(), ref.publication_id());
+    }
+
+    private DocumentRef documentRef(SourceRef source) {
+        return new DocumentRef(UUID.fromString(source.document_id()), UUID.fromString(source.publication_id()));
+    }
+
+    private String authoritativeText(SourceRef source, Map<DocumentRef, KnowledgeGovernanceRepository.PublishedContentView> views,
+            Map<DocumentRef, Map<String, StructuredDocumentCodec.ProjectedNode>> nodes) {
+        var ref = documentRef(source);
+        var view = views.get(ref);
         if (!view.publication().versionId().toString().equals(source.version_id()))
             throw new ApiException(ApiErrorCode.VERSION_CONFLICT, "来源文件版本不匹配");
         if(source.anchor().hasNonNull("parent_chunk_id"))return parentText(source);
@@ -293,9 +450,14 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
             if (!com.jsd.aird.kb.api.SourceAnchorComparison.same(locator, locatorAnchor(source.anchor())) || !sourceTitleMatches(source,row.title()))
                 throw new ApiException(ApiErrorCode.VERSION_CONFLICT, "来源位置或标题不匹配");
         } else {
-            var node = codec.project(view.confirmedDocument(), view.excludedReviewNodeIds()).nodes().stream()
-                .filter(item -> item.reviewNodeId().toString().equals(source.source_node_key()))
-                .findFirst().orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND));
+            var projected = nodes.computeIfAbsent(ref, ignored -> {
+                var values = new HashMap<String, StructuredDocumentCodec.ProjectedNode>();
+                for (var node : codec.project(view.confirmedDocument(), view.excludedReviewNodeIds()).nodes())
+                    values.put(node.reviewNodeId().toString(), node);
+                return values;
+            });
+            var node = projected.get(source.source_node_key());
+            if (node == null) throw new ApiException(ApiErrorCode.NOT_FOUND);
             text = node.text();
             var locator = mapper.createObjectNode().put("reviewNodeId", node.reviewNodeId().toString());
             locator.set("sourceNodeKeys", mapper.valueToTree(node.sourceNodeKeys()));
@@ -350,7 +512,7 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
         }
         var trace=new LinkedHashMap<String,Object>();trace.put("parent_status",contexts.isEmpty()?"MISSING_OR_BUDGET":"SUCCEEDED");
         trace.put("parent_links",links);trace.put("parent_pages",pages);trace.put("parent_chars",used);trace.put("parent_missing",missing);trace.put("parent_omitted",omitted);trace.put("parent_not_applicable",notApplicable);trace.put("fulltext_coverage",false);
-        return new Result(List.of(),trace,null,null,contexts,List.of());
+        return withMetadata(new Result(List.of(),trace,null,null,contexts,List.of()));
     }
 
     @Override public Result parentContext(SourceRef reference,int cursor,int chars) {
@@ -370,7 +532,7 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
         if(cursor>total)throw new ApiException(ApiErrorCode.BAD_REQUEST);
         if(cursor==total)return new Result(List.of(),Map.of("parent_status","END","total_chars",total,"fulltext_coverage",false),null);
         var candidate=parentSpan(parent,cursor,chars);int end=candidate.source().anchor().path("span_end").asInt();
-        return new Result(List.of(candidate),Map.of("parent_status","SUCCEEDED","total_chars",total,"span_start",cursor,"span_end",end,"fulltext_coverage",false),end<total?end:null);
+        return withMetadata(new Result(List.of(candidate),Map.of("parent_status","SUCCEEDED","total_chars",total,"span_start",cursor,"span_end",end,"fulltext_coverage",false),end<total?end:null));
     }
 
     private Candidate parentSpan(KnowledgeRepository.ParentChunk parent,int start,int chars) {
@@ -411,6 +573,7 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
         var hydrated=new HashMap<UUID,KnowledgeRepository.SearchRow>();
         if(!hits.isEmpty())repository.loadSearchRows(actor.organizationId(),hits.stream().map(com.jsd.aird.kb.api.KnowledgeSearchFacade.SearchHit::chunkId).toList()).forEach(r->hydrated.put(r.chunkId(),r));
         var result=new LinkedHashMap<UUID,SourceRef>();
+        var books = currentBibliography(hits.stream().map(com.jsd.aird.kb.api.KnowledgeSearchFacade.SearchHit::versionId).toList());
         for(var hit:hits) {
             if(!hit.versionId().equals(versions.get(hit.documentId())))throw new ApiException(ApiErrorCode.VERSION_CONFLICT,"检索来源版本已变化");
             var row=hydrated.get(hit.chunkId());
@@ -419,18 +582,19 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
             var locator=mapper.createObjectNode().put("chunkId",hit.chunkId().toString());
             if(anchor!=null) {if(anchor.primaryAnchorJson()!=null)try{locator.setAll((com.fasterxml.jackson.databind.node.ObjectNode)mapper.readTree(anchor.primaryAnchorJson()));}catch(Exception ignored){}
                 locator.set("sourceNodeKeys",mapper.valueToTree(anchor.sourceNodeKeys()));}
-            result.put(hit.chunkId(),source(refs.get(hit.documentId()),hit.versionId(),hit.chunkId().toString(),locator,hit.title(),hit.content()));
+            result.put(hit.chunkId(),source(refs.get(hit.documentId()),hit.versionId(),hit.chunkId().toString(),locator,hit.title(),hit.content(),books.get(hit.versionId())));
         }
         return result;
     }
 
     private SourceRef source(DocumentRef ref, UUID version, String node, JsonNode anchor, String title, String text) {
-        if(bibliography!=null) {
-            var accepted=bibliography.find(ActorContext.required().organizationId(),version,null).orElse(null);
-            if(accepted!=null&&accepted.documentId().equals(ref.document_id())&&!accepted.accepted().path("title").asText().isBlank()) {
-                var located=(com.fasterxml.jackson.databind.node.ObjectNode)anchor.deepCopy();
-                located.put("bibliography_revision",accepted.revision());anchor=located;title=accepted.accepted().path("title").asText();
-            }
+        return source(ref,version,node,anchor,title,text,currentBibliography(List.of(version)).get(version));
+    }
+    private SourceRef source(DocumentRef ref, UUID version, String node, JsonNode anchor, String title, String text, BibliographyRepository.Record accepted) {
+        if(accepted!=null && accepted.revision()>0 && accepted.documentId().equals(ref.document_id())) {
+            var located=(com.fasterxml.jackson.databind.node.ObjectNode)anchor.deepCopy();
+            located.put("bibliography_revision",accepted.revision());anchor=located;
+            if (!accepted.accepted().path("title").asText().isBlank()) title=accepted.accepted().path("title").asText();
         }
         return new SourceRef("KB_PUBLICATION", ref.document_id().toString(), version.toString(), ref.publication_id().toString(), node, sha(text), anchor, title, null);
     }
@@ -445,7 +609,7 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
         if(bibliography==null||!revision.isInt()||revision.asInt()<1)return false;
         return bibliography.find(ActorContext.required().organizationId(),UUID.fromString(source.version_id()),revision.asInt())
             .filter(r->r.documentId().toString().equals(source.document_id()))
-            .map(r->r.accepted().path("title").asText().equals(source.title())).orElse(false);
+            .map(r->{ var title=r.accepted().path("title").asText(); return (title.isBlank()?legacyTitle:title).equals(source.title()); }).orElse(false);
     }
 
     private String sha(String text) {

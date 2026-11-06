@@ -3,6 +3,7 @@
 import copy
 
 from aird_agent.core.contracts import digest
+from aird_agent.evidence.metadata import attach_metadata
 from aird_agent.evidence.models import SourceRef
 
 
@@ -75,6 +76,7 @@ async def cached_host(runtime, principal, run, action, args):
     # Library reuse always goes through the host to verify the authorized window revision, without re-ranking.
     if (
         entry
+        and ("outline" not in action or entry["metadata"].get("document_metadata"))
         and entry["metadata"].get("trace", {}).get("scope") != "AUTHORIZED_LIBRARY"
         and all(eid in current["evidence"] for group in entry["groups"].values() for eid in group["ids"])
     ):
@@ -85,6 +87,11 @@ async def cached_host(runtime, principal, run, action, args):
                 for eid, location in zip(group["ids"], group["locations"])
             ]
         candidates = result.get("candidates", []) + result.get("context_candidates", [])
+        if result.get("document_metadata"):
+            await runtime.host_call(principal, "authorize", {"documents": [
+                {"document_id": item["document_id"], "publication_id": item["publication_id"]}
+                for item in result["document_metadata"]
+            ]}, run["id"])
         if candidates:
             try:
                 await runtime.host_call(
@@ -203,7 +210,7 @@ async def context_for(runtime, principal, run, candidate, before=1, after=1, cur
 
 
 def preview_context(result):
-    return {
+    return attach_metadata({
         "nodes": [
             {
                 "evidence_id": c["evidence_id"],
@@ -217,17 +224,28 @@ def preview_context(result):
         "next_cursor": result.get("next_offset"),
         "trace": result.get("trace", {}),
         "instruction": "Use evidence_read for exact source quotations; previews are not complete reading.",
-    }
+    }, result.get("document_metadata", []), 6000)
+
+
+def quote_window(candidate, query=""):
+    """Keep an exact sentence with its same-node context, never a rewritten fact."""
+    import re
+
+    from aird_agent.evidence.quotes import quotes
+
+    spans = quotes(candidate)
+    terms = re.findall(r"\w+", query.casefold())
+    index = max(range(len(spans)),
+                key=lambda i: sum(term in spans[i]["text"].casefold() for term in terms), default=0)
+    return index, spans, spans[max(0, index - 2):index + 3]
 
 
 def search_preview(result, budget):
     """Bound search transport, retaining canonical bodies/quote handles in the ledger."""
     import json
-    import re
 
     from aird_agent.evidence.quotes import quotes
 
-    terms = re.findall(r"\w+", result.get("query", "").casefold())
     page = {
         "hits": [],
         "trace": result.get("trace", {}),
@@ -235,7 +253,7 @@ def search_preview(result, budget):
         "parent_context": [],
         "next_offset": result.get("next_offset"),
         "next_cursor": result.get("next_cursor"),
-        "instruction": "Hits contain exact source quotes, not complete nodes. Use evidence_read with evidence_id and quote_offset for more; evidence_context for neighbors.",
+        "instruction": "Read each hit with its context_quotes/source_text; values may describe different samples, statistics or tests. requires_read means source context did not fit: read evidence_read before asserting its results. This is not full-document coverage. Use evidence_read with evidence_id and quote_offset for more; evidence_context for neighbors and table headers/footnotes.",
     }
     parent_used = 0
     for candidate in result.get("context_candidates", []):
@@ -253,12 +271,7 @@ def search_preview(result, budget):
         page["parent_context"].append(context)
         parent_used += size
     for candidate in result.get("candidates", []):
-        spans = quotes(candidate)
-        index = max(
-            range(len(spans)),
-            key=lambda i: sum(term in spans[i]["text"].casefold() for term in terms),
-            default=0,
-        )
+        index, spans, window = quote_window(candidate, result.get("query", ""))
         hit = {
             "evidence_id": candidate["evidence_id"],
             "source": candidate["source"],
@@ -266,8 +279,24 @@ def search_preview(result, budget):
             "quote_offset": index,
             "quote_count": len(spans),
             "quote": spans[index] if spans else None,
+            "context_quotes": [span for span in window if span != spans[index]],
         }
+        if candidate.get("table_context"):
+            hit["table_context"] = candidate["table_context"]
+            hit["requires_read"] = True
+        if len(candidate["text"]) <= 2400:
+            hit["source_text"] = candidate["text"]
         proposed = {**page, "hits": [*page["hits"], hit]}
+        if len(json.dumps(proposed, ensure_ascii=False)) > budget - 128:
+            hit.pop("source_text", None)
+            proposed = {**page, "hits": [*page["hits"], hit]}
+        if len(json.dumps(proposed, ensure_ascii=False)) > budget - 128:
+            # A bare matching value can lose the sample/condition that gives it
+            # meaning. Keep the window atomically or return a read handle only.
+            hit.pop("context_quotes")
+            hit.pop("quote")
+            hit["requires_read"] = True
+            proposed = {**page, "hits": [*page["hits"], hit]}
         if len(json.dumps(proposed, ensure_ascii=False)) > budget - 128:
             if not page["hits"]:
                 page.pop("context", None)
@@ -285,4 +314,4 @@ def search_preview(result, budget):
             "Source metadata exceeds preview budget; use evidence_read with this evidence ID."
         )
     page["trace"] = {**page["trace"], "candidate_count": total, "preview_only": True}
-    return page
+    return attach_metadata(page, result.get("document_metadata", []), budget)

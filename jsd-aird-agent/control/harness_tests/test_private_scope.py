@@ -1,7 +1,6 @@
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
 
 from aird_agent.hosts.jsd.bindings import JsdBindings
 from aird_agent.server.contracts import RunRequest
@@ -16,9 +15,10 @@ def test_conversation_authorization_uses_its_own_id_for_private_source_scope():
     assert JsdBindings.context_request({"id": str(uuid4()), "conversation_id": cid})["conversation_id"] == cid
 
 
-def test_fast_qa_does_not_silently_ignore_attached_fulltext_sources():
-    with pytest.raises(ValidationError):
-        RunRequest(request="read", profile="fast_qa", private_source_ids=[uuid4()])
+def test_unified_task_accepts_explicit_native_sources_for_the_owning_request():
+    sid = uuid4()
+    request = RunRequest(request="read", profile="agent", conversation_id=uuid4(), private_source_ids=[sid])
+    assert request.private_source_ids == [sid]
 
 
 @pytest.mark.parametrize("kind", ["RUN_UPLOAD", "EXTERNAL_FULLTEXT", "KB_PUBLICATION"])

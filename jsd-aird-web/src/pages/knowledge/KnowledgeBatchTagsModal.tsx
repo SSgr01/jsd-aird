@@ -1,4 +1,5 @@
-import { App, Modal, Select, Space, Tag, Typography } from 'antd';
+import { FormModal } from '@/components/form-dialog/FormModal';
+import { App, Select, Space, Tag, Typography } from 'antd';
 import { useMemo, useState } from 'react';
 import { knowledgeApi, type KnowledgeDocument } from '@/services/knowledge';
 
@@ -26,8 +27,8 @@ export function KnowledgeBatchTagsModal({ documents, tagOptions, onCancel, onSav
     } catch (error) { void message.error(error instanceof Error ? error.message : '标签保存失败'); }
     finally { setSaving(false); }
   };
-  return <Modal open title={`批量编辑标签 · ${documents.length} 个文档`} okText="应用修改" cancelText="取消" confirmLoading={saving}
-    okButtonProps={{ disabled: !add.length && !remove.length }} onCancel={onCancel} onOk={() => void save()}>
+  return <FormModal draft={[add, remove]} open title={`批量编辑标签 · ${documents.length} 个文档`} okText="应用修改" cancelText="取消" confirmLoading={saving}
+    okButtonProps={{ disabled: !add.length && !remove.length }} onCancel={onCancel} onOk={() => save()}>
     <Typography.Paragraph>现有标签 <Typography.Text type="secondary">点击 × 从所选文档移除；括号内为使用该标签的文档数。</Typography.Text></Typography.Paragraph>
     <Space wrap>{existingTags.filter(([tag]) => !remove.includes(tag)).map(([tag, count]) => <Tag key={tag} closable
       onClose={(event) => { event.preventDefault(); setRemove((values) => [...values, tag]); setAdd((values) => values.filter((value) => value !== tag)); }}>{tag}（{count}）</Tag>)}</Space>
@@ -37,5 +38,5 @@ export function KnowledgeBatchTagsModal({ documents, tagOptions, onCancel, onSav
     <Select style={{ width: '100%' }} mode="tags" allowClear value={add} tokenSeparators={[',', '，']} placeholder="选择或输入新标签"
       options={tagOptions.filter((tag) => !remove.includes(tag)).map((tag) => ({ value: tag, label: tag }))}
       onChange={(values) => { setAdd(values); setRemove((current) => current.filter((tag) => !values.includes(tag))); }} />
-  </Modal>;
+  </FormModal>;
 }

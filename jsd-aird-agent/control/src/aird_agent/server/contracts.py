@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from aird_agent.core.contracts import Contract as Contract
@@ -15,26 +15,34 @@ from aird_agent.evidence.models import SourceRef as SourceRef
 
 
 class ContextRef(Contract):
-    kind: Literal["PROJECT", "KB_PUBLICATION"]
+    kind: Literal["PROJECT", "EXPERIMENT", "KB_PUBLICATION"]
     resource_id: UUID
     publication_id: UUID | None = None
+    version_id: str | None = Field(default=None, min_length=1, max_length=100)
 
     @model_validator(mode="after")
     def coherent(self):
         if self.kind == "KB_PUBLICATION" and self.publication_id is None:
             raise ValueError("A knowledge context must pin a publication")
+        if self.kind == "EXPERIMENT":
+            if self.version_id is None:
+                raise ValueError("An experiment reference must pin a version")
+            UUID(self.version_id)
+        if self.kind == "PROJECT" and self.version_id is not None and not self.version_id.isdecimal():
+            raise ValueError("Project versions are numeric")
         return self
+
+
+class PublicationRef(Contract):
+    document_id: UUID
+    publication_id: UUID
 
 
 class RetrievalScope(Contract):
     knowledge_category_ids: list[UUID] = Field(default_factory=list, max_length=100)
     data_category_ids: list[UUID] = Field(default_factory=list, max_length=100)
     web_search_enabled: bool = False
-
-
-class PublicationRef(Contract):
-    document_id: UUID
-    publication_id: UUID
+    knowledge_documents: list[PublicationRef] | None = Field(default=None, min_length=1, max_length=100)
 
 
 class ResearchRequirements(Contract):
@@ -63,35 +71,14 @@ class RunRequest(Contract):
     request: str = Field(min_length=1, max_length=12000)
     conversation_id: UUID | None = None
     topic_id: UUID | None = None
-    profile: Literal["agent", "fast_qa"] = "agent"
+    profile: Literal["agent"] = "agent"
     pack_ids: list[str] | None = Field(default=None, min_length=1, max_length=16)
     context_refs: list[ContextRef] = Field(default_factory=list, max_length=100)
     retrieval_scope: RetrievalScope = Field(default_factory=RetrievalScope)
     research_requirements: ResearchRequirements | None = None
     expected_revision: int | None = None
-    resume_from_run_id: UUID | None = None
-    resume_context: Literal["checkpoint", "rebuild"] = "checkpoint"
-    upgrade_capabilities: bool = False
-    resume_queue: bool = False
     private_source_ids: list[UUID] = Field(default_factory=list, max_length=20)
 
-    @model_validator(mode="after")
-    def profile_scope(self):
-        if self.resume_context == "rebuild" and (self.resume_from_run_id is None or self.profile != "agent"):
-            raise ValueError("Rebuilding context requires an explicit previous agent run")
-        if self.upgrade_capabilities and (
-            self.resume_context != "rebuild" or self.resume_from_run_id is None or self.profile != "agent"
-        ):
-            raise ValueError("Capability upgrades require an explicit linked run with rebuilt agent context")
-        if self.profile == "fast_qa" and (self.topic_id is not None or self.context_refs):
-            raise ValueError(
-                "Fixed QA uses retrieval_scope categories; topic/project contexts require the agent profile"
-            )
-        if self.profile == "fast_qa" and self.research_requirements is not None:
-            raise ValueError("Full-text research requires the agent profile")
-        if self.profile == "fast_qa" and self.private_source_ids:
-            raise ValueError("Private full-text sources require the agent profile")
-        return self
 
 
 class MessageRequest(Contract):
@@ -101,18 +88,15 @@ class MessageRequest(Contract):
 
 
 class QueueRequest(Contract):
-    action: Literal["edit", "delete", "move", "promote"]
+    action: Literal["edit", "delete", "promote"]
     message_id: UUID
     expected_revision: int
     text: str | None = Field(default=None, min_length=1, max_length=12000)
-    position: int | None = Field(default=None, ge=0, le=49)
 
     @model_validator(mode="after")
     def arguments(self):
         if self.action == "edit" and (self.text is None or not self.text.strip()):
             raise ValueError("An edited message requires nonblank text")
-        if self.action == "move" and self.position is None:
-            raise ValueError("A move requires a position")
         return self
 
 
@@ -121,7 +105,7 @@ def retryable_failure(run):
     return run.get("status") == "FAILED" and (
         code
         in {
-            "PI_RUNTIME_UNAVAILABLE",
+            "DSH_RUNTIME_UNAVAILABLE",
             "RUNTIME_EXECUTION_FAILED",
             "MODEL_DID_NOT_COMPLETE",
             "CONTEXT_COMPACTION_FAILED",
@@ -155,12 +139,14 @@ class HarnessSettings(BaseSettings):
     runtime_secret: SecretStr
     runtime_url: str = "http://127.0.0.1:8092"
     java_url: str = "http://127.0.0.1:8080"
+    public_url: str = Field(default="http://localhost:5173", validation_alias=AliasChoices("JSD_AIRD_HARNESS_PUBLIC_URL", "JSD_AIRD_PUBLIC_URL", "public_url"))
     storage_root: Path = Path(".runtime/harness")
     model_context_window: int = Field(default=128000, ge=16000)
     model_output_tokens: int = Field(default=8192, ge=512)
     max_steps: int = Field(default=32, ge=1, le=128)
     max_model_calls: int = Field(default=128, ge=1, le=512)
     max_tool_calls: int = Field(default=128, ge=1, le=512)
+    max_total_tokens: int = Field(default=2000000, ge=1024)
     max_active_seconds: int = Field(default=1800, ge=10)
     parallelism: int = Field(default=4, ge=1, le=8)
     max_running_runs: int = Field(default=4, ge=1, le=32)
@@ -172,10 +158,6 @@ class HarnessSettings(BaseSettings):
     sandbox_memory: str = "1g"
     sandbox_cpus: str = "1"
     sandbox_timeout_seconds: int = Field(default=120, ge=1, le=600)
-    paperqa_model: str = ""
-    paperqa_base_url: str = ""
-    paperqa_api_key: SecretStr = SecretStr("")
-    paperqa_enable_thinking: bool | None = None
     report_review_timeout_seconds: int = Field(default=120, ge=10, le=600)
 
     @model_validator(mode="after")

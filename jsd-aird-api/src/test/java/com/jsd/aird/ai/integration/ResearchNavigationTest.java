@@ -14,6 +14,73 @@ import static org.mockito.Mockito.*;
 import static org.assertj.core.api.Assertions.*;
 
 class ResearchNavigationTest {
+    @Test void distantTableRowsKeepTheirOwnHeadersAcrossPagesAndReplay() {
+        var mapper = new ObjectMapper(); var repo = mock(KnowledgeRepository.class);
+        var governance = mock(KnowledgeGovernanceService.class); var authorization = mock(AuthorizationService.class);
+        var codec = spy(new StructuredDocumentCodec(mapper));
+        var ref = new ResearchKnowledgeFacade.DocumentRef(UUID.randomUUID(), UUID.randomUUID());
+        var view = mock(KnowledgeGovernanceRepository.PublishedContentView.class);
+        var publication = mock(KnowledgeGovernanceRepository.PublicationRow.class);
+        when(publication.documentId()).thenReturn(ref.document_id()); when(publication.versionId()).thenReturn(UUID.randomUUID());
+        when(view.publication()).thenReturn(publication); when(view.originalName()).thenReturn("study.pdf");
+        when(view.sourceNodes()).thenReturn(List.of()); when(view.excludedReviewNodeIds()).thenReturn(List.of());
+        var document = mapper.createObjectNode().put("type", "doc"); var content = document.putArray("content");
+        var rowKeys = new ArrayList<String>();
+        for (int tableNo = 0; tableNo < 2; tableNo++) {
+            var table = content.addObject().put("type", "table").putArray("content");
+            for (int index = 0; index < 7; index++) {
+                var id = UUID.randomUUID().toString(); rowKeys.add(id);
+                var row = table.addObject().put("type", "tableRow");
+                // Identical parser group/coordinates must not join two tables.
+                var attrs = row.putObject("attrs").put("reviewNodeId", id).put("tableGroup", "reused-group").put("pageNo", 6);
+                attrs.putArray("sourceNodeKeys").add(UUID.randomUUID().toString());
+                var cells = row.putArray("content");
+                for (String value : index == 0 ? List.of("mol% A", "Hardness A", "wt% B", "Hardness B") : List.of("1", "2H", "2.2", "H")) {
+                    cells.addObject().put("type", index == 0 ? "tableHeader" : "tableCell").putArray("content")
+                        .addObject().put("type", "paragraph").putArray("content").addObject().put("type", "text").put("text", value);
+                }
+            }
+        }
+        when(view.confirmedDocument()).thenReturn(document);
+        when(governance.publishedContent(ref.document_id(),ref.publication_id())).thenReturn(view);
+        when(repo.isAiApproved(any(),eq(ref.document_id()))).thenReturn(true);
+        var service = new ResearchKnowledgeService(repo,governance,codec,(com.jsd.aird.kb.api.KnowledgeSearchFacade)null,authorization,mapper);
+        ActorContext.set(new Actor(UUID.randomUUID(),UUID.randomUUID(),"test"));
+        try {
+            var row = service.read(ref,6,1).candidates().getFirst();
+            assertThat(row.text()).isEqualTo("1 | 2H | 2.2 | H");
+            assertThat(row.table_context().path("header_node_keys").get(0).asText()).isEqualTo(rowKeys.getFirst());
+            var first = service.context(row.source(),0,0,0);
+            assertThat(first.candidates().getFirst().source().source_node_key()).isEqualTo(rowKeys.getFirst());
+            assertThat(first.next_offset()).isEqualTo(5);
+            var last = service.context(row.source(),0,0,5);
+            assertThat(last.candidates()).hasSize(2);
+            assertThat(last.candidates().getLast().source()).isEqualTo(row.source());
+            assertThat(last.next_offset()).isNull();
+            var replay = service.replay(List.of(new ResearchKnowledgeFacade.Handle(row.source(),1,6,null))).getFirst();
+            assertThat(replay.table_context()).isEqualTo(row.table_context());
+            assertThat(replay.source()).isEqualTo(row.source());
+            var firstRows = service.read(ref,0,2).candidates();
+            clearInvocations(governance,codec);
+            service.validateAll(firstRows.stream().map(candidate -> new ResearchKnowledgeFacade.SourceExcerpt(candidate.source(),candidate.text())).toList());
+            verify(governance,times(1)).publishedContent(ref.document_id(),ref.publication_id());
+            verify(codec,times(1)).project(any(),any());
+            assertThatThrownBy(() -> service.validateAll(List.of(
+                new ResearchKnowledgeFacade.SourceExcerpt(firstRows.get(0).source(),firstRows.get(0).text()),
+                new ResearchKnowledgeFacade.SourceExcerpt(row.source(),"different row"))))
+                .isInstanceOf(com.jsd.aird.shared.error.ApiException.class);
+            var wrongVersion = new ResearchKnowledgeFacade.SourceRef(row.source().kind(),row.source().document_id(),UUID.randomUUID().toString(),
+                row.source().publication_id(),row.source().source_node_key(),row.source().content_sha256(),row.source().anchor(),row.source().title(),null);
+            assertThatThrownBy(() -> service.validateAll(List.of(new ResearchKnowledgeFacade.SourceExcerpt(wrongVersion,row.text()))))
+                .isInstanceOf(com.jsd.aird.shared.error.ApiException.class);
+            when(view.excludedReviewNodeIds()).thenReturn(List.of(UUID.fromString(rowKeys.getFirst())));
+            assertThat(service.read(ref,5,1).candidates().getFirst().table_context().path("header_node_keys")).isEmpty();
+            doThrow(new IllegalStateException("revoked")).when(authorization).require(any());
+            assertThatThrownBy(()->service.context(row.source(),0,0,0)).hasMessage("revoked");
+            assertThatThrownBy(()->service.validateAll(List.of(new ResearchKnowledgeFacade.SourceExcerpt(row.source(),row.text())))).hasMessage("revoked");
+        } finally {ActorContext.clear();}
+    }
+
     @Test void historicalSearchAndContextStayPinnedAndReauthorize() {
         var mapper=new ObjectMapper();
         var repo=mock(KnowledgeRepository.class); var governance=mock(KnowledgeGovernanceService.class);

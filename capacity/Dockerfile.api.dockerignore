@@ -1,6 +1,12 @@
 **
 !jsd-aird-api/
 !jsd-aird-api/**
+!jsd-aird-agent/
+!jsd-aird-agent/control/
+!jsd-aird-agent/control/src/
+!jsd-aird-agent/control/src/aird_agent/
+!jsd-aird-agent/control/src/aird_agent/capabilities/
+!jsd-aird-agent/control/src/aird_agent/capabilities/answer_guidelines.txt
 !docs/
 !docs/operation-assistant/
 !docs/operation-assistant/**

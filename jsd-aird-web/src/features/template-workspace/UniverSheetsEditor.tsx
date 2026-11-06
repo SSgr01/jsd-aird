@@ -1,6 +1,8 @@
 import '@/compat/browser';
+import { observeEditorSize } from './observe-editor-size';
 import { markPerformance } from '@/services/performance/metrics';
 import { editorReady } from './workspace-loading';
+import { editorTheme } from './editor-theme';
 import {
   createUniver,
   ICommandService,
@@ -244,6 +246,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     host.setAttribute('data-loading-label', '初始化内容…');
     container.replaceChildren(host);
     let cancelled = false;
+    let stopObservingSize: (() => void) | undefined;
     let animationFrame = 0;
     let commandSubscription: { dispose(): void } | undefined;
     let beforeCommandSubscription: { dispose(): void } | undefined;
@@ -274,6 +277,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         return;
       }
       const { univer, univerAPI } = createUniver({
+        theme: editorTheme,
         locale: LocaleType.ZH_CN,
         locales: {
           [LocaleType.ZH_CN]: mergeLocales(
@@ -309,6 +313,9 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       univerRef.current = univer;
       apiRef.current = univerAPI;
       const workbook = univerAPI.createWorkbook(workbookWithExplicitRowHeights(snapshot));
+      stopObservingSize = observeEditorSize(container, () => {
+        if (!cancelled) univer.__getInjector().get(IRenderManagerService).getRenderUnitById(workbook.getId())?.engine.resize();
+      });
       const structureOperationFor = (command: { id: string; params?: object }) => operationFromUniverCommand(command.id === 'sheet.command.set-worksheet-name'
         ? { ...command, params: { ...command.params, subUnitId: (command.params as { subUnitId?: string })?.subUnitId ?? workbook.getActiveSheet()?.getSheetId() } } : command);
       clipboardSubscription = univer.__getInjector().get(ISheetClipboardService).addClipboardHook(templatePasteStyleHook(
@@ -795,6 +802,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
 
     return () => {
       cancelled = true;
+      stopObservingSize?.();
       cellChangeEventsArmed = false;
       window.cancelAnimationFrame(animationFrame);
       commandSubscription?.dispose();

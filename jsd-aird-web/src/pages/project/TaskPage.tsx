@@ -1,6 +1,7 @@
 import { AppstoreOutlined, ReloadOutlined, SearchOutlined, UnorderedListOutlined } from '@ant-design/icons';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ListFeedback } from '@/components/loading/ListQueryFeedback';
 import {
   Button,
   Empty,
@@ -68,6 +69,8 @@ function statusTagClass(value?: string) {
 export default function TaskPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  const [listError, setListError] = useState<string>();
+  const [listLoaded, setListLoaded] = useState(false);
   const [tasks, setTasks] = useState<ProjectTask[]>([]);
   const [total, setTotal] = useState(0);
   const [query, setQuery] = useState<TaskQuery>({ ...defaultQuery });
@@ -119,8 +122,9 @@ export default function TaskPage() {
       const res = await getTasks(q);
       setTasks(res.items);
       setTotal(res.total);
+      setListError(undefined); setListLoaded(true);
     } catch (e) {
-      message.error('加载任务列表失败');
+      setListError(e instanceof Error ? e.message : '加载任务列表失败');
     } finally {
       setLoading(false);
     }
@@ -250,7 +254,7 @@ export default function TaskPage() {
       title: '实验数',
       dataIndex: 'experimentCount',
       width: 90,
-      align: 'center' as const,
+      align: 'right' as const,
     },
     {
       title: '操作',
@@ -278,7 +282,7 @@ export default function TaskPage() {
     <div className="pm-page pm-unified-list-page pm-task-page">
       <div className="page-heading">
         <div>
-          <h2>任务</h2>
+          <h1>任务</h1>
           <p>集中查看并筛选全部项目任务，数据来自项目管理原有项目结构。</p>
         </div>
         <div className="pm-page-actions">
@@ -364,6 +368,7 @@ export default function TaskPage() {
       </div>
 
       <div className="pm-task-content">
+        <ListFeedback loading={loading && listLoaded} hasData={listLoaded} error={listError} onRetry={() => void loadTasks(query)} />
         {view === 'card' ? (
           <Spin spinning={loading}>
             <div className="pm-card-grid pm-task-card-grid">
@@ -412,7 +417,7 @@ export default function TaskPage() {
                   </div>
                 </div>
               ))}
-              {!loading && !tasks.length && <Empty description="暂无符合条件的任务" />}
+              {!loading && !listError && !tasks.length && <Empty description={query.keyword || query.projectId || query.stageId || query.status || query.owner || query.priority ? '暂无符合条件的任务' : '暂无任务'} />}
             </div>
           </Spin>
         ) : (
@@ -423,6 +428,7 @@ export default function TaskPage() {
               size="small"
               columns={columns}
               dataSource={tasks}
+              locale={{ emptyText: listError ? <span /> : <Empty description={query.keyword || query.projectId || query.stageId || query.status || query.owner || query.priority ? '暂无符合条件的任务' : '暂无任务'} /> }}
               pagination={false}
               scroll={{ x: 1360 }}
             />

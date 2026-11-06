@@ -1,11 +1,11 @@
 # 通用文件能力
 
-`files` 与文献、项目等能力并列。`core + files` 可以创建、读取、隔离执行和登记文件，不要求文献能力、研究主题、证据矩阵或报告。
+`files` 与文献、项目等能力并列。`core + files` 通过 dsh 原生 read/write/edit/apply_patch/bash/present 创建、读取、隔离执行和交付文件，不要求文献能力、研究主题、证据矩阵或报告。
 
-- `definitions.py`：文件工具及平台说明；格式和文件数量由当前任务决定。
-- `handler.py`：工作区、沙箱、执行来源检查和成果登记；宿主存储与来源策略通过接口注入。
+- `definitions.py`：业务来源登记工具及平台说明；文件操作和格式、文件数量遵循原生工具与当前任务。
+- `handler.py`：执行来源检查和成果登记；宿主存储与来源策略通过接口注入。原生工具的沙箱适配位于 `hosts/jsd/native_files.py`，不另外提供文件 CRUD 或脚本工具。
 - `quality.py`：CSV/TSV/JSON 结构及 Office/PDF 基本格式检查，不要求文献引用，也不修改原始字节。
-- `guide.py`：按需读取的 Word/Excel/PDF 格式指南，随能力指纹固定。
+- Office 指导通过固定上游的原生 `skill-office` 提供，企业扩展只替换 Linux 沙箱中的运行路径。
 - `completion.py`：检查任务承诺的文件是否已登记。
 
 JSD 宿主通过 `evidence.exports` 从显式引用及实际选中执行输入解析来源，并调用文献能力的 `literature.export` 检查文献数据引用。任务曾经检索过的其他资料不会自动附到文件上。专业校验不能被用作通用格式限制。

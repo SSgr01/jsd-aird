@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from aird_agent.capabilities.fast_qa.history import answer_context
+from aird_agent.evidence.retrieval_context import answer_context
 from aird_agent.evidence.quotes import quotes, resolve_quote
 from aird_agent.evidence.registry import alias_map, canonical_candidate, register_candidates
 

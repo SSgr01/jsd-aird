@@ -119,21 +119,6 @@ class Store:
         )
         await conn.execute("SELECT pg_notify('aird_harness_events', %s)", (str(run_id),))
 
-    async def checkpoint(self, principal, reference):
-        if reference is None or isinstance(reference, str):
-            return reference
-        async with self.pool.connection() as conn:
-            row = await (
-                await conn.execute(
-                    "SELECT content FROM agent_runtime.harness_checkpoints "
-                    "WHERE organization_id=%s AND actor_id=%s AND sha256=%s",
-                    (*principal.key, reference["sha256"]),
-                )
-            ).fetchone()
-        if not row:
-            raise HTTPException(409, "CHECKPOINT_UNAVAILABLE")
-        return row["content"]
-
     async def events(self, principal, run_id, after=0):
         await self.get(principal, "run", run_id)
         async with self.pool.connection() as conn:

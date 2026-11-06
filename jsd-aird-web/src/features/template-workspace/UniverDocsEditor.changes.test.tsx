@@ -18,6 +18,7 @@ vi.mock('@univerjs/presets', () => ({
 vi.mock('@univerjs/preset-docs-core', () => ({ UniverDocsCorePreset: () => ({}), unmount: vi.fn(), DocBackScrollRenderController: {}, IRenderManagerService: {} }));
 vi.mock('@univerjs/preset-docs-core/locales/zh-CN', () => ({ default: {} }));
 vi.mock('./docs-features', () => ({ docsFeatureLocale: {}, docsFeaturePlugins: [], docsFeaturePresets: () => [] }));
+vi.mock('./editor-theme', () => ({ editorTheme: {} }));
 
 beforeEach(() => {
   vi.clearAllMocks(); sdk.raw.body.dataStream = 'before\r\n';

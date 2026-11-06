@@ -68,7 +68,7 @@ public class RetrievalPipeline {
         var raw=rag.knowledge.recall(request);
         if(raw==null) return rag.knowledge.search(request); // compatibility with older facade implementations
         var channels=raw.channels().stream().filter(c -> switch(c.name()) {
-            case "BM25" -> policy.qa.bm25(); case "VECTOR" -> policy.qa.vector(); case "METADATA" -> policy.qa.metadata(); default -> true;
+            case "BM25" -> policy.qa.bm25(); case "VECTOR" -> policy.qa.vector(); case "METADATA", "TAG" -> policy.qa.metadata(); default -> true;
         }).map(c->new com.jsd.aird.shared.retrieval.RankFusion.Channel<>(c.name(),c.weight(),c.hits())).toList();
         var hits=com.jsd.aird.shared.retrieval.RankFusion.fuse(channels,h->h.chunkId().toString(),policy.rrfK).stream().limit(request.limit())
             .map(r->r.value().withScores(r.value().retrievalScore(),r.score(),r.score())).toList();
@@ -78,13 +78,33 @@ public class RetrievalPipeline {
                               List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds, boolean aiOnly,
                               boolean webSearchEnabled, DataSourceFileSearchFacade.RetrievalAccessScope accessScope,
                               boolean legacyFacadeCalls) {
+        return retrieveQa(organizationId, question, history, knowledgeCategoryIds, dataCategoryIds, aiOnly,
+            webSearchEnabled, accessScope, legacyFacadeCalls, false, true);
+    }
+
+    public Retrieval retrieveCurrentAccess(UUID org, String question, List<AssistantRepository.MessageRow> history,
+            boolean web, DataSourceFileSearchFacade.RetrievalAccessScope access) {
+        return retrieveQa(org, question, history, List.of(), List.of(), true, web, access, false, true, false);
+    }
+
+    /** The native agent already plans its query; retrieval must not invoke a hidden model. */
+    public Retrieval retrieveAgentQuery(UUID org, String question, List<AssistantRepository.MessageRow> history,
+            List<UUID> kb, List<UUID> data, boolean web, DataSourceFileSearchFacade.RetrievalAccessScope access) {
+        return retrieveQa(org, question, history, kb, data, true, web, access, false,
+            kb.isEmpty() && data.isEmpty(), false);
+    }
+
+    private Retrieval retrieveQa(UUID organizationId, String question, List<AssistantRepository.MessageRow> history,
+            List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds, boolean aiOnly, boolean webSearchEnabled,
+            DataSourceFileSearchFacade.RetrievalAccessScope accessScope, boolean legacyFacadeCalls, boolean automatic,
+            boolean rewriteQuery) {
         var started = System.nanoTime();
         var timings = new LinkedHashMap<String, Long>();
         var stage = System.nanoTime();
-        var authorizedDocuments=knowledgeSources!=null&&knowledgeCategoryIds!=null&&!knowledgeCategoryIds.isEmpty()
+        var authorizedDocuments=knowledgeSources!=null&&(automatic||(knowledgeCategoryIds!=null&&!knowledgeCategoryIds.isEmpty()))
             ? knowledgeSources.authorizedSearchDocuments() : null;
         timings.put("authorizationMs",rag.elapsedMs(stage));stage=System.nanoTime();
-        var plan = policy.qa.rewrite() ? rag.rewrite.rewrite(question, history, webSearchEnabled) : rag.rewrite.original(question, history, webSearchEnabled);
+        var plan = rewriteQuery && policy.qa.rewrite() ? rag.rewrite.rewrite(question, history, webSearchEnabled) : rag.rewrite.original(question, history, webSearchEnabled);
         timings.put("queryRewriteMs", rag.elapsedMs(stage));
         var explicitIdentifiers = explicitQueryIdentifiers(question, plan.plan());
         var webTasks = rag.launchWebSearch(webSearchEnabled, plan.plan().webQueries());
@@ -92,8 +112,8 @@ public class RetrievalPipeline {
         // selects a knowledge category, data-center rows must not be used as a
         // silent fallback (and vice versa), otherwise an unrelated file can be
         // presented as evidence for a knowledge-base question.
-        var searchKnowledge = knowledgeCategoryIds != null && !knowledgeCategoryIds.isEmpty();
-        var searchData = dataCategoryIds != null && !dataCategoryIds.isEmpty();
+        var searchKnowledge = automatic || (knowledgeCategoryIds != null && !knowledgeCategoryIds.isEmpty());
+        var searchData = automatic || (dataCategoryIds != null && !dataCategoryIds.isEmpty());
         var knowledgeFilters = knowledgeCategoryIds == null ? List.<UUID>of() : knowledgeCategoryIds;
         var dataFilters = dataCategoryIds == null ? List.<UUID>of() : dataCategoryIds;
         var dataQueries = searchData ? rag.dataQueries(question, plan.plan()) : List.<String>of();
@@ -393,7 +413,7 @@ public class RetrievalPipeline {
             }
             if(channels.size()==1)ordered=channels.getFirst().hits();
             else ordered=com.jsd.aird.shared.retrieval.RankFusion.fuse(channels,c->com.jsd.aird.ai.api.EvidenceProtocol.evidenceId(mapper.valueToTree(c.source())),policy.rrfK).stream()
-                .map(r->new com.jsd.aird.kb.api.ResearchKnowledgeFacade.Candidate(r.value().text(),r.value().source(),r.score(),r.value().node_offset(),r.value().role())).toList();
+                .map(r->new com.jsd.aird.kb.api.ResearchKnowledgeFacade.Candidate(r.value().text(),r.value().source(),r.score(),r.value().node_offset(),r.value().role(),r.value().table_context())).toList();
             trace.put("recall_fusion_ms",rag.elapsedMs(recallStarted));
             var rankStarted=System.nanoTime();
             var ranking=rank(query,ordered,c->com.jsd.aird.ai.api.EvidenceProtocol.evidenceId(mapper.valueToTree(c.source())),
@@ -414,6 +434,12 @@ public class RetrievalPipeline {
                 Math.min(policy.parentBudget,Math.min(18000,Math.max(0,args.path("context_character_budget").asInt(12000)))/3))
             : new com.jsd.aird.kb.api.ResearchKnowledgeFacade.Result(List.of(),Map.of("parent_status",privateMode?"NOT_APPLICABLE":"SKIPPED_CONFIG"),null);
         trace.putAll(parents.trace());trace.put("candidate_count",total);result.set("trace",mapper.valueToTree(trace));result.set("context_candidates",mapper.valueToTree(parents.context_candidates()));
+        if (!privateMode) {
+            var metadataSources = new ArrayList<com.jsd.aird.kb.api.ResearchKnowledgeFacade.SourceRef>();
+            ordered.forEach(c -> metadataSources.add(c.source()));
+            parents.context_candidates().forEach(c -> metadataSources.add(c.source()));
+            result.set("document_metadata", mapper.valueToTree(knowledgeSources.documentMetadata(metadataSources)));
+        }
         if(offset+ordered.size()<total)result.put("next_offset",offset+ordered.size());else result.putNull("next_offset");
         if(nextCursor==null)result.putNull("next_cursor");else result.put("next_cursor",nextCursor);
         return result;

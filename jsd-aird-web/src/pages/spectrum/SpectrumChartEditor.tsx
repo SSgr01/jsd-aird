@@ -1,4 +1,5 @@
-import { App, Form, Input, Modal, Select, Typography } from 'antd';
+import { FormModal } from '@/components/form-dialog/FormModal';
+import { App, Form, Input, Select, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { getExperiment, listExperiments, type ExperimentSummary } from '@/services/experiments/experiment-api';
 import { spectrumApi, type SpectrumCategory, type SpectrumChart } from '@/services/spectrum';
@@ -57,8 +58,8 @@ export function SpectrumChartEditor({ item, categories, onCancel, onSaved }: {
     finally { setSaving(false); }
   };
 
-  return <Modal open title="编辑图谱" width={720} okText="保存" cancelText="取消" confirmLoading={saving}
-    onCancel={onCancel} onOk={() => { void save().catch(() => undefined); }}>
+  return <FormModal form={form} open title="编辑图谱" width={720} okText="保存" cancelText="取消" confirmLoading={saving}
+    onCancel={onCancel} onOk={() => save().catch(() => undefined)}>
     <Form form={form} layout="vertical" initialValues={{
       title: item.title, categoryId: item.categoryId, sampleName: item.sampleName,
       batchNo: item.batchNo, testConditions: item.testConditions, metadata: { ...item.metadata },
@@ -72,5 +73,5 @@ export function SpectrumChartEditor({ item, categories, onCancel, onSaved }: {
       {category?.fields.map((field) => <Form.Item key={field.key} name={['metadata', field.key]} label={field.label}><Input placeholder="可选" /></Form.Item>)}
       {category?.analysisHint && <Typography.Paragraph type="secondary">当前分类分析提示：{category.analysisHint}</Typography.Paragraph>}
     </Form>
-  </Modal>;
+  </FormModal>;
 }

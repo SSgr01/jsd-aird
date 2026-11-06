@@ -1,3 +1,4 @@
+import { FormModal } from '@/components/form-dialog/FormModal';
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
@@ -10,7 +11,6 @@ import {
   Alert,
   App,
   Button,
-  Modal,
   Space,
   Spin,
   Tabs,
@@ -482,6 +482,7 @@ export function DataImportJobPage({
 
   return (
     <DataWorkbenchShell
+      maximizable={workspaceMode === 'EXPERIMENT'}
       breadcrumb={workspaceMode === 'EXPERIMENT' ? '实验中心 / 导入确认' : '数据中心 / 导入确认'}
       title={preview.job.sourceFileName}
       leading={<Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate(workspaceMode === 'EXPERIMENT' ? '/experiments/upload' : (canCreate ? '/data/upload' : '/data/view'))}>{workspaceMode === 'EXPERIMENT' ? '返回实验上传' : (canCreate ? '返回上传' : '返回数据查看')}</Button>}
@@ -639,7 +640,7 @@ export function DataImportJobPage({
       ) : undefined}
     >
       <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} showSpreadsheetMerges={false} />
-      <Modal open={relationOpen} title="维护数据任务关联项目" width={760} okText="保存" confirmLoading={saving} onCancel={() => setRelationOpen(false)} onOk={() => void saveProjectRelations()}><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></Modal>
+      <FormModal draft={projectRelations} open={relationOpen} title="维护数据任务关联项目" width={760} okText="保存" confirmLoading={saving} onCancel={() => setRelationOpen(false)} onOk={() => saveProjectRelations()}><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></FormModal>
     </DataWorkbenchShell>
   );
 }

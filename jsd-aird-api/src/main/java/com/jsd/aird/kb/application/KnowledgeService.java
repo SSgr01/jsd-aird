@@ -609,19 +609,33 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             timings.put("phraseDbMs",elapsedMs(started));
         }
         if (request.options().metadata()) {
-        var metadataQueries = new LinkedHashSet<String>(); addQuery(metadataQueries,request.originalQuery()); addQuery(metadataQueries,request.query());
+        var metadataQueries = new LinkedHashSet<String>();
+        metadataQueries.addAll(discoveryQueries(request.originalQuery()));
+        metadataQueries.addAll(discoveryQueries(request.query()));
         request.queryVariants().forEach(v->addQuery(metadataQueries,v)); request.requiredFacts().forEach(v->addQuery(metadataQueries,v.retrievalQuery()));
         request.retrievalTerms().forEach(t->{addQuery(metadataQueries,t.text());t.aliases().forEach(v->addQuery(metadataQueries,v));});
         long started = System.nanoTime();
         try {
             var values = repository.searchPublishedMetadata(organizationId,List.copyOf(metadataQueries),request.aiOnly(),request.categoryIds(),request.allowedDocumentIds(),request.options().metadataLimit());
-            phaseChannel(organizationId,"METADATA",String.join(" | ",metadataQueries),1,values,channels);
+            // An explicit title/author/identifier match represents a document.
+            // It must survive fusion with broad chunk-level semantic matches.
+            phaseChannel(organizationId,"METADATA",String.join(" | ",metadataQueries),3,values,channels);
             values.forEach(row->ids.add(row.chunkId()));
             traces.add(queryTrace(String.join(" | ",metadataQueries),"DOCUMENT_METADATA","SUCCEEDED",values,started,""));
         } catch(RuntimeException error) {
             fallbacks.add("DOCUMENT_METADATA_ERROR");traces.add(queryTrace(String.join(" | ",metadataQueries),"DOCUMENT_METADATA","FAILED",List.of(),started,safeTraceError(error)));
         }
         timings.put("metadataSearchMs",elapsedMs(started));
+        started = System.nanoTime();
+        try {
+            var values = repository.searchPublishedTags(organizationId,List.copyOf(metadataQueries),request.aiOnly(),request.categoryIds(),request.allowedDocumentIds(),request.options().metadataLimit());
+            phaseChannel(organizationId,"TAG",String.join(" | ",metadataQueries),3,values,channels);
+            values.forEach(row->ids.add(row.chunkId()));
+            traces.add(queryTrace(String.join(" | ",metadataQueries),"DOCUMENT_TAG","SUCCEEDED",values,started,""));
+        } catch(RuntimeException error) {
+            fallbacks.add("DOCUMENT_TAG_ERROR");traces.add(queryTrace(String.join(" | ",metadataQueries),"DOCUMENT_TAG","FAILED",List.of(),started,safeTraceError(error)));
+        }
+        timings.put("tagSearchMs",elapsedMs(started));
         } else traces.add(new KnowledgeSearchFacade.QueryTrace(request.query(), "DOCUMENT_METADATA", "SKIPPED_CONFIG", 0, 0, "", List.of()));
         var factCandidates = request.requiredFacts().stream().map(f->new KnowledgeSearchFacade.FactCandidateSet(f.label(),f.retrievalQuery(),List.copyOf(facts.getOrDefault(f.retrievalQuery(),Set.of())))).toList();
         return new KnowledgeSearchFacade.RecallResult(channels,new KnowledgeSearchFacade.RetrievalTrace("RAW_BM25_VECTOR_PHRASE_METADATA",
@@ -778,6 +792,17 @@ public class KnowledgeService implements KnowledgeSearchFacade {
 
     private void addQuery(java.util.LinkedHashSet<String> values, String value) {
         if (StringUtils.hasText(value)) values.add(value.strip());
+    }
+
+    static List<String> discoveryQueries(String query) {
+        if (!StringUtils.hasText(query)) return List.of();
+        var result = new LinkedHashSet<String>();
+        // A quoted document title is a discovery term, not the whole question.
+        // Keep the original wording as well; no generated aliases or extra model call.
+        var matcher = java.util.regex.Pattern.compile("《([^《》]{2,300})》").matcher(query);
+        while (matcher.find() && result.size() < 8) result.add(matcher.group(1).strip());
+        result.add(query.strip());
+        return List.copyOf(result);
     }
 
     private List<KnowledgeSearchFacade.QueryTrace> rankTraces(String channel, List<String> queries,

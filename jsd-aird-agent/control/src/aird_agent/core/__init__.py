@@ -1,4 +1,4 @@
-"""Host-neutral coordinator and capability contracts; pi owns the native Agent loop."""
+"""Business capability contracts; DeepSeek owns the execution loop."""
 
 from aird_agent.core.capabilities import CapabilityPack, CapabilityRegistry, ExecutionContext
 

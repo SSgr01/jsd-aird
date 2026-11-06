@@ -92,6 +92,11 @@ class BrokerJobs:
             root = self.path(request.execution_id)
             if (root / "receipt.json").exists():
                 record = self.get(request.execution_id)
+                # A stop can arrive while the caller is still uploading inputs.
+                # Bind the first request to the durable cancellation without dispatching it.
+                if record["status"] == "CANCELLED" and record["request_hash"] is None:
+                    record["request_hash"] = signature
+                    self.save(request.execution_id, record)
                 if record["request_hash"] != signature:
                     raise HTTPException(409, "EXECUTION_ID_CONFLICT")
                 return record
@@ -154,7 +159,17 @@ class BrokerJobs:
 
     async def cancel(self, execution_id):
         async with self.lock:
-            record = self.get(execution_id)
+            try:
+                record = self.get(execution_id)
+            except HTTPException as error:
+                if error.status_code != 404:
+                    raise
+                record = {
+                    "execution_id": execution_id, "request_hash": None,
+                    "status": "CANCELLED", "finished_at": time.time(),
+                }
+                self.save(execution_id, record)
+                return record
             task = self.tasks.get(execution_id)
             if task:
                 task.cancel()

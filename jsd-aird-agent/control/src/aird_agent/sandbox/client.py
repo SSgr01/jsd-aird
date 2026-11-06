@@ -3,10 +3,13 @@
 import asyncio
 import base64
 import hashlib
+import logging
 import re
 
 import httpx
 from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
 
 
 class Sandbox:
@@ -92,29 +95,47 @@ class Sandbox:
             raise HTTPException(400, "Unsupported script or script too large")
         try:
             async with httpx.AsyncClient(
-                timeout=self.settings.sandbox_timeout_seconds + 15, follow_redirects=False
+                timeout=self.settings.sandbox_timeout_seconds + 15, follow_redirects=False, trust_env=False
             ) as client:
                 headers = {"Authorization": "Bearer " + self.settings.sandbox_secret.get_secret_value()}
                 files, manifest = self.inputs(workspace, input_paths)
                 endpoint = self.settings.sandbox_url + "/executions"
-                response = await client.post(
-                    endpoint,
-                    headers=headers,
-                    json={
-                        "organization_id": workspace.root.parent.name,
-                        "run_id": workspace.root.name,
-                        "execution_id": execution_id,
-                        "script": script,
-                        "language": language,
-                        "files": files,
-                    },
-                )
+                async def receipt_response():
+                    # Reading a durable receipt is safe after a lost response.
+                    # Never resubmit a command whose acceptance is uncertain.
+                    for attempt in range(3):
+                        try:
+                            value = await client.get(endpoint + "/" + execution_id, headers=headers)
+                            if value.status_code == 200:
+                                return value
+                            if value.status_code not in {500, 502, 503, 504}:
+                                raise HTTPException(503, "SANDBOX_RESULT_UNKNOWN")
+                            failure = "HTTP_" + str(value.status_code)
+                        except httpx.HTTPError as error:
+                            failure = type(error).__name__
+                        logger.warning("Sandbox receipt unavailable execution=%s attempt=%s failure=%s",
+                            execution_id, attempt + 1, failure)
+                        if attempt < 2:
+                            await asyncio.sleep(0.2 * (attempt + 1))
+                    raise HTTPException(503, "SANDBOX_RESULT_UNKNOWN")
+
+                try:
+                    response = await client.post(endpoint, headers=headers, json={
+                        "organization_id": workspace.root.parent.name, "run_id": workspace.root.name,
+                        "execution_id": execution_id, "script": script, "language": language, "files": files,
+                    })
+                except httpx.HTTPError as error:
+                    logger.warning("Sandbox submission response lost execution=%s failure=%s",
+                        execution_id, type(error).__name__)
+                    response = await receipt_response()
                 if response.status_code not in {200, 202}:
                     raise HTTPException(503, "SANDBOX_EXECUTION_REFUSED")
                 try:
                     async with asyncio.timeout(self.settings.sandbox_timeout_seconds + 10):
                         while True:
                             record = response.json()
+                            if record.get("execution_id") != execution_id:
+                                raise HTTPException(502, "INVALID_SANDBOX_RESPONSE")
                             if record["status"] == "SUCCEEDED":
                                 return {**self.accept_result(workspace, record), "inputs": manifest}
                             if record["status"] in {"FAILED", "CANCELLED"}:
@@ -129,9 +150,7 @@ class Sandbox:
                             if record["status"] == "UNKNOWN":
                                 raise HTTPException(503, "SANDBOX_UNKNOWN")
                             await asyncio.sleep(0.2)
-                            response = await client.get(endpoint + "/" + execution_id, headers=headers)
-                            if response.status_code != 200:
-                                raise HTTPException(503, "SANDBOX_RESULT_UNKNOWN")
+                            response = await receipt_response()
                 except (asyncio.CancelledError, TimeoutError):
                     try:
                         await asyncio.shield(client.delete(endpoint + "/" + execution_id, headers=headers))
@@ -171,7 +190,7 @@ class Sandbox:
     async def reconcile(self, workspace, execution_id):
         if not self.settings.sandbox_enabled:
             return {"status": "UNKNOWN"}
-        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False, trust_env=False) as client:
             response = await client.get(
                 self.settings.sandbox_url + "/executions/" + execution_id,
                 headers={"Authorization": "Bearer " + self.settings.sandbox_secret.get_secret_value()},
@@ -179,7 +198,12 @@ class Sandbox:
         if response.status_code != 200:
             return {"status": "UNKNOWN"}
         record = response.json()
-        if record.get("execution_id") != execution_id or record.get("status") != "SUCCEEDED":
+        if record.get("execution_id") != execution_id:
+            return {"status": "UNKNOWN"}
+        if record.get("status") in {"FAILED", "CANCELLED"}:
+            return {"status": "FAILED", "result": {"id": execution_id, "error": "SANDBOX_" + record["status"],
+                "receipt": {key: record[key] for key in ("execution_id", "request_hash", "status", "finished_at")}}}
+        if record.get("status") != "SUCCEEDED":
             return {"status": "UNKNOWN"}
         workspace.prepare()
         return {
@@ -190,7 +214,7 @@ class Sandbox:
     async def cancel(self, execution_id):
         if not self.settings.sandbox_enabled:
             return
-        async with httpx.AsyncClient(timeout=5, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=5, follow_redirects=False, trust_env=False) as client:
             await client.delete(
                 self.settings.sandbox_url + "/executions/" + execution_id,
                 headers={"Authorization": "Bearer " + self.settings.sandbox_secret.get_secret_value()},

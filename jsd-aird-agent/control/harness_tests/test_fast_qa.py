@@ -3,7 +3,7 @@ import copy
 import pytest
 from fastapi import HTTPException
 
-from aird_agent.capabilities.fast_qa.history import answer_context, qa_history
+from aird_agent.evidence.retrieval_context import answer_context, qa_history
 from aird_agent.capabilities.literature.rcs import normalize_citations as legacy_normalize
 from aird_agent.capabilities.literature.rcs import validate_report as legacy_validate
 from aird_agent.evidence.citations import normalize_citations, validate_report

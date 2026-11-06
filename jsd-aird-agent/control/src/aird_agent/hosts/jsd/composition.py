@@ -1,19 +1,20 @@
-"""JSD composition root; generic execution lives in runtime_core.Coordinator."""
+"""JSD composition root; DeepSeek owns the native execution loop."""
 
 import httpx
 
-from aird_agent.capabilities.fast_qa.history import qa_history
+from aird_agent.evidence.retrieval_context import qa_history
 from aird_agent.capabilities.registry import default_registry
-from aird_agent.core.coordinator import Coordinator
+from aird_agent.core.business_service import BusinessService
 from aird_agent.hosts.jsd.bindings import JsdBindings
 from aird_agent.hosts.jsd.host import JsdHostGateway
+from aird_agent.hosts.jsd.session_views import SessionViews
 
 
-class Service(Coordinator):
+class Service(SessionViews, BusinessService):
     qa_history = staticmethod(qa_history)
 
     def __init__(self, settings, store, *, registry=None, host=None):
-        http = httpx.AsyncClient(timeout=120, follow_redirects=False)
+        http = httpx.AsyncClient(timeout=120, follow_redirects=False, trust_env=False)
         super().__init__(
             settings,
             store,

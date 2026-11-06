@@ -63,6 +63,13 @@ class BibliographyPersistenceTest {
             var v2=new Record(v.documentId(),v.versionId(),2,"ACCEPTED","PAPER",json.createObjectNode().put("title","Revised title"),v.provenance(),v.candidates(),v.manualFields(),null,"hash",null);
             assertThat(repo.save(org,owner,v2,1)).isTrue();assertThat(repo.find(org,v.versionId(),1).orElseThrow().accepted().path("title").asText()).isEqualTo("Original title");
             assertThat(repo.find(UUID.randomUUID(),v.versionId(),1)).isEmpty();
+            var currentKey=new BibliographyRepository.Lookup(v.versionId(),null);
+            var historicKey=new BibliographyRepository.Lookup(v.versionId(),1);
+            var batch=repo.findAll(org,List.of(currentKey,historicKey,currentKey));
+            assertThat(batch).hasSize(2);
+            assertThat(batch.get(currentKey).accepted().path("title").asText()).isEqualTo("Revised title");
+            assertThat(batch.get(historicKey).accepted().path("title").asText()).isEqualTo("Original title");
+            assertThat(repo.findAll(UUID.randomUUID(),List.of(currentKey,historicKey))).isEmpty();
             var task=repo.createTask(org,owner,"request","same");assertThat(repo.createTask(org,owner,"request","same").id()).isEqualTo(task.id());
             assertThatThrownBy(()->repo.createTask(org,owner,"request","different")).isInstanceOf(RuntimeException.class);
             assertThat(repo.task(org,UUID.randomUUID(),task.id())).isEmpty();

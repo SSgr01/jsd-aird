@@ -1,3 +1,4 @@
+import { FormModal } from '@/components/form-dialog/FormModal';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -388,19 +389,12 @@ function NewDocumentModal({ open, projectLabel, projectId, onCancel, onCreate, o
   };
 
   return (
-    <Modal
+    <FormModal form={form}
       title="新建项目文档"
       open={open}
       onCancel={handleCancel}
       width={620}
-      footer={[
-        <Button key="cancel" onClick={handleCancel}>
-          取消
-        </Button>,
-        <Button key="submit" type="primary" loading={submitting} onClick={handleSubmit}>
-          确认新建
-        </Button>,
-      ]}
+      onOk={handleSubmit} confirmLoading={submitting} okText="确认新建" cancelText="取消"
       destroyOnClose
     >
       <Radio.Group
@@ -510,6 +504,6 @@ function NewDocumentModal({ open, projectLabel, projectId, onCancel, onCreate, o
           </Form.Item>
         )}
       </Form>
-    </Modal>
+    </FormModal>
   );
 }

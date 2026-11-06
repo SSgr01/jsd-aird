@@ -78,4 +78,23 @@ class RetrievalPipelineTest {
             com.jsd.aird.data.api.DataSourceFileSearchFacade.RetrievalAccessScope.denied())).isInstanceOf(ApiException.class);
         verifyNoInteractions(rewrite,ranker);
     }
+
+    @Test void nativeAgentQueriesNeverUseTheSeparatelyConfiguredRewriteModel() {
+        var kb = mock(KnowledgeSearchFacade.class);
+        var data = mock(com.jsd.aird.data.api.DataSourceFileSearchFacade.class);
+        when(kb.search(any(KnowledgeSearchFacade.SearchRequest.class))).thenReturn(
+            new KnowledgeSearchFacade.SearchResult(List.of(), new KnowledgeSearchFacade.RetrievalTrace("test", 0, 0, 0, List.of())));
+        var query = "目标材料的测试条件";
+        var plan = new QueryRewriteService.QueryPlan(query, query, List.of(), List.of(), List.of(), Map.of(), "", List.of());
+        when(rewrite.original(eq(query), anyList(), eq(false))).thenReturn(new QueryRewriteService.Result(plan, "ORIGINAL", "", false));
+        var pipeline = new RetrievalPipeline(new RagRetrievalService(kb, data, rewrite, ranker), new ContextCompressionService());
+        for (var categories : List.of(List.<UUID>of(), List.of(UUID.randomUUID()))) {
+            var result = pipeline.retrieveAgentQuery(UUID.randomUUID(), query, List.of(), categories, List.of(), false,
+                com.jsd.aird.data.api.DataSourceFileSearchFacade.RetrievalAccessScope.denied());
+            assertThat(result.knowledgeHits()).isEmpty();
+            assertThat(result.trace().rewriteStatus()).isEqualTo("ORIGINAL");
+        }
+        verify(rewrite, times(2)).original(eq(query), anyList(), eq(false));
+        verify(rewrite, never()).rewrite(anyString(), anyList(), anyBoolean());
+    }
 }

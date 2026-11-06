@@ -1,3 +1,5 @@
+import { FormModal } from '@/components/form-dialog/FormModal';
+import { WorkspaceFrame, WorkspaceMaximizeButton } from '@/components/workspace/WorkspaceFrame';
 import { updateFieldDefinition } from '@/features/template-workspace/field-editing';
 import { deleteWorkbookField, addWorkbookField } from '@/features/template-workspace/workbook-instance';
 import { DocsEditor, SheetsEditor } from '@/features/template-workspace/editor-runtime';
@@ -1733,9 +1735,9 @@ export function TemplateWorkspacePage() {
     : undefined;
 
   return (
-    <section
+    <WorkspaceFrame maximizable
       ref={workspaceRootRef}
-      className="workspace-shell template-business-workspace"
+      className="workspace-shell template-business-workspace template-document-workspace"
       aria-label={`${workspace.name}模板工作台`}
     >
       <header className="workspace-header">
@@ -1747,12 +1749,11 @@ export function TemplateWorkspacePage() {
           >
             返回
           </Button>
-          <span className="workspace-title-block">
+          <div className="workspace-title-block">
             <Typography.Text type="secondary" className="workspace-breadcrumb">
               模板中心 / 模板管理
             </Typography.Text>
-            <Typography.Text strong>{workspace.name}</Typography.Text>
-          </span>
+            <h1 className="workspace-document-title" title={workspace.name}>{workspace.name}</h1></div>
           <span className="workspace-meta-item">V{workspace.versionNo}</span>
           <span className="workspace-meta-item workspace-format">
             {workspace.format === 'XLSX' ? (
@@ -1857,6 +1858,7 @@ export function TemplateWorkspacePage() {
            >
             发布
          </Button>
+          <WorkspaceMaximizeButton />
          </Space>
         </header>
 
@@ -1885,13 +1887,13 @@ export function TemplateWorkspacePage() {
           </div>
         )}
 
-       <Modal
+       <FormModal draft={rejectReason}
          title="驳回模板审核"
          open={rejectReviewOpen}
          okText="确认驳回"
          cancelText="取消"
          onCancel={() => { setRejectReviewOpen(false); setRejectReason(''); }}
-         onOk={() => void rejectTemplateReview()}
+         onOk={() => rejectTemplateReview()}
        >
          <Typography.Paragraph>驳回原因必填，提交后可修改草稿并再次提交审核。</Typography.Paragraph>
          <Input.TextArea
@@ -1900,7 +1902,7 @@ export function TemplateWorkspacePage() {
            placeholder="请输入驳回原因"
            rows={4}
          />
-       </Modal>
+       </FormModal>
 
       <nav className="workspace-view-tabs" aria-label="模板页面">
         <Tabs
@@ -1960,6 +1962,7 @@ export function TemplateWorkspacePage() {
             : ''}`}>
             {workspace.format === 'DOCX' && (
               <DocumentOutlinePanel
+                collapsible
                 structure={workspace.documentStructure}
                 selectedNodeId={selectedWordNodeId}
                 onSelect={(node) => {
@@ -2084,7 +2087,7 @@ export function TemplateWorkspacePage() {
         </div>
       )}
 
-      <Modal
+      <FormModal draft={groupDrafts}
         title="管理业务分组"
         open={groupManagerOpen}
         okText="保存分组"
@@ -2146,7 +2149,7 @@ export function TemplateWorkspacePage() {
         >
           新建分组
         </Button>
-      </Modal>
+      </FormModal>
       <Modal
         title="模板审核记录"
         open={reviewHistoryOpen}
@@ -2175,7 +2178,7 @@ export function TemplateWorkspacePage() {
           }))} />
         ) : <Typography.Text type="secondary">当前版本暂无审核操作记录。</Typography.Text>}
       </Modal>
-    </section>
+    </WorkspaceFrame>
   );
 }
 

@@ -54,7 +54,11 @@ public class LiteratureResearchService {
         else {
             get("topic", UUID.fromString(record.path("topic_id").asText()));
             if ("card".equals(kind)) for (var field : record.path("fields")) authorizeSource(field.path("source"));
-            if ("report".equals(kind)) for (var evidence : record.path("evidence")) authorizeSource(evidence.path("source"));
+            if ("report".equals(kind)) {
+                var refs = mapper.createArrayNode();
+                for (var evidence : record.path("evidence")) refs.add(evidence.path("source"));
+                sources.authorize(refs);
+            }
             if ("annotation".equals(kind) && record.hasNonNull("source")) authorizeSource(record.path("source"));
         }
         return record;
@@ -96,8 +100,7 @@ public class LiteratureResearchService {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST);
             knowledge.authorize(documents(payload));
         } else {
-            var topic = get("topic", UUID.fromString(payload.path("topic_id").asText()));
-            knowledge.authorize(documents(topic));
+            get("topic", UUID.fromString(payload.path("topic_id").asText()));
         }
         if ("card".equals(kind)) {
             if (!payload.path("fields").isArray() || payload.path("fields").isEmpty()) throw new ApiException(ApiErrorCode.VALIDATION_ERROR);
@@ -121,8 +124,7 @@ public class LiteratureResearchService {
             sources.validate(payload.path("source"), payload.path("excerpt").asText(""));
         if ("report".equals(kind)) {
             payload.put("status", "CANDIDATE_PENDING_REVIEW");
-            for (var evidence : payload.path("evidence"))
-                sources.validate(evidence.path("source"), evidence.path("text").asText());
+            sources.validateEvidence(payload.path("evidence"));
             var matcher = java.util.regex.Pattern.compile("\\[E:([a-zA-Z0-9_-]+)\\]").matcher(payload.path("text").asText());
             if (!payload.path("evidence").isObject() || payload.path("evidence").isEmpty() || !matcher.find())
                 throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "研究报告至少需要一处原文证据引用；提纲请保存为笔记");

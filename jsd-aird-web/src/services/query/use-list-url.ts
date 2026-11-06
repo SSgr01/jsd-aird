@@ -6,11 +6,15 @@ export function useListUrl() {
   const [params, setParams] = useSearchParams();
   const location = useLocation();
   const pending = useRef<URLSearchParams>();
+  const latestParams = useRef(params);
+  latestParams.current = params;
   const locationRef = useRef(location.key);
   locationRef.current = location.key;
   const update = useCallback((values: Record<string, string | number | undefined>, resetPage = false) => {
       const first = !pending.current;
-      const next = pending.current ?? new URLSearchParams(params);
+      // A completed list request can correct the page after a newer filter
+      // has committed. Merge that correction into the current URL.
+      const next = pending.current ?? new URLSearchParams(latestParams.current);
       if (resetPage) next.delete('page');
       Object.entries(values).forEach(([key, value]) => {
         if (value === undefined || value === '') next.delete(key);
@@ -23,7 +27,7 @@ export function useListUrl() {
         pending.current = undefined;
         if (target && origin === locationRef.current) setParams(target, { replace: true });
       });
-  }, [params, setParams]);
+  }, [setParams]);
   const number = (key: string, fallback: number) => {
     const value = Number(params.get(key));
     return Number.isSafeInteger(value) && value > 0 ? value : fallback;

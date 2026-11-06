@@ -22,7 +22,6 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "pytest-cov==7.1.0", "ruff==0.15.6"]
-research = ["paper-qa @ git+https://github.com/Future-House/paper-qa.git@c692d0dfeac4a0296599f7fe21a253a58b7ac12a"]
 
 [project.scripts]
 jsd-aird-agent-control = "aird_agent.server.__main__:main"

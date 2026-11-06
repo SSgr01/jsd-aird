@@ -14,7 +14,7 @@ from aird_agent.capabilities.literature.quality import (
     resolve_quote,
     validate_review,
 )
-from aird_agent.hosts.jsd.task_state import check_completion, read_progress, record_read, source_catalog
+from aird_agent.hosts.jsd.task_state import check_delivery, read_progress, record_read, source_catalog
 
 
 def test_recovery_catalog_reuses_handles_without_merging_publication_versions():
@@ -74,6 +74,7 @@ def test_recovery_matrix_retains_exact_quote_and_evidence_pairs_without_copying_
     claim = summary["questions"][0]["claims"][0]
     assert claim["quote_refs"] == [{"evidence_id": "e-original", "quote_id": "q-original"}]
     assert claim["quote_ids"] == ["q-original"]
+    assert claim["verification"] == "AI_CANDIDATE_NOT_FACT_VERIFIED"
     assert "Original source" not in str(summary)
     assert span["source"]["publication_id"] == "v1"
 
@@ -143,7 +144,8 @@ def test_report_rows_cannot_borrow_another_samples_citation(layout):
     answer = {
         "units": [{"unit_id": unit["unit_id"], "verdict": "NON_FACTUAL", "quote_ids": [], "reason": "heading"}
                   for unit in prepared["units"]],
-        "questions": [{"question_id": "modulus", "verdict": "COVERED", "reason": "compared"}],
+        "questions": [{"question_id": row["question_id"], "verdict": "COVERED", "reason": "compared"}
+                      for row in prepared["questions"]],
     }
     next(unit for unit in answer["units"] if unit["unit_id"] == first["unit_id"]).update(
         verdict="SUPPORTED", quote_ids=[spans[1]["quote_id"]]
@@ -201,7 +203,7 @@ def test_fulltext_coverage_retains_holes_until_every_required_node_is_delivered(
     assert progress["read_nodes"] == 5
     assert progress["missing_ranges"] == [[3, 4]] and progress["next_unread_offset"] == 3
     with pytest.raises(HTTPException, match="FULLTEXT_COVERAGE_INCOMPLETE"):
-        check_completion(run, {"outcome": "COMPLETE", "checks": []})
+        check_delivery(run)
     record_read(run, {**source, "offset": 3}, {"trace": {"total_nodes": 6}, "candidates": [{}]})
     assert read_progress(run["read_coverage"])["doc:pub"]["missing_ranges"] == []
 
@@ -230,7 +232,7 @@ def test_review_pass_keeps_its_ai_verification_label(review):
 
 def test_legacy_passing_report_cannot_complete_under_current_review_policy():
     run = {
-        "plan": {"steps": [], "deliverables": ["report"]},
+        "report_requested": True,
         "pack_versions": {"literature": {"version": "4"}},
         "research_matrix": {"revision": 1},
         "report_checks": {"old-hash": {"passed": True, "quality_check_version": 2}},
@@ -242,15 +244,14 @@ def test_legacy_passing_report_cannot_complete_under_current_review_policy():
         ],
     }
     with pytest.raises(HTTPException, match="CURRENT_MATRIX_CHECKED_REPORT_REQUIRED"):
-        check_completion(run, {"outcome": "COMPLETE", "checks": []})
+        check_delivery(run)
 
 
-def test_reviewer_support_without_a_source_handle_is_an_actionable_failed_check(review):
+def test_reviewer_omitting_available_source_handles_is_a_checker_error(review):
     prepared, answer = review
     answer["units"][0]["quote_ids"] = []
-    result = validate_review(prepared, answer)
-    assert not result["passed"]
-    assert result["units"][0]["verdict"] == "INSUFFICIENT"
+    with pytest.raises(ValueError, match="Review omitted source support"):
+        validate_review(prepared, answer)
 
 
 @pytest.mark.parametrize(
@@ -287,8 +288,6 @@ def test_review_cannot_skip_facts_or_borrow_other_units_quotes(review, change):
         answer["units"][0]["quote_ids"] = ["other-unit-quote"]
     else:
         answer["units"][0]["verdict"] = "NON_FACTUAL"
-        assert validate_review(prepared, answer)["passed"] is False
-        return
     with pytest.raises(ValueError):
         validate_review(prepared, answer)
 

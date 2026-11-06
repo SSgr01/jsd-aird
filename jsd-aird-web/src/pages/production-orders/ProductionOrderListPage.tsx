@@ -1,3 +1,5 @@
+import { ListFeedback } from '@/components/loading/ListQueryFeedback';
+import { FormModal } from '@/components/form-dialog/FormModal';
 import { selectionSnapshot } from '@/services/query/selection-snapshot';
 import { useRequestGuard } from '@/services/query/use-request-guard';
 import {
@@ -126,6 +128,8 @@ export function ProductionOrderListPage() {
   }>();
 
   const beginListRequest = useRequestGuard(JSON.stringify([keyword,status,projectId,page.current,page.pageSize]));
+  const [listError, setListError] = useState<string>();
+  const [listLoaded, setListLoaded] = useState(false);
   const load = useCallback(async () => {
     const request = beginListRequest();
     setLoading(true);
@@ -140,14 +144,17 @@ export function ProductionOrderListPage() {
       }, request.signal);
       if (!request.current()) return;
       setItems(result.items);
+      setListError(undefined);
+      setListLoaded(true);
       setPage((current) => ({
         ...current,
         current: result.page,
         pageSize: result.size,
         total: result.total,
       }));
-    } catch (error) {
-      if (request.current()) void message.error(error instanceof Error ? error.message : '生产单列表加载失败');
+    } catch (listFailure) {
+      if (request.current()) setListError(listFailure instanceof Error ? listFailure.message : '列表加载失败');
+      if (request.current()) void message.error(listFailure instanceof Error ? listFailure.message : '生产单列表加载失败');
     } finally {
       if (request.current()) setLoading(false);
     }
@@ -760,16 +767,17 @@ export function ProductionOrderListPage() {
           </Space>
         </Card>
 
+      <ListFeedback loading={loading} hasData={listLoaded} error={listError} onRetry={() => void load()} />
         {view === 'card' ? (
           <Card className="content-card production-order-card-view">
-            {loading ? (
+            {loading && !listLoaded ? (
               <div className="production-order-card-loading">
                 <Spin />
               </div>
             ) : items.length ? (
               <div className="production-order-card-grid">{items.map(renderProductionCard)}</div>
-            ) : (
-              <Empty description="暂无已保存的生产单" />
+            ) : listError ? null : (
+              <Empty description={keyword || status || projectId ? '没有符合筛选条件的生产单' : '暂无已保存的生产单'} />
             )}
             {!loading && items.length > 0 && (
               <Pagination
@@ -798,7 +806,7 @@ export function ProductionOrderListPage() {
               }}
               loading={loading}
               dataSource={items}
-              locale={{ emptyText: <Empty description="暂无已保存的生产单" /> }}
+              locale={{ emptyText: listError ? null : <Empty description={keyword || status || projectId ? '没有符合筛选条件的生产单' : '暂无已保存的生产单'} /> }}
               tableLayout="fixed"
               pagination={{
                 current: page.current,
@@ -920,14 +928,14 @@ export function ProductionOrderListPage() {
           </Card>
         )}
       </div>
-      <Modal
+      <FormModal form={createForm}
         rootClassName="production-order-create-modal"
         title="新建生产单"
         open={createOpen}
         confirmLoading={creating}
         okText="创建并进入工作区"
         cancelText="取消"
-        onOk={() => void createOrder()}
+        onOk={() => createOrder()}
         onCancel={() => {
           setCreateOpen(false);
           createForm.resetFields();
@@ -1028,8 +1036,8 @@ export function ProductionOrderListPage() {
             />
           )}
         </Form>
-      </Modal>
-      <Modal
+      </FormModal>
+      <FormModal form={renameForm}
         open={renameOpen}
         title="编辑生产单信息"
         width={720}
@@ -1042,7 +1050,7 @@ export function ProductionOrderListPage() {
           renameForm.resetFields();
           setRenameRelations([]);
         }}
-        onOk={() => void saveRename()}
+        onOk={() => saveRename()}
       >
         <Form form={renameForm} layout="vertical">
           <div className="production-order-create-grid">
@@ -1086,7 +1094,7 @@ export function ProductionOrderListPage() {
             </Form.Item>
           </div>
         </Form>
-      </Modal>
+      </FormModal>
     </>
   );
 }

@@ -90,7 +90,7 @@
   justify-content: space-between;
   gap: 12px;
   padding: 13px 14px;
-  border: 1px solid #e8edf3;
+  border: 1px solid #edf0f5;
   border-radius: 9px;
   background: #fff;
   color: #42536a;
@@ -106,7 +106,7 @@
 }
 
 .history-dataset-option:disabled {
-  background: #f6f7f9;
+  background: #f8f9fb;
   cursor: not-allowed;
   opacity: .68;
 }

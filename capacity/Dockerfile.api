@@ -3,6 +3,7 @@ WORKDIR /workspace
 COPY jsd-aird-api/pom.xml jsd-aird-api/pom.xml
 RUN mvn -f jsd-aird-api/pom.xml dependency:go-offline -q
 COPY jsd-aird-api jsd-aird-api
+COPY jsd-aird-agent/control/src/aird_agent/capabilities/answer_guidelines.txt jsd-aird-agent/control/src/aird_agent/capabilities/answer_guidelines.txt
 COPY docs/operation-assistant docs/operation-assistant
 RUN mkdir -p jsd-aird-ai/src/jsd_aird_ai/task_profiles
 RUN mvn -f jsd-aird-api/pom.xml -DskipTests package -q

@@ -17,6 +17,13 @@ public interface BibliographyRepository {
     record Source(UUID parseRunId, String fingerprint, List<Page> pages) { }
     record Page(String text, JsonNode anchor, String nodeKey, String nodeType) { }
     Optional<Record> find(UUID org, UUID version, Integer revision);
+    record Lookup(UUID versionId, Integer revision) { }
+    default java.util.Map<Lookup, Record> findAll(UUID org, java.util.Collection<Lookup> lookups) {
+        var result = new java.util.LinkedHashMap<Lookup, Record>();
+        for (var key : new java.util.LinkedHashSet<>(lookups))
+            find(org, key.versionId(), key.revision()).ifPresent(value -> result.put(key, value));
+        return result;
+    }
     boolean save(UUID org, UUID actor, Record value, int expectedRevision);
     List<Target> targets(UUID org, UUID category, List<UUID> documents, UUID after, Instant before, int limit);
     Source source(UUID org, UUID document, UUID version);

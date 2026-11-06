@@ -19,7 +19,6 @@ async def test_conversation_keeps_authorized_files_registered_before_a_topic_wit
             {"id": "m2", "role": "assistant", "run_id": first, "text": "Saved"},
             {"id": "m3", "role": "user", "run_id": second, "text": "Explain the result"},
         ],
-        "checkpoint": {"private": "context"},
         "evidence": {"private": "source text"},
     }
     original = {"id": "a", "kind": "artifact", "title": "result.csv", "path": "output/result.csv"}
@@ -38,7 +37,7 @@ async def test_conversation_keeps_authorized_files_registered_before_a_topic_wit
         )
         assert response.status_code == 200
         assert response.json()["registered_outputs"] == [original, revised]
-        assert "checkpoint" not in response.json() and "evidence" not in response.json()
+        assert "evidence" not in response.json()
         assert "private-bytes" not in response.text
         service.authorize_history.assert_awaited_once()
         # Cached snapshots must not be projected when current authorization fails.

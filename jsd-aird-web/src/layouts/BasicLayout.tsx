@@ -30,7 +30,8 @@ import {
 import { ProLayout, type MenuDataItem } from '@ant-design/pro-components';
 import { Avatar, Button, Dropdown, Input, Result, Tooltip, Typography, type InputRef } from 'antd';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSidebarAutoCollapse } from './use-sidebar-auto-collapse';
 
 import { ContentBoundary } from '@/components/loading/ContentBoundary';
 import { PrefetchLink } from '@/components/loading/PrefetchLink';
@@ -279,6 +280,11 @@ export function BasicLayout() {
   const isAssistant = location.pathname === '/assistant';
   const [assistantNavExpanded, setAssistantNavExpanded] = useState(false);
   const layoutCollapsed = isAssistant ? !assistantNavExpanded : collapsed;
+  const changeNavigationCollapsed = useCallback((next: boolean) => {
+    if (isAssistant) setAssistantNavExpanded(!next);
+    else setCollapsed(next);
+  }, [isAssistant, setCollapsed]);
+  useSidebarAutoCollapse(layoutCollapsed, changeNavigationCollapsed);
   const user = useAuthStore((state) => state.user);
   const permissions = user?.permissions ?? [];
   const menuKeys = user?.menuKeys ?? [];
@@ -294,12 +300,13 @@ export function BasicLayout() {
       <ProLayout
         title={appEnv.title}
         logo={<AppstoreOutlined />}
+        menuHeaderRender={(logo) => <>{logo}<span className="app-brand-title">{appEnv.title}</span></>}
         route={visibleRoute}
         location={{ pathname: location.pathname }}
         selectedKeys={[location.pathname.startsWith('/assistant/model-center') ? '/assistant/model-center' : location.pathname]}
         collapsed={layoutCollapsed}
-        onCollapse={isAssistant ? () => undefined : setCollapsed}
-        collapsedButtonRender={isAssistant ? () => <Tooltip title={layoutCollapsed ? '展开导航' : '收起导航'}><Button type="text" aria-label={layoutCollapsed ? '展开导航' : '收起导航'} icon={<UnorderedListOutlined />} onClick={(event) => { event.stopPropagation(); setAssistantNavExpanded((value) => !value); }} /></Tooltip> : undefined}
+        onCollapse={changeNavigationCollapsed}
+        collapsedButtonRender={() => <Tooltip title={layoutCollapsed ? '展开导航' : '收起导航'}><Button data-sidebar-toggle type="text" aria-expanded={!layoutCollapsed} aria-label={layoutCollapsed ? '展开导航' : '收起导航'} icon={<UnorderedListOutlined />} onClick={(event) => { event.stopPropagation(); changeNavigationCollapsed(!layoutCollapsed); }} /></Tooltip>}
         layout="side"
         fixedHeader
         fixSiderbar

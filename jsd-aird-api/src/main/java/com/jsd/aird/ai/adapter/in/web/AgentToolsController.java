@@ -34,6 +34,10 @@ public class AgentToolsController {
     private final AgentArtifactService artifacts;
     private final PrivateResearchSourceService privateSources;
     private final ScholarlyLiteratureFacade scholarly;
+    private com.jsd.aird.rnd.api.AgentExperimentFacade experiments;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void experiments(com.jsd.aird.rnd.api.AgentExperimentFacade experiments) { this.experiments = experiments; }
 
     public AgentToolsController(AgentDelegation delegation, LiteratureResearchService research,
             ResearchKnowledgeFacade knowledge, WebSearchProvider web, ObjectMapper mapper, AgentArtifactService artifacts,
@@ -62,10 +66,14 @@ public class AgentToolsController {
             return switch (command.action()) {
                 case "topic" -> topic(UUID.fromString(args.path("id").asText()));
                 case "runtime_context" -> host.context(args);
+                case "context_choices" -> host.contextChoices(args);
+                case "context_resource" -> host.contextResource(args);
+                case "research_report_get" -> research.get("report", UUID.fromString(args.path("id").asText()));
                 case "authorize_sources" -> host.authorizeSources(args);
                 case "validate_cached_evidence" -> host.validateEvidence(args);
                 case "research_topic_ensure" -> host.ensureTopic(args);
                 case "retrieval_context" -> retrieval.retrieve(args);
+                case "query_structured_data" -> retrieval.structured(args);
                 case "private_source_upload" -> privateSources.upload(args);
                 case "private_source_get" -> privateSources.metadata(UUID.fromString(args.path("document_id").asText()));
                 case "private_source_read" -> privateSources.read(args);
@@ -75,8 +83,13 @@ public class AgentToolsController {
                 case "source_context" -> "parent".equals(args.path("relation").asText("neighbors"))
                     ? knowledge.parentContext(mapper.convertValue(args.path("source"), ResearchKnowledgeFacade.SourceRef.class),args.path("cursor").asInt(),2000)
                     : knowledge.context(mapper.convertValue(args.path("source"), ResearchKnowledgeFacade.SourceRef.class),args.path("before").asInt(1),args.path("after").asInt(1),args.path("cursor").asInt());
-                case "operation_receipt" -> research.receipt(args);
-                case "search_projects", "get_project_snapshot", "list_project_stages", "list_project_tasks", "get_task_detail" -> projects.read(command.action(), args);
+                case "operation_receipt" -> "create_experiment_draft".equals(args.path("tool").asText())
+                    ? (args.path("close_uncommitted").asBoolean(false)
+                        ? experiments.reconcileReceipt(args.path("operation_key").asText(), args.path("arguments") instanceof ObjectNode request ? request : null)
+                        : experiments.receipt(args.path("operation_key").asText(), args.path("arguments") instanceof ObjectNode request ? request : null)) : research.receipt(args);
+                case "search_experiments", "get_experiment_record" -> experiments.read(command.action(), args);
+                case "create_experiment_draft" -> experiments.createDraft(args);
+                case "search_projects", "get_project_snapshot", "list_project_stages", "list_project_tasks", "get_task_detail", "get_project_records" -> projects.read(command.action(), args);
                 case "authorize" -> { knowledge.authorize(refs(args.path("documents"))); yield Map.of("allowed", true); }
                 case "knowledge_search" -> {
                     var scope = args.hasNonNull("topic_id") ? topic(UUID.fromString(args.path("topic_id").asText())) : host.context(args);
@@ -96,6 +109,7 @@ public class AgentToolsController {
                 case "report_save" -> research.create("report", args.deepCopy(), args.path("key").asText());
                 case "artifact_save" -> artifacts.save(args);
                 case "external_search" -> web.search(new WebSearchProvider.SearchQuery(args.path("query").asText(), "general", null));
+                case "web_search_status" -> Map.of("available", web.isAvailable());
                 case "bibliography_lookup" -> scholarly.lookup(args);
                 case "literature_search" -> scholarly.search(args);
                 case "literature_expand" -> scholarly.expand(args);

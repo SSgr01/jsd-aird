@@ -1,13 +1,16 @@
+import { ListFeedback } from '@/components/loading/ListQueryFeedback';
+import { FormModal } from '@/components/form-dialog/FormModal';
 import {
   App,
   Checkbox,
   Button,
   Card,
   DatePicker,
+  Empty,
   Form,
   Input,
-  List,
   Modal,
+  List,
   Popconfirm,
   Select,
   Space,
@@ -130,6 +133,8 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
     [deleting, setDeleting] = useState(false);
   const sourceType = Form.useWatch('sourceType', form);
   const documentFormat = Form.useWatch('format', form);
+  const [listError, setListError] = useState<string>();
+  const [listLoaded, setListLoaded] = useState(false);
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -144,9 +149,12 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         size,
       });
       setRows(result.items);
+      setListError(undefined);
+      setListLoaded(true);
       setTotal(result.total);
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : '列表加载失败');
+    } catch (listFailure) {
+      setListError(listFailure instanceof Error ? listFailure.message : '列表加载失败');
+      message.error(listFailure instanceof Error ? listFailure.message : '列表加载失败');
     } finally {
       setLoading(false);
     }
@@ -851,14 +859,15 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
           </Button>
         </Space>
       </Card>
+      <ListFeedback loading={loading && !listLoaded} hasData={listLoaded} error={listError} onRetry={() => void load()} />
       {mode === 'card' ? (
-        <List
+        <List locale={{ emptyText: listError ? null : <Empty description={keyword || projectId || status || category || date ? '没有符合筛选条件的记录' : '暂无研发测试记录'} /> }}
           className={
             report
               ? 'research-test-card-list research-test-report-card-list'
               : 'research-test-card-list'
           }
-          loading={loading}
+          loading={loading && !listLoaded}
           grid={{ gutter: 0 }}
           dataSource={rows}
           pagination={{
@@ -983,10 +992,10 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         />
       ) : (
         <div className="research-test-table-wrap">
-          <Table
+          <Table locale={{ emptyText: listError ? null : <Empty description={keyword || projectId || status || category || date ? '没有符合筛选条件的记录' : '暂无研发测试记录'} /> }}
             rowKey="id"
             className={`research-test-list-table research-test-${report ? 'report' : 'standard'}-table`}
-            loading={loading}
+            loading={loading && !listLoaded}
             dataSource={rows}
             columns={columns}
             // Keep the data table readable on narrow screens.  The mobile
@@ -1011,7 +1020,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
           />
         </div>
       )}
-      <Modal
+      <FormModal form={form}
         rootClassName={
           report
             ? 'research-test-create-modal research-test-report-modal'
@@ -1024,7 +1033,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         confirmLoading={submitting}
         okButtonProps={{ disabled: submitting }}
         onCancel={() => setOpen(false)}
-        onOk={() => void submit()}
+        onOk={() => submit()}
       >
         <Form form={form} layout="vertical">
           <Form.Item name="sourceType" hidden rules={[{ required: true }]}>
@@ -1167,8 +1176,8 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
             />
           )}
         </Form>
-      </Modal>
-      <Modal
+      </FormModal>
+      <FormModal draft={[renameName, renameBusinessNo, renameOwnerName, renameDate, renameCategory, renameScope, renameEffectiveFrom, renameEffectiveTo, renameProjectId, renameStageId, renameTaskId]}
         rootClassName="research-test-rename-modal"
         open={renameOpen}
         title={report ? '编辑报告' : '编辑测试标准'}
@@ -1177,7 +1186,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         okText="保存"
         cancelText="取消"
         onCancel={() => setRenameOpen(false)}
-        onOk={() => void saveRename()}
+        onOk={() => saveRename()}
       >
         <Form layout="vertical" className="research-test-rename-form">
           {report ? (
@@ -1311,7 +1320,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
             </div>
           )}
         </Form>
-      </Modal>
+      </FormModal>
     </section>
   );
 }

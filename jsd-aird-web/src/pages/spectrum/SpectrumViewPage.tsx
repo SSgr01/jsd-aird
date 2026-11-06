@@ -1,3 +1,4 @@
+import { FormModal } from '@/components/form-dialog/FormModal';
 import { useRequestGuard } from '@/services/query/use-request-guard';
 import { DeleteOutlined, DownloadOutlined, EyeOutlined, FolderOpenOutlined, LineChartOutlined, MessageOutlined, RedoOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
 import { App, Button, Dropdown, Empty, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
@@ -184,8 +185,8 @@ export function SpectrumViewPage() {
     {deleteItem && <Modal open title={`删除分类“${deleteItem.name}”`} okText="删除" okButtonProps={{ danger: true }} cancelText="取消" confirmLoading={saving} onCancel={() => setDeleteItem(undefined)} onOk={() => void removeCategory()}><Typography.Paragraph>分类下必须没有图谱才能删除；删除后不会删除原始文件。</Typography.Paragraph></Modal>}
     <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} />
     {editingItem && <SpectrumChartEditor item={editingItem} categories={categories} onCancel={() => setEditingItem(undefined)} onSaved={() => { setEditingItem(undefined); void load(); }} />}
-    <Modal open={Boolean(projectEditor)} title="加入项目参考资料" width={780} okText="保存" confirmLoading={saving} onCancel={() => setProjectEditor(undefined)} onOk={() => void saveProjectEditor()}>
+    <FormModal draft={projectEditor?.targets} open={Boolean(projectEditor)} title="加入项目参考资料" width={780} okText="保存" confirmLoading={saving} onCancel={() => setProjectEditor(undefined)} onOk={() => saveProjectEditor()}>
       {projectEditor && <ProjectRelationPicker value={projectEditor.targets} onChange={(targets) => setProjectEditor((current) => current ? { ...current, targets } : current)} emptyText="尚未选择项目参考资料" addText="添加参考资料" removeText="移除参考资料" />}
-    </Modal>
+    </FormModal>
   </div>;
 }

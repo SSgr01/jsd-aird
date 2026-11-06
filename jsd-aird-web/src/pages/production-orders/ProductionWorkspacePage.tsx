@@ -1,3 +1,4 @@
+import { FormModal } from '@/components/form-dialog/FormModal';
 import { DocsEditor, SheetsEditor } from '@/features/template-workspace/editor-runtime';
 import { ContentLoading } from '@/components/loading/ContentLoading';
 import { editorUnchanged, flushEditorChanges, pauseWorkspaceInputs, snapshotBlob, useSaveSession } from '@/features/template-workspace/editor-save';
@@ -601,12 +602,12 @@ export function ProductionWorkspacePage() {
         </aside>
       </div>
 
-      <Modal
+      <FormModal form={customForm}
         title="新增订单自定义字段"
         open={customFieldOpen}
         okText="添加字段"
         cancelText="取消"
-        onOk={() => void addOrderField()}
+        onOk={() => addOrderField()}
         onCancel={() => setCustomFieldOpen(false)}
       >
         <Form form={customForm} layout="vertical" preserve={false}>
@@ -649,7 +650,7 @@ export function ProductionWorkspacePage() {
             <Input placeholder="例如 B2、E8:E20 或 E5:N5" />
           </Form.Item>
         </Form>
-      </Modal>
+      </FormModal>
 
       <Modal
         title={ingestJob?.sourceType === 'PHOTO' ? '照片识别结果复核' : 'Excel 实例导入预览'}

@@ -164,6 +164,34 @@ describe('operation assistant panel', () => {
     expect(useOperationAssistantStore.getState().panelPosition).toEqual({ x: 230, y: 125 });
   });
 
+  it('keeps a corner launcher at the corner through a narrow viewport and back', () => {
+    const width = Object.getOwnPropertyDescriptor(window, 'innerWidth')!;
+    const height = Object.getOwnPropertyDescriptor(window, 'innerHeight')!;
+    const resize = (nextWidth: number, nextHeight: number) => {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: nextWidth });
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: nextHeight });
+    };
+    try {
+      resize(1440, 900);
+      mount();
+      const launcher = screen.getByRole('button', { name: '打开 AI 操作助手' });
+      vi.spyOn(launcher, 'getBoundingClientRect').mockImplementation(() => {
+        const size = window.innerWidth <= 480 ? 44 : 48;
+        return new DOMRect(0, 0, size, size);
+      });
+      expect(useOperationAssistantStore.getState().launcherPosition).toEqual({ x: 1368, y: 828 });
+      resize(390, 844);
+      fireEvent(window, new Event('resize'));
+      expect(useOperationAssistantStore.getState().launcherPosition).toEqual({ x: 322, y: 776 });
+      resize(1440, 900);
+      fireEvent(window, new Event('resize'));
+      expect(useOperationAssistantStore.getState().launcherPosition).toEqual({ x: 1368, y: 828 });
+    } finally {
+      Object.defineProperty(window, 'innerWidth', width);
+      Object.defineProperty(window, 'innerHeight', height);
+    }
+  });
+
   it('keeps Shift+Enter and IME composition from submitting and enforces the question limit', () => {
     const api = vi.spyOn(operationAssistantApi, 'stream').mockResolvedValue();
     mount();

@@ -223,7 +223,7 @@
   height: 38px;
   flex: 0 0 38px;
   border-radius: 8px;
-  background: var(--app-primary-soft, #edf3ff);
+  background: var(--app-primary-soft, var(--app-primary-soft));
   color: var(--app-primary);
   font-size: 18px;
   place-items: center;
@@ -439,7 +439,7 @@
 .production-order-create-modal .ant-modal-header {
   margin: 0 0 20px;
   padding: 20px 24px 16px;
-  border-bottom: 1px solid #dfe6f0;
+  border-bottom: 1px solid var(--app-border);
 }
 
 .production-order-create-modal .ant-modal-title {
@@ -455,7 +455,7 @@
 .production-order-create-modal .ant-modal-footer {
   margin: 0;
   padding: 16px 20px;
-  border-top: 1px solid #dfe6f0;
+  border-top: 1px solid var(--app-border);
 }
 
 .production-order-create-modal .ant-modal-footer .ant-btn {
@@ -499,7 +499,7 @@
 
 .production-order-choice-section button.active {
   border: 2px solid #678bff;
-  background: #f5f8ff;
+  background: var(--app-surface-subtle);
 }
 
 .production-order-choice-section button > span {
@@ -508,8 +508,8 @@
   height: 32px;
   margin-right: 10px;
   border-radius: 8px;
-  background: #eaf0ff;
-  color: #346bf2;
+  background: var(--app-primary-soft);
+  color: var(--app-primary);
   place-items: center;
 }
 
@@ -520,7 +520,7 @@
 .production-order-choice-section button small {
   display: block;
   margin-top: 3px;
-  color: #718096;
+  color: var(--app-text-secondary);
   font-size: 11px;
   font-weight: 400;
 }

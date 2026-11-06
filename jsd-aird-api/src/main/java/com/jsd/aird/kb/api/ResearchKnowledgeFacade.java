@@ -16,7 +16,11 @@ public interface ResearchKnowledgeFacade {
             this(kind,document,version,publication,node,hash,anchor,title,url,null,null);
         }
     }
-    record Candidate(String text, SourceRef source, double score, Integer node_offset, String role) {
+    record Candidate(String text, SourceRef source, double score, Integer node_offset, String role,
+                     @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) JsonNode table_context) {
+        public Candidate(String text, SourceRef source, double score, Integer node_offset, String role) {
+            this(text,source,score,node_offset,role,null);
+        }
         public Candidate(String text, SourceRef source, double score) { this(text,source,score,null,null); }
     }
     record Handle(SourceRef source, double score, Integer node_offset, String role) { }
@@ -24,7 +28,11 @@ public interface ResearchKnowledgeFacade {
     record Recall(List<RecallChannel> channels, Map<String,Object> trace, String next_cursor) { }
     record RecallOptions(boolean bm25, boolean vector, boolean metadata, int limit) { }
     record Result(List<Candidate> candidates, Map<String, Object> trace, Integer next_offset, String next_cursor,
-                  List<Candidate> context_candidates, List<Handle> ranking_snapshot) {
+                  List<Candidate> context_candidates, List<Handle> ranking_snapshot, List<JsonNode> document_metadata) {
+        public Result(List<Candidate> candidates, Map<String,Object> trace, Integer offset, String cursor,
+                      List<Candidate> context, List<Handle> snapshot) {
+            this(candidates, trace, offset, cursor, context, snapshot, List.of());
+        }
         public Result(List<Candidate> candidates,Map<String,Object> trace,Integer offset,String cursor) {
             this(candidates,trace,offset,cursor,List.of(),List.of());
         }
@@ -33,6 +41,9 @@ public interface ResearchKnowledgeFacade {
         }
     }
     void authorize(List<DocumentRef> documents);
+    default void authorizeHistoricalVersion(UUID documentId, UUID versionId) { throw new UnsupportedOperationException("Historical authority unavailable"); }
+    /** Accepted bibliography only, pinned to each evidence source's revision; never a full-text substitute. */
+    default List<JsonNode> documentMetadata(List<SourceRef> sources) { return List.of(); }
     /** Null means an explicitly authorized ALL scope; an empty set denies all documents. */
     default java.util.Set<UUID> authorizedSearchDocuments() { throw new UnsupportedOperationException("Search authority unavailable"); }
     default Recall recall(List<DocumentRef> refs,String query,String mode,RecallOptions options) {
@@ -56,6 +67,11 @@ public interface ResearchKnowledgeFacade {
     Result context(SourceRef source, int before, int after, int cursor);
     Object table(DocumentRef document, UUID tableId, int offset);
     void validate(SourceRef source, String excerpt);
+    record SourceExcerpt(SourceRef source, String excerpt) { }
+    /** One request-local authority snapshot per publication; every excerpt still checks its own identity. */
+    default void validateAll(List<SourceExcerpt> excerpts) {
+        for (var excerpt : excerpts) validate(excerpt.source(), excerpt.excerpt());
+    }
     default SourceRef indexedSource(KnowledgeSearchFacade.SearchHit hit) {
         throw new UnsupportedOperationException("Indexed source projection is not implemented");
     }

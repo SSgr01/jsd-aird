@@ -18,17 +18,46 @@ public class JdbcBibliographyRepository implements BibliographyRepository {
     private final ObjectMapper json;
     public JdbcBibliographyRepository(JdbcTemplate jdbc, ObjectMapper json) { this.jdbc = jdbc; this.json = json; }
 
+    @Override public Map<Lookup, Record> findAll(UUID org, Collection<Lookup> lookups) {
+        var keys = new LinkedHashSet<>(lookups);
+        var result = new LinkedHashMap<Lookup, Record>();
+        var current = keys.stream().filter(k -> k.revision() == null).map(Lookup::versionId).toList();
+        if (!current.isEmpty()) {
+            var args = new ArrayList<Object>(); args.add(org); args.addAll(current);
+            jdbc.query("SELECT * FROM kb.document_bibliography WHERE organization_id=? AND version_id IN ("
+                + String.join(",", Collections.nCopies(current.size(), "?")) + ")", (rs, n) -> {
+                    var value = currentRow(rs);
+                    result.put(new Lookup(value.versionId(), null), value); return value;
+                }, args.toArray());
+        }
+        var historical = keys.stream().filter(k -> k.revision() != null).toList();
+        if (!historical.isEmpty()) {
+            var args = new ArrayList<Object>(); args.add(org);
+            historical.forEach(k -> { args.add(k.versionId()); args.add(k.revision()); });
+            jdbc.query("SELECT snapshot_jsonb FROM kb.document_bibliography_revision WHERE organization_id=? AND (version_id,revision) IN ("
+                + String.join(",", Collections.nCopies(historical.size(), "(?,?)")) + ")", (rs, n) -> {
+                    var value = decode(rs.getString(1), Record.class);
+                    result.put(new Lookup(value.versionId(), value.revision()), value); return value;
+                }, args.toArray());
+        }
+        return result;
+    }
+
+    private Record currentRow(ResultSet rs) throws SQLException {
+        return new Record(rs.getObject("document_id", UUID.class), rs.getObject("version_id", UUID.class), rs.getInt("revision"),
+            rs.getString("status"), rs.getString("document_type"), read(rs.getString("accepted_jsonb")),
+            read(rs.getString("provenance_jsonb")), read(rs.getString("candidates_jsonb")),
+            read(rs.getString("manual_fields_jsonb")), rs.getObject("parse_run_id", UUID.class),
+            rs.getString("source_fingerprint"), rs.getString("message"));
+    }
+
     @Override public Optional<Record> find(UUID org, UUID version, Integer revision) {
         if (revision != null) return jdbc.query("""
             SELECT snapshot_jsonb FROM kb.document_bibliography_revision
             WHERE organization_id=? AND version_id=? AND revision=?
             """, (rs,n) -> decode(rs.getString(1), Record.class), org, version, revision).stream().findFirst();
         return jdbc.query("SELECT * FROM kb.document_bibliography WHERE organization_id=? AND version_id=?",
-            (rs,n) -> new Record(rs.getObject("document_id",UUID.class), version, rs.getInt("revision"),
-                rs.getString("status"), rs.getString("document_type"), read(rs.getString("accepted_jsonb")),
-                read(rs.getString("provenance_jsonb")), read(rs.getString("candidates_jsonb")),
-                read(rs.getString("manual_fields_jsonb")), rs.getObject("parse_run_id",UUID.class),
-                rs.getString("source_fingerprint"), rs.getString("message")), org, version).stream().findFirst();
+            (rs,n) -> currentRow(rs), org, version).stream().findFirst();
     }
     @Override @Transactional public boolean save(UUID org, UUID actor, Record v, int expected) {
         jdbc.update("""

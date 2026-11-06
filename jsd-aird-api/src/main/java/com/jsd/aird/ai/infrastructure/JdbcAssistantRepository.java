@@ -35,6 +35,25 @@ public class JdbcAssistantRepository implements AssistantRepository {
     }
 
     @Override
+    public boolean conversationOwned(UUID organizationId, UUID conversationId, UUID actorId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS(SELECT 1 FROM ai.assistant_conversation
+                    WHERE organization_id = ? AND id = ? AND created_by = ?)
+                """, Boolean.class, organizationId, conversationId, actorId));
+    }
+
+    @Override
+    public List<ConversationMeta> listOwnedConversations(UUID organizationId, UUID actorId, int limit) {
+        return jdbc.query("""
+                SELECT id, title, summary, title_source, summary_token_count, last_summarized_message_id
+                FROM ai.assistant_conversation WHERE organization_id = ? AND created_by = ?
+                ORDER BY updated_at DESC LIMIT ?
+                """, (rs, rowNum) -> new ConversationMeta(rs.getObject("id", UUID.class), rs.getString("title"),
+                rs.getString("summary"), rs.getString("title_source"), rs.getInt("summary_token_count"),
+                rs.getObject("last_summarized_message_id", UUID.class)), organizationId, actorId, Math.min(100, Math.max(1, limit)));
+    }
+
+    @Override
     public void insertMessage(UUID conversationId, String role, String content, JsonNode citations) {
         jdbc.update("""
                 INSERT INTO ai.assistant_message (id, conversation_id, role, content, citations_jsonb)

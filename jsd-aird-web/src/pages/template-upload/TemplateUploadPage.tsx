@@ -1,3 +1,4 @@
+import { FormModal } from '@/components/form-dialog/FormModal';
 import {
   CloudUploadOutlined,
 } from '@ant-design/icons';
@@ -378,13 +379,13 @@ export function TemplateUploadPage() {
         onPageChange={(current, pageSize) => setRecordPage({ current, pageSize })}
       />
 
-      <Modal
+      <FormModal form={form}
         title="确认模板信息"
         open={Boolean(selectedJob)}
         okText="进入工作台"
         cancelText="取消"
         confirmLoading={creating}
-        onOk={() => void createTemplate()}
+        onOk={() => createTemplate()}
         onCancel={() => setSelectedJob(undefined)}
       >
         <Alert
@@ -410,7 +411,7 @@ export function TemplateUploadPage() {
             />
           </Form.Item>
         </Form>
-      </Modal>
+      </FormModal>
 
       <Modal
         title={viewingJob ? `识别结果：${viewingJob.sourceFileName}` : '识别结果'}

@@ -164,6 +164,10 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         audit(org,id,old.currentVersionId(),"STATUS_"+target,old.editModel(),old.editModel(),actor,name);return required(org,id);
     }
     @Override public List<Version> versions(UUID org,UUID id){return jdbc.query("SELECT * FROM rnd.experiment_version WHERE organization_id=? AND experiment_id=? AND (status='COMPLETED' OR (status='VOIDED' AND published_at IS NOT NULL)) ORDER BY version_no DESC",this::version,org,id);}
+    @Override public Optional<Version> version(UUID org,UUID id,UUID versionId){
+        return jdbc.query("SELECT * FROM rnd.experiment_version WHERE organization_id=? AND experiment_id=? AND id=?",
+                this::version,org,id,versionId).stream().findFirst();
+    }
     @Override @Transactional public Detail createRevision(UUID org,UUID id,long revision,String reason,UUID actor,String name){
         var old=required(org,id); requireVersion(old,revision);if(old.summary().status()!=ExperimentStatus.COMPLETED)conflict("仅已完成实验可创建修订版本");if(!text(reason))invalid("必须填写修订原因");var vid=UUID.randomUUID();int next=old.summary().versionNo()+1;
         int n=jdbc.update("UPDATE rnd.experiment SET status='DRAFT',current_version_id=NULL,revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=? AND deleted=false",actor,org,id,revision);lock(n);

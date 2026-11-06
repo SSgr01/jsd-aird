@@ -4,6 +4,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import dayjs from '@/utils/dayjs';
+import { ListFeedback } from '@/components/loading/ListQueryFeedback';
 
 import { deleteStage, formatStageStatus, getProjects, getStages, stageStatuses, type ProjectStage, type StageStatus } from '@/services/project/project-api';
 import './project-pages.css';
@@ -28,6 +29,8 @@ export function PhasePage() {
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [view, setView] = useState<ViewMode>('list');
   const [loading, setLoading] = useState(false);
+  const [listError, setListError] = useState<string>();
+  const [listLoaded, setListLoaded] = useState(false);
   const [keyword, setKeyword] = useState('');
   const [projectId, setProjectId] = useState<string>();
   const [status, setStatus] = useState<StageStatus>();
@@ -49,7 +52,8 @@ export function PhasePage() {
       const result = await getStages({ keyword: keyword.trim() || undefined, projectId, status, owner,
         plannedFrom: dates?.[0]?.format('YYYY-MM-DD'), plannedTo: dates?.[1]?.format('YYYY-MM-DD'), page, size: pageSize });
       setRows(result.items); setTotal(result.total);
-    } catch (reason) { messageApi.error(reason instanceof Error ? reason.message : '阶段查询失败'); }
+      setListError(undefined); setListLoaded(true);
+    } catch (reason) { setListError(reason instanceof Error ? reason.message : '阶段查询失败'); }
     finally { setLoading(false); }
   }, [dates, keyword, messageApi, owner, page, pageSize, projectId, status]);
 
@@ -73,10 +77,10 @@ export function PhasePage() {
     { title: '阶段编号', dataIndex: 'stageCode', className: 'pm-code-column', width: 200 },
     { title: '阶段名称', dataIndex: 'name', className: 'pm-name-column', render: (value: string, row) => <Button type="link" onClick={() => navigate(`/projects/${row.projectId}?section=stages&stageId=${row.id}`)}>{value}</Button> },
     { title: '所属项目', dataIndex: 'projectName', className: 'pm-project-column', render: (value: string) => <div className="pm-phase-project">{value}</div> },
-    { title: '序号', dataIndex: 'orderNo', align: 'center', width: 100, render: (value: number) => `第 ${value} 阶段` },
+    { title: '序号', dataIndex: 'orderNo', align: 'right', width: 100, render: (value: number) => `第 ${value} 阶段` },
     { title: '负责人', dataIndex: 'owner', width: 120, render: (value?: string) => value || '—' },
     { title: '开始日期', dataIndex: 'plannedStart', align: 'center', width: 130, render: (value?: string) => value ? dayjs(value).format('YYYY-MM-DD') : '—' },
-    { title: '任务完成', key: 'tasks', align: 'center', width: 110, render: (_, row) => {
+    { title: '任务完成', key: 'tasks', align: 'right', width: 110, render: (_, row) => {
       const completed = Math.max(0, row.taskCount - row.openTaskCount);
       return `${completed} / ${row.taskCount}`;
     } },
@@ -110,7 +114,7 @@ export function PhasePage() {
       {holder}
       <div className="page-heading">
         <div>
-          <h2>项目阶段</h2>
+          <h1>项目阶段</h1>
           <p>跨项目查询、跟踪并定位研发阶段。</p>
         </div>
         <div className="pm-page-actions">
@@ -144,6 +148,7 @@ export function PhasePage() {
         <Button icon={<ReloadOutlined />} onClick={reset}>重置</Button>
       </div>
       <div className="pm-phase-content">
+        <ListFeedback loading={loading && listLoaded} hasData={listLoaded} error={listError} onRetry={() => void load()} />
         {view === 'card' ? (
           <Spin spinning={loading}>
             <div className="pm-card-grid pm-phase-card-grid">
@@ -197,13 +202,13 @@ export function PhasePage() {
                   </div>
                 );
               })}
-              {!loading && !rows.length && <Empty description="暂无符合条件的阶段" />}
+              {!loading && !listError && !rows.length && <Empty description={keyword || projectId || status || owner || dates ? '暂无符合条件的阶段' : '暂无阶段'} />}
             </div>
           </Spin>
         ) : (
           <div className="pm-table-scroll">
             <Table<ProjectStage> rowKey="id" columns={columns} dataSource={rows} loading={loading} size="small" scroll={{ x: 1510 }}
-              locale={{ emptyText: <Empty description="暂无符合条件的阶段" /> }}
+              locale={{ emptyText: listError ? <span /> : <Empty description={keyword || projectId || status || owner || dates ? '暂无符合条件的阶段' : '暂无阶段'} /> }}
               pagination={false} />
           </div>
         )}

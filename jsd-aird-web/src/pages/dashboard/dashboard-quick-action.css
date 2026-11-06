@@ -30,25 +30,25 @@
   border: 0;
   outline: none;
   border-radius: 999px;
-  background: linear-gradient(135deg, #2f7bff 0%, #4f8bff 100%);
-  box-shadow: 0 12px 28px rgba(47, 123, 255, 0.42), 0 4px 10px rgba(47, 123, 255, 0.18);
-  color: #ffffff;
+  background: var(--app-action);
+  box-shadow: 0 12px 28px rgba(53, 111, 200, 0.42), 0 4px 10px rgba(53, 111, 200, 0.18);
+  color: var(--app-surface);
   pointer-events: auto;
   user-select: none;
 }
 
 .dashboard-quick-action-fab:hover {
   transform: scale(1.05);
-  box-shadow: 0 16px 34px rgba(47, 123, 255, 0.5);
+  box-shadow: 0 16px 34px rgba(53, 111, 200, 0.5);
 }
 
 .dashboard-quick-action-fab:focus-visible {
-  box-shadow: 0 0 0 4px rgba(47, 123, 255, 0.28), 0 12px 28px rgba(47, 123, 255, 0.42);
+  box-shadow: 0 0 0 4px rgba(53, 111, 200, 0.28), 0 12px 28px rgba(53, 111, 200, 0.42);
 }
 
 .dashboard-quick-action .is-dragging .dashboard-quick-action-fab {
   transition: none;
-  box-shadow: 0 16px 32px rgba(47, 123, 255, 0.55);
+  box-shadow: 0 16px 32px rgba(53, 111, 200, 0.55);
 }
 
 .dashboard-quick-action-fab-icon {
@@ -70,7 +70,7 @@
   position: absolute;
   inset: -6px;
   border-radius: 999px;
-  border: 2px solid rgba(47, 123, 255, 0.35);
+  border: 2px solid rgba(53, 111, 200, 0.35);
   opacity: 0;
   transition: opacity 0.2s ease, transform 0.2s ease;
   pointer-events: none;
@@ -148,7 +148,7 @@
 }
 
 .dashboard-quick-action-item {
-  --qa-tint: #1f6feb;
+  --qa-tint: var(--app-primary);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -166,7 +166,7 @@
 }
 
 .dashboard-quick-action-item:focus-visible .dashboard-quick-action-icon {
-  box-shadow: 0 0 0 4px rgba(47, 123, 255, 0.3);
+  box-shadow: 0 0 0 4px rgba(53, 111, 200, 0.3);
 }
 
 .dashboard-quick-action-icon {
@@ -176,8 +176,8 @@
   width: 44px;
   height: 44px;
   border-radius: 999px;
-  background: var(--qa-tint, #1f6feb);
-  color: #ffffff;
+  background: var(--qa-tint, var(--app-primary));
+  color: var(--app-surface);
   font-size: 20px;
   box-shadow: 0 6px 16px rgba(31, 41, 55, 0.18);
   transition: transform 0.18s ease, box-shadow 0.18s ease;
@@ -192,12 +192,12 @@
   display: inline-flex;
   align-items: center;
   padding: 6px 14px;
-  background: #ffffff;
-  border: 1px solid var(--qa-tint, #1f6feb);
+  background: var(--app-surface);
+  border: 1px solid var(--qa-tint, var(--app-primary));
   border-radius: 999px;
   font-size: 13px;
-  color: #11233f;
-  box-shadow: 0 6px 18px rgba(42, 72, 110, 0.08);
+  color: var(--app-text);
+  box-shadow: var(--app-shadow);
   transition: transform 0.18s ease;
 }
 

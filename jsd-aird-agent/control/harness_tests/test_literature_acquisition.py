@@ -100,4 +100,4 @@ def test_new_tools_are_discovered_from_literature_and_acquisition_is_a_mutation(
     assert {"literature_search", "literature_expand", "literature_acquire", "literature_acquire_status"} <= names
     assert "literature_acquire" in registry.mutations(["literature"])
     assert "literature_acquire" not in registry.initial_tools(["literature"])
-    assert not {"literature_search", "literature_acquire"} & {item["name"] for item in registry.tools(["core", "fast-qa"])}
+    assert not {"literature_search", "literature_acquire"} & {item["name"] for item in registry.tools(["core", "retrieval"])}

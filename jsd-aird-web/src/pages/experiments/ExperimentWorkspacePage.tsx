@@ -1,3 +1,5 @@
+import { WorkspaceFrame, WorkspaceMaximizeButton } from '@/components/workspace/WorkspaceFrame';
+import { FormModal } from '@/components/form-dialog/FormModal';
 import { instanceWorkbookView } from '@/features/data-workbench/instance-workbook-view';
 import { DocsEditor, SheetsEditor } from '@/features/template-workspace/editor-runtime';
 import {
@@ -32,8 +34,7 @@ import {
   Button,
   Form,
   Input,
-  Modal,
-  Progress,
+    Progress,
   Result,
   Space,
   Spin,
@@ -165,6 +166,7 @@ export function ExperimentWorkspacePage({
   const id = experimentId ?? routeId;
   const navigate = useNavigate();
   const location = useLocation();
+  const requestedVersion = new URLSearchParams(location.search).get('version_id');
   const returnTo =
     returnToOverride ??
     (typeof location.state?.returnTo === 'string' ? location.state.returnTo : '/experiments/list');
@@ -246,11 +248,14 @@ export function ExperimentWorkspacePage({
       const d = await trackSnapshot(getExperiment(id));
       if (!isCurrent()) return;
       preloadWorkspaceEditor(documentFormatOf(d.editModel ?? {}, d.templateSnapshot));
-      void listVersions(id)
-        .then((versions) => {
-          if (isCurrent()) setVersions(versions);
-        })
-        .catch(() => undefined);
+      const history = await listVersions(id);
+      if (!isCurrent()) return;
+      setVersions(history);
+      const pinned = requestedVersion ? history.find(version => version.id === requestedVersion) : undefined;
+      // The published history omits the current editable draft. Its exact ID
+      // is already authorized by the detail response; other IDs must be in history.
+      if (requestedVersion && requestedVersion !== d.currentVersionId && !pinned)
+        throw new Error('引用的实验版本已不可用，请重新核对来源。');
       const nextModel: ExperimentModel = { ...(d.editModel ?? {}) };
       // Keep legacy XLS/XLSX imports aligned with the production workspace:
       // workbook snapshots always use Sheets, even if an older record was
@@ -288,7 +293,8 @@ export function ExperimentWorkspacePage({
       }
       setSnapshot(initialSnapshot);
       const editable = !['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(d.summary.status);
-      setView(editable ? 'edit' : 'preview');
+      setSelectedVersion(pinned);
+      setView(pinned ? 'versions' : editable ? 'edit' : 'preview');
       if (!editable && labDefinition(initialSnapshot)) {
         const result = await getExperimentPresentation(id, d.summary.revision);
         if (!isCurrent()) return;
@@ -305,7 +311,7 @@ export function ExperimentWorkspacePage({
       if (!isCurrent()) return;
       setLoadError(error instanceof Error ? error.message : '实验本加载失败');
     }
-  }, [id, beginLoad]);
+  }, [id, beginLoad, requestedVersion]);
 
   useEffect(() => {
     setDetail(undefined);
@@ -1263,7 +1269,7 @@ export function ExperimentWorkspacePage({
         </Button>
       </Can>
       <Button
-        type="primary"
+        type={saveState === 'SAVED' ? 'default' : 'primary'}
         icon={<SaveOutlined />}
         disabled={!editable}
         loading={saveState === 'SAVING'}
@@ -1340,14 +1346,14 @@ export function ExperimentWorkspacePage({
         onClose={() => setPreviewSource(undefined)}
       />
 
-      <Modal
+      <FormModal form={templateDraftForm}
         title={unifiedDefinition ? '创建公共模板修订草稿' : '另存为模板'}
         open={templateDraftOpen}
         okText="生成模板草稿"
         cancelText="取消"
         confirmLoading={templateDraftSaving}
         onCancel={() => setTemplateDraftOpen(false)}
-        onOk={() => void createTemplateDraft()}
+        onOk={() => createTemplateDraft()}
         destroyOnHidden
       >
         <Form form={templateDraftForm} layout="vertical" preserve={false}>
@@ -1382,16 +1388,16 @@ export function ExperimentWorkspacePage({
             }
           />
         </Form>
-      </Modal>
+      </FormModal>
 
-      <Modal
+      <FormModal form={metadataForm}
         title="编辑实验基本信息"
         open={metadataOpen}
         okText="保存"
         cancelText="取消"
         confirmLoading={metadataSaving}
         onCancel={() => setMetadataOpen(false)}
-        onOk={() => void saveMetadata()}
+        onOk={() => saveMetadata()}
         destroyOnHidden
       >
         <Typography.Paragraph type="secondary">
@@ -1413,16 +1419,16 @@ export function ExperimentWorkspacePage({
             <Input type="date" />
           </Form.Item>
         </Form>
-      </Modal>
+      </FormModal>
 
-      <Modal
+      <FormModal form={reviewForm}
         title="审核信息"
         open={reviewOpen}
         okText="保存并提交审核"
         cancelText="取消"
         confirmLoading={busy}
         onCancel={() => setReviewOpen(false)}
-        onOk={() => void submitReviewWithInformation()}
+        onOk={() => submitReviewWithInformation()}
         destroyOnHidden
       >
         <Typography.Paragraph type="secondary">
@@ -1444,15 +1450,15 @@ export function ExperimentWorkspacePage({
             <Input.TextArea rows={4} placeholder="填写真实实验完成后得到的主要结论" />
           </Form.Item>
         </Form>
-      </Modal>
-      <Modal
+      </FormModal>
+      <FormModal draft={returnReason}
         title="退回修改"
         open={returnOpen}
         okText="确认退回"
         cancelText="取消"
         confirmLoading={busy}
         onCancel={() => setReturnOpen(false)}
-        onOk={() => void returnForChanges()}
+        onOk={() => returnForChanges()}
         destroyOnHidden
       >
         <Form layout="vertical">
@@ -1467,7 +1473,7 @@ export function ExperimentWorkspacePage({
             />
           </Form.Item>
         </Form>
-      </Modal>
+      </FormModal>
     </>
   );
   const focusInstanceBinding = (binding: TemplateBinding) => {
@@ -1851,6 +1857,7 @@ export function ExperimentWorkspacePage({
     };
     return (
       <DataWorkbenchShell
+        maximizable
         rootRef={workspaceRootRef}
         breadcrumb="实验中心 / 实验记录"
         title={detail.summary.title}
@@ -1926,7 +1933,7 @@ export function ExperimentWorkspacePage({
     );
   }
   return (
-    <section
+    <WorkspaceFrame maximizable
       ref={workspaceRootRef}
       className="workspace-shell template-business-workspace experiment-workspace-shell"
       aria-label={`${detail.summary.title}实验工作台`}
@@ -1936,20 +1943,19 @@ export function ExperimentWorkspacePage({
           <Button type="text" icon={<ArrowLeftOutlined />} onClick={goBack}>
             {onBack ? '返回导入数据' : '返回'}
           </Button>
-          <span className="workspace-title-block">
+          <div className="workspace-title-block">
             <Typography.Text type="secondary" className="workspace-breadcrumb">
               实验中心 / 实验记录
             </Typography.Text>
-            <Typography.Text strong>{detail.summary.title}</Typography.Text>
-          </span>
+            <h1 className="workspace-document-title" title={detail.summary.title}>{detail.summary.title}</h1></div>
           {workspaceMeta}
         </div>
-        {workspaceActions}
+        <Space wrap>{workspaceActions}<WorkspaceMaximizeButton /></Space>
       </header>
       {workspaceNavigation}
       {workspaceContent}
       {workspaceDialogs}
-    </section>
+    </WorkspaceFrame>
   );
 }
 

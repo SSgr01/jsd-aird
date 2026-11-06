@@ -11,11 +11,12 @@ interface CatalogListPanelProps {
   loading?: boolean;
   error?: string;
   onRetry?: () => void;
+  feedback?: ReactNode;
   empty?: ReactNode;
   children: ReactNode;
 }
 
-export function CatalogListPanel({ title, count, countLabel = '条', filters, actions, loading, error, onRetry, empty, children }: CatalogListPanelProps) {
+export function CatalogListPanel({ title, count, countLabel = '条', filters, actions, loading, error, onRetry, feedback, empty, children }: CatalogListPanelProps) {
   return (
     <section className="catalog-list-panel" aria-label={title}>
       <div className="catalog-list-heading">
@@ -23,6 +24,7 @@ export function CatalogListPanel({ title, count, countLabel = '条', filters, ac
         <div className="catalog-list-filters">{filters}</div>
       </div>
       <div className="catalog-list-actions">{actions}</div>
+      {feedback}
       {loading ? (
         <div className="catalog-list-state catalog-list-loading" role="status" aria-label="正在加载列表">
           <ContentLoading label="正在加载列表…" />

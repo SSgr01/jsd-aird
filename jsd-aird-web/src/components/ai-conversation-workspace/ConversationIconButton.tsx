@@ -129,7 +129,7 @@ export function CopyAnswerButton({ text }: { text: string }) {
         tooltip={notice || '复制回答'}
         onClick={() => {
           void navigator.clipboard
-            .writeText(cleanConversationText(text))
+            .writeText(cleanConversationText(text, true))
             .then(() => {
               setNotice('已复制');
               clearTimeout(timer.current);

@@ -36,6 +36,7 @@ async def create_conversation(service, principal):
             "conversation",
             {
                 "profile": "agent",
+                "engine_version": "dsh-v1",
                 "topic_id": None,
                 "context_refs": [],
                 "retrieval_scope": {},
@@ -45,7 +46,6 @@ async def create_conversation(service, principal):
                 "messages": [],
                 "notes": [],
                 "queued": [],
-                "checkpoint": None,
                 "private_source_ids": [],
             },
             conn,
@@ -89,8 +89,7 @@ async def upload(service, principal, cid, request, key, *, provenance=None):
             dict.fromkeys([*(current.get("private_source_ids") or []), result["id"]])
         )
         if "private-literature" not in current["pack_ids"]:
-            # Explicit source attachment enables only its new read capability. Existing pins
-            # remain unchanged; the source-scope change invalidates any old checkpoint on start.
+            # Source ownership registration adds only the corresponding read capability.
             current["pack_ids"] = [*current["pack_ids"], "private-literature"]
             current["pack_versions"] = {
                 **current["pack_versions"],
@@ -137,7 +136,12 @@ def private_pack():
         runtime = context.runtime
         sid = str(UUID(args["document_id"]))
         if sid not in (context.run.get("private_source_ids") or []):
-            raise HTTPException(403, "PRIVATE_SOURCE_NOT_IN_CONVERSATION")
+            # An earlier native attachment remains readable when a later message
+            # refers to it. Ownership is availability, never a retrieval filter
+            # or a requirement to read every attachment on each turn.
+            conversation = await runtime.store.get(context.principal, "conversation", context.run["conversation_id"])
+            if sid not in (conversation.get("private_source_ids") or []):
+                raise HTTPException(403, "PRIVATE_SOURCE_NOT_IN_CONVERSATION")
         signature = digest([mode, sid, args])
         async with runtime.store.transaction(context.principal, context.run["id"]) as conn:
             current = await runtime.active(context.principal, context.run["id"], context.run["epoch"], conn)
@@ -233,14 +237,15 @@ def private_pack():
                 "document_id": STRING,
                 "query": {"type": "string", "minLength": 1, "maxLength": 256},
                 "offset": INTEGER,
+                "limit": {"type": "integer", "minimum": 1, "maximum": 12},
                 "match_mode": {"type": "string", "enum": ["auto", "phrase", "all", "any"]},
             },
             ["document_id", "query"],
         ),
         tool(
             "private_document_read",
-            "按节点偏移顺序读取原文，不接受query；从目录/搜索返回的node_offset定位，按next_offset继续。",
-            {"document_id": STRING, "offset": INTEGER},
+            "按节点偏移顺序读取原文，不接受query；从目录/搜索返回的node_offset定位，按next_offset继续，每次最多12个节点。",
+            {"document_id": STRING, "offset": INTEGER, "limit": {"type": "integer", "minimum": 1, "maximum": 12}},
             ["document_id"],
         ),
     )

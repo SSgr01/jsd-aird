@@ -1,41 +1,11 @@
-"""Observable task state, not a fixed workflow or scientific verification."""
+"""Business delivery, source identity and reading coverage."""
 
 import json
-from pathlib import PurePosixPath
 
 from fastapi import HTTPException
 
 from aird_agent.capabilities.files.completion import check_file_completion
 from aird_agent.core.contracts import digest
-
-
-def check_plan(plan):
-    """Keep legacy logs readable; new research plans carry explicit scope and method."""
-    if plan["task_type"] == "GENERAL" and plan.get("presentation") == "research_plan_v1":
-        # A display hint must not impose literature fields on an ordinary task.
-        plan = {key: value for key, value in plan.items() if key != "presentation"}
-    steps = plan["steps"]
-    if "analysis_file" in plan.get("deliverables", []) and not plan.get("file_names"):
-        raise HTTPException(
-            422, "PLAN_FILE_NAMES_REQUIRED: list every requested download in file_names"
-        )
-    for name in plan.get("file_names", []):
-        if not name or PurePosixPath(name).name != name or any(c in name for c in "\\:\x00") or name in {".", ".."}:
-            raise HTTPException(422, "PLAN_FILE_NAME_INVALID: use a file name without directories")
-    if (
-        len({item["id"] for item in steps}) != len(steps)
-        or sum(item["status"] == "in_progress" for item in steps) > 1
-    ):
-        raise HTTPException(422, "Plan requires unique steps and at most one active step")
-    if plan.get("presentation") == "research_plan_v1" and (
-        plan["task_type"] != "RESEARCH"
-        or not plan.get("scope", "").strip()
-        or not plan["goal"].strip()
-        or not plan["summary"].strip()
-        or any(not step["title"].strip() or not step.get("description", "").strip() for step in steps)
-    ):
-        raise HTTPException(422, "RESEARCH_PLAN: provide research goal, scope and a method for each step")
-    return plan
 
 
 def scope_digest(topic):
@@ -50,122 +20,85 @@ def scope_digest(topic):
     return digest(value)
 
 
-def check_completion(run, body):
-    if body["outcome"] == "COMPLETE":
-        requirements = run.get("research_requirements") or {}
-        required_sources = requirements.get("fulltext_documents", [])
-        questions = (
-            set(requirements.get("question_ids", [])) | requirements.get("question_targets", {}).keys()
+def selected_sources(run):
+    """Explicit document scope is host input, independent of the model's plan type."""
+    packs = run.get("pack_ids")
+    if packs is not None and not {"literature", "private-literature"}.intersection(packs):
+        return set()
+    sources = {
+        (ref["resource_id"], ref.get("publication_id"))
+        for ref in run.get("context_refs", [])
+        if ref.get("kind") == "KB_PUBLICATION"
+    }
+    sources.update(
+        (item["document_id"], item.get("publication_id"))
+        for item in run.get("private_documents", [])
+    )
+    if run.get("topic_id") and not run.get("context_refs"):
+        sources.update((item["document_id"], item.get("publication_id")) for item in run.get("source_documents", []))
+    return sources
+
+
+def selected_evidence(run):
+    sources = selected_sources(run)
+    return {
+        eid for eid, candidate in run.get("evidence", {}).items()
+        if candidate.get("text", "").strip()
+        and candidate.get("source", {}).get("kind") in {"KB_PUBLICATION", "RUN_UPLOAD", "EXTERNAL_FULLTEXT"}
+        and any(
+            candidate["source"].get("document_id") == doc
+            and (publication is None or candidate["source"].get("publication_id") == publication)
+            for doc, publication in sources
         )
-        if questions - run.get("research_matrix", {}).get("questions", {}).keys():
-            raise HTTPException(422, "MATRIX_QUESTIONS_INCOMPLETE")
-        if required_sources:
-            coverage = run.get("read_coverage", {})
-            if any(
-                not fully_read(coverage.get(item["document_id"] + ":" + item["publication_id"], {}))
-                for item in required_sources
-            ):
-                raise HTTPException(
-                    422,
-                    "FULLTEXT_COVERAGE_INCOMPLETE: user-required documents cannot be removed by changing the plan",
-                )
-            if requirements.get("require_rcs"):
-                contexts = run.get("evidence_contexts", [])
-                scored = {
-                    (item["source"]["document_id"], item["source"].get("publication_id")) for item in contexts
-                }
-                if any(
-                    (item["document_id"], item["publication_id"]) not in scored for item in required_sources
-                ):
-                    raise HTTPException(
-                        422,
-                        "RCS_COVERAGE_INCOMPLETE: score relevant evidence from every required publication",
-                    )
-            outputs = run.get("registered_outputs", [])
-            for option, kind in (("require_report", "report"), ("require_cards", "card")):
-                if not requirements.get(option):
-                    continue
-                covered = {
-                    (ref["document_id"], ref["publication_id"])
-                    for output in outputs
-                    if output["kind"] == kind
-                    for ref in output.get("publications", [])
-                }
-                missing = [
-                    ref
-                    for ref in required_sources
-                    if (ref["document_id"], ref["publication_id"]) not in covered
-                ]
-                if missing:
-                    raise HTTPException(
-                        422, "USER_DELIVERABLES_MISSING: " + kind + " for " + json.dumps(missing)
-                    )
-        plan = run.get("plan")
-        if not plan and body.get("task_type") == "GENERAL":
-            plan = {"task_type": "GENERAL", "steps": [], "deliverables": ["answer"]}
-        if not plan:
-            raise HTTPException(422, "PLAN_REQUIRED: record task and expected deliverables first")
-        check_file_completion(run, plan)
-        if run.get("pack_versions", {}).get("literature", {}).get("version") == "4" and (
-            requirements.get("require_report") or "report" in plan["deliverables"]
+    }
+
+
+def check_delivery(run):
+    """Check business receipts and explicit requirements; dsh owns plans and turn completion."""
+    if selected_sources(run) and not selected_evidence(run):
+        raise HTTPException(422, "SELECTED_SOURCE_READING_REQUIRED")
+    requirements = run.get("research_requirements") or {}
+    required_sources = requirements.get("fulltext_documents", [])
+    questions = set(requirements.get("question_ids", [])) | requirements.get("question_targets", {}).keys()
+    if questions - run.get("research_matrix", {}).get("questions", {}).keys():
+        raise HTTPException(422, "MATRIX_QUESTIONS_INCOMPLETE")
+    if required_sources:
+        coverage = run.get("read_coverage", {})
+        if any(not fully_read(coverage.get(item["document_id"] + ":" + item["publication_id"], {})) for item in required_sources):
+            raise HTTPException(422, "FULLTEXT_COVERAGE_INCOMPLETE")
+        if requirements.get("require_rcs"):
+            scored = {(item["source"]["document_id"], item["source"].get("publication_id")) for item in run.get("evidence_contexts", [])}
+            if any((item["document_id"], item["publication_id"]) not in scored for item in required_sources):
+                raise HTTPException(422, "RCS_COVERAGE_INCOMPLETE")
+    outputs = run.get("registered_outputs", [])
+    for option, kind in (("require_report", "report"), ("require_cards", "card")):
+        if not requirements.get(option):
+            continue
+        covered = {(ref["document_id"], ref["publication_id"]) for output in outputs if output["kind"] == kind for ref in output.get("publications", [])}
+        missing = [ref for ref in required_sources if (ref["document_id"], ref["publication_id"]) not in covered]
+        if missing or not any(output["kind"] == kind for output in outputs):
+            raise HTTPException(422, "USER_DELIVERABLES_MISSING: " + kind + " for " + json.dumps(missing))
+    check_file_completion(run)
+    if (requirements.get("require_report") or run.get("report_requested")) and run.get("pack_versions", {}).get("literature", {}).get("version") == "4":
+        checks = run.get("report_checks", {})
+        if not any(
+            output.get("kind") == "report"
+            and (review := output.get("quality_review", {})).get("passed")
+            and review.get("matrix_revision") == run.get("research_matrix", {}).get("revision", 0)
+            and checks.get(review.get("report_hash"), {}).get("passed")
+            and checks.get(review.get("report_hash"), {}).get("quality_check_version") == 3
+            for output in outputs
         ):
-            # A saved older snapshot remains valid history, not completion of a
-            # newer matrix. Revision alone is insufficient: bind the check hash.
-            checks = run.get("report_checks", {})
-            if not any(
-                output.get("kind") == "report"
-                and (review := output.get("quality_review", {})).get("passed")
-                and review.get("matrix_revision") == run.get("research_matrix", {}).get("revision")
-                and checks.get(review.get("report_hash"), {}).get("passed")
-                and checks.get(review.get("report_hash"), {}).get("quality_check_version") == 3
-                for output in run.get("registered_outputs", [])
-            ):
-                raise HTTPException(422, "CURRENT_MATRIX_CHECKED_REPORT_REQUIRED")
-        if any(step["status"] != "completed" for step in plan["steps"]):
-            raise HTTPException(422, "UNFINISHED_PLAN: continue work or declare PARTIAL/NEEDS_INPUT")
-        if not body["checks"] or any(item["status"] == "missing" for item in body["checks"]):
-            raise HTTPException(
-                422, "INCOMPLETE_COVERAGE: disclose missing work instead of claiming completion"
-            )
-        kinds = {item["kind"] for item in run.get("registered_outputs", [])}
-        required = {"report": "report", "comparison": "card"}
-        missing = [item for item in plan["deliverables"] if item in required and required[item] not in kinds]
-        if missing:
-            raise HTTPException(422, "DELIVERABLES_MISSING: " + ", ".join(missing))
-        if (
-            "comparison" in plan["deliverables"]
-            and len({item["id"] for item in run.get("registered_outputs", []) if item["kind"] == "card"}) < 2
-        ):
-            raise HTTPException(
-                422,
-                "COMPARISON_REQUIRES_TWO_INSTANCES: save at least two instance evidence cards or declare PARTIAL",
-            )
-        cited = {eid for item in body["checks"] for eid in item.get("evidence_ids", [])}
-        if plan["task_type"] == "RESEARCH" and not cited:
-            raise HTTPException(422, "RESEARCH_EVIDENCE_REQUIRED: retrieve/read sources or declare PARTIAL")
-        if plan.get("fulltext_coverage_required"):
-            coverage = run.get("read_coverage", {})
-            sources = plan.get("fulltext_documents", run.get("source_documents", []))
-            authorized = {
-                (item["document_id"], item["publication_id"])
-                for item in [*run.get("source_documents", []), *run.get("private_documents", [])]
-            }
-            if not sources or any(
-                (source["document_id"], source["publication_id"]) not in authorized
-                or not fully_read(coverage.get(source["document_id"] + ":" + source["publication_id"], {}))
-                for source in sources
-            ):
-                raise HTTPException(
-                    422, "FULLTEXT_COVERAGE_INCOMPLETE: read remaining nodes or declare PARTIAL"
-                )
-    for check in body["checks"]:
-        if any(eid not in run["evidence"] for eid in check.get("evidence_ids", [])):
-            raise HTTPException(422, "Unknown evidence in completion review")
-    return {**body, "verification": "AGENT_SELF_CHECK_NOT_HUMAN_VERIFICATION"}
+            raise HTTPException(422, "CURRENT_MATRIX_CHECKED_REPORT_REQUIRED")
 
 
 def bound_document_page(result, args, max_characters, total_key="total_nodes"):
     """Deliver complete nodes, never count a workspace preview as reading them."""
+    from aird_agent.evidence.metadata import attach_metadata
+    from aird_agent.evidence.presentation import model_result
+
+    metadata = result.get("document_metadata", [])
+    result = {key: value for key, value in result.items() if key != "document_metadata"}
     offset = args.get("offset", 0)
     total = result.get("trace", {}).get(total_key)
     if not isinstance(total, int) or total < 0 or offset < 0:
@@ -176,7 +109,7 @@ def bound_document_page(result, args, max_characters, total_key="total_nodes"):
         proposed["next_offset"] = (
             offset + len(proposed["candidates"]) if offset + len(proposed["candidates"]) < total else None
         )
-        if len(json.dumps(proposed, ensure_ascii=False, default=str)) > max_characters - 256:
+        if len(json.dumps(model_result(proposed), ensure_ascii=False, default=str)) > max_characters - 256:
             break
         page = proposed
     if not page["candidates"] and offset < total:
@@ -187,7 +120,7 @@ def bound_document_page(result, args, max_characters, total_key="total_nodes"):
         offset + len(page["candidates"]) if offset + len(page["candidates"]) < total else None
     )
     page["trace"]["delivered_nodes"] = len(page["candidates"])
-    return page
+    return attach_metadata(page, metadata, max_characters, projection=model_result)
 
 
 def fully_read(value):
@@ -278,7 +211,7 @@ ACTIVITIES = {
     "report_check": "逐项核查报告事实与原文",
     "report_save": "保存带引用的研究报告",
     "artifact_save": "登记可下载成果",
-    "sandbox_execute": "执行隔离数据分析",
+    "dsh_execute": "执行隔离数据分析",
     "external_search": "发现外部资料",
     "bibliography_lookup": "查询文献与 DOI",
     "literature_search": "查找相关论文",

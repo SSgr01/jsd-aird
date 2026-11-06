@@ -60,6 +60,8 @@ public interface ExperimentRepository {
     Detail transition(UUID organizationId, UUID id, long revision, ExperimentStatus target, String comment,
                       UUID actorId, String actorName);
     List<Version> versions(UUID organizationId, UUID id);
+    /** Explicit, owner-scoped version read, including the current editable draft. */
+    Optional<Version> version(UUID organizationId, UUID id, UUID versionId);
     Detail createRevision(UUID organizationId, UUID id, long revision, String reason, UUID actorId, String actorName);
     Detail rollback(UUID organizationId, UUID id, long revision, int targetVersion, String reason, UUID actorId, String actorName);
     JsonNode compare(UUID organizationId, UUID id, int from, int to);

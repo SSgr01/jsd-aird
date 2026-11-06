@@ -1,0 +1,136 @@
+.workspace-frame { min-width: 0; }
+
+/* The section stays in place in the React tree, below portalled menus/dialogs. */
+.workspace-frame[data-maximized='true'] {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 900;
+  width: 100vw !important;
+  height: 100dvh !important;
+  max-width: none !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
+  overflow: hidden;
+  background: var(--app-background);
+}
+
+body.workspace-is-maximized .app-topbar,
+body.workspace-is-maximized .ant-pro-sider,
+body.workspace-is-maximized .ant-pro-layout-header,
+body.workspace-is-maximized .ant-pro-layout .ant-layout-sider,
+body.workspace-is-maximized .operation-assistant-root {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.workspace-frame :is(.workspace-header, .data-workbench-header) {
+  flex: 0 0 auto;
+  min-width: 0;
+  height: auto;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+}
+
+.workspace-frame :is(.workspace-header, .data-workbench-header) > .ant-space {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.workspace-frame :is(.workspace-title-block, .data-workbench-identity) { min-width: 0; }
+.workspace-frame .workspace-title-block { display: flex; }
+.workspace-frame .workspace-title-block > span:last-child { color: var(--app-text); font-weight: 600; }
+.workspace-frame .workspace-document-title {
+  max-width: min(420px, 100%);
+  margin: 0;
+  overflow: hidden;
+  color: var(--app-text);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-frame .data-workbench-title-row h1 { margin: 0; font-size: 17px; font-weight: 600; line-height: 1.5; }
+.workspace-frame .business-page-heading :is(h1, h2, h3) { margin: 0; font-size: 17px; font-weight: 600; line-height: 1.5; }
+.workspace-maximize-button { flex: none; }
+.workspace-frame :is(.workspace-main-stage, .data-workbench-grid) { min-height: 0; }
+
+/* Project spreadsheets have no field rail; let the canvas use the whole grid. */
+.project-document-workspace .prototype-workspace-grid:not(.word-workspace-grid) {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.workspace-frame .document-outline-panel-header { display: flex; min-height: 44px; flex: none; align-items: flex-start; justify-content: space-between; padding-right: 8px; }
+.workspace-frame .document-outline-panel-header > .side-panel-heading { min-width: 0; flex: 1; padding: 0; border: 0; }
+.workspace-frame .document-outline-panel-content { min-height: 0; overflow: auto; }
+.workspace-frame .document-outline-panel-header > .ant-btn { margin-top: 12px; flex: none; }
+.workspace-frame .document-outline-panel-header [hidden],
+.workspace-frame .document-outline-panel-content[hidden] { display: none; }
+.workspace-frame .document-outline-panel[data-collapsed='true'] .document-outline-panel-header { justify-content: center; padding: 0; }
+.workspace-frame .document-outline-panel[data-collapsed='true'] { gap: 0; padding: 0 8px; }
+.workspace-frame .document-outline-panel[data-collapsed='true'] .document-outline-panel-header > .ant-btn { margin-top: 8px; }
+.workspace-frame .word-workspace-grid:has(> .document-outline-panel[data-collapsed='true']) { grid-template-columns: 44px minmax(0, 1fr); }
+.workspace-frame .word-workspace-grid.has-recognition-review:has(> .document-outline-panel[data-collapsed='true']) { grid-template-columns: 44px minmax(0, 1fr) 370px; }
+
+@media (max-width: 1099px) {
+  .app-content-workspace:has(> .template-document-workspace) { height: calc(100dvh - 64px); min-height: 0; overflow: hidden; }
+  .workspace-frame.template-document-workspace { min-height: 0; }
+  /* The desktop inspector must not squeeze a narrow editor to zero width. */
+  .workspace-frame.template-document-workspace .prototype-workspace-grid:not(.word-workspace-grid) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(240px, 1fr) minmax(180px, 35%);
+    overflow: auto;
+  }
+  .workspace-frame.template-document-workspace .prototype-workspace-grid:not(.word-workspace-grid) > .workspace-canvas { grid-column: 1; grid-row: 1; }
+  .workspace-frame.template-document-workspace .prototype-workspace-grid:not(.word-workspace-grid) > .template-field-manager { grid-column: 1; grid-row: 2; }
+  .workspace-frame.template-document-workspace .prototype-workspace-grid:has(> .collapsible-field-panel[data-collapsed='true']):not(.word-workspace-grid) { grid-template-rows: minmax(240px, 1fr) 44px; }
+  .workspace-frame .word-workspace-grid,
+  .workspace-frame .word-workspace-grid:has(> .document-outline-panel[data-collapsed='true']) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .workspace-frame .word-workspace-grid.has-recognition-review,
+  .workspace-frame .word-workspace-grid.has-recognition-review:has(> .document-outline-panel[data-collapsed='true']) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(260px, 1fr) minmax(160px, 28%);
+    overflow: auto;
+  }
+  .workspace-frame .word-workspace-grid > .document-outline-panel { max-height: 180px; }
+  .workspace-frame.experiment-workspace-shell .workspace-main-stage > .template-workspace-grid:not(.has-field-bindings) {
+    flex: 1; height: auto; min-height: 0; grid-template-rows: minmax(0, 1fr);
+  }
+}
+
+.workspace-frame:is(.knowledge-document-view, .knowledge-review-workbench) {
+  display: flex;
+  flex-direction: column;
+  max-width: none;
+  min-height: 100%;
+}
+
+.workspace-frame:is(.knowledge-document-view, .knowledge-review-workbench)[data-maximized='true'] {
+  padding: 20px 24px;
+  overflow: auto;
+}
+
+.workspace-frame .business-page-heading { flex-wrap: wrap; gap: 16px; }
+.workspace-frame .business-page-heading > .ant-space { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+.workspace-frame .business-page-heading > .ant-space:first-child { flex: 1 1 300px; }
+.workspace-frame .business-page-heading > .ant-space:first-child > .ant-space-item:last-child { min-width: 0; }
+.workspace-frame .business-page-heading h2 { overflow-wrap: anywhere; text-wrap: balance; }
+
+@media (max-width: 767px) {
+  .app-content-workspace:has(> .template-document-workspace) { height: calc(100dvh - 56px); margin-top: 0; }
+  .workspace-frame :is(.workspace-header, .data-workbench-header) { padding: 12px; }
+  .workspace-frame :is(.workspace-header, .data-workbench-header) > .ant-space {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .workspace-frame .workspace-identity { width: 100%; flex-wrap: wrap; }
+  .workspace-frame .workspace-title-block { flex: 1 1 140px; }
+  .workspace-frame .workspace-title-block > span { max-width: 100%; }
+  .workspace-frame:is(.knowledge-document-view, .knowledge-review-workbench)[data-maximized='true'] { padding: 12px; }
+}

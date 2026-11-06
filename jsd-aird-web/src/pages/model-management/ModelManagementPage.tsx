@@ -1,5 +1,6 @@
+import { FormModal } from '@/components/form-dialog/FormModal';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { App, Button, Card, Checkbox, Drawer, Empty, Form, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd'
+import { App, Button, Card, Checkbox, Drawer, Empty, Form, Input, Select, Space, Table, Tag, Typography } from 'antd'
 import { CheckCircleOutlined, ClockCircleOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useAuthStore } from '@/stores/auth-store'
 import { modelRegistryApi } from '@/services/ai-rnd/model-registry-api'
@@ -172,6 +173,6 @@ export function ModelManagementPage({ embedded = false, focusTargetId, focusMode
       </div>}
     </Drawer>
 
-    <Modal open={Boolean(action)} title={action?.type === 'pause' ? '暂停模型' : '回退模型'} okText="确认" cancelText="取消" onCancel={() => setAction(undefined)} onOk={() => void submitAction()}><Form form={actionForm} layout="vertical"><Form.Item name="reason" label="操作原因" rules={[{ required: true, message: '请填写操作原因' }]}><Input.TextArea rows={3} maxLength={300} /></Form.Item></Form></Modal>
+    <FormModal form={actionForm} open={Boolean(action)} title={action?.type === 'pause' ? '暂停模型' : '回退模型'} okText="确认" cancelText="取消" onCancel={() => setAction(undefined)} onOk={() => submitAction()}><Form form={actionForm} layout="vertical"><Form.Item name="reason" label="操作原因" rules={[{ required: true, message: '请填写操作原因' }]}><Input.TextArea rows={3} maxLength={300} /></Form.Item></Form></FormModal>
   </main>
 }

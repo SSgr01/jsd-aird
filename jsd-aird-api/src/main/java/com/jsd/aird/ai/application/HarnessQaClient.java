@@ -8,6 +8,7 @@ import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.Actor;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -16,15 +17,18 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
-/** Executes fixed generation in pi; Java remains the canonical conversation/message authority. */
+/** Adapts the public HTTP stream to native dsh tasks without a separate model path. */
 @Component
 public class HarnessQaClient {
-    public record Chunk(String text, int inputTokens, int outputTokens, boolean reset) {
+    public record Chunk(String text, int inputTokens, int outputTokens, boolean reset, JsonNode citations) {
+        public Chunk(String text, int inputTokens, int outputTokens, boolean reset) { this(text, inputTokens, outputTokens, reset, null); }
         public Chunk(String text, int inputTokens, int outputTokens) { this(text, inputTokens, outputTokens, false); }
     }
 
@@ -44,23 +48,44 @@ public class HarnessQaClient {
     public boolean enabled() { return enabled; }
 
     public Flux<Chunk> stream(Actor actor, UUID conversationId, UUID userMessageId, String question,
-            String instructions, String prompt, Collection<String> allowedRefs, JsonNode candidates,
             Collection<UUID> knowledgeCategories, Collection<UUID> dataCategories, boolean webSearch) {
+        if (!enabled) return Flux.error(unavailable());
         // Issue while the request's identity is available; every downstream tool/gate rechecks it.
         var ticket = delegation.issue(actor);
         var body = mapper.createObjectNode().put("canonical_conversation_id", conversationId.toString())
-            .put("canonical_user_message_id", userMessageId.toString()).put("question", question)
-            .put("instructions", instructions).put("prompt", prompt);
-        body.set("allowed_refs", mapper.valueToTree(allowedRefs)); body.set("candidates", candidates);
+            .put("canonical_user_message_id", userMessageId.toString()).put("question", question);
         var scope = body.putObject("retrieval_scope").put("web_search_enabled", webSearch);
         scope.set("knowledge_category_ids", mapper.valueToTree(knowledgeCategories));
         scope.set("data_category_ids", mapper.valueToTree(dataCategories));
         return Flux.<Chunk>create(sink -> {
+            var run = new AtomicReference<UUID>();
+            var inputStream = new AtomicReference<InputStream>();
+            var cancellationSent = new AtomicBoolean();
+            Runnable cancel = () -> {
+                var id = run.get();
+                if (id != null && cancellationSent.compareAndSet(false, true)) {
+                    Schedulers.boundedElastic().schedule(() -> {
+                        try { exchange("POST", "/runs/" + id + "/cancel", null, ticket, null); }
+                        catch (Exception error) {
+                            org.slf4j.LoggerFactory.getLogger(HarnessQaClient.class)
+                                .warn("Could not stop native task {} after HTTP cancellation", id);
+                        }
+                    });
+                }
+                var input = inputStream.getAndSet(null);
+                if (input != null) try { input.close(); } catch (java.io.IOException ignored) { }
+            };
+            sink.onCancel(cancel::run);
+            // Keep admission alive long enough to learn its run ID even if the
+            // subscriber cancels while /tasks is still returning.
+            Schedulers.boundedElastic().schedule(() -> {
             try {
-                var created = exchange("POST", "/prepared-qa", body, ticket, "ordinary-qa:" + userMessageId);
+                var created = exchange("POST", "/tasks", body, ticket, "task:" + userMessageId);
                 var id = UUID.fromString(created.path("id").asText());
+                run.set(id);
+                // Admission may finish after the HTTP client disconnected.
+                if (sink.isCancelled()) { cancel.run(); return; }
                 long cursor = 0;
-                var answer = new StringBuilder();
                 for (int attempt = 0; attempt < 3 && !sink.isCancelled(); attempt++) {
                     try {
                         var request = HttpRequest.newBuilder(URI.create(controlUrl + "/internal/v1/harness/runs/" + id + "/events"))
@@ -68,6 +93,8 @@ public class HarnessQaClient {
                             .header("Last-Event-ID", Long.toString(cursor)).GET().build();
                         var response = http.send(request, HttpResponse.BodyHandlers.ofInputStream());
                         try (var input = response.body()) {
+                            inputStream.set(input);
+                            if (sink.isCancelled()) { cancel.run(); return; }
                             if (response.statusCode() != 200) throw unavailable();
                             try (var reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
                                 String line;
@@ -80,48 +107,52 @@ public class HarnessQaClient {
                                         if (seq <= cursor) continue;
                                         var payload = event.path("payload");
                                         switch (event.path("type").asText()) {
-                                            case "message.started" -> { answer.setLength(0); sink.next(new Chunk("", 0, 0, true)); }
+                                            case "message.started" -> sink.next(new Chunk("", 0, 0, true));
                                             case "message.delta" -> {
-                                                var text = payload.path("delta").asText(); answer.append(text);
+                                                var text = payload.path("delta").asText();
                                                 sink.next(new Chunk(text, 0, 0));
                                             }
                                             case "message.completed" -> sink.next(new Chunk("",
                                                 payload.path("usage").path("input").asInt(), payload.path("usage").path("output").asInt()));
                                             case "run.succeeded" -> {
                                                 var text = payload.path("text").asText();
-                                                if (!text.contentEquals(answer)) sink.next(new Chunk(text, 0, 0, true));
+                                                sink.next(new Chunk(text, 0, 0, true, payload.path("citations")));
                                                 sink.complete(); return;
                                             }
-                                            case "run.failed", "run.cancelled" -> throw unavailable();
+                                            case "run.failed", "run.cancelled" -> throw unavailable(payload);
                                             default -> { }
                                         }
                                         cursor = seq;
                                     }
                                 }
                             }
+                        } finally {
+                            inputStream.set(null);
                         }
                     } catch (java.io.IOException error) {
                         if (attempt == 2) throw error;
                     }
+                    if (sink.isCancelled()) return;
                     var snapshot = exchange("GET", "/runs/" + id, null, ticket, null);
                     if ("SUCCEEDED".equals(snapshot.path("status").asText())) {
                         var text = snapshot.path("result").asText();
-                        if (!text.contentEquals(answer)) sink.next(new Chunk(text, 0, 0, true));
+                        sink.next(new Chunk(text, 0, 0, true, snapshot.path("citations")));
                         sink.complete(); return;
                     }
-                    if (java.util.Set.of("FAILED", "CANCELLED").contains(snapshot.path("status").asText())) throw unavailable();
+                    if (java.util.Set.of("FAILED", "CANCELLED").contains(snapshot.path("status").asText())) throw unavailable(snapshot);
                 }
                 if (!sink.isCancelled()) throw unavailable();
             } catch (Exception error) {
                 if (error instanceof InterruptedException) Thread.currentThread().interrupt();
-                sink.error(error);
+                if (!sink.isCancelled()) sink.error(error);
             }
-        }).subscribeOn(Schedulers.boundedElastic());
+            });
+        });
     }
 
     private JsonNode exchange(String method, String path, ObjectNode body, String ticket, String key) throws Exception {
         var request = HttpRequest.newBuilder(URI.create(controlUrl + "/internal/v1/harness" + path))
-            .timeout(Duration.ofSeconds(30)).header("X-Jsd-Agent-Ticket", ticket).header("Content-Type", "application/json");
+            .timeout(Duration.ofSeconds(150)).header("X-Jsd-Agent-Ticket", ticket).header("Content-Type", "application/json");
         if (key != null) request.header("Idempotency-Key", key);
         var response = http.send(request.method(method, body == null ? HttpRequest.BodyPublishers.noBody()
             : HttpRequest.BodyPublishers.ofString(body.toString())).build(), HttpResponse.BodyHandlers.ofString());
@@ -131,5 +162,12 @@ public class HarnessQaClient {
 
     private ApiException unavailable() {
         return new ApiException(ApiErrorCode.AI_PROVIDER_UNAVAILABLE, "问答执行服务暂不可用，请稍后重试");
+    }
+
+    private ApiException unavailable(JsonNode failure) {
+        var code = failure.path("error").asText(failure.path("code").asText());
+        if ("MODEL_QUOTA_UNAVAILABLE".equals(code))
+            return new ApiException(ApiErrorCode.AI_PROVIDER_UNAVAILABLE, "模型服务额度暂不可用，请联系管理员检查账户。");
+        return unavailable();
     }
 }

@@ -154,16 +154,6 @@ async def test_stale_replay_clears_only_navigation_indexes_and_can_restart(princ
     assert "ranking_snapshot" not in runtime.host_call.call_args.args[2]
 
 
-def test_authorized_recovery_retains_handle_indexes_and_policy_without_body_copies():
-    from aird_agent.hosts.jsd.bindings import JsdBindings
-
-    prior = {
-        "ranking_snapshots": {"key": {"handles": []}},
-        "retrieval_policy": {"fingerprint": "one"},
-        "navigation_cache": {},
-    }
-    assert JsdBindings().inherit(prior) == prior
-
 
 async def test_host_query_limit_error_is_actionable_without_forwarding_arbitrary_details(settings, principal):
     import httpx

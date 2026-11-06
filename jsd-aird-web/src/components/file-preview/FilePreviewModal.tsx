@@ -1,14 +1,29 @@
-import { DownloadOutlined, FileOutlined, LoadingOutlined } from '@ant-design/icons';
-import { Alert, Button, Empty, Modal, Spin, Table, Tabs, Tag, Typography, type TableColumnsType } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { DownloadOutlined, FileOutlined, FullscreenExitOutlined, FullscreenOutlined, LoadingOutlined } from '@ant-design/icons';
+import { Alert, Button, Empty, Modal, Spin, Table, Tabs, Tag, Tooltip, Typography, type TableColumnsType } from 'antd';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 
 import { downloadBlob, triggerNativeDownload } from '@/services/files';
 import { buildSpreadsheetPreview, detectPreviewMode, excelColumnLabel, type FilePreviewDescriptor, type FilePreviewMode, type SpreadsheetCell, type SpreadsheetPreview } from './file-preview-utils';
 import { PdfCanvasPreview } from './PdfCanvasPreview';
+import './file-preview-modal.css';
 
 const MAX_PREVIEW_BYTES = 50 * 1024 * 1024;
 const MAX_ROWS = 200;
 const MAX_COLUMNS = 50;
+
+function hasPreviewPopup(dialog: HTMLElement) {
+  const selector = [
+    '.ant-tabs-dropdown:not(.ant-tabs-dropdown-hidden)',
+    '.ant-dropdown:not(.ant-dropdown-hidden)',
+    '.ant-select-dropdown:not(.ant-select-dropdown-hidden)',
+    '.ant-picker-dropdown:not(.ant-picker-dropdown-hidden)',
+    '.ant-popover:not(.ant-popover-hidden)', '.ant-modal-wrap', '[role="dialog"]',
+  ].join(',');
+  return Array.from(document.querySelectorAll<HTMLElement>(selector)).some(element =>
+    !element.contains(dialog) && element.getClientRects().length > 0
+      && getComputedStyle(element).visibility !== 'hidden' && !element.closest('[hidden], [aria-hidden="true"]'),
+  );
+}
 
 interface FilePreviewModalProps {
   open: boolean;
@@ -29,6 +44,9 @@ interface SpreadsheetRow {
 }
 
 export function FilePreviewModal({ open, file, onClose, showSpreadsheetMerges = true }: FilePreviewModalProps) {
+  const [maximized, setMaximized] = useState(false);
+  const composing = useRef(false);
+  const popupAtEscape = useRef(false);
   const [mode, setMode] = useState<FilePreviewMode>('unsupported');
   const [blob, setBlob] = useState<Blob>();
   const [objectUrl, setObjectUrl] = useState<string>();
@@ -36,6 +54,7 @@ export function FilePreviewModal({ open, file, onClose, showSpreadsheetMerges = 
   const [sheets, setSheets] = useState<SpreadsheetSheet[]>([]);
   const [activeSheet, setActiveSheet] = useState<string>();
   const [loading, setLoading] = useState(false);
+  const [docxRendering, setDocxRendering] = useState(false);
   const [error, setError] = useState<string>();
   const docxBodyRef = useRef<HTMLDivElement>(null);
   const docxStyleRef = useRef<HTMLDivElement>(null);
@@ -76,17 +95,6 @@ export function FilePreviewModal({ open, file, onClose, showSpreadsheetMerges = 
           setObjectUrl(nextObjectUrl);
         } else if (nextMode === 'text') {
           setText(await loaded.text());
-        } else if (nextMode === 'docx') {
-          if (!docxBodyRef.current || !docxStyleRef.current) return;
-          const { renderAsync } = await import('docx-preview');
-          await renderAsync(loaded, docxBodyRef.current, docxStyleRef.current, {
-            breakPages: true,
-            renderHeaders: true,
-            renderFooters: true,
-            renderFootnotes: true,
-            renderEndnotes: true,
-            useBase64URL: true,
-          });
         } else if (nextMode === 'spreadsheet') {
           const XLSX = await import('xlsx');
           const workbook = XLSX.read(await loaded.arrayBuffer(), { type: 'array', cellDates: true });
@@ -132,6 +140,32 @@ export function FilePreviewModal({ open, file, onClose, showSpreadsheetMerges = 
     };
   }, [file, open]);
 
+  // The Word containers only mount after file loading has finished. Render
+  // after that commit, and keep this effect independent of display mode.
+  useEffect(() => {
+    if (!open || loading || mode !== 'docx' || !blob || !docxBodyRef.current || !docxStyleRef.current) return;
+    const body = docxBodyRef.current;
+    const styles = docxStyleRef.current;
+    let active = true;
+    setDocxRendering(true);
+    void import('docx-preview').then(({ renderAsync }) => {
+      if (!active) return;
+      return renderAsync(blob, body, styles, {
+        breakPages: true,
+        renderHeaders: true,
+        renderFooters: true,
+        renderFootnotes: true,
+        renderEndnotes: true,
+        useBase64URL: true,
+      });
+    }).catch((reason: unknown) => {
+      if (active) setError(reason instanceof Error ? reason.message : 'Word 预览加载失败，请下载原文件查看。');
+    }).finally(() => {
+      if (active) setDocxRendering(false);
+    });
+    return () => { active = false; };
+  }, [blob, loading, mode, open]);
+
   const download = async () => {
     if (!file) return;
     try {
@@ -170,15 +204,55 @@ export function FilePreviewModal({ open, file, onClose, showSpreadsheetMerges = 
     : [];
   const tableRows: SpreadsheetRow[] = currentSheet?.preview.rows.map((row, index) => ({ key: `${currentSheet.name}-${index}`, rowNumber: row.rowNumber, cells: row.cells })) || [];
 
+  const handleEscape = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Escape') return;
+    // Child popups and native media fullscreen consume Escape first.
+    if (event.defaultPrevented || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229
+      || composing.current || document.fullscreenElement) {
+      event.stopPropagation();
+      return;
+    }
+    // Tab overflow menus close from a window listener. Let that listener run
+    // without also restoring or closing this modal on the same key.
+    if (popupAtEscape.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (maximized) setMaximized(false);
+    else onClose();
+  };
+
   return (
     <Modal
       open={open}
-      title={<span><FileOutlined /> {file?.fileName || '文件预览'}</span>}
+      title={<div className="file-preview-header">
+        <span className="file-preview-title" title={file?.fileName}>
+          <FileOutlined aria-hidden /><span>{file?.fileName || '文件预览'}</span>
+        </span>
+        <Tooltip title={maximized ? '还原预览（Esc）' : '全屏预览'}>
+          <Button type="text" className="file-preview-maximize" aria-label={maximized ? '还原预览' : '全屏预览'}
+            aria-pressed={maximized} icon={maximized ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
+            onClick={() => setMaximized(value => !value)}>{maximized ? '还原' : '全屏'}</Button>
+        </Tooltip>
+      </div>}
       width="min(960px, calc(100vw - 32px))"
       footer={<Button icon={<DownloadOutlined />} onClick={() => void download()} disabled={!file}>下载原文件</Button>}
       destroyOnHidden
       onCancel={onClose}
-      className="file-preview-modal"
+      afterClose={() => { setMaximized(false); composing.current = false; }}
+      closable={{ 'aria-label': '关闭文件预览' }}
+      keyboard={false}
+      className={`file-preview-modal${maximized ? ' file-preview-modal-maximized' : ''}`}
+      wrapProps={{ onKeyDownCapture: (event: ReactKeyboardEvent<HTMLDivElement>) => {
+        if (event.key !== 'Escape') return;
+        const dialog = event.currentTarget.querySelector<HTMLElement>('.file-preview-dialog');
+        popupAtEscape.current = hasPreviewPopup(dialog || event.currentTarget);
+        // Ant Design's initial focus sentinel sits outside modalRender.
+        if (!(event.target instanceof Element) || !event.target.closest('.file-preview-dialog')) handleEscape(event);
+      } }}
+      modalRender={(node) => <div className="file-preview-dialog"
+        onCompositionStart={() => { composing.current = true; }}
+        onCompositionEnd={() => { composing.current = false; }}
+        onKeyDown={handleEscape}>{node}</div>}
     >
       {!file ? <Empty description="未选择文件" /> : loading ? (
         <div className="file-preview-state"><Spin indicator={<LoadingOutlined spin />} /><Typography.Text type="secondary">正在生成预览…</Typography.Text></div>
@@ -191,11 +265,14 @@ export function FilePreviewModal({ open, file, onClose, showSpreadsheetMerges = 
       ) : mode === 'audio' && objectUrl ? (
         <div className="file-preview-state"><audio controls preload="metadata" src={objectUrl} style={{ width: '100%' }} onError={() => setError('浏览器无法播放此音频编码，可下载原文件查看。')}>当前浏览器不支持音频播放</audio></div>
       ) : mode === 'video' && objectUrl ? (
-        <div className="file-preview-state"><video controls preload="metadata" src={objectUrl} style={{ width: '100%', maxHeight: '65vh' }} onError={() => setError('浏览器无法播放此视频编码，可下载原文件查看。')}>当前浏览器不支持视频播放</video></div>
+        <div className="file-preview-state"><video className="file-preview-video" controls preload="metadata" src={objectUrl} onError={() => setError('浏览器无法播放此视频编码，可下载原文件查看。')}>当前浏览器不支持视频播放</video></div>
       ) : mode === 'text' ? (
         <pre className="file-preview-text">{text || '文件内容为空'}</pre>
       ) : mode === 'docx' ? (
-        <div className="file-preview-docx"><div ref={docxStyleRef} /><div ref={docxBodyRef} /></div>
+        <div className="file-preview-docx" aria-busy={docxRendering}>
+          {docxRendering && <div className="file-preview-docx-loading"><Spin /><Typography.Text type="secondary">正在排版文档…</Typography.Text></div>}
+          <div ref={docxStyleRef} /><div ref={docxBodyRef} />
+        </div>
       ) : mode === 'spreadsheet' && sheets.length ? (
         <div className="file-preview-spreadsheet">
           <Tabs activeKey={activeSheet} onChange={setActiveSheet} items={sheets.map((sheet) => ({ key: sheet.name, label: sheet.name }))} />

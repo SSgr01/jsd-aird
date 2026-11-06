@@ -12,7 +12,6 @@ from aird_agent.capabilities.registry import default_registry
 from aird_agent.core.capabilities import CapabilityPack, CapabilityRegistry
 from aird_agent.evidence.exports import export_sources
 from aird_agent.evidence.quotes import quotes
-from aird_agent.hosts.jsd.task_state import check_plan
 
 
 def candidate():
@@ -26,28 +25,32 @@ def candidate():
 def test_only_core_and_files_support_generic_downloads_without_research():
     registry = default_registry()
     tools = {tool["name"] for tool in registry.tools(["core", "files"])}
-    assert {"workspace_write", "workspace_read", "sandbox_execute", "artifact_save"} <= tools
+    assert "artifact_save" in tools
+    assert not {"workspace_write", "workspace_read", "workspace_list", "sandbox_prepare", "sandbox_execute"} & tools
     assert not {"report_check", "report_save", "matrix_record", "knowledge_search"} & tools
     validate_format("output/user-data.csv", b"name,value\nwater,0.81\n")
     validate_format("output/user-data.json", b'{"value": 0.81}')
     check_file_completion(
-        {"registered_outputs": [{"kind": "artifact", "path": "output/user-data.csv"}]},
-        {"file_names": ["user-data.csv"]},
+        {"required_artifacts": ["user-data.csv"], "registered_outputs": [{"kind": "artifact", "path": "output/user-data.csv"}]},
     )
 
 
-def test_research_plan_keeps_its_scope_and_method_requirements():
-    plan = {
-        "task_type": "RESEARCH", "presentation": "research_plan_v1", "goal": "Compare sources",
-        "summary": "Research", "steps": [{"id": "read", "title": "Read", "status": "pending"}],
-    }
-    with pytest.raises(HTTPException, match="RESEARCH_PLAN"):
-        check_plan(plan)
-    plan["scope"] = "Selected authorized papers"
-    with pytest.raises(HTTPException, match="RESEARCH_PLAN"):
-        check_plan(plan)
-    plan["steps"][0]["description"] = "Compare test conditions in the original text"
-    assert check_plan(plan)["presentation"] == "research_plan_v1"
+def test_business_catalog_leaves_planning_and_completion_to_native_dsh():
+    tools = {item["name"] for item in default_registry().tools(["core", "literature", "files"])}
+    assert not {"plan_update", "finish_task", "workspace_read", "workspace_write", "sandbox_execute"} & tools
+    assert {"report_check", "report_save", "artifact_save"} <= tools
+
+
+def test_professional_guidance_uses_native_skills_without_a_parallel_skill_tool():
+    from pathlib import Path
+    registry = default_registry()
+    ids = ["core", "literature", "files", "experiments"]
+    assert "skill_read" not in {item["name"] for item in registry.tools(ids)}
+    instructions = registry.instructions(ids)
+    assert "普通回答和文件不强制" in instructions
+    assert "question_targets不得偷换" not in instructions
+    skill = Path(__file__).parents[2] / "enterprise-plugin/skills/literature-review/SKILL.md"
+    assert "report_check" in skill.read_text(encoding="utf-8")
 
 
 def test_unrelated_run_evidence_is_neither_authorized_nor_attached_to_output():

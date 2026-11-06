@@ -84,6 +84,10 @@ public interface KnowledgeRepository {
                                                     int limit) {
         return List.of();
     }
+      default List<SearchRow> searchPublishedTags(UUID organizationId, List<String> queries, boolean aiOnly,
+                                                List<UUID> categoryIds, Set<UUID> allowedDocumentIds, int limit) {
+          return List.of();
+      }
     default List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly,
                                            List<UUID> categoryIds, int limit) {
         return fullTextSearch(organizationId, query, aiOnly, limit);

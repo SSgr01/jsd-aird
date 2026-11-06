@@ -6,6 +6,7 @@ import type { TemplateBinding } from './types';
 import {
   applySuggestion,
   bindingForField,
+  prepareFormalMappings,
   readFieldModel,
   removeBusinessField,
   updateBusinessField,
@@ -13,6 +14,32 @@ import {
 import { locatorValueRange } from './locator';
 
 describe('field model', () => {
+  it('keeps a pending structural parent for a confirmed child without claiming the parent was confirmed', () => {
+    const parent = {
+      bindingId: 'parent', fieldCode: 'AUTO.REPEAT.REGION', dataPath: '/rows', role: 'FIELD',
+      mappingKind: 'REPEAT_REGION', locatorType: 'CELL_RANGE', locator: {},
+      syncDirection: 'TWO_WAY', primaryBinding: true, bindingStatus: 'VALID',
+      diagnostic: { recognitionItemId: 'pending-parent' },
+    } satisfies TemplateBinding;
+    const child = {
+      ...parent, bindingId: 'child', fieldCode: 'TABLE.COLUMN.product',
+      parentBindingId: 'parent', diagnostic: { recognitionItemId: 'confirmed-child' },
+    } satisfies TemplateBinding;
+    const model = readFieldModel({ 'x-jsd-field-model': {
+      modelVersion: 1, groups: [], fields: [{
+        id: 'parent', bindingId: 'parent', groupId: 'group', name: '重复记录区域',
+        kind: 'SCALAR', valueType: 'string', required: false, reviewStatus: 'NEEDS_CONFIRMATION',
+      }, {
+        id: 'child', bindingId: 'child', groupId: 'group', name: '产品', kind: 'SCALAR',
+        valueType: 'string', required: false, reviewStatus: 'CONFIRMED',
+      }],
+    } }, [parent, child]);
+
+    const prepared = prepareFormalMappings([parent, child], model);
+    expect(prepared.map((binding) => binding.bindingId)).toEqual(['parent', 'child']);
+    expect(prepared[0]?.diagnostic?.recognitionItemId).toBeUndefined();
+    expect(prepared[1]?.diagnostic?.recognitionItemId).toBe('confirmed-child');
+  });
   it('uses configured group names for legacy ID prefixes while preserving scientific labels and field identity', () => {
     const fields = ['basic', 'conditions'].map((groupId, index) => ({
       id: `f-${groupId}`, bindingId: `f-${groupId}`, groupId,

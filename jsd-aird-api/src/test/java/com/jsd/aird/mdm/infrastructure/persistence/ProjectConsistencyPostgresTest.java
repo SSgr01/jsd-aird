@@ -54,7 +54,7 @@ class ProjectConsistencyPostgresTest {
         var config=new Configuration(new Environment("isolated",new SpringManagedTransactionFactory(),dataSource));
         config.setArgNameBasedConstructorAutoMapping(true); config.getTypeHandlerRegistry().register(UUID.class,UuidTypeHandler.class);config.addMapper(ProjectMapper.class);
         var session=new SqlSessionTemplate(new SqlSessionFactoryBuilder().build(config));
-        repository=new MyBatisProjectRepository(session.getMapper(ProjectMapper.class));service=new ProjectService(repository);reviews=new JdbcTemplateVersionReviewRepository(jdbc);
+        repository=new MyBatisProjectRepository(session.getMapper(ProjectMapper.class));service=new ProjectService(repository, org.mockito.Mockito.mock(com.jsd.aird.iam.api.AuthorizationService.class));reviews=new JdbcTemplateVersionReviewRepository(jdbc);
     }
     @AfterAll static void cleanup(){
         if(jdbc!=null&&SCHEMA.matches("consistency_test_[a-f0-9]{32}"))jdbc.execute("DROP SCHEMA IF EXISTS "+SCHEMA+" CASCADE");
@@ -163,7 +163,7 @@ class ProjectConsistencyPostgresTest {
         catch(ApiException conflict){assertThat(conflict.errorCode()).isEqualTo(ApiErrorCode.REVIEW_STATE_CONFLICT);return "conflict";}
     }
     private UUID insert(String code,ProjectStatus status){
-        var id=UUID.randomUUID(); repository.insert(new Project(id,code,"original",null,null,"qa",null,null,ProjectPriority.MEDIUM,status,1,null,null,null,0,Instant.now(),Instant.now()),"qa");return id;
+        var id=UUID.randomUUID(); repository.insert(new Project(id,code,"original",null,null,"qa",null,null,ProjectPriority.MEDIUM,status,1,null,null,null,0,Instant.now(),Instant.now()),ORG,"qa");return id;
     }
     private ProjectCommands.SaveProject command(String name,long version){return new ProjectCommands.SaveProject("P-1",name,null,null,"qa",null,null,ProjectPriority.MEDIUM,ProjectStatus.IN_PROGRESS,1,null,null,null,version);}
     private void assertCode(org.assertj.core.api.ThrowableAssert.ThrowingCallable action,ApiErrorCode code){assertThatThrownBy(action).isInstanceOfSatisfying(ApiException.class,error->assertThat(error.errorCode()).isEqualTo(code));}

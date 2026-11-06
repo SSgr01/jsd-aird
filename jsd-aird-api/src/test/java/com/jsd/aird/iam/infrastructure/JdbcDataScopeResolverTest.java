@@ -79,6 +79,21 @@ class JdbcDataScopeResolverTest {
     }
 
     @Test
+    void selfScopeSupportsResearchTestReportsAndStandards() {
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+
+        var report = resolver.resolve(check("RESEARCH_TEST"),
+                new Binding("research-test.report.update", "ALLOW", "SELF", List.of()));
+        var standard = resolver.resolve(check("RESEARCH_TEST"),
+                new Binding("research-test.standard.update", "ALLOW", "SELF", List.of()));
+
+        assertThat(report.allowed()).isTrue();
+        assertThat(report.scopeType()).isEqualTo("SELF");
+        assertThat(standard.allowed()).isTrue();
+        assertThat(standard.scopeType()).isEqualTo("SELF");
+    }
+
+    @Test
     void projectAndCategoryEmptyTargetsAreDenied() {
         assertThat(resolver.resolve(check("EXPERIMENT"), new Binding("experiment.manage", "ALLOW", "PROJECT", List.of()))
                 .allowed()).isFalse();

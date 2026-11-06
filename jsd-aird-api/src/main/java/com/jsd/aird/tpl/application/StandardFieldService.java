@@ -44,14 +44,12 @@ public class StandardFieldService {
 
     public List<StandardFieldRepository.Request> requests(String status) {
         var actor = ActorContext.required();
-        requireAdmin(actor.organizationId(), actor.userId());
         return repository.listRequests(actor.organizationId(), trimToNull(status));
     }
 
     @Transactional
     public StandardFieldRepository.StandardField approve(UUID requestId, ApprovalCommand command) {
         var actor = ActorContext.required();
-        requireAdmin(actor.organizationId(), actor.userId());
         var request = repository.findRequest(actor.organizationId(), requestId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "标准字段申请不存在"));
         if (!"PENDING".equals(request.status())) {
@@ -70,7 +68,6 @@ public class StandardFieldService {
     @Transactional
     public void reject(UUID requestId, String reviewComment) {
         var actor = ActorContext.required();
-        requireAdmin(actor.organizationId(), actor.userId());
         var request = repository.findRequest(actor.organizationId(), requestId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "标准字段申请不存在"));
         if (!"PENDING".equals(request.status())) {
@@ -151,12 +148,6 @@ public class StandardFieldService {
                 .put("requiresStandardConfirmation", false)
                 .put("reviewRequired", true);
         field.remove(List.of("standardFieldId", "standardFieldVersion", "standardFieldName"));
-    }
-
-    private void requireAdmin(UUID organizationId, UUID userId) {
-        if (!repository.isDictionaryAdmin(organizationId, userId)) {
-            throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "当前身份不是标准字段字典管理员");
-        }
     }
 
     private String generatedCode(StandardFieldRepository.Request request) {

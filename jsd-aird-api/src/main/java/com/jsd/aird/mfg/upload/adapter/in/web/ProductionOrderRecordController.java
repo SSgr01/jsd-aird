@@ -7,6 +7,7 @@ import com.jsd.aird.mfg.upload.application.port.ProductionUploadRepository;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
+import com.jsd.aird.shared.review.WorkspaceReviewService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
@@ -32,11 +33,13 @@ public class ProductionOrderRecordController {
 
     private final ProductionUploadService service;
     private final ProductionUploadExportService exportService;
+    private final WorkspaceReviewService reviews;
 
     public ProductionOrderRecordController(ProductionUploadService service,
-                                           ProductionUploadExportService exportService) {
+                                           ProductionUploadExportService exportService, WorkspaceReviewService reviews) {
         this.service = service;
         this.exportService = exportService;
+        this.reviews = reviews;
     }
 
     @GetMapping("/{id}")
@@ -75,6 +78,7 @@ public class ProductionOrderRecordController {
 
     @PostMapping("/{id}/publish")
     public ApiResponse<ProductionUploadRepository.VersionView> publish(@PathVariable UUID id,@Valid @RequestBody VersionRequest request) {
+        reviews.requireApproved("PRODUCTION_UPLOAD", id);
         return success(service.publish(id,request.lockVersion()));
     }
 

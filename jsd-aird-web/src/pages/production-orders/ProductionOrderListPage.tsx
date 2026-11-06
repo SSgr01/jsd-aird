@@ -21,10 +21,12 @@ import {
   Input,
   Modal,
   Pagination,
+  Popconfirm,
   Select,
   Space,
   Spin,
   Table,
+  Tag,
   Typography,
 } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
@@ -32,6 +34,7 @@ import { useNavigate } from 'react-router-dom';
 
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 import '@/components/project-relations/project-relation-picker.css';
+import { ProjectRelationPath } from '@/components/project-relations/ProjectRelationPath';
 import {
   getProjects,
   getProjectStages,
@@ -53,9 +56,14 @@ import './production-order-list.css';
 import '@/styles/management-list.css';
 
 const statusOptions = [
-  { value: 'SAVED', label: '已保存' },
+  { value: 'SAVED', label: '草稿' },
   { value: 'PUBLISHED', label: '已发布' },
 ];
+const reviewLabels: Record<string, string> = { NOT_SUBMITTED: '草稿', SUBMITTED: '待审核', APPROVED: '审核通过', REJECTED: '已退回', PUBLISHED: '已发布' };
+const reviewTag = (item: ProductionUpload) => {
+  const status = item.workflowStatus || (item.status === 'PUBLISHED' ? 'PUBLISHED' : 'NOT_SUBMITTED');
+  return <Tag color={status === 'PUBLISHED' ? 'green' : status === 'APPROVED' ? 'success' : status === 'SUBMITTED' ? 'processing' : status === 'REJECTED' ? 'error' : 'default'}>{reviewLabels[status]}</Tag>;
+};
 
 type ViewMode = 'card' | 'list';
 
@@ -75,13 +83,18 @@ const renderCellText = (value?: string | null, strong = false) => {
 export function ProductionOrderListPage() {
   const { message } = App.useApp();
   const navigate = useNavigate();
-  const canCreate = usePermission('production.create');
-  const canUpdate = usePermission('production.update');
-  const canDelete = usePermission('production.delete');
+  const canCreate = usePermission('production.view.create');
+  const canUpdate = usePermission('production.view.update');
+  const canDelete = usePermission('production.view.delete');
+  const canCopy = usePermission('production.view.copy');
+  const canExport = usePermission('production.view.export');
+  const canDownload = usePermission('production.view.download');
+  const canUpload = usePermission('production.upload.create');
   const [items, setItems] = useState<ProductionUpload[]>([]);
   const [loading, setLoading] = useState(true);
   const [keyword, setKeyword] = useState('');
   const [status, setStatus] = useState<string>();
+  const [format, setFormat] = useState<'XLSX' | 'PHOTO'>();
   const [projectId, setProjectId] = useState<string>();
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
@@ -125,7 +138,7 @@ export function ProductionOrderListPage() {
     manufactureDate: string;
   }>();
 
-  const beginListRequest = useRequestGuard(JSON.stringify([keyword,status,projectId,page.current,page.pageSize]));
+  const beginListRequest = useRequestGuard(JSON.stringify([keyword,status,format,projectId,page.current,page.pageSize]));
   const load = useCallback(async () => {
     const request = beginListRequest();
     setLoading(true);
@@ -133,6 +146,7 @@ export function ProductionOrderListPage() {
       const result = await productionUploadApi.list({
         keyword: keyword || undefined,
         status: status || undefined,
+        format,
         projectId: projectId || undefined,
         viewableOnly: true,
         page: page.current,
@@ -151,7 +165,7 @@ export function ProductionOrderListPage() {
     } finally {
       if (request.current()) setLoading(false);
     }
-  }, [beginListRequest, keyword, message, page.current, page.pageSize, projectId, status]);
+  }, [beginListRequest, format, keyword, message, page.current, page.pageSize, projectId, status]);
 
   useEffect(() => {
     void load();
@@ -178,7 +192,7 @@ export function ProductionOrderListPage() {
   const deleteSelected = () => {
     if (!selectedKeys.length) return;
     Modal.confirm({
-      title: `确认删除 ${selectedKeys.length} 条生产单记录？`,
+      title: `删除选中的 ${selectedKeys.length} 条生产单？`,
       content: '删除后记录会进入作废状态，原始文件不会被物理删除。',
       okText: '确认删除',
       cancelText: '取消',
@@ -326,24 +340,15 @@ export function ProductionOrderListPage() {
     }
   };
 
-  const deleteItem = (item: ProductionUpload) => {
-    Modal.confirm({
-      title: `确认删除生产单“${item.productionName || item.orderNo || item.originalName}”？`,
-      content: '删除后记录会进入作废状态，原始文件不会被物理删除。',
-      okText: '删除',
-      cancelText: '取消',
-      okButtonProps: { danger: true },
-      onOk: async () => {
-        try {
-          await productionUploadApi.delete(item.id,item.lockVersion);
-          setSelectedKeys((current) => current.filter((id) => id !== item.id));
-          void message.success('生产单记录已作废');
-          await load();
-        } catch (error) {
-          void message.error(error instanceof Error ? error.message : '删除失败');
-        }
-      },
-    });
+  const deleteItem = async (item: ProductionUpload) => {
+    try {
+      await productionUploadApi.delete(item.id,item.lockVersion);
+      setSelectedKeys((current) => current.filter((id) => id !== item.id));
+      void message.success('生产单记录已作废');
+      await load();
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '删除失败');
+    }
   };
 
   const openRename = (item: ProductionUpload) => {
@@ -536,6 +541,7 @@ export function ProductionOrderListPage() {
   const resetFilters = () => {
     setKeyword('');
     setStatus(undefined);
+    setFormat(undefined);
     setProjectId(undefined);
     setPage((current) => ({ ...current, current: 1 }));
   };
@@ -578,6 +584,7 @@ export function ProductionOrderListPage() {
             onChange={() => toggleSelected(item.id)}
           />
         </div>
+        {reviewTag(item)}
         <div className="production-order-card-fields">
           <div>
             <span>订单号</span>
@@ -621,12 +628,19 @@ export function ProductionOrderListPage() {
           <Button type="link" onClick={() => openWorkspace(item.id)}>
             查看
           </Button>
-          <Button type="link" disabled={!canUpdate} onClick={() => openRename(item)}>
+          {canUpdate && <Button type="link" onClick={() => openRename(item)}>
             重命名
-          </Button>
-          <Button type="link" danger disabled={!canDelete} onClick={() => deleteItem(item)}>
-            删除
-          </Button>
+          </Button>}
+          {canDelete && <Popconfirm
+            title="确认删除该生产单？"
+            description="删除后记录会进入作废状态，原始文件不会被物理删除。"
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => { void deleteItem(item); }}
+          >
+            <Button type="link" danger>删除</Button>
+          </Popconfirm>}
         </div>
       </article>
     );
@@ -649,48 +663,46 @@ export function ProductionOrderListPage() {
                 清除已选
               </Button>
             )}
-            <Button
+            {canCopy && <Button
               icon={<CopyOutlined />}
               disabled={!selectedKeys.length}
               loading={copying}
               onClick={() => void copySelected()}
             >
               复制
-            </Button>
-            <Button icon={<EditOutlined />} onClick={renameSelected}>
+            </Button>}
+            {canUpdate && <Button icon={<EditOutlined />} onClick={renameSelected}>
               重命名
-            </Button>
-            <Button
+            </Button>}
+            {canExport && <Button
               icon={<DownloadOutlined />}
               disabled={!selectedKeys.length}
               loading={exporting}
               onClick={() => void exportSelected()}
             >
               导出
-            </Button>
-            <Button
+            </Button>}
+            {canDelete && <Button
               danger
               icon={<DeleteOutlined />}
-              disabled={!selectedKeys.length || !canDelete}
+              disabled={!selectedKeys.length}
               onClick={deleteSelected}
             >
               删除
-            </Button>
-            <Button
+            </Button>}
+            {canUpload && <Button
               icon={<UploadOutlined />}
-              disabled={!canCreate}
               onClick={() => navigate('/production-orders/upload')}
             >
               上传生产单
-            </Button>
-            <Button
+            </Button>}
+            {canCreate && <Button
               type="primary"
               icon={<PlusOutlined />}
-              disabled={!canCreate}
               onClick={openCreate}
             >
               新建生产单
-            </Button>
+            </Button>}
             <Space.Compact className="production-order-view-toggle">
               <Button
                 aria-label="卡片视图"
@@ -754,6 +766,10 @@ export function ProductionOrderListPage() {
               options={statusOptions}
               style={{ width: 'min(140px, 100%)' }}
             />
+            <Select allowClear placeholder="全部格式" value={format}
+              options={[{ value: 'XLSX', label: 'Excel' }, { value: 'PHOTO', label: '图片' }]}
+              onChange={(value) => { setFormat(value); setPage((current) => ({ ...current, current: 1 })); }}
+              style={{ width: 130 }} />
             <Button icon={<RedoOutlined />} onClick={resetFilters}>
               重置
             </Button>
@@ -811,9 +827,15 @@ export function ProductionOrderListPage() {
               }}
               columns={[
                 {
+                  title: '订单号',
+                  dataIndex: 'orderNo',
+                  width: 170,
+                  render: (value: string) => renderCellText(value),
+                },
+                {
                   title: '生产单名称',
                   dataIndex: 'productionName',
-                  width: 280,
+                  width: 360,
                   render: (value: string, item: ProductionUpload) => (
                     <Typography.Link
                       className="production-order-cell-text production-order-name-link"
@@ -827,10 +849,16 @@ export function ProductionOrderListPage() {
                   ),
                 },
                 {
-                  title: '订单号',
-                  dataIndex: 'orderNo',
-                  width: 135,
-                  render: (value: string) => renderCellText(value),
+                  title: '项目 / 阶段 / 任务',
+                  className: 'production-order-project-column',
+                  width: 300,
+                  render: (_: unknown, item: ProductionUpload) => (
+                    <ProjectRelationPath
+                      projectName={item.projectName}
+                      stageName={item.stageName}
+                      taskName={item.taskName}
+                    />
+                  ),
                 },
                 {
                   title: '品名',
@@ -845,36 +873,28 @@ export function ProductionOrderListPage() {
                   render: (value: string) => renderCellText(value),
                 },
                 {
+                  title: '文件格式',
+                  dataIndex: 'sourceType',
+                  key: 'fileFormat',
+                  width: 105,
+                  render: (value: string) => value === 'XLSX' ? 'Excel' : value === 'PHOTO' ? '图片' : '—',
+                },
+                {
                   title: '制造日期',
                   dataIndex: 'manufactureDate',
                   width: 135,
                   render: (value: string) => renderCellText(value),
                 },
                 {
-                  title: '关联项目',
-                  className: 'production-order-project-column',
-                  width: 320,
-                  render: (_: unknown, item: ProductionUpload) => (
-                    <span className="production-order-project-cell">
-                      {item.projectName || '未关联项目'}
-                    </span>
-                  ),
-                },
-                {
-                  title: '阶段 / 任务',
-                  width: 220,
-                  render: (_: unknown, item: ProductionUpload) => (
-                    <span className="production-order-relation-cell">
-                      <span>{item.stageName || '未选择'}</span>
-                      <small>{item.taskName || '未选择'}</small>
-                    </span>
-                  ),
-                },
-                {
                   title: '上传时间',
                   width: 170,
                   render: (_: unknown, item: ProductionUpload) =>
                     renderCellText(new Date(item.createdAt).toLocaleString('zh-CN')),
+                },
+                {
+                  title: '状态',
+                  width: 110,
+                  render: (_: unknown, item: ProductionUpload) => reviewTag(item),
                 },
                 {
                   title: '操作',
@@ -884,33 +904,38 @@ export function ProductionOrderListPage() {
                       <Button type="link" size="small" onClick={() => openWorkspace(item.id)}>
                         查看
                       </Button>
-                      <Button
+                      {canUpdate && <Button
                         type="link"
                         size="small"
-                        disabled={!canUpdate}
                         onClick={() => openRename(item)}
                       >
                         重命名
-                      </Button>
-                      <Button
+                      </Button>}
+                      {canDownload && <Button
                         type="link"
                         size="small"
-                        icon={<DownloadOutlined />}
                         loading={downloadingId === item.id}
                         disabled={Boolean(downloadingId && downloadingId !== item.id)}
                         onClick={() => void downloadItem(item)}
                       >
                         下载
-                      </Button>
-                      <Button
-                        type="link"
-                        size="small"
-                        danger
-                        disabled={!canDelete}
-                        onClick={() => deleteItem(item)}
+                      </Button>}
+                      {canDelete && <Popconfirm
+                        title="确认删除该生产单？"
+                        description="删除后记录会进入作废状态，原始文件不会被物理删除。"
+                        okText="删除"
+                        cancelText="取消"
+                        okButtonProps={{ danger: true }}
+                        onConfirm={() => { void deleteItem(item); }}
                       >
-                        删除
-                      </Button>
+                        <Button
+                          type="link"
+                          size="small"
+                          danger
+                        >
+                          删除
+                        </Button>
+                      </Popconfirm>}
                     </Space>
                   ),
                 },

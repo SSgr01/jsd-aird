@@ -10,6 +10,7 @@ import {
 import { App, Button, Checkbox, Collapse, Space, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { usePermission } from '@/components/auth/usePermission';
 
 import {
   AiConversationWorkspace,
@@ -217,13 +218,15 @@ function renderAssistantContent(
   hasOriginalFile: (citation: AssistantCitation) => boolean,
   onSelectDataFile: (citation: AssistantCitation) => void,
   candidateDisabled: boolean,
+  canCreate: boolean,
+  canDownload: boolean,
 ) {
   const { candidates, evidence } = partitionAssistantCitations(message.citations);
   const citationGroups = groupAssistantCitations(evidence);
   return (
     <div>
       <MarkdownContent value={displayAnswer(message.content)} />
-      {candidates.length ? (
+      {candidates.length && canCreate ? (
         <div className="ai-message-file-candidates">
           <Typography.Text type="secondary">请选择数据文件</Typography.Text>
           <div className="ai-message-file-candidate-list">
@@ -291,14 +294,14 @@ function renderAssistantContent(
                       >
                         预览
                       </Button>
-                      <Button
+                      {canDownload && <Button
                         size="small"
                         type="text"
                         icon={<DownloadOutlined />}
                         onClick={() => onDownload(citation)}
                       >
                         下载
-                      </Button>
+                      </Button>}
                     </div>
                   )}
                 </div>
@@ -312,6 +315,10 @@ function renderAssistantContent(
 }
 
 export function AssistantPage() {
+  const canCreate = usePermission('ai.qa.create');
+  const canUpdate = usePermission('ai.qa.update');
+  const canDelete = usePermission('ai.qa.delete');
+  const canDownload = usePermission('ai.qa.download');
   const { message: toast } = App.useApp();
   const navigate = useNavigate();
   const location = useLocation();
@@ -676,6 +683,8 @@ export function AssistantPage() {
                 void send(dataFileSelectionQuestion(fileName, originalQuestion));
               },
               loading || streaming,
+              canCreate,
+              canDownload,
             )
           ) : null
         ) : (
@@ -846,6 +855,7 @@ export function AssistantPage() {
         </div>
       </div>
       <AiConversationWorkspace
+        canCreate={canCreate}
         conversations={conversationItems}
         activeConversationId={conversationId}
         messages={viewMessages}
@@ -871,9 +881,9 @@ export function AssistantPage() {
         submitDisabled={!hasSelectedScope}
         onNewConversation={reset}
         onSelectConversation={(id) => void openConversation(id)}
-        onRenameConversation={renameConversation}
-        onDeleteConversation={deleteConversation}
-        onEditMessage={(item, value) => {
+        onRenameConversation={canUpdate ? renameConversation : undefined}
+        onDeleteConversation={canDelete ? deleteConversation : undefined}
+        onEditMessage={canCreate ? (item, value) => {
           const expectedLastMessageId = messages.at(-1)?.id;
           if (!conversationId || !expectedLastMessageId) {
             void toast.error('当前会话尚未保存完成，请稍后重试');
@@ -883,7 +893,7 @@ export function AssistantPage() {
             replaceFromMessageId: item.id,
             expectedLastMessageId,
           });
-        }}
+        } : undefined}
         onQuestionChange={setQuestion}
         onSubmit={() => void send()}
       />

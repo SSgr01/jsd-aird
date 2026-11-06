@@ -62,7 +62,7 @@ public interface ProductionUploadRepository {
     /** Returns the latest active record for a file content hash. */
     Optional<UploadView> findActiveBySha256(UUID organizationId, String sha256);
 
-    PageResult<UploadView> list(UUID organizationId, String keyword, String status, UUID projectId,
+    PageResult<UploadView> list(UUID organizationId, String keyword, String status, String format, UUID projectId,
                                 boolean viewableOnly, int page, int size);
 
     int delete(UUID organizationId, UUID uploadId);
@@ -139,7 +139,8 @@ public interface ProductionUploadRepository {
             String failureMessage,
             long lockVersion,
             UUID updatedBy,
-            Instant updatedAt
+            Instant updatedAt,
+            String workflowStatus
     ) {
         public List<String> getAllowedActions() {
             return AllowedActions.productionUpload(status);

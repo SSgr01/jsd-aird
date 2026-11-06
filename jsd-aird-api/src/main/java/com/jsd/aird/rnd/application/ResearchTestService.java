@@ -28,8 +28,10 @@ public class ResearchTestService {
     private final AuditLogFacade audit;
     public ResearchTestService(ResearchTestRepository repository,FileStorageFacade files){this(repository,files,null,null);}
     @Autowired public ResearchTestService(ResearchTestRepository repository,FileStorageFacade files,ExperimentImportService sourceParser,AuditLogFacade audit){this.repository=repository;this.files=files;this.sourceParser=sourceParser;this.audit=audit;}
-    public PageResponse<Summary> search(Type type,String keyword,String category,String status,String owner,UUID projectId,LocalDate from,LocalDate to,int page,int size){var a=ActorContext.required();return repository.search(a.organizationId(),new ResearchTestRepository.Search(type,keyword,category,status,owner,projectId,from,to,Math.max(1,page),Math.min(100,Math.max(1,size))));}
+    public PageResponse<Summary> search(Type type,String keyword,String category,String status,String owner,UUID projectId,String format,LocalDate from,LocalDate to,int page,int size){var a=ActorContext.required();return repository.search(a.organizationId(),new ResearchTestRepository.Search(type,keyword,category,status,owner,projectId,format,from,to,Math.max(1,page),Math.min(100,Math.max(1,size))));}
     public Detail detail(UUID id){var a=ActorContext.required();return repository.detail(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试记录不存在"));}
+    public String nextReportNumber(){ActorContext.required();return repository.nextReportNumber();}
+    public String nextStandardNumber(){var a=ActorContext.required();return repository.nextStandardNumber(a.organizationId());}
     public Detail create(CreateCommand c){
         var a=ActorContext.required();
         validateCreate(c);

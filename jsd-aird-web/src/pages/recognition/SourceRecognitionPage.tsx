@@ -26,6 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { FilePreviewModal } from '@/components/file-preview';
+import { usePermission } from '@/components/auth/usePermission';
 import { DataPublicationPanel } from '@/features/data-workbench/DataPublicationPanel';
 import type { DataPublication } from '@/services/data/data-api';
 import { fetchFilePreviewBlob, fileContentUrl } from '@/services/files';
@@ -82,6 +83,8 @@ export function DataRecognitionPage() {
 }
 
 function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
+  const canUpdate = usePermission(owner === 'EXPERIMENT' ? 'eln.upload.create' : 'data.upload.create');
+  const canFinalize = usePermission(owner === 'EXPERIMENT' ? 'eln.upload.create' : 'data.upload.submit');
   const { id = '' } = useParams();
   const nav = useNavigate();
   const { message } = App.useApp();
@@ -512,7 +515,7 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
           <Button icon={<FileSearchOutlined />} onClick={() => setPreviewOpen(true)}>
             预览原文件
           </Button>
-          {!historicalFreeform && <Button
+          {!historicalFreeform && canUpdate && <Button
             icon={<SaveOutlined />}
             loading={saving}
             disabled={reviewLocked || parsing || job.status === 'FAILED'}
@@ -520,7 +523,7 @@ function SourceRecognitionPage({ owner }: { owner: SourceOwner }) {
           >
             保存工作区
           </Button>}
-          {!historicalFreeform && <Button
+          {!historicalFreeform && canFinalize && <Button
             type="primary"
             icon={<CheckCircleOutlined />}
             loading={finalizing}

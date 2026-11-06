@@ -214,7 +214,7 @@ public class ProjectService {
     private ProjectQuery scoped(ProjectQuery query) {
         var actor = ActorContext.required();
         var scope = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
-            "project.view", "PROJECT", null, "READ", "project.list"));
+            "project.list.view", "PROJECT", null, "READ", "project.list"));
         if (!scope.allowed()) {
             throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有项目查看权限");
         }

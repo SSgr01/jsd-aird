@@ -157,7 +157,8 @@ public interface TemplateRepository {
             boolean hasDraft,
             UUID createdBy,
             String createdByName,
-            Instant createdAt
+            Instant createdAt,
+            String draftReviewStatus
     ) {
         public String getRevision(){return com.jsd.aird.shared.json.RevisionToken.of(templateId,versionId,name,categoryId,category,status,versionNo,lockVersion,updatedAt,currentPublishedVersionId,draftVersionId,hasDraft);}
         public List<String> getAllowedActions() {

@@ -9,7 +9,12 @@ import java.util.*;
 
 public interface ExperimentRepository {
     record Search(String keyword, String status, String sourceType, UUID projectId, UUID stageId, UUID taskId,
-                  UUID categoryId, String ownerName, LocalDate dateFrom, LocalDate dateTo, int page, int size) {}
+                  UUID categoryId, String ownerName, LocalDate dateFrom, LocalDate dateTo, String format, int page, int size) {
+        public Search(String keyword, String status, String sourceType, UUID projectId, UUID stageId, UUID taskId,
+                      UUID categoryId, String ownerName, LocalDate dateFrom, LocalDate dateTo, int page, int size) {
+            this(keyword, status, sourceType, projectId, stageId, taskId, categoryId, ownerName, dateFrom, dateTo, null, page, size);
+        }
+    }
     record Create(UUID id, UUID organizationId, String experimentNo, String title, UUID categoryId, String categoryName,
                   String sourceType, ExperimentStatus status, UUID projectId, UUID stageId, UUID taskId,
                   UUID ownerId, String ownerName, LocalDate experimentDate, UUID versionId, UUID templateVersionId,

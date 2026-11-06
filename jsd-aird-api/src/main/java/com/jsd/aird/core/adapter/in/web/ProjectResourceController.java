@@ -15,6 +15,7 @@ import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
+import com.jsd.aird.shared.security.Actor;
 import com.jsd.aird.shared.security.ActorContext;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
@@ -78,8 +79,38 @@ public class ProjectResourceController {
             authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "spectrum.view",
                     "SPECTRUM", request.resourceId(), "READ"));
         }
+        requireReferenceWrite(actor, request.resourceType(), request.resourceId());
         return success(service.addReferences(actor, request.resourceType(), request.resourceId(),
                 request.summary(), targets(request.targets())));
+    }
+
+    /**
+     * 维护参考资料要么有 project.assign，要么对来源记录本身有编辑权限
+     * （图谱编辑、知识文档编辑、数据来源编辑均算）。
+     */
+    private void requireReferenceWrite(Actor actor, ResourceType resourceType, UUID resourceId) {
+        var canAssign = authorization.check(new PermissionCheck(actor.organizationId(), actor.userId(),
+                "project.assign", "PROJECT", null, "WRITE")).allowed();
+        if (canAssign) return;
+        var candidates = switch (resourceType) {
+            case SPECTRUM_CHART -> List.of(
+                    sourceEdit(actor, "spectrum.update", "SPECTRUM", resourceId),
+                    sourceEdit(actor, "spectrum.view.update", "SPECTRUM", resourceId));
+            case KNOWLEDGE_DOCUMENT -> List.of(
+                    sourceEdit(actor, "knowledge.update", "KNOWLEDGE", resourceId),
+                    sourceEdit(actor, "knowledge.view.update", "KNOWLEDGE", resourceId));
+            case DATA_IMPORT_JOB -> List.of(
+                    sourceEdit(actor, "data.view.update", "DATA", resourceId),
+                    sourceEdit(actor, "data.update", "DATA", resourceId));
+        };
+        for (var candidate : candidates) {
+            if (authorization.check(candidate).allowed()) return;
+        }
+        authorization.require(candidates.get(0));
+    }
+
+    private static PermissionCheck sourceEdit(Actor actor, String code, String resourceType, UUID resourceId) {
+        return new PermissionCheck(actor.organizationId(), actor.userId(), code, resourceType, resourceId, "WRITE");
     }
 
     @GetMapping("/projects/{projectId}/references")

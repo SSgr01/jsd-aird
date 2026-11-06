@@ -281,7 +281,7 @@ CREATE TABLE rnd.research_test_record (
     CONSTRAINT research_test_record_type_check CHECK (record_type IN ('REPORT','STANDARD')),
     CONSTRAINT research_test_record_document_format_check CHECK (document_format IN ('WORD','EXCEL')),
     CONSTRAINT research_test_record_source_type_check CHECK (source_type IN ('BLANK','TEMPLATE','UPLOAD','GENERATED','IMPORT')),
-    CONSTRAINT research_test_record_status_check CHECK (status IN ('DRAFT','PENDING_REVIEW','RETURNED','PUBLISHED','ARCHIVED')),
+    CONSTRAINT research_test_record_status_check CHECK (status IN ('DRAFT','PENDING_REVIEW','RETURNED','APPROVED','PUBLISHED','ARCHIVED')),
     CONSTRAINT research_test_record_visibility_check CHECK (visibility IN ('ALL','RND','PROJECT'))
 );
 CREATE UNIQUE INDEX uq_research_test_business_no_active ON rnd.research_test_record(organization_id, record_type, business_no) WHERE deleted = false;
@@ -295,7 +295,7 @@ CREATE TABLE rnd.research_test_version (
     created_by uuid NOT NULL REFERENCES iam.app_user(id), created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (organization_id, id), UNIQUE (organization_id, record_id, version_no),
     FOREIGN KEY (organization_id, record_id) REFERENCES rnd.research_test_record(organization_id, id) ON DELETE CASCADE,
-    CONSTRAINT research_test_version_status_check CHECK (status IN ('DRAFT','PENDING_REVIEW','RETURNED','PUBLISHED','ARCHIVED'))
+    CONSTRAINT research_test_version_status_check CHECK (status IN ('DRAFT','PENDING_REVIEW','RETURNED','APPROVED','PUBLISHED','ARCHIVED'))
 );
 ALTER TABLE rnd.research_test_record ADD CONSTRAINT research_test_current_version_fk FOREIGN KEY (organization_id, current_version_id) REFERENCES rnd.research_test_version(organization_id, id);
 

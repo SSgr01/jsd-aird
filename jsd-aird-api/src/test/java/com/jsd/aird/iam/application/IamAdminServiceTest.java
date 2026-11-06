@@ -15,6 +15,7 @@ import static org.mockito.Mockito.when;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import com.jsd.aird.iam.api.AuthorizationService;
@@ -129,6 +130,45 @@ class IamAdminServiceTest {
     }
 
     @Test
+    void userAdministrationAcceptsTheAtomicPermissionGrantedByTheMatrix() {
+        var service = serviceGranting("system.users.update", "system.user.view");
+        var userId = UUID.randomUUID();
+        var role = role(UUID.randomUUID(), "RND_ENGINEER", false, 0);
+        when(store.user(userId)).thenReturn(Optional.of(user(userId, ORGANIZATION_ID, "RND_ENGINEER", "ACTIVE")));
+        when(store.role(ORGANIZATION_ID, role.id())).thenReturn(Optional.of(role));
+
+        var updated = service.update(actor, userId, new IamAdminService.UpdateUserCommand(0, "新姓名", null, null, null, role.id()));
+
+        assertThat(updated.id()).isEqualTo(userId);
+        verify(store).updateUser(ORGANIZATION_ID, userId, "新姓名", null, null, null, role.id());
+    }
+
+    @Test
+    void userAdministrationStillAcceptsTheLegacyManagePermission() {
+        var service = serviceGranting("system.user.manage", "system.user.view");
+        var userId = UUID.randomUUID();
+        var role = role(UUID.randomUUID(), "RND_ENGINEER", false, 0);
+        when(store.user(userId)).thenReturn(Optional.of(user(userId, ORGANIZATION_ID, "RND_ENGINEER", "ACTIVE")));
+        when(store.role(ORGANIZATION_ID, role.id())).thenReturn(Optional.of(role));
+
+        service.update(actor, userId, new IamAdminService.UpdateUserCommand(0, "新姓名", null, null, null, role.id()));
+
+        verify(store).updateUser(ORGANIZATION_ID, userId, "新姓名", null, null, null, role.id());
+    }
+
+    @Test
+    void userAdministrationIsDeniedWithoutEitherPermission() {
+        var service = serviceGranting("system.user.view");
+        var userId = UUID.randomUUID();
+        var role = role(UUID.randomUUID(), "RND_ENGINEER", false, 0);
+        when(store.user(userId)).thenReturn(Optional.of(user(userId, ORGANIZATION_ID, "RND_ENGINEER", "ACTIVE")));
+
+        assertApiError(() -> service.update(actor, userId,
+                new IamAdminService.UpdateUserCommand(0, "新姓名", null, null, null, role.id())), ApiErrorCode.PERMISSION_DENIED);
+        verify(store, org.mockito.Mockito.never()).updateUser(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     void userOverrideChangesAreAuditedAndReturnCurrentVersion() {
         var userId = UUID.randomUUID();
         when(store.user(userId)).thenReturn(Optional.of(user(userId, ORGANIZATION_ID, "RND_ENGINEER", "ACTIVE")));
@@ -159,6 +199,15 @@ class IamAdminServiceTest {
         verifyNoInteractions(passwordEncoder,audit);
         verify(store,org.mockito.Mockito.never()).revokeUserSessions(ORGANIZATION_ID,id);
         verify(store,org.mockito.Mockito.never()).deleteRole(ORGANIZATION_ID,custom.id());
+    }
+
+    /** An administrator holding exactly the given permission codes. */
+    private IamAdminService serviceGranting(String... permissionCodes) {
+        var granted = Set.of(permissionCodes);
+        AuthorizationService restricting = check -> granted.contains(check.permissionCode())
+                ? new PermissionDecision(true, check.permissionCode(), "ALLOW", "ALL", "TEST")
+                : PermissionDecision.denied(check.permissionCode());
+        return new IamAdminService(store, restricting, passwordEncoder, audit, auditPresentation);
     }
 
     private static PermissionDefinitionContributor.PermissionDefinition permission(String code) {

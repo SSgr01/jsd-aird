@@ -796,30 +796,39 @@
   color: var(--app-danger);
 }
 
-/* Experiment filters need to wrap before the controls become too narrow. */
+/* Keep experiment filters at readable widths and wrap whole controls as needed. */
 .pm-unified-list-page.eln-prototype-page .eln-filter-row {
-  display: grid;
-  grid-template-columns: minmax(220px, 280px) repeat(6, minmax(120px, 155px)) auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: start;
-  gap: 0;
+  gap: 10px;
   overflow: visible;
 }
 
-.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-input-affix-wrapper,
-.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select {
-  width: 100% !important;
+.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-input-affix-wrapper {
+  width: 280px !important;
   min-width: 0;
-  max-width: none;
-  flex: none;
+  max-width: 100%;
+  flex: 0 0 280px;
 }
 
-/* Override the legacy second-select width so status and project stay side by side. */
-.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select:nth-of-type(2) {
-  width: 100% !important;
+.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select {
+  width: 150px !important;
   min-width: 0;
-  max-width: none;
-  flex: none;
+  max-width: 100%;
+  flex: 0 0 150px;
+}
+
+.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select:nth-of-type(2) {
+  width: 150px !important;
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 0 150px;
+}
+
+.pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select:nth-last-of-type(1) {
+  width: 130px !important;
+  flex-basis: 130px;
 }
 
 .pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-btn {
@@ -828,32 +837,17 @@
   justify-self: start;
 }
 
-@media (max-width: 1400px) {
-  .pm-unified-list-page.eln-prototype-page .eln-filter-row {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 900px) {
-  .pm-unified-list-page.eln-prototype-page .eln-filter-row {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 640px) {
-  .pm-unified-list-page.eln-prototype-page .eln-filter-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+@media (max-width: 540px) {
+  .pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-input-affix-wrapper,
+  .pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select,
+  .pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select:nth-of-type(2),
+  .pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-select:nth-last-of-type(1) {
+    width: 100% !important;
+    flex: 1 1 100%;
   }
 
   .pm-unified-list-page.eln-prototype-page .eln-filter-row > .ant-btn {
     width: 100%;
-    justify-self: stretch;
-  }
-}
-
-@media (max-width: 540px) {
-  .pm-unified-list-page.eln-prototype-page .eln-filter-row {
-    grid-template-columns: 1fr;
   }
 }
 

@@ -13,7 +13,11 @@ type ManagerProps = React.ComponentProps<typeof TemplateFieldManager>;
 type RecognitionItem = NonNullable<ManagerProps['recognitionReview']>['items'][number];
 
 /** The experiment tab only exists for experiment templates, which uploads never are. */
-const EMPTY_EXPERIMENT_CONFIG = {} as ManagerProps['experimentConfiguration'];
+const EMPTY_EXPERIMENT_CONFIG: ManagerProps['experimentConfiguration'] = {
+  templateUsage: 'GENERAL_DATA',
+  identities: [],
+  listProjections: [],
+};
 
 /**
  * Field review for a recognized production order, rendered by the template

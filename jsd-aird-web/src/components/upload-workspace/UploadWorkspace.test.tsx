@@ -1,9 +1,52 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { UploadFile } from 'antd';
 
 import { UploadWorkspace } from './UploadWorkspace';
+import { useAuthStore } from '@/stores/auth-store';
 
 describe('UploadWorkspace', () => {
+  afterEach(() => act(() => useAuthStore.setState({ user: null })));
+
+  it('shows only granted record actions and hides an unauthorized submit', () => {
+    useAuthStore.setState({ user: {
+      userId: 'user-1', organizationId: 'org-1', organizationName: 'Test',
+      username: 'reader', displayName: 'Reader', status: 'ACTIVE', authVersion: 1,
+      permissions: ['data.upload.download'],
+    } });
+    render(<UploadWorkspace
+      breadcrumbs={[]} title="数据上传" leftTitle="导入" classification={null}
+      accept=".csv" files={[]} onFilesChange={vi.fn()} onRemoveFile={vi.fn()}
+      onClearFiles={vi.fn()} submitLabel="开始上传" onSubmit={vi.fn()}
+      showSubmit={false} uploadDisabled rightTitle="历史"
+      records={[{ id: 'job-1', name: 'source.csv', commonActions: {
+        download: { permission: 'data.upload.download', onClick: vi.fn() },
+        retry: { permission: 'data.upload.retry', onClick: vi.fn() },
+        delete: { permission: 'data.upload.delete', onClick: vi.fn() },
+      } }]}
+    />);
+    expect(screen.getByRole('button', { name: /下载/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /重试/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /删除/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '开始上传' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the upload history but hides the drop zone for a read-only viewer', () => {
+    render(<UploadWorkspace
+      breadcrumbs={[]} title="数据上传" leftTitle="导入" classification={null}
+      accept=".csv" files={[]} onFilesChange={vi.fn()} onRemoveFile={vi.fn()}
+      onClearFiles={vi.fn()} submitLabel="开始上传" onSubmit={vi.fn()}
+      showSubmit={false} uploadDisabled uploadReadOnly rightTitle="历史"
+      records={[{ id: 'job-1', name: '历史记录.xlsx' }]}
+    />);
+
+    expect(document.querySelector('input[type="file"]')).toBeNull();
+    expect(screen.queryByText('拖拽文件到此处/点击选择文件/点击拍照上传')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '开始上传' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /清\s*空/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/只有查看权限/)).toBeInTheDocument();
+    expect(screen.getByText('历史记录.xlsx')).toBeInTheDocument();
+  });
+
   it('supports file selection, preview removal, filters, search and submit', () => {
     const onFilesChange = vi.fn();
     const onRemoveFile = vi.fn();

@@ -23,6 +23,7 @@ import {
   InboxOutlined,
 } from '@ant-design/icons';
 import dayjs from '@/utils/dayjs';
+import { Can } from '@/components/auth/Can';
 import { httpClient } from '@/services/http/client';
 import type { ApiResponse } from '@/types/api';
 import { projectDocumentApi } from '@/services/project/project-document-api';
@@ -191,22 +192,22 @@ export default function ProjectDocumentsTab({
           >
             查看
           </Button>
-          <Button
+          <Can permission="project.document.view"><Button
             size="small"
             type="link"
             loading={downloadingId === doc.id}
             onClick={() => void downloadDocument(doc)}
           >
             下载
-          </Button>
-          <Button
+          </Button></Can>
+          <Can permission="project.document.delete"><Button
             size="small"
             type="link"
             danger
             onClick={() => removeDocument(doc)}
           >
             删除
-          </Button>
+          </Button></Can>
         </Space>
       ),
     },
@@ -216,18 +217,18 @@ export default function ProjectDocumentsTab({
     <div className="pm-documents-tab">
       <div className="pm-documents-toolbar">
         <span className="pm-documents-count">共 {documents.length} 份文档</span>
-        <Button type="primary" icon={<FileAddOutlined />} onClick={() => setModalOpen(true)}>
+        <Can permission="project.document.create"><Button type="primary" icon={<FileAddOutlined />} onClick={() => setModalOpen(true)}>
           新建文档
-        </Button>
+        </Button></Can>
       </div>
 
       <Spin spinning={loading}>
       {documents.length === 0 ? (
         <div className="pm-documents-empty">
           <Empty description="暂无项目文档，点击「新建文档」开始">
-            <Button type="primary" icon={<FileAddOutlined />} onClick={() => setModalOpen(true)}>
+            <Can permission="project.document.create"><Button type="primary" icon={<FileAddOutlined />} onClick={() => setModalOpen(true)}>
               新建文档
-            </Button>
+            </Button></Can>
           </Empty>
         </div>
       ) : activeDoc ? (

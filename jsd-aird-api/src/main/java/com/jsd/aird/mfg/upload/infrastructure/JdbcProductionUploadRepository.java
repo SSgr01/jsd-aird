@@ -229,7 +229,7 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
     }
 
     @Override
-    public PageResult<UploadView> list(UUID organizationId, String keyword, String status, UUID projectId,
+    public PageResult<UploadView> list(UUID organizationId, String keyword, String status, String format, UUID projectId,
                                       boolean viewableOnly, int page, int size) {
         var where = new StringBuilder(" WHERE pu.organization_id = ? ");
         var args = new ArrayList<Object>();
@@ -237,6 +237,10 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
         if (projectId != null) {
             where.append(" AND pu.project_id = ?");
             args.add(projectId);
+        }
+        if (format != null && !format.isBlank()) {
+            where.append(" AND pu.source_type = ?");
+            args.add(format);
         }
         if (status != null && !status.isBlank()) {
             if ("PARSED".equalsIgnoreCase(status)) {
@@ -418,7 +422,12 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
                        pu.workbook_snapshot_jsonb, pu.recognition_progress, pu.current_stage,
                        pu.selected_template_version_id, pu.match_mode, pu.template_match_score,
                        pu.recognition_result_jsonb, pu.structure_summary_jsonb, pu.failure_message,
-                       pu.lock_version, pu.updated_by, pu.updated_at
+                       pu.lock_version, pu.updated_by, pu.updated_at,
+                       CASE WHEN pu.status='PUBLISHED' THEN 'PUBLISHED'
+                            ELSE COALESCE((SELECT w.status FROM ops.workspace_review w
+                                WHERE w.organization_id=pu.organization_id AND w.resource_type='PRODUCTION_UPLOAD'
+                                  AND w.resource_id=pu.id AND w.resource_updated_at=pu.updated_at), 'NOT_SUBMITTED')
+                       END workflow_status
                 FROM mfg.production_upload pu
                 JOIN ops.file_object fo ON fo.id = pu.file_id
                 """;
@@ -459,7 +468,8 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
                 rs.getString("failure_message"),
                 rs.getLong("lock_version"),
                 rs.getObject("updated_by", UUID.class),
-                rs.getTimestamp("updated_at").toInstant()
+                rs.getTimestamp("updated_at").toInstant(),
+                rs.getString("workflow_status")
         );
     }
 

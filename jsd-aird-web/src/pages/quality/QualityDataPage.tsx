@@ -7,6 +7,7 @@ import {
   EditOutlined,
   FileOutlined,
   FolderOpenOutlined,
+  FolderOutlined,
   PlusOutlined,
   RedoOutlined,
   SearchOutlined,
@@ -17,23 +18,25 @@ import {
   Button,
   Card,
   Checkbox,
+  DatePicker,
   Empty,
   Form,
   Input,
   message,
   Modal,
   Pagination,
+  Popconfirm,
   Select,
   Space,
   Tag,
   Typography,
 } from 'antd';
+import dayjs, { type Dayjs } from 'dayjs';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CategoryCardGrid, type CatalogCategoryCard } from '@/components/catalog-workspace';
-import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
-import '@/components/project-relations/project-relation-picker.css';
-import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
+import { CategoryCardGrid, CategoryDeleteModal, type CatalogCategoryCard } from '@/components/catalog-workspace';
+import { useAuthStore } from '@/stores/auth-store';
+import { ProjectRelationPath } from '@/components/project-relations/ProjectRelationPath';
 import {
   getProjects,
   getProjectStages,
@@ -60,6 +63,12 @@ type Draft = QualityRecord & { newRow?: boolean };
 type ViewMode = 'card' | 'list';
 type CreateSourceType = 'BLANK' | 'TEMPLATE';
 type CreateFormat = 'WORD' | 'EXCEL';
+function toDayjs(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  const parsed = dayjs(value);
+  return parsed.isValid() ? parsed : undefined;
+}
+
 function qualityIdKey(typeId: QualityTypeId) {
   return typeId === 'standard'
     ? 'fileNo'
@@ -99,12 +108,33 @@ function textValue(value: unknown, fallback = '') {
   }
 }
 
+const workflowLabels: Record<string, string> = {
+  NOT_SUBMITTED: '草稿',
+  SUBMITTED: '待审核',
+  APPROVED: '审核通过',
+  REJECTED: '已退回',
+  PUBLISHED: '已发布',
+};
+function workflowTag(status?: QualityRecord['workflowStatus']) {
+  const value = status || 'NOT_SUBMITTED';
+  return <Tag color={value === 'PUBLISHED' ? 'green' : value === 'APPROVED' ? 'success' : value === 'SUBMITTED' ? 'processing' : value === 'REJECTED' ? 'error' : 'default'}>{workflowLabels[value]}</Tag>;
+}
+
 export function QualityDataPage() {
+  const permissions = useAuthStore((state) => state.user?.permissions ?? []);
+  const can = (action: string) => permissions.includes(`quality.view.${action}`);
+  const canCategory = (action: string) => permissions.includes(`quality.category.${action}`);
   const navigate = useNavigate();
   const [types, setTypes] = useState<QualityType[]>([]),
     [typeId, setTypeId] = useState<QualityTypeId>('standard'),
     [categories, setCategories] = useState<QualityCategory[]>([]),
     [categoryId, setCategoryId] = useState<string>();
+  const [categoryEditorOpen, setCategoryEditorOpen] = useState(false),
+    [categorySaving, setCategorySaving] = useState(false),
+    [editingCategory, setEditingCategory] = useState<QualityCategory>(),
+    [deletingCategory, setDeletingCategory] = useState<QualityCategory>(),
+    [replacementCategoryId, setReplacementCategoryId] = useState<string>(),
+    [categoryForm] = Form.useForm<{ name: string; description?: string }>();
   const [rows, setRows] = useState<QualityRecord[]>([]),
     [draft, setDraft] = useState<Draft[]>([]),
     [deleted, setDeleted] = useState<string[]>([]),
@@ -119,6 +149,7 @@ export function QualityDataPage() {
     [size, setSize] = useState(10),
     [total, setTotal] = useState(0);
   const [projectId, setProjectId] = useState<string>();
+  const [formatFilter, setFormatFilter] = useState<'WORD' | 'EXCEL' | 'CSV' | 'PDF' | 'IMAGE'>();
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -126,7 +157,19 @@ export function QualityDataPage() {
     [renameSaving, setRenameSaving] = useState(false),
     [renaming, setRenaming] = useState<QualityRecord>(),
     [renameName, setRenameName] = useState(''),
-    [renameRelations, setRenameRelations] = useState<ProjectRelationTarget[]>([]);
+    [renameBusinessNo, setRenameBusinessNo] = useState(''),
+    [renamePerson, setRenamePerson] = useState(''),
+    [renameDate, setRenameDate] = useState<Dayjs>(),
+    [renameProjectId, setRenameProjectId] = useState<string>(),
+    [renameStageId, setRenameStageId] = useState<string>(),
+    [renameTaskId, setRenameTaskId] = useState<string>(),
+    [renameStages, setRenameStages] = useState<ProjectStage[]>([]),
+    [renameTasks, setRenameTasks] = useState<ProjectTask[]>([]),
+    [renameStagesLoading, setRenameStagesLoading] = useState(false),
+    [renameTasksLoading, setRenameTasksLoading] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false),
+    [moveSaving, setMoveSaving] = useState(false),
+    [moveForm] = Form.useForm<{ categoryId?: string }>();
   const [createOpen, setCreateOpen] = useState(false),
     [createSaving, setCreateSaving] = useState(false),
     [createSourceType, setCreateSourceType] = useState<CreateSourceType>('BLANK'),
@@ -149,6 +192,11 @@ export function QualityDataPage() {
   const [createForm] = Form.useForm<Record<string, string>>();
   const [msg, holder] = message.useMessage();
   const type = types.find((t) => t.id === typeId);
+  // 编辑弹窗里的“负责人/日期”跟随当前数据类型的字段定义。
+  const renamePersonField = type?.fields.find((field) =>
+    ['author', 'owner', 'inspector', 'operator'].includes(field.key),
+  );
+  const renameDateField = type?.fields.find((field) => field.kind === 'date');
   const activeRows = editing ? draft : rows;
   const beginCategoryRequest = useRequestGuard(typeId);
   const loadCategories = useCallback(async () => {
@@ -158,7 +206,7 @@ export function QualityDataPage() {
     setCategories(cs);
     setCategoryId((v) => (cs.some((c) => c.id === v) ? v : cs[0]?.id));
   }, [beginCategoryRequest, typeId]);
-  const beginRowsRequest = useRequestGuard(JSON.stringify([typeId,categoryId,keyword,projectId,page,size]));
+  const beginRowsRequest = useRequestGuard(JSON.stringify([typeId,categoryId,keyword,projectId,formatFilter,page,size]));
   const loadRows = useCallback(async () => {
     if (!categoryId) return;
     const request = beginRowsRequest();
@@ -168,6 +216,7 @@ export function QualityDataPage() {
         categoryId,
         keyword: keyword || undefined,
         projectId: projectId || undefined,
+        format: formatFilter,
         page,
         size,
       }, request.signal);
@@ -208,41 +257,86 @@ export function QualityDataPage() {
   const openRename = (row: QualityRecord) => {
     setRenaming(row);
     setRenameName(row.displayName || row.sourceFileName || row.businessNo);
-    setRenameRelations(
-      row.projectId
-        ? [
-            {
-              projectId: row.projectId,
-              projectName: row.projectName,
-              stageId: row.stageId,
-              stageName: row.stageName,
-              taskId: row.taskId,
-              taskName: row.taskName,
-            },
-          ]
-        : [],
-    );
+    setRenameBusinessNo(row.businessNo || '');
+    setRenamePerson(renamePersonField ? textValue(row.data[renamePersonField.key]) : '');
+    setRenameDate(renameDateField ? toDayjs(row.data[renameDateField.key]) : undefined);
+    setRenameProjectId(row.projectId);
+    setRenameStageId(row.stageId);
+    setRenameTaskId(row.taskId);
+    setRenameStages([]);
+    setRenameTasks([]);
+    if (row.projectId) {
+      setRenameStagesLoading(true);
+      void getProjectStages(row.projectId)
+        .then(setRenameStages)
+        .catch(() => msg.error('阶段列表加载失败'))
+        .finally(() => setRenameStagesLoading(false));
+    }
+    if (row.stageId) {
+      setRenameTasksLoading(true);
+      void getStageTasks(row.stageId)
+        .then(setRenameTasks)
+        .catch(() => msg.error('任务列表加载失败'))
+        .finally(() => setRenameTasksLoading(false));
+    }
     setRenameOpen(true);
+  };
+  const changeRenameProject = (nextProjectId?: string) => {
+    setRenameProjectId(nextProjectId);
+    setRenameStageId(undefined);
+    setRenameTaskId(undefined);
+    setRenameStages([]);
+    setRenameTasks([]);
+    if (!nextProjectId) return;
+    setRenameStagesLoading(true);
+    void getProjectStages(nextProjectId)
+      .then(setRenameStages)
+      .catch(() => msg.error('阶段列表加载失败'))
+      .finally(() => setRenameStagesLoading(false));
+  };
+  const changeRenameStage = (nextStageId?: string) => {
+    setRenameStageId(nextStageId);
+    setRenameTaskId(undefined);
+    setRenameTasks([]);
+    if (!nextStageId) return;
+    setRenameTasksLoading(true);
+    void getStageTasks(nextStageId)
+      .then(setRenameTasks)
+      .catch(() => msg.error('任务列表加载失败'))
+      .finally(() => setRenameTasksLoading(false));
   };
   const saveRename = async () => {
     if (!renaming || !renameName.trim()) {
       msg.warning('请输入品管数据名称');
       return;
     }
-    const relation = renameRelations[0];
+    const project = projects.find((item) => item.id === renameProjectId);
+    const stage = renameStages.find((item) => item.id === renameStageId);
+    const task = renameTasks.find((item) => item.id === renameTaskId);
+    const nextNo = renameBusinessNo.trim();
+    const dataPatch: Record<string, unknown> = {};
+    if (renamePersonField) dataPatch[renamePersonField.key] = renamePerson.trim();
+    if (renameDateField) {
+      dataPatch[renameDateField.key] = renameDate ? renameDate.format('YYYY-MM-DD') : '';
+    }
+    // 编号列与 data 中的编号字段保持一致，避免详情页显示旧编号。
+    const idKey = qualityIdKey(typeId);
+    if (nextNo && type?.fields.some((field) => field.key === idKey)) dataPatch[idKey] = nextNo;
     setRenameSaving(true);
     try {
       await qualityApi.renameRecord(renaming.id, {
         revision: renaming.lockVersion,
         name: renameName.trim(),
-        projectId: relation?.projectId,
-        projectName: relation?.projectName,
-        stageId: relation?.stageId,
-        stageName: relation?.stageName,
-        taskId: relation?.taskId,
-        taskName: relation?.taskName,
+        businessNo: nextNo || undefined,
+        data: Object.keys(dataPatch).length ? dataPatch : undefined,
+        projectId: renameProjectId,
+        projectName: project?.name ?? (renameProjectId === renaming.projectId ? renaming.projectName : undefined),
+        stageId: renameStageId,
+        stageName: stage?.name ?? (renameStageId === renaming.stageId ? renaming.stageName : undefined),
+        taskId: renameTaskId,
+        taskName: task?.name ?? (renameTaskId === renaming.taskId ? renaming.taskName : undefined),
       });
-      msg.success('品管数据名称和项目关联已更新');
+      msg.success('品管数据信息已更新');
       setRenameOpen(false);
       setRenaming(undefined);
       await loadRows();
@@ -250,6 +344,47 @@ export function QualityDataPage() {
       msg.error(error instanceof Error ? error.message : '品管数据保存失败');
     } finally {
       setRenameSaving(false);
+    }
+  };
+  const openMove = () => {
+    if (editing) {
+      msg.warning('请先保存或取消当前修改，再移动品管数据');
+      return;
+    }
+    const target = categories.find((category) => category.id !== categoryId);
+    moveForm.setFieldsValue({ categoryId: target?.id });
+    setMoveOpen(true);
+  };
+  const saveMove = async () => {
+    const chosen = rows.filter((row) => selected.has(row.id) && !row.newRow);
+    if (!chosen.length) {
+      msg.warning('请先选择需要移动的品管数据');
+      return;
+    }
+    const values = await moveForm.validateFields().catch(() => undefined);
+    if (!values?.categoryId) {
+      msg.warning('请选择目标分类');
+      return;
+    }
+    if (values.categoryId === categoryId) {
+      msg.warning('目标分类与当前分类相同');
+      return;
+    }
+    setMoveSaving(true);
+    try {
+      await qualityApi.move(
+        chosen.map((row) => ({ id: row.id, lockVersion: row.lockVersion })),
+        values.categoryId,
+      );
+      msg.success(`已移动 ${chosen.length} 条品管数据`);
+      setMoveOpen(false);
+      setSelected(new Set());
+      await loadRows();
+      await loadCategories();
+    } catch (error) {
+      msg.error(error instanceof Error ? error.message : '品管数据移动失败');
+    } finally {
+      setMoveSaving(false);
     }
   };
   const guard = () => !dirty || window.confirm('当前表格有未保存修改，确定放弃吗？');
@@ -395,7 +530,7 @@ export function QualityDataPage() {
         if (!template) throw new Error('请选择已发布的 Excel 模板');
         const workspace = await templateApi.getEditModel(template.versionId);
         templateSnapshot = workspace.snapshotFileId && workspace.snapshotHash
-          ? await templateApi.downloadSnapshot(workspace.snapshotFileId)
+          ? await templateApi.downloadSnapshot(workspace.versionId)
           : workspace.inlineSnapshot;
         if (!templateSnapshot) throw new Error('所选模板没有可用的 Excel 内容');
       }
@@ -567,18 +702,15 @@ export function QualityDataPage() {
     });
   };
   const openRecord = (id: string) => navigate(`/quality/records/${id}`);
-  const deleteRecord = (row: QualityRecord) => {
+  const deleteRecord = async (row: QualityRecord) => {
     if (row.newRow || editing) return;
-    if (!window.confirm('确定要删除这条品管数据吗？删除后数据将从列表中隐藏。')) return;
-    void (async () => {
-      try {
-        await qualityApi.deleteRecord(row.id,row.lockVersion);
-        msg.success('品管数据已删除');
-        await Promise.all([loadRows(), loadCategories()]);
-      } catch (error) {
-        msg.error(error instanceof Error ? error.message : '删除失败');
-      }
-    })();
+    try {
+      await qualityApi.deleteRecord(row.id,row.lockVersion);
+      msg.success('品管数据已删除');
+      await Promise.all([loadRows(), loadCategories()]);
+    } catch (error) {
+      msg.error(error instanceof Error ? error.message : '删除失败');
+    }
   };
   const copySelected = () => {
     const sourceRows = editing ? draft : rows;
@@ -659,23 +791,31 @@ export function QualityDataPage() {
     }
     const ids = Array.from(selected).filter((id) => !id.startsWith('new-'));
     if (!ids.length) return;
-    if (!window.confirm('确定要删除选中的品管数据吗？删除后数据将从列表中隐藏。')) return;
-    void qualityApi.deleteRecords(ids.map(id=>{
-      const original=rows.find(row=>row.id===id);
-      if(!original)throw new Error('删除数据的原版本缺失，请重新核对');
-      return {id,lockVersion:original.lockVersion};
-    }))
-      .then(async () => {
-        msg.success('选中的品管数据已删除');
-        setSelected(new Set());
-        await Promise.all([loadRows(), loadCategories()]);
-      })
-      .catch((error) => msg.error(error instanceof Error ? error.message : '删除失败'));
+    Modal.confirm({
+      title: `删除选中的 ${ids.length} 条品管数据？`,
+      content: '删除后数据将从列表中隐藏。',
+      okText: '确认删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await qualityApi.deleteRecords(ids.map(id=>{
+            const original=rows.find(row=>row.id===id);
+            if(!original)throw new Error('删除数据的原版本缺失，请重新核对');
+            return {id,lockVersion:original.lockVersion};
+          }));
+          msg.success('选中的品管数据已删除');
+          setSelected(new Set());
+          await Promise.all([loadRows(), loadCategories()]);
+        } catch (error) {
+          msg.error(error instanceof Error ? error.message : '删除失败');
+          throw error;
+        }
+      },
+    });
   };
   const renderQualityCard = (row: QualityRecord) => {
     const title = row.displayName || row.sourceFileName || row.businessNo;
-    const relation =
-      [row.projectName, row.stageName, row.taskName].filter(Boolean).join(' · ') || '未关联项目';
     const cardFields = (type?.fields || []).filter((field) => field.key !== idKey).slice(0, 4);
     return (
       <article
@@ -700,6 +840,7 @@ export function QualityDataPage() {
             </Typography.Text>
           </div>
           <Tag>{type?.name || '品管数据'}</Tag>
+          {workflowTag(row.workflowStatus)}
           <Checkbox
             aria-label={`选择品管数据 ${title}`}
             checked={selected.has(row.id)}
@@ -716,8 +857,14 @@ export function QualityDataPage() {
             </div>
           ))}
           <div className="quality-record-card-field-wide">
-            <span>关联项目 / 阶段 / 任务</span>
-            <Typography.Text ellipsis={{ tooltip: relation }}>{relation}</Typography.Text>
+            <span>项目 / 阶段 / 任务</span>
+            <div className="quality-record-relation">
+              <ProjectRelationPath
+                projectName={row.projectName}
+                stageName={row.stageName}
+                taskName={row.taskName}
+              />
+            </div>
           </div>
           <div>
             <span>保存位置</span>
@@ -740,10 +887,10 @@ export function QualityDataPage() {
           <Button type="link" onClick={() => openRecord(row.id)}>
             查看
           </Button>
-          <Button type="link" disabled={editing} onClick={() => openRename(row)}>
+          {can('update') && row.workflowStatus !== 'PUBLISHED' && <Button type="link" disabled={editing} onClick={() => openRename(row)}>
             重命名
-          </Button>
-          {typeId === 'record' && textValue(row.data.judgement) === '不合格' && (
+          </Button>}
+          {can('create') && typeId === 'record' && textValue(row.data.judgement) === '不合格' && (
             <Button
               type="link"
               onClick={() =>
@@ -756,69 +903,85 @@ export function QualityDataPage() {
               生成不良报告
             </Button>
           )}
-          <Button
+          {can('download') && <Button
             type="link"
             loading={downloadingId === row.id}
             disabled={!row.sourceFileId || row.newRow || editing || (downloadingId !== undefined && downloadingId !== row.id)}
             onClick={() => void downloadRow(row)}
           >
             下载
-          </Button>
-          <Button type="link" danger onClick={() => deleteRecord(row)}>
-            删除
-          </Button>
+          </Button>}
+          {can('delete') && row.workflowStatus !== 'PUBLISHED' && <Popconfirm
+            title="确认删除该品管数据？"
+            description="删除后数据将从列表中隐藏。"
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => { void deleteRecord(row); }}
+          >
+            <Button type="link" danger>删除</Button>
+          </Popconfirm>}
         </div>
       </article>
     );
   };
-  const categoryModal = (current?: QualityCategory) => {
-    let name = current?.name || '',
-      description = current?.description || '';
-    Modal.confirm({
-      title: current ? '编辑分类' : '新增分类',
-      width: 520,
-      content: (
-        <Space direction="vertical" style={{ width: '100%', marginTop: 16 }}>
-          <Input
-            defaultValue={name}
-            maxLength={20}
-            placeholder="分类名称"
-            onChange={(e) => (name = e.target.value)}
-          />
-          <Input.TextArea
-            defaultValue={description}
-            maxLength={80}
-            placeholder="分类简介"
-            onChange={(e) => (description = e.target.value)}
-          />
-        </Space>
-      ),
-      onOk: async () => {
-        if (!name.trim() || !description.trim()) throw new Error('请填写分类名称和简介');
-        if (current)
-          await qualityApi.updateCategory(current.id, { revision: current.revision,
-            name: name.trim(),
-            description: description.trim(),
-          });
-        else
-          await qualityApi.createCategory({
-            type: typeId,
-            name: name.trim(),
-            description: description.trim(),
-          });
-        await loadCategories();
-      },
+  const openCategoryEditor = (current?: QualityCategory) => {
+    setEditingCategory(current);
+    setCategoryEditorOpen(true);
+    categoryForm.setFieldsValue({
+      name: current?.name || '',
+      description: current?.description || '',
     });
   };
-  const removeCategory = async (category: QualityCategory) => {
+  const saveCategory = async (values: { name: string; description?: string }) => {
+    setCategorySaving(true);
     try {
-      await qualityApi.deleteCategory(category.id,category.revision);
+      const name = values.name.trim();
+      const description = (values.description || '').trim();
+      if (editingCategory) {
+        await qualityApi.updateCategory(editingCategory.id, {
+          revision: editingCategory.revision,
+          name,
+          description,
+        });
+        msg.success('分类已更新');
+      } else {
+        await qualityApi.createCategory({ type: typeId, name, description });
+        msg.success('分类已新增');
+      }
       await loadCategories();
-    } catch {
-      msg.warning('该分类下存在数据，请先移动或删除数据');
+      setCategoryEditorOpen(false);
+      setEditingCategory(undefined);
+      categoryForm.resetFields();
+    } catch (error) {
+      msg.error(error instanceof Error ? error.message : '分类保存失败');
+    } finally {
+      setCategorySaving(false);
+    }
+  };
+  const removeCategory = async () => {
+    if (!deletingCategory) return;
+    setCategorySaving(true);
+    try {
+      await qualityApi.deleteCategory(deletingCategory.id, deletingCategory.revision, replacementCategoryId);
+      setDeletingCategory(undefined);
+      setReplacementCategoryId(undefined);
+      await loadCategories();
+      msg.success('分类已删除');
+    } catch (error) {
+      msg.warning(error instanceof Error ? error.message : '该分类下存在数据，请选择迁移目标分类');
+    } finally {
+      setCategorySaving(false);
     }
   };
   const fields = type?.fields || [];
+  const listFields = typeId === 'standard'
+    ? ['fileNo', 'fileName', 'author', 'effectiveDate']
+        .map((key) => fields.find((field) => field.key === key))
+        .filter((field): field is QualityType['fields'][number] => Boolean(field))
+    : fields;
+  // 状态列固定展示，字段列表里已包含状态时不重复渲染。
+  const hasStatusField = listFields.some((field) => field.key === 'status');
   const createFields = (createType?.fields || []).filter(
     (field) => field.key !== 'fileType' && field.key !== 'version',
   );
@@ -833,7 +996,7 @@ export function QualityDataPage() {
     // catalog card layout and interaction surface.
     icon: <FolderOpenOutlined />,
     tone: 'blue',
-    editable: true,
+    editable: !category.systemDefault,
     allowedActions: category.allowedActions ?? ['DELETE'],
   }));
   return (
@@ -855,9 +1018,9 @@ export function QualityDataPage() {
           )}
           {editing ? (
             <>
-              <Button type="primary" onClick={() => void save()}>
+              {can('update') && <Button type="primary" onClick={() => void save()}>
                 保存修改
-              </Button>
+              </Button>}
               <Button
                 onClick={() => {
                   if (guard()) {
@@ -868,39 +1031,46 @@ export function QualityDataPage() {
               >
                 取消修改
               </Button>
-              <Button onClick={addRow}>新增行</Button>
+              {can('create') && <Button onClick={addRow}>新增行</Button>}
               <span className="quality-dirty">{dirty ? '● 有未保存修改' : '尚未修改'}</span>
             </>
           ) : (
             <>
-              <Button icon={<CopyOutlined />} disabled={!selected.size} onClick={copySelected}>
+              {can('copy') && <Button icon={<CopyOutlined />} disabled={!selected.size} onClick={copySelected}>
                 复制
-              </Button>
-              <Button icon={<EditOutlined />} onClick={renameSelected}>
+              </Button>}
+              {can('update') && <Button icon={<EditOutlined />} onClick={renameSelected}>
                 重命名
-              </Button>
-              <Button
+              </Button>}
+              {can('update') && <Button
+                icon={<FolderOutlined />}
+                disabled={!selected.size}
+                onClick={openMove}
+              >
+                移动到
+              </Button>}
+              {can('export') && <Button
                 icon={<DownloadOutlined />}
                 disabled={!selected.size}
                 loading={exporting}
                 onClick={() => void exportSelected()}
               >
                 导出
-              </Button>
-              <Button
+              </Button>}
+              {can('delete') && <Button
                 danger
                 icon={<DeleteOutlined />}
                 disabled={!selected.size}
                 onClick={deleteSelected}
               >
                 删除
-              </Button>
-              <Button icon={<UploadOutlined />} onClick={() => navigate('/quality/upload')}>
+              </Button>}
+              {permissions.includes('quality.upload.create') && <Button icon={<UploadOutlined />} onClick={() => navigate('/quality/upload')}>
                 品管数据上传
-              </Button>
-              <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              </Button>}
+              {can('create') && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
                 新增品管数据
-              </Button>
+              </Button>}
               <Space.Compact className="quality-list-view-toggle">
                 <Button
                   aria-label="卡片视图"
@@ -948,15 +1118,18 @@ export function QualityDataPage() {
           setDirty(false);
           setPage(1);
         }}
-        onCreate={() => categoryModal()}
-        onRename={(item) => {
+        onCreate={canCategory('create') ? () => openCategoryEditor() : undefined}
+        onRename={canCategory('update') ? (item) => {
           const category = categories.find((candidate) => candidate.id === item.id);
-          if (category) categoryModal(category);
-        }}
-        onDelete={(item) => {
+          if (category) openCategoryEditor(category);
+        } : undefined}
+        onDelete={canCategory('delete') ? (item) => {
           const category = categories.find((candidate) => candidate.id === item.id);
-          if (category) void removeCategory(category);
-        }}
+          if (category) {
+            setReplacementCategoryId(undefined);
+            setDeletingCategory(category);
+          }
+        } : undefined}
       />
       <Card className="content-card quality-filter-card">
         <Space className="quality-filter-space" wrap>
@@ -991,6 +1164,13 @@ export function QualityDataPage() {
             }}
             style={{ width: 180 }}
           />
+          <Select allowClear placeholder="全部格式" value={formatFilter}
+            options={[{ value: 'EXCEL', label: 'Excel' }, { value: 'WORD', label: 'Word' }, { value: 'CSV', label: 'CSV' }, { value: 'PDF', label: 'PDF' }, { value: 'IMAGE', label: '图片' }]}
+            onChange={(value) => {
+              if (!guard()) return;
+              setFormatFilter(value);
+              setPage(1);
+            }} style={{ width: 130 }} />
           {filterFields.map((field) => {
             const values = Array.from(
               new Set([
@@ -1022,6 +1202,7 @@ export function QualityDataPage() {
               if (!guard()) return;
               setKeyword('');
               setProjectId(undefined);
+              setFormatFilter(undefined);
               setFilters({});
               setPage(1);
             }}
@@ -1069,12 +1250,19 @@ export function QualityDataPage() {
                         }
                       />
                     </th>
-                    <th>名称</th>
-                    <th>关联项目 / 阶段 / 任务</th>
-                    {fields.map((f) => (
+                    {typeId !== 'standard' && <th>名称</th>}
+                    {listFields.slice(0, typeId === 'standard' ? 2 : 0).map((f) => (
+                      <th key={f.key}>{f.label}</th>
+                    ))}
+                    <th className="quality-project-column">项目 / 阶段 / 任务</th>
+                    {listFields.slice(2, typeId === 'standard' ? 4 : 2).map((f) => (
+                      <th key={f.key}>{f.label}</th>
+                    ))}
+                    <th>文件格式</th>
+                    <th>{hasStatusField ? '审核状态' : '状态'}</th>
+                    {listFields.slice(typeId === 'standard' ? 4 : 0).map((f) => (
                       <th key={f.key}>
                         {f.label}
-                        {f.required ? ' *' : ''}
                       </th>
                     ))}
                     <th>操作</th>
@@ -1089,7 +1277,7 @@ export function QualityDataPage() {
                           onChange={() => toggleSelected(r.id)}
                         />
                       </td>
-                      <td title={r.displayName || r.sourceFileName || r.businessNo}>
+                      {typeId !== 'standard' && <td title={r.displayName || r.sourceFileName || r.businessNo}>
                         {!editing && !r.newRow ? (
                           <Button
                             type="link"
@@ -1101,14 +1289,46 @@ export function QualityDataPage() {
                         ) : (
                           r.displayName || r.sourceFileName || r.businessNo
                         )}
-                      </td>
-                      <td>
-                        {[r.projectName, r.stageName, r.taskName].filter(Boolean).join(' · ') ||
-                          '未关联项目'}
-                      </td>
-                      {fields.map((f) => (
+                      </td>}
+                      {listFields.slice(0, typeId === 'standard' ? 2 : 0).map((f) => (
                         <td key={f.key}>
-                          {editing ? (
+                          {editing && !['PUBLISHED', 'SUBMITTED', 'APPROVED'].includes(r.workflowStatus || '') ? (
+                            <input
+                              type="text"
+                              disabled={!r.newRow && f.key === idKey}
+                              value={textValue(r.data[f.key])}
+                              onChange={(e) => update(draft.findIndex((item) => item.id === r.id), f.key, e.target.value)}
+                            />
+                          ) : f.key === 'fileName' && !r.newRow ? (
+                            <Button type="link" className="pm-name-link quality-record-name-link" onClick={() => openRecord(r.id)}>
+                              {textValue(r.data[f.key], r.displayName || r.sourceFileName || '—')}
+                            </Button>
+                          ) : textValue(r.data[f.key], '—')}
+                        </td>
+                      ))}
+                      <td className="quality-project-column">
+                        <ProjectRelationPath
+                          projectName={r.projectName}
+                          stageName={r.stageName}
+                          taskName={r.taskName}
+                        />
+                      </td>
+                      {listFields.slice(2, typeId === 'standard' ? 4 : 2).map((f) => (
+                        <td key={f.key}>
+                          {editing && !['PUBLISHED', 'SUBMITTED', 'APPROVED'].includes(r.workflowStatus || '') ? (
+                            <input
+                              type={f.kind === 'date' ? 'date' : 'text'}
+                              value={textValue(r.data[f.key])}
+                              onChange={(e) => update(draft.findIndex((item) => item.id === r.id), f.key, e.target.value)}
+                            />
+                          ) : textValue(r.data[f.key], '—')}
+                        </td>
+                      ))}
+                      <td>{r.documentFormat === 'EXCEL' ? 'Excel' : r.documentFormat === 'WORD' ? 'Word' : r.documentFormat === 'IMAGE' ? '图片' : r.documentFormat || '—'}</td>
+                      <td>{workflowTag(r.workflowStatus)}</td>
+                      {listFields.slice(typeId === 'standard' ? 4 : 0).map((f) => (
+                        <td key={f.key}>
+                          {editing && !['PUBLISHED', 'SUBMITTED', 'APPROVED'].includes(r.workflowStatus || '') ? (
                             f.kind === 'select' ? (
                               <Select
                                 value={textValue(r.data[f.key])}
@@ -1162,15 +1382,15 @@ export function QualityDataPage() {
                           <Button type="link" size="small" onClick={() => openRecord(r.id)}>
                             查看
                           </Button>
-                          <Button
+                          {can('update') && r.workflowStatus !== 'PUBLISHED' && <Button
                             type="link"
                             size="small"
                             disabled={r.newRow || editing}
                             onClick={() => openRename(r)}
                           >
                             重命名
-                          </Button>
-                          {typeId === 'record' &&
+                          </Button>}
+                          {can('create') && typeId === 'record' &&
                             textValue(r.data.judgement) === '不合格' &&
                             !editing && (
                               <Button
@@ -1189,7 +1409,7 @@ export function QualityDataPage() {
                                 生成不良报告
                               </Button>
                             )}
-                          <Button
+                          {can('download') && <Button
                             type="link"
                             size="small"
                             loading={downloadingId === r.id}
@@ -1197,17 +1417,25 @@ export function QualityDataPage() {
                             onClick={() => void downloadRow(r)}
                           >
                             下载
-                          </Button>
-                          <Button
-                            type="link"
-                            size="small"
-                            danger
-                            icon={typeId === 'standard' ? undefined : <DeleteOutlined />}
-                            disabled={r.newRow || editing}
-                            onClick={() => deleteRecord(r)}
+                          </Button>}
+                          {can('delete') && r.workflowStatus !== 'PUBLISHED' && <Popconfirm
+                            title="确认删除该品管数据？"
+                            description="删除后数据将从列表中隐藏。"
+                            okText="删除"
+                            cancelText="取消"
+                            okButtonProps={{ danger: true }}
+                            onConfirm={() => { void deleteRecord(r); }}
                           >
-                            删除
-                          </Button>
+                            <Button
+                              type="link"
+                              size="small"
+                              danger
+                              icon={typeId === 'standard' ? undefined : <DeleteOutlined />}
+                              disabled={r.newRow || editing}
+                            >
+                              删除
+                            </Button>
+                          </Popconfirm>}
                         </Space>
                       </td>
                     </tr>
@@ -1407,15 +1635,27 @@ export function QualityDataPage() {
       </Modal>
       <Modal
         open={renameOpen}
-        title="重命名并关联项目"
-        width={720}
+        rootClassName="quality-rename-modal"
+        title="编辑品管数据"
+        width={600}
         confirmLoading={renameSaving}
         okText="保存"
         cancelText="取消"
         onCancel={() => setRenameOpen(false)}
         onOk={() => void saveRename()}
       >
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <div className="quality-rename-grid">
+          <div>
+            <span className="ant-form-item-label">
+              <label>品管数据编号</label>
+            </span>
+            <Input
+              value={renameBusinessNo}
+              maxLength={120}
+              placeholder="请输入品管数据编号"
+              onChange={(event) => setRenameBusinessNo(event.target.value)}
+            />
+          </div>
           <div>
             <span className="ant-form-item-label">
               <label>品管数据名称</label>
@@ -1427,20 +1667,160 @@ export function QualityDataPage() {
               onChange={(event) => setRenameName(event.target.value)}
             />
           </div>
-          <div>
-            <span className="ant-form-item-label">
-              <label>关联项目 / 阶段 / 任务</label>
-            </span>
-            <div style={{ marginTop: 8 }}>
-              <ProjectRelationPicker
-                value={renameRelations}
-                onChange={setRenameRelations}
-                multiple={false}
+          {renamePersonField && (
+            <div>
+              <span className="ant-form-item-label">
+                <label>{renamePersonField.label}</label>
+              </span>
+              <Input
+                value={renamePerson}
+                maxLength={120}
+                placeholder={`请输入${renamePersonField.label}`}
+                onChange={(event) => setRenamePerson(event.target.value)}
+              />
+            </div>
+          )}
+          {renameDateField && (
+            <div>
+              <span className="ant-form-item-label">
+                <label>{renameDateField.label}</label>
+              </span>
+              <DatePicker
+                value={renameDate}
+                format="YYYY/MM/DD"
+                placeholder={`请选择${renameDateField.label}`}
+                style={{ width: '100%' }}
+                onChange={(value) => setRenameDate(value ?? undefined)}
+              />
+            </div>
+          )}
+          <div className="quality-rename-relations">
+            <div>
+              <span className="ant-form-item-label">
+                <label>关联项目</label>
+              </span>
+              <Select<string>
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                value={renameProjectId}
+                placeholder="不关联项目"
+                loading={projectsLoading}
+                options={projects.map((item) => ({ value: item.id, label: item.name }))}
+                onChange={(value) => changeRenameProject(value)}
+              />
+            </div>
+            <div>
+              <span className="ant-form-item-label">
+                <label>阶段</label>
+              </span>
+              <Select<string>
+                allowClear
+                value={renameStageId}
+                placeholder="不关联阶段"
+                disabled={!renameProjectId}
+                loading={renameStagesLoading}
+                options={renameStages.map((item) => ({ value: item.id, label: item.name }))}
+                onChange={(value) => changeRenameStage(value)}
+              />
+            </div>
+            <div>
+              <span className="ant-form-item-label">
+                <label>任务</label>
+              </span>
+              <Select<string>
+                allowClear
+                value={renameTaskId}
+                placeholder="不关联任务"
+                disabled={!renameStageId}
+                loading={renameTasksLoading}
+                options={renameTasks.map((item) => ({ value: item.id, label: item.name }))}
+                onChange={(value) => setRenameTaskId(value)}
               />
             </div>
           </div>
-        </Space>
+        </div>
       </Modal>
+      <Modal
+        open={moveOpen}
+        title="移动到分类"
+        width={480}
+        confirmLoading={moveSaving}
+        okText="移动"
+        cancelText="取消"
+        onCancel={() => setMoveOpen(false)}
+        onOk={() => void saveMove()}
+      >
+        <Form form={moveForm} layout="vertical">
+          <Form.Item
+            name="categoryId"
+            label="目标分类"
+            rules={[{ required: true, message: '请选择目标分类' }]}
+          >
+            <Select
+              placeholder="请选择目标分类"
+              options={categories
+                .filter((category) => category.id !== categoryId)
+                .map((category) => ({ value: category.id, label: category.name }))}
+            />
+          </Form.Item>
+        </Form>
+        <Typography.Text type="secondary">
+          已选择 {selected.size} 条品管数据，移动后文档内容与项目关联保持不变。
+        </Typography.Text>
+      </Modal>
+      <Modal
+        title={editingCategory ? '编辑分类' : '新增分类'}
+        open={categoryEditorOpen}
+        confirmLoading={categorySaving}
+        okText="保存"
+        cancelText="取消"
+        forceRender
+        onOk={() => categoryForm.submit()}
+        onCancel={() => {
+          setCategoryEditorOpen(false);
+          setEditingCategory(undefined);
+          categoryForm.resetFields();
+        }}
+      >
+        <Form
+          form={categoryForm}
+          layout="vertical"
+          onFinish={(values) => void saveCategory(values)}
+        >
+          <Form.Item
+            name="name"
+            label="分类名称"
+            rules={[
+              { required: true, whitespace: true, message: '请输入分类名称' },
+              { max: 20 },
+            ]}
+          >
+            <Input autoFocus maxLength={20} placeholder="请输入分类名称" />
+          </Form.Item>
+          <Form.Item name="description" label="分类简介" rules={[{ max: 80 }]}>
+            <Input.TextArea
+              rows={3}
+              maxLength={80}
+              showCount
+              placeholder="可选，简要说明该分类的用途或内容范围"
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+      <CategoryDeleteModal
+        open={Boolean(deletingCategory)}
+        title={deletingCategory ? `删除分类“${deletingCategory.name}”` : '删除分类'}
+        description="品管数据不会被删除。请选择迁移目标，留空则移到未分类。"
+        confirmLoading={categorySaving}
+        replacement={{
+          value: replacementCategoryId,
+          onChange: setReplacementCategoryId,
+          options: categories.filter((item) => item.id !== deletingCategory?.id).map((item) => ({ value: item.id, label: item.name })),
+        }}
+        onCancel={() => { setDeletingCategory(undefined); setReplacementCategoryId(undefined); }}
+        onConfirm={() => void removeCategory()}
+      />
     </div>
   );
 }

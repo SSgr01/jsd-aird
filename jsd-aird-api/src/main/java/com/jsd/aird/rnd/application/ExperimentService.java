@@ -686,7 +686,7 @@ public class ExperimentService {
         var actor = ActorContext.required();
         var result = repository.createCategory(
                 actor.organizationId(), requiredText(code, "分类编码不能为空"),
-                requiredText(name, "分类名称不能为空"), requiredText(description, "分类说明不能为空"),
+                requiredText(name, "分类名称不能为空"), defaultText(description, ""),
                 actor.userId());
         audit(actor, "EXPERIMENT_CATEGORY_CREATED", "EXPERIMENT_CATEGORY", result.id(), result.name());
         return result;

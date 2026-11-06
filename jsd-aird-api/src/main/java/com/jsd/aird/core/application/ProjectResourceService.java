@@ -129,7 +129,7 @@ public class ProjectResourceService implements ProjectResourceFacade {
         var involvedProjects = new LinkedHashSet<UUID>();
         existing.forEach(target -> involvedProjects.add(target.projectId()));
         desired.forEach(target -> involvedProjects.add(target.projectId()));
-        involvedProjects.forEach(projectId -> requireProject(actor, "project.assign", projectId, "WRITE"));
+        involvedProjects.forEach(projectId -> requireLinkPermission(actor, resourceType, resourceId, projectId));
         desired.forEach(this::validateHierarchy);
 
         var desiredKeys = desired.stream().map(TargetKey::new).collect(java.util.stream.Collectors.toSet());
@@ -488,6 +488,32 @@ public class ProjectResourceService implements ProjectResourceFacade {
         if (projectId == null) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "项目不能为空");
         authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), permission,
                 "PROJECT", projectId, operation));
+    }
+
+    /**
+     * 维护记录的项目关联要求 {@code project.assign}；记录自身的「编辑」权限同样可以维护
+     * 自己的项目关联（数据导入任务、知识文档），数据范围按记录本身计算，因此编辑他人
+     * 创建的记录仍会被 SELF/CREATOR 范围拒绝。
+     */
+    private void requireLinkPermission(Actor actor, ResourceType resourceType, UUID resourceId, UUID projectId) {
+        if (projectId == null) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "项目不能为空");
+        var projectCheck = new PermissionCheck(actor.organizationId(), actor.userId(), "project.assign",
+                "PROJECT", projectId, "WRITE");
+        if (authorization.check(projectCheck).allowed()) return;
+        var sourceEditCheck = sourceEditCheck(actor, resourceType, resourceId);
+        if (sourceEditCheck == null) { authorization.require(projectCheck); return; }
+        authorization.require(sourceEditCheck);
+    }
+
+    private PermissionCheck sourceEditCheck(Actor actor, ResourceType resourceType, UUID resourceId) {
+        if (resourceId == null) return null;
+        return switch (resourceType) {
+            case DATA_IMPORT_JOB -> new PermissionCheck(actor.organizationId(), actor.userId(),
+                    "data.view.update", "DATA", resourceId, "WRITE");
+            case KNOWLEDGE_DOCUMENT -> new PermissionCheck(actor.organizationId(), actor.userId(),
+                    "knowledge.update", "KNOWLEDGE", resourceId, "WRITE");
+            default -> null;
+        };
     }
 
     private boolean allowed(Actor actor, String permission, UUID projectId, String operation) {

@@ -12,12 +12,13 @@ public interface SpectrumRepository {
     List<CategoryRow> listCategories(UUID organizationId);
     Optional<CategoryRow> findCategory(UUID organizationId, UUID categoryId);
     Optional<CategoryRow> findCategoryByCode(UUID organizationId, String code);
+    UUID ensureUncategorizedCategory(UUID organizationId, UUID createdBy);
     void lockCategoryName(UUID organizationId, String name);
     boolean categoryNameExists(UUID organizationId, String name, UUID excludingCategoryId);
     void lockCategoryCode(UUID organizationId, String code);
     CategoryRow createCategory(NewCategory command);
     CategoryRow renameCategory(UUID organizationId, UUID categoryId, String name, String description, String analysisHint, String fieldsJson);
-    void deleteCategory(UUID organizationId, UUID categoryId);
+    void deleteCategory(UUID organizationId, UUID categoryId, UUID replacementCategoryId);
 
     Optional<ChartRow> findChart(UUID organizationId, UUID chartId);
     Optional<ChartRow> findChartByHash(UUID organizationId, String sha256);

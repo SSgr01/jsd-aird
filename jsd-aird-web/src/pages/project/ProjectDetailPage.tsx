@@ -26,6 +26,8 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import dayjs from '@/utils/dayjs';
+import { Can } from '@/components/auth/Can';
+import { usePermission } from '@/components/auth/usePermission';
 
 import {
   formatProjectStatus,
@@ -50,8 +52,6 @@ import { ProjectStageBoard } from './ProjectStageBoard';
 import { ProjectLogsTab } from './ProjectLogsTab';
 import ProjectDocumentsTab from './ProjectDocumentsTab';
 
-const detailTabKeys = new Set(['documents', 'info', 'requirements', 'references', 'meetings', 'logs', 'assets']);
-
 interface InfoFormValues {
   projectCode?: string;
   name: string;
@@ -65,6 +65,13 @@ interface InfoFormValues {
 }
 
 export function ProjectDetailPage() {
+  const canViewInfo = usePermission('project.list.view');
+  const canViewDocuments = usePermission('project.document.view');
+  const canViewRequirements = usePermission('project.customer-needs.view');
+  const canViewReferences = usePermission('project.reference.view');
+  const canViewMeetings = usePermission('project.meeting.view');
+  const canViewLogs = usePermission('project.log.view');
+  const canViewMaterials = usePermission('project.materials.view');
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -201,9 +208,9 @@ export function ProjectDetailPage() {
   const infoForm = (
     <div className="pm-info-card">
       <div className="pm-info-toolbar">
-        <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void handleSave()}>
+        <Can permission="project.list.update"><Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void handleSave()}>
           保存
-        </Button>
+        </Button></Can>
       </div>
 
       <Form
@@ -326,14 +333,14 @@ export function ProjectDetailPage() {
   );
 
   const tabs = [
-    { key: 'documents', label: <><FolderOpenOutlined /> 项目文档</>, children: <ProjectDocumentsTab projectId={id ?? project.id} projectCode={project.projectCode} projectName={project.name} /> },
-    { key: 'info', label: <><InfoCircleOutlined /> 项目信息</>, children: infoForm },
-    { key: 'requirements', label: <><FileTextOutlined /> 客户需求</>, children: <CustomerRequirementTab projectId={id ?? project.id} projectName={project.name} partnerId={project.partnerId} /> },
-    { key: 'references', label: <><BookOutlined /> 资料参考</>, children: <ReferenceMaterialsTab projectId={id ?? project.id} /> },
-    { key: 'meetings', label: <><TeamOutlined /> 会议纪要</>, children: <MeetingMinutesTab projectId={id ?? project.id} /> },
-    { key: 'logs', label: <><HistoryOutlined /> 日志</>, children: <ProjectLogsTab projectId={id ?? project.id} /> },
-    { key: 'assets', label: <><LinkOutlined /> 关联资料</>, children: <ProjectMaterialsTab projectId={id ?? project.id} /> },
-  ];
+    canViewDocuments && { key: 'documents', label: <><FolderOpenOutlined /> 项目文档</>, children: <ProjectDocumentsTab projectId={id ?? project.id} projectCode={project.projectCode} projectName={project.name} /> },
+    canViewInfo && { key: 'info', label: <><InfoCircleOutlined /> 项目信息</>, children: infoForm },
+    canViewRequirements && { key: 'requirements', label: <><FileTextOutlined /> 客户需求</>, children: <CustomerRequirementTab projectId={id ?? project.id} projectName={project.name} partnerId={project.partnerId} /> },
+    canViewReferences && { key: 'references', label: <><BookOutlined /> 资料参考</>, children: <ReferenceMaterialsTab projectId={id ?? project.id} /> },
+    canViewMeetings && { key: 'meetings', label: <><TeamOutlined /> 会议纪要</>, children: <MeetingMinutesTab projectId={id ?? project.id} /> },
+    canViewLogs && { key: 'logs', label: <><HistoryOutlined /> 日志</>, children: <ProjectLogsTab projectId={id ?? project.id} /> },
+    canViewMaterials && { key: 'assets', label: <><LinkOutlined /> 关联资料</>, children: <ProjectMaterialsTab projectId={id ?? project.id} /> },
+  ].filter(Boolean) as { key: string; label: React.ReactNode; children: React.ReactNode }[];
 
   return (
     <div className="pm-detail-page">
@@ -345,13 +352,13 @@ export function ProjectDetailPage() {
         <span className="pm-detail-partner">关联客户：{project.partnerName ?? '—'}</span>
       </div>
 
-      <ProjectStageBoard projectId={id ?? project.id} />
+      <Can permission="project.stage.view"><ProjectStageBoard projectId={id ?? project.id} /></Can>
 
-      <Tabs activeKey={detailTabKeys.has(searchParams.get('section') ?? '') ? searchParams.get('section')! : 'info'}
+      <Tabs activeKey={tabs.some((tab) => tab.key === searchParams.get('section')) ? searchParams.get('section')! : tabs[0]?.key}
         items={tabs} className="pm-detail-tabs"
         onChange={(key) => {
           const next = new URLSearchParams(searchParams);
-          if (key === 'info') next.delete('section'); else next.set('section', key);
+          next.set('section', key);
           setSearchParams(next, { replace: true });
         }} />
     </div>

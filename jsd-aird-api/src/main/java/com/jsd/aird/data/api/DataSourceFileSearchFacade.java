@@ -333,8 +333,23 @@ public interface DataSourceFileSearchFacade {
     }
 
     record AccessScope(String type, UUID actorId, Set<UUID> targetIds) {
+        /**
+         * Organization-wide visibility is granted as {@code ORG} and creator-owned
+         * visibility as {@code CREATOR} by the v2 IAM model, while this retrieval
+         * boundary was written on the older {@code ALL}/{@code SELF} vocabulary.
+         * Normalize the two sets here: otherwise every migrated tenant resolves
+         * its view permission to {@code ORG}, which {@link #deniesAll()} rejects as
+         * unknown, silently dropping all data-center and experiment evidence from
+         * AI answers. Both codes stay bounded by {@code organization_id} like the
+         * scopes they map to.
+         */
         public AccessScope {
             type = type == null || type.isBlank() ? "ALL" : type.strip().toUpperCase(Locale.ROOT);
+            type = switch (type) {
+                case "ORG" -> "ALL";
+                case "CREATOR" -> "SELF";
+                default -> type;
+            };
             targetIds = targetIds == null ? Set.of() : Set.copyOf(targetIds);
         }
 

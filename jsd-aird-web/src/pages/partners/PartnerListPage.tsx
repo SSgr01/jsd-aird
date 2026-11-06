@@ -8,6 +8,7 @@ import * as XLSX from 'xlsx';
 import { createPartner, deletePartner, getPartners } from '@/services/partners/partner-api';
 import type { BusinessPartner } from '@/services/partners/partner-api';
 import { errorMessage } from '@/services/http/errors';
+import { useAuthStore } from '@/stores/auth-store';
 import { PartnerPrototypeModal } from './PartnerPrototypeModals';
 import './partner-pages.css';
 import './partner-0730.css';
@@ -43,6 +44,8 @@ const uniqueText = (values: Array<string | undefined>) => [...new Set(
 )];
 
 export function PartnerListPage() {
+  const permissions = useAuthStore((state) => state.user?.permissions ?? []);
+  const can = (action: string) => permissions.includes(`customer.list.${action}`);
   const [rows, setRows] = useState<BusinessPartner[]>([]);
   const [keyword, setKeyword] = useState('');
   const [industry, setIndustry] = useState<string>();
@@ -281,13 +284,13 @@ export function PartnerListPage() {
               清除已选
             </Button>
           )}
-          <Button icon={<DownloadOutlined />} onClick={() => void exportRows()} loading={exporting}>
+          {can('view') && <Button icon={<DownloadOutlined />} onClick={() => void exportRows()} loading={exporting}>
             导出
-          </Button>
-          <Button icon={<CopyOutlined />} onClick={() => void copySelected()} disabled={!selectedIds.length} loading={copying}>
+          </Button>}
+          {can('create') && permissions.includes('customer.copy') && <Button icon={<CopyOutlined />} onClick={() => void copySelected()} disabled={!selectedIds.length} loading={copying}>
             复制
-          </Button>
-          <Popconfirm
+          </Button>}
+          {can('delete') && <Popconfirm
             title={`批量删除 ${selectedIds.length} 个客户？`}
             description="历史关联数据不会被删除。"
             disabled={selectedIds.length === 0}
@@ -296,10 +299,10 @@ export function PartnerListPage() {
             <Button danger disabled={selectedIds.length === 0}>
               删除
             </Button>
-          </Popconfirm>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setModal({ mode: 'customer' })}>
+          </Popconfirm>}
+          {can('create') && <Button type="primary" icon={<PlusOutlined />} onClick={() => setModal({ mode: 'customer' })}>
             新建客户
-          </Button>
+          </Button>}
           <Space.Compact>
             <Tooltip title="卡片视图">
               <Button
@@ -418,9 +421,7 @@ export function PartnerListPage() {
                       </td>
                       <td>{x.partnerCode}</td>
                       <td>
-                        <Link className="cm-customer-link" to={`/partners/${x.id}`}>
-                          {x.name}
-                        </Link>
+                        {can('view') ? <Link className="cm-customer-link" to={`/partners/${x.id}`}>{x.name}</Link> : x.name}
                         <div className="cm-muted">{x.address || '—'}</div>
                       </td>
                       <td>{x.industry || '—'}</td>
@@ -434,8 +435,8 @@ export function PartnerListPage() {
                       <td>{x.latestFollowUpAt ? dayjs(x.latestFollowUpAt).format('YYYY-MM-DD HH:mm') : '—'}</td>
                       <td>
                         <div className="cm-row-actions management-table-actions">
-                          <Link to={`/partners/${x.id}`}>查看</Link>
-                          <Popconfirm
+                          {can('view') && <Link to={`/partners/${x.id}`}>查看</Link>}
+                          {can('delete') && <Popconfirm
                             title="删除该公司？"
                             description="历史关联数据不会被删除。"
                             onConfirm={() => void removePartners([x])}
@@ -443,7 +444,7 @@ export function PartnerListPage() {
                             <Button danger type="link" size="small">
                               删除
                             </Button>
-                          </Popconfirm>
+                          </Popconfirm>}
                         </div>
                       </td>
                     </tr>
@@ -481,7 +482,7 @@ export function PartnerListPage() {
                     </div>
                     <div className="cm-customer-card-head">
                       <div className="cm-customer-card-titleline">
-                        <Link className="cm-customer-card-name" to={`/partners/${x.id}`} title={x.name}>{x.name}</Link>
+                        {can('view') ? <Link className="cm-customer-card-name" to={`/partners/${x.id}`} title={x.name}>{x.name}</Link> : x.name}
                         <div className="cm-customer-card-tags">
                           {x.customerLevel && (
                             <Tag color={levelColor}>{x.customerLevel}</Tag>
@@ -511,8 +512,8 @@ export function PartnerListPage() {
                         最近跟进：{x.latestFollowUpAt ? dayjs(x.latestFollowUpAt).format('YYYY-MM-DD HH:mm') : '—'}
                       </span>
                       <Space size={8}>
-                        <Link className="cm-link-button" to={`/partners/${x.id}`}>查看</Link>
-                        <Popconfirm
+                        {can('view') && <Link className="cm-link-button" to={`/partners/${x.id}`}>查看</Link>}
+                        {can('delete') && <Popconfirm
                           title="删除该公司？"
                           description="历史关联数据不会被删除。"
                           onConfirm={() => void removePartners([x])}
@@ -520,7 +521,7 @@ export function PartnerListPage() {
                           <Button danger type="link" size="small">
                             删除
                           </Button>
-                        </Popconfirm>
+                        </Popconfirm>}
                       </Space>
                     </div>
                   </div>

@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { canViewPath, canViewPathWithMenus, filterMenuRoute, hasMenu, hasPermission, requiredMenuForPath, requiredPermissionForPath } from './route-permissions';
 describe('research test route permissions', () => {
   it('maps report and standard routes independently', () => {
-    expect(requiredPermissionForPath('/research-test/upload')).toBe('research-test.report.create');
+    expect(requiredPermissionForPath('/research-test/upload')).toBe('research-test.report.upload.create');
     expect(requiredPermissionForPath('/research-test/standard-upload')).toBe(
-      'research-test.standard.create',
+      'research-test.standard.upload.create',
     );
     expect(requiredPermissionForPath('/research-test/reports')).toBe('research-test.report.view');
     expect(requiredPermissionForPath('/research-test/standards')).toBe(
@@ -15,6 +15,11 @@ describe('research test route permissions', () => {
     expect(hasPermission('research-test.report.view', ['research-test.report.update'])).toBe(true);
     expect(canViewPath('/research-test/standards', ['research-test.standard.create'])).toBe(true);
     expect(canViewPath('/research-test/reports', ['research-test.standard.view'])).toBe(false);
+  });
+  it('recognizes report review and publication permissions in the workspace', () => {
+    expect(hasPermission('research-test.report.view.approve', ['research-test.report.approve'])).toBe(true);
+    expect(hasPermission('research-test.report.view.publish', ['research-test.report.publish'])).toBe(true);
+    expect(hasPermission('research-test.report.view.publish', ['research-test.report.approve'])).toBe(false);
   });
   it('uses business-role menus independently from atomic operations', () => {
     expect(requiredMenuForPath('/research-test/reports')).toBe('research-test.report.view');

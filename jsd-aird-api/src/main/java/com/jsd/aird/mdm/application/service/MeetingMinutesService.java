@@ -52,6 +52,9 @@ public class MeetingMinutesService {
     @Transactional
     public void update(UUID id, MeetingMinutes input) {
         var current = get(id);
+        if (current.archivedToKb()) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "已归档会议纪要不可编辑");
+        }
         var value = new MeetingMinutes(
                 id,
                 current.projectId(),

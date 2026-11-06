@@ -26,3 +26,4 @@ export function PageAnyPermissionGate({ permissions, children }: { permissions: 
   }
   return <>{children}</>;
 }
+

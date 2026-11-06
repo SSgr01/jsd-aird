@@ -233,7 +233,7 @@ export const productionOrderApi = {
     );
     const response = await httpClient.post<
       ApiResponse<{ fileId: string; sha256: string; status: 'STAGED' }>
-    >('/api/v1/files/staged?kind=SNAPSHOT', body);
+    >('/api/v1/files/staged?kind=PRODUCTION_SNAPSHOT', body);
     return response.data.data;
   },
 

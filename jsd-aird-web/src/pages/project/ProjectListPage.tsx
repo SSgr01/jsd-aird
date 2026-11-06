@@ -34,6 +34,7 @@ import {
 } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { Can } from '@/components/auth/Can';
 import dayjs from '@/utils/dayjs';
 import './project-pages.css';
 import './project-list.css';
@@ -439,21 +440,21 @@ export function ProjectListPage() {
               void handleImport(file);
             }}
           />
-          <Button icon={<FileWordOutlined />} loading={importing} onClick={() => importInput.current?.click()}>
+          <Can permission="project.list.create"><Button icon={<FileWordOutlined />} loading={importing} onClick={() => importInput.current?.click()}>
             AI 导入
-          </Button>
-          <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void handleExport()}>
+          </Button></Can>
+          <Can permission="project.list.view"><Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void handleExport()}>
             导出
-          </Button>
-          <Button icon={<CopyOutlined />} disabled={!selected.size} onClick={handleCopy}>
+          </Button></Can>
+          <Can permission="project.list.create"><Button icon={<CopyOutlined />} disabled={!selected.size} onClick={handleCopy}>
             复制
-          </Button>
-          <Button danger disabled={!selected.size} onClick={handleDelete}>
+          </Button></Can>
+          <Can permission="project.list.delete"><Button danger disabled={!selected.size} onClick={handleDelete}>
             删除
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+          </Button></Can>
+          <Can permission="project.list.create"><Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             新建项目
-          </Button>
+          </Button></Can>
           <Space.Compact>
             <Tooltip title="卡片视图">
               <Button
@@ -583,11 +584,11 @@ export function ProjectListPage() {
                   </div>
                   <div className="pm-card-actions">
                     <Link to={`/projects/${row.id}`} state={{ returnTo: `/projects/list?${searchParams.toString()}` }}>查看</Link>
-                    <Popconfirm title="确认删除该项目？" description="删除后不可恢复。" onOpenChange={(open) => { if (open) pendingRowDelete.current = { id: row.id, version: row.version }; }} onConfirm={() => handleDeleteRow(row)}>
+                    <Can permission="project.list.delete"><Popconfirm title="确认删除该项目？" description="删除后不可恢复。" onOpenChange={(open) => { if (open) pendingRowDelete.current = { id: row.id, version: row.version }; }} onConfirm={() => handleDeleteRow(row)}>
                       <Button type="link" danger>
                         删除
                       </Button>
-                    </Popconfirm>
+                    </Popconfirm></Can>
                   </div>
                 </div>
               ))}
@@ -640,11 +641,11 @@ export function ProjectListPage() {
                     <td>
                       <div className="cm-row-actions management-table-actions">
                         <Link to={`/projects/${row.id}`} state={{ returnTo: `/projects/list?${searchParams.toString()}` }}>查看</Link>
-                        <Popconfirm title="确认删除该项目？" description="删除后不可恢复。" onOpenChange={(open) => { if (open) pendingRowDelete.current = { id: row.id, version: row.version }; }} onConfirm={() => handleDeleteRow(row)}>
+                        <Can permission="project.list.delete"><Popconfirm title="确认删除该项目？" description="删除后不可恢复。" onOpenChange={(open) => { if (open) pendingRowDelete.current = { id: row.id, version: row.version }; }} onConfirm={() => handleDeleteRow(row)}>
                           <Button type="link" size="small" danger>
                             删除
                           </Button>
-                        </Popconfirm>
+                        </Popconfirm></Can>
                       </div>
                     </td>
                   </tr>

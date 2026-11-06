@@ -119,6 +119,8 @@ public class JdbcTemplateRepository implements TemplateRepository {
                        (SELECT count(*)::int FROM tpl.template_mapping tm
                         WHERE tm.template_version_id = lt.version_id
                           AND tm.binding_status <> 'VALID') AS issue_count,
+                       (SELECT review_status FROM tpl.template_version_review tr
+                        WHERE tr.version_id = lt.draft_version_id) AS draft_review_status,
                        count(*) OVER() AS total_count
                 FROM logical_templates lt
                 WHERE lt.version_id IS NOT NULL
@@ -169,7 +171,8 @@ public class JdbcTemplateRepository implements TemplateRepository {
                 rs.getObject("draft_version_id") != null,
                 rs.getObject("created_by", UUID.class),
                 rs.getString("created_by_name"),
-                rs.getTimestamp("created_at").toInstant()
+                rs.getTimestamp("created_at").toInstant(),
+                rs.getString("draft_review_status")
         ));
         var safeTotal = total;
         return new TemplatePage(rows, safeTotal, page, size,
@@ -357,7 +360,7 @@ public class JdbcTemplateRepository implements TemplateRepository {
                         item.currentPublishedVersionNo() == null ? item.versionNo() : item.currentPublishedVersionNo(),
                         item.lockVersion(), item.updatedAt(), item.issueCount(), item.categoryId(),
                         item.currentPublishedVersionId(), item.currentPublishedVersionNo(), item.retiredVersionNo(), item.draftVersionId(),
-                        item.draftVersionNo(), item.hasDraft(), item.createdBy(), item.createdByName(), item.createdAt()))
+                        item.draftVersionNo(), item.hasDraft(), item.createdBy(), item.createdByName(), item.createdAt(), item.draftReviewStatus()))
                 .toList();
     }
 

@@ -5,6 +5,7 @@ import java.sql.SQLException;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.Comparator;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -16,7 +17,7 @@ import org.springframework.stereotype.Repository;
 public class JdbcKnowledgeUploadTaskRepository implements KnowledgeUploadTaskRepository {
 
     private static final String SELECT_TASKS = """
-            SELECT t.id, t.file_name, t.size_bytes,
+            SELECT t.id, t.actor_id, t.file_name, t.size_bytes,
                    CASE
                        WHEN v.status = 'READY' THEN 'COMPLETED'
                        WHEN v.status IN ('FAILED', 'REJECTED', 'PENDING_PROVIDER') THEN 'FAILED'
@@ -37,11 +38,32 @@ public class JdbcKnowledgeUploadTaskRepository implements KnowledgeUploadTaskRep
               FROM kb.upload_task t
               LEFT JOIN kb.document_version v ON v.id = t.document_version_id
               LEFT JOIN kb.document d ON d.id = t.document_id AND d.organization_id = t.organization_id
-             WHERE t.organization_id = ? AND t.actor_id = ? AND t.hidden_at IS NULL
+             WHERE t.organization_id = ? AND t.hidden_at IS NULL
             """;
 
     private static final String LIST_TASKS = SELECT_TASKS + """
              ORDER BY t.created_at DESC, t.id DESC
+             LIMIT ?
+            """;
+
+    private static final String LIST_UNTRACKED_VERSIONS = """
+            SELECT v.id, NULL::uuid AS actor_id, v.original_name AS file_name, v.size_bytes,
+                   CASE WHEN v.status = 'READY' THEN 'COMPLETED'
+                        WHEN v.status IN ('FAILED', 'REJECTED', 'PENDING_PROVIDER') THEN 'FAILED'
+                        ELSE 'QUEUED' END AS display_status,
+                   CASE WHEN v.status = 'READY' THEN 100 ELSE 0 END AS display_progress,
+                   d.id AS document_id, v.id AS document_version_id,
+                   CASE WHEN v.status = 'READY' THEN '解析完成，等待人工校对'
+                        ELSE coalesce(v.error_message, d.parse_error) END AS display_message,
+                   v.file_object_id AS source_file_id, '{}' AS upload_context_json,
+                   v.created_at, v.updated_at
+              FROM kb.document_version v
+              JOIN kb.document d ON d.id = v.document_id
+             WHERE d.organization_id = ?
+               AND NOT EXISTS (SELECT 1 FROM kb.upload_task t
+                                WHERE t.organization_id = d.organization_id
+                                  AND t.document_version_id = v.id)
+             ORDER BY v.created_at DESC, v.id DESC
              LIMIT ?
             """;
 
@@ -65,17 +87,20 @@ public class JdbcKnowledgeUploadTaskRepository implements KnowledgeUploadTaskRep
     }
 
     @Override
-    public List<UploadTaskRow> list(UUID organizationId, UUID actorId, int limit) {
+    public List<UploadTaskRow> list(UUID organizationId, int limit) {
         jdbc.update("""
                 UPDATE kb.upload_task
                    SET status = 'FAILED', progress = 100,
                        message = '上传流程中断，请重新上传', updated_at = now()
-                 WHERE organization_id = ? AND actor_id = ?
+                 WHERE organization_id = ?
                    AND hidden_at IS NULL
                    AND status IN ('STAGING', 'CHECKING', 'SUBMITTING')
                    AND updated_at < now() - interval '30 minutes'
-                """, organizationId, actorId);
-        return jdbc.query(LIST_TASKS, this::map, organizationId, actorId, limit);
+                """, organizationId);
+        var rows = new java.util.ArrayList<>(jdbc.query(LIST_TASKS, this::map, organizationId, limit));
+        rows.addAll(jdbc.query(LIST_UNTRACKED_VERSIONS, this::map, organizationId, limit));
+        return rows.stream().sorted(Comparator.comparing(UploadTaskRow::createdAt).reversed()
+                .thenComparing(UploadTaskRow::id, Comparator.reverseOrder())).limit(limit).toList();
     }
 
     @Override
@@ -111,8 +136,8 @@ public class JdbcKnowledgeUploadTaskRepository implements KnowledgeUploadTaskRep
     }
 
     private Optional<UploadTaskRow> find(UUID organizationId, UUID actorId, UUID id) {
-        var query = SELECT_TASKS + " AND t.id = ? LIMIT 1";
-        return jdbc.query(query, this::map, organizationId, actorId, id).stream().findFirst();
+        var query = SELECT_TASKS + " AND t.id = ? AND t.actor_id = ? LIMIT 1";
+        return jdbc.query(query, this::map, organizationId, id, actorId).stream().findFirst();
     }
 
     private UploadTaskRow map(ResultSet rs, int rowNum) throws SQLException {
@@ -123,7 +148,7 @@ public class JdbcKnowledgeUploadTaskRepository implements KnowledgeUploadTaskRep
         } catch (java.io.IOException exception) {
             throw new SQLException("Invalid knowledge upload context JSON", exception);
         }
-        return new UploadTaskRow(rs.getObject("id", UUID.class), rs.getString("file_name"),
+        return new UploadTaskRow(rs.getObject("id", UUID.class), rs.getObject("actor_id", UUID.class), rs.getString("file_name"),
                 rs.getLong("size_bytes"), rs.getString("display_status"), rs.getInt("display_progress"),
                 rs.getObject("source_file_id", UUID.class), uploadContext,
                 rs.getObject("document_id", UUID.class), rs.getObject("document_version_id", UUID.class),

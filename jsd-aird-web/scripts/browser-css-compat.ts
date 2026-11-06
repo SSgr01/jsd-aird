@@ -3,7 +3,7 @@ import postcss, { type Declaration, type Plugin, type Rule } from 'postcss';
 // Default theme tokens. Modern browsers keep evaluating the original variables;
 // Chromium 106 uses these equivalent solid colors instead of color-mix().
 const colors: Record<string, string> = {
-  'app-primary': '#315cf6', 'app-success': '#18a66a', 'app-focus': '#2448d8',
+  'app-primary': '#315cf6', 'app-success': '#18a66a', 'app-danger': '#dc2626', 'app-focus': '#2448d8',
   'app-surface': '#fefeff', 'app-border': '#dce4ef',
   'oa-accent': '#315cf6', 'oa-surface': '#ffffff', 'oa-border': '#e8edf4',
 };

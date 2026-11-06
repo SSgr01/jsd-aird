@@ -2,6 +2,10 @@ package com.jsd.aird.tpl.adapter.in.web;
 
 import java.util.List;
 import java.util.UUID;
+import java.io.IOException;
+import jakarta.servlet.http.HttpServletResponse;
+import com.jsd.aird.ops.application.port.FileStorageFacade;
+import com.jsd.aird.shared.web.ImportSourceDownload;
 
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
@@ -24,9 +28,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class TemplateImportController {
 
     private final TemplateImportService service;
+    private final FileStorageFacade files;
 
-    public TemplateImportController(TemplateImportService service) {
+    public TemplateImportController(TemplateImportService service, FileStorageFacade files) {
         this.service = service;
+        this.files = files;
     }
 
     @GetMapping
@@ -37,6 +43,12 @@ public class TemplateImportController {
     @GetMapping("/{importJobId}")
     public ApiResponse<TemplateImportRepository.ImportJobView> get(@PathVariable UUID importJobId) {
         return success(service.get(importJobId));
+    }
+
+    @GetMapping("/{importJobId}/source")
+    public void source(@PathVariable UUID importJobId, HttpServletResponse response) throws IOException {
+        var job = service.get(importJobId);
+        ImportSourceDownload.write(files, job.originalSourceFileId() == null ? job.sourceFileId() : job.originalSourceFileId(), response);
     }
 
     @GetMapping("/{importJobId}/suggestions")

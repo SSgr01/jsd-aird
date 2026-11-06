@@ -26,6 +26,7 @@ import {
 import { formatTime } from '@/utils/date';
 import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
 import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
+import { ReviewHistoryButton } from '@/components/workspace-review/ReviewHistoryButton';
 import {
   App,
   Alert,
@@ -87,6 +88,7 @@ import {
 } from '@/components/file-preview';
 import { Can } from '@/components/auth/Can';
 import { generateUUID } from '@/utils/uuid';
+import { usePermission } from '@/components/auth/usePermission';
 import { templateApi, type TemplateCategory } from '@/services/templates/template-api';
 import { ExperimentFieldReviewPanel } from './ExperimentFieldReviewPanel';
 import './experiments.css';
@@ -161,6 +163,7 @@ export function ExperimentWorkspacePage({
   returnTo?: string;
   onBack?: () => void;
 } = {}) {
+  const canUpdate = usePermission('eln.view.update');
   const { id: routeId = '' } = useParams();
   const id = experimentId ?? routeId;
   const navigate = useNavigate();
@@ -288,7 +291,7 @@ export function ExperimentWorkspacePage({
       }
       setSnapshot(initialSnapshot);
       const editable = !['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(d.summary.status);
-      setView(editable ? 'edit' : 'preview');
+      setView(editable && canUpdate ? 'edit' : 'preview');
       if (!editable && labDefinition(initialSnapshot)) {
         const result = await getExperimentPresentation(id, d.summary.revision);
         if (!isCurrent()) return;
@@ -305,7 +308,7 @@ export function ExperimentWorkspacePage({
       if (!isCurrent()) return;
       setLoadError(error instanceof Error ? error.message : '实验本加载失败');
     }
-  }, [id, beginLoad]);
+  }, [id, beginLoad, canUpdate]);
 
   useEffect(() => {
     setDetail(undefined);
@@ -963,7 +966,7 @@ export function ExperimentWorkspacePage({
   const returnForChanges = async () => {
     if (!detail) return;
     if (!returnReason.trim()) {
-      void message.warning('请填写退回修改原因');
+      void message.warning('请填写驳回原因');
       return;
     }
     setBusy(true);
@@ -971,10 +974,10 @@ export function ExperimentWorkspacePage({
       await actExperiment(id, 'return', detail.summary.revision, returnReason.trim());
       setReturnOpen(false);
       setReturnReason('');
-      void message.success('实验已退回修改');
+      void message.success('实验审核已驳回');
       await load();
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : '退回修改失败');
+      void message.error(error instanceof Error ? error.message : '驳回失败');
     } finally {
       setBusy(false);
     }
@@ -1130,7 +1133,7 @@ export function ExperimentWorkspacePage({
       }
     : undefined;
   const sourceIsImage = /\.(png|jpe?g|gif|webp|bmp|tiff?)$/i.test(sourceFile?.fileName ?? '');
-  const readonly = statusLocked;
+  const readonly = statusLocked || !canUpdate;
   const editable = !readonly && isDesktop && view === 'edit';
   const unifiedDefinition = labDefinition(editModel.documentSnapshot ?? snapshot);
   // 无模板导入（CONTENT_ONLY）不涉及识别区域与字段绑定，隐藏 Excel 识别审核面板。
@@ -1210,6 +1213,7 @@ export function ExperimentWorkspacePage({
   const workspaceActions = (
     <Space wrap>
       <SaveStateBadge state={saveState} />
+      <ReviewHistoryButton items={detail.reviews} />
       <Button
         className="workspace-export-button"
         icon={<DownloadOutlined />}
@@ -1247,7 +1251,7 @@ export function ExperimentWorkspacePage({
         </Button>
       ) : null}
       {status === 'COMPLETED' && (
-        <Can permission="experiment.update">
+        <Can permission="eln.view.update">
           <Button loading={busy} onClick={reviseCompletedExperiment}>
             创建修订
           </Button>
@@ -1272,7 +1276,7 @@ export function ExperimentWorkspacePage({
         保存草稿
       </Button>
       {publishAction === 'submit-review' ? (
-        <Can permission="experiment.submit">
+        <Can permission="eln.view.submit">
           <Button
             type="primary"
             className="workspace-publish-button"
@@ -1286,7 +1290,7 @@ export function ExperimentWorkspacePage({
       ) : null}
       {publishAction === 'approve' ? (
         <>
-          <Can permission="experiment.review">
+          <Can permission="eln.view.approve">
             <Button
               loading={busy}
               onClick={() => {
@@ -1294,10 +1298,10 @@ export function ExperimentWorkspacePage({
                 setReturnOpen(true);
               }}
             >
-              退回修改
+              驳回
             </Button>
           </Can>
-          <Can permission="experiment.approve">
+          <Can permission="eln.view.approve">
             <Button
               type="primary"
               className="workspace-publish-button"
@@ -1446,7 +1450,7 @@ export function ExperimentWorkspacePage({
         </Form>
       </Modal>
       <Modal
-        title="退回修改"
+        title="驳回审核"
         open={returnOpen}
         okText="确认退回"
         cancelText="取消"

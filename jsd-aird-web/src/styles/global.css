@@ -5209,6 +5209,11 @@ a:active,
   justify-content: flex-end;
   margin-top: 22px;
 }
+.upload-workspace-read-only {
+  min-height: 160px;
+  font-size: 13px;
+  line-height: 1.7;
+}
 
 .upload-workspace-preview-heading,
 .upload-workspace-right-heading {

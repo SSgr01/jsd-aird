@@ -428,7 +428,7 @@ function ModelingWorkbenchPageInner({ canManageCatalog = false, canRegister = fa
           <div><Text strong>训练方式</Text><Text>系统自动比较多种预测方法</Text><Text type="secondary">训练结果会用交叉验证指标进行对比。</Text></div>
         </div>
         <WorkbenchDataChecks checks={dataChecks} />
-        <footer className="workbench-step-footer"><Button icon={<ArrowLeftOutlined />} onClick={() => navigateToStep(0)}>返回原表</Button><Button type="primary" icon={<ExperimentOutlined />} loading={submitting} disabled={!canTrain || trainingActive || !yColumn || !xColumns.length || completeRows < 6 || allXConstant} onClick={() => void startTraining()}>{!canTrain ? '没有训练权限' : trainingActive ? '训练中' : '开始训练'}</Button></footer>
+        <footer className="workbench-step-footer"><Button icon={<ArrowLeftOutlined />} onClick={() => navigateToStep(0)}>返回原表</Button>{canTrain && <Button type="primary" icon={<ExperimentOutlined />} loading={submitting} disabled={trainingActive || !yColumn || !xColumns.length || completeRows < 6 || allXConstant} onClick={() => void startTraining()}>{trainingActive ? '训练中' : '开始训练'}</Button>}</footer>
       </>}
     </section>}
 
@@ -446,7 +446,7 @@ function ModelingWorkbenchPageInner({ canManageCatalog = false, canRegister = fa
           <Text type="secondary">进度和结果会自动保存。</Text>
         </div> : run.status === 'FAILED' || run.status === 'CANCELLED' ? <div className="workbench-result-error">
           <Alert type="error" showIcon message={run.status === 'CANCELLED' ? '训练已取消' : '训练没有完成'} description={run.status === 'CANCELLED' ? undefined : workbenchFailureMessage(run.error)} />
-          <Space><Button onClick={() => setActiveStep(1)}>调整 X/Y</Button><Button type="primary" onClick={() => void startTraining()}>重新训练</Button></Space>
+          <Space><Button onClick={() => setActiveStep(1)}>调整 X/Y</Button>{canTrain && <Button type="primary" onClick={() => void startTraining()}>重新训练</Button>}</Space>
         </div> : <>
           <div className="workbench-result-banner"><CheckCircleFilled /><div><strong>训练完成</strong><span>使用 {run.result?.rowCount ?? run.rowCount} 条完整实验记录 · {algorithmLabels[selectedAlgorithm] ?? (selectedAlgorithm || '模型方法')}</span></div><Tag color="success">已保存</Tag></div>
           <div className="workbench-result-summary">

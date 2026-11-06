@@ -79,9 +79,13 @@ public class EffectivePermissionResolver {
                             new Binding(binding.permissionCode(), binding.effect(), binding.scopeType(), binding.targetIds()))));
         }
         var operationOverrides = store.userOperationOverrides(organizationId, user.id());
+        var deniedOperations = new LinkedHashSet<String>();
         if (operationOverrides != null) operationOverrides.forEach(binding -> {
             if ("ALLOW".equals(binding.effect())) bindings.put(binding.permissionCode(), binding);
-            else bindings.remove(binding.permissionCode());
+            else {
+                deniedOperations.add(binding.permissionCode());
+                bindings.remove(binding.permissionCode());
+            }
         });
         var menuOverrides = store.userMenuOverrides(organizationId, user.id());
         if (menuOverrides != null) menuOverrides.forEach(override -> {
@@ -91,6 +95,10 @@ public class EffectivePermissionResolver {
         if ((roles == null || roles.isEmpty()) && !hasLevel) {
             store.userOverrides(organizationId, user.id()).forEach(binding -> bindings.put(binding.permissionCode(), binding));
         }
+        MenuViewPermissions.impliedBy(menuKeys).stream()
+                .filter(code -> !deniedOperations.contains(code))
+                .forEach(code -> bindings.compute(code, (key, existing) -> existing == null || "DENY".equals(existing.effect())
+                        ? new Binding(code, "ALLOW", "ALL", List.of()) : existing));
         var systemAdmin = "SYSTEM_ADMIN".equals(user.roleCode())
                 || (roles != null && roles.stream().anyMatch(role -> "SYSTEM_ADMIN".equals(role.code())));
         if (systemAdmin) {

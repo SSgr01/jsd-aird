@@ -39,6 +39,7 @@ interface AiConversationWorkspaceProps {
   composerActions?: ReactNode;
   assistantLabel?: string;
   submitDisabled?: boolean;
+  canCreate?: boolean;
   pendingLabel?: string;
   scopeTitle?: string;
   welcomeTitle?: string;
@@ -79,6 +80,7 @@ export function AiConversationWorkspace({
   composerActions,
   assistantLabel = 'AI研发助手',
   submitDisabled = false,
+  canCreate = true,
   pendingLabel = '正在阅读资料并整理依据',
   scopeTitle = '选择检索范围',
   welcomeTitle = '从研发资料开始提问',
@@ -215,7 +217,7 @@ export function AiConversationWorkspace({
     <div className={`ai-conversation-workspace${sideOpen ? ' is-side-open' : ''}`}>
       <aside className="ai-conversation-side">
         <div className="ai-conversation-side-head">
-          <Button
+          {canCreate && <Button
             type="primary"
             size="large"
             icon={<PlusOutlined />}
@@ -226,7 +228,7 @@ export function AiConversationWorkspace({
             }}
           >
             新建对话
-          </Button>
+          </Button>}
           <Button
             className="ai-conversation-side-close"
             type="text"
@@ -452,7 +454,7 @@ export function AiConversationWorkspace({
             onClick={() => scrollToLatest('smooth')}
           />
         ) : null}
-        <div className="ai-conversation-composer">
+        {canCreate && <div className="ai-conversation-composer">
           {composerTopContent || composerActions ? (
             <div className="ai-conversation-composer-top">
               <div className="ai-conversation-composer-context">{composerTopContent}</div>
@@ -485,7 +487,7 @@ export function AiConversationWorkspace({
               onClick={onSubmit}
             />
           </div>
-        </div>
+        </div>}
       </main>
       <Modal
         title="确认编辑并重新发送？"

@@ -1,6 +1,7 @@
 import { AppstoreOutlined, ReloadOutlined, SearchOutlined, UnorderedListOutlined } from '@ant-design/icons';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Can } from '@/components/auth/Can';
 import {
   Button,
   Empty,
@@ -259,7 +260,7 @@ export default function TaskPage() {
       render: (_: unknown, record: ProjectTask) => (
         <Space className="management-table-actions" size={0}>
           <Button type="link" onClick={() => handleView(record)}>查看</Button>
-          <Popconfirm
+          <Can permission="project.task.delete"><Popconfirm
             title="确认删除该任务？"
             description={record.experimentCount > 0 ? '任务下存在实验，不能删除。' : '删除后不可恢复。'}
             disabled={record.experimentCount > 0}
@@ -268,7 +269,7 @@ export default function TaskPage() {
             <Button type="link" danger disabled={record.experimentCount > 0 || deletingTaskId === record.id} loading={deletingTaskId === record.id}>
               删除
             </Button>
-          </Popconfirm>
+          </Popconfirm></Can>
         </Space>
       ),
     },
@@ -401,14 +402,14 @@ export default function TaskPage() {
                   </div>
                   <div className="pm-card-actions">
                     <Button type="link" onClick={() => handleView(task)}>查看</Button>
-                    <Popconfirm
+                    <Can permission="project.task.delete"><Popconfirm
                       title="确认删除该任务？"
                       description={task.experimentCount > 0 ? '任务下存在实验，不能删除。' : '删除后不可恢复。'}
                       disabled={task.experimentCount > 0}
                       onConfirm={() => void handleDelete(task)}
                     >
                       <Button type="link" danger disabled={task.experimentCount > 0 || deletingTaskId === task.id} loading={deletingTaskId === task.id}>删除</Button>
-                    </Popconfirm>
+                    </Popconfirm></Can>
                   </div>
                 </div>
               ))}

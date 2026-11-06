@@ -14,7 +14,7 @@ import static org.mockito.ArgumentMatchers.*;
 
 class ProjectConsistencyTest {
     private final ProjectRepository repository = mock(ProjectRepository.class);
-    private final ProjectService service = new ProjectService(repository);
+    private final ProjectService service = new ProjectService(repository, mock(com.jsd.aird.iam.api.AuthorizationService.class));
     private final UUID id = UUID.randomUUID();
 
     @Test void missingOrNegativeVersionCannotBypassUpdateProtection() {

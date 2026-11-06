@@ -1,5 +1,6 @@
 import { App, Empty, Table, Tabs, Tag, Typography } from 'antd';
 import { useEffect, useState } from 'react';
+import { Can } from '@/components/auth/Can';
 
 import { downloadFile } from '@/services/files/file-api';
 import { qualityApi, type QualityUpload } from '@/services/quality/quality-api';
@@ -60,7 +61,7 @@ export function ProjectMaterialsTab({ projectId }: Props) {
     { title: '阶段 / 任务', key: 'relation', render: (_: unknown, row: QualityUpload) => `${row.stageName || '—'} / ${row.taskName || '—'}` },
     { title: '可见范围', dataIndex: 'visibility', render: (value: string) => <Tag>{value === 'PROJECT' ? '项目组可见' : value === 'RND' ? '研发部可见' : value === 'QUALITY' ? '品管部可见' : '全员可见'}</Tag> },
     { title: '上传时间', dataIndex: 'createdAt', render: (value: string) => formatDate(value) },
-    { title: '操作', key: 'action', width: 80, render: (_: unknown, row: QualityUpload) => <a onClick={() => download(row.fileId, row.originalName)}>下载</a> },
+    { title: '操作', key: 'action', width: 80, render: (_: unknown, row: QualityUpload) => <Can permission="project.materials.view"><a onClick={() => download(row.fileId, row.originalName)}>下载</a></Can> },
   ];
 
   const productionColumns = [
@@ -70,7 +71,7 @@ export function ProjectMaterialsTab({ projectId }: Props) {
     { title: '品名', dataIndex: 'productName', render: (value: string) => value || '—' },
     { title: '阶段 / 任务', key: 'relation', render: (_: unknown, row: ProductionUpload) => `${row.stageName || '—'} / ${row.taskName || '—'}` },
     { title: '上传时间', dataIndex: 'createdAt', render: (value: string) => formatDate(value) },
-    { title: '操作', key: 'action', width: 80, render: (_: unknown, row: ProductionUpload) => <a onClick={() => download(row.fileId, row.originalName)}>下载</a> },
+    { title: '操作', key: 'action', width: 80, render: (_: unknown, row: ProductionUpload) => <Can permission="project.materials.view"><a onClick={() => download(row.fileId, row.originalName)}>下载</a></Can> },
   ];
   const reportColumns = [
     { title: '报告编号', dataIndex: 'businessNo' },
@@ -78,7 +79,7 @@ export function ProjectMaterialsTab({ projectId }: Props) {
     { title: '阶段 / 任务', key: 'relation', render: (_: unknown, row: ResearchTestSummary) => `${row.stageName || '—'} / ${row.taskName || '—'}` },
     { title: '负责人', dataIndex: 'ownerName', render: (value?: string) => value || '—' },
     { title: '状态', dataIndex: 'status', render: (value: string) => <Tag color={value === 'PUBLISHED' ? 'green' : 'blue'}>{value === 'PUBLISHED' ? '已发布' : '草稿/审核中'}</Tag> },
-    { title: '操作', key: 'action', width: 80, render: (_: unknown, row: ResearchTestSummary) => <a onClick={() => downloadReport(row)}>下载</a> },
+    { title: '操作', key: 'action', width: 80, render: (_: unknown, row: ResearchTestSummary) => <Can permission="project.materials.view"><a onClick={() => downloadReport(row)}>下载</a></Can> },
   ];
 
   return (

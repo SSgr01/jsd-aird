@@ -32,10 +32,9 @@ public final class PermissionModelCatalog {
             m("template", "模板中心", null, "/templates/library"),
             m("template.upload", "模板上传", "template", "/templates/upload"),
             m("template.view", "模板查看", "template", "/templates/library"),
-            m("template.published", "已发布模板使用", "template", "/templates/library"),
+            m("template.category", "模板分类", "template", "/templates/library"),
             m("project", "项目管理", null, "/projects/list"),
             m("project.list", "项目列表", "project", "/projects/list"),
-            m("project.info", "项目信息", "project", "/projects/list"),
             m("project.stage", "阶段", "project", "/projects/list"),
             m("project.task", "任务", "project", "/projects/list"),
             m("project.document", "项目文档", "project", "/projects/list"),
@@ -48,6 +47,7 @@ public final class PermissionModelCatalog {
             m("eln.create", "新建实验", "eln", "/experiments/new"),
             m("eln.upload", "实验上传", "eln", "/experiments/upload"),
             m("eln.view", "实验查看", "eln", "/experiments/list"),
+            m("eln.category", "实验分类", "eln", "/experiments/list"),
             m("research-test", "研发测试中心", null, "/research-test/reports"),
             m("research-test.report.upload", "综合测试报告上传", "research-test", "/research-test/upload"),
             m("research-test.report.view", "综合测试报告查看", "research-test", "/research-test/reports"),
@@ -56,10 +56,12 @@ public final class PermissionModelCatalog {
             m("quality", "品管部数据", null, "/quality/view"),
             m("quality.upload", "品管数据上传", "quality", "/quality/upload"),
             m("quality.view", "品管数据查看", "quality", "/quality/view"),
+            m("quality.category", "品管数据分类", "quality", "/quality/view"),
             m("spectrum", "图谱中心", null, "/spectrum/view"),
             m("spectrum.upload", "图谱上传", "spectrum", "/spectrum/view"),
             m("spectrum.view", "图谱查看", "spectrum", "/spectrum/view"),
             m("spectrum.ai", "AI图谱分析", "spectrum", "/spectrum/view"),
+            m("spectrum.category", "图谱分类", "spectrum", "/spectrum/view"),
             m("production", "生产单管理", null, "/production-orders/list"),
             m("production.upload", "生产单上传", "production", "/production-orders/list"),
             m("production.view", "生产单查看", "production", "/production-orders/list"),
@@ -68,13 +70,17 @@ public final class PermissionModelCatalog {
             m("ai.qa", "AI问答", "ai", "/assistant"),
             m("ai.formula", "AI配方预测", "ai", "/assistant"),
             m("ai.analysis", "AI研发分析", "ai", "/assistant"),
+            m("ai.optimization", "AI实验优化", "ai", "/assistant/experiment-optimization"),
+            m("ai.model", "模型中心", "ai", "/assistant/model-center"),
             m("knowledge", "研发知识库", null, "/knowledge/view"),
             m("knowledge.review", "审核工作台", "knowledge", "/knowledge/review"),
             m("knowledge.upload", "资料上传", "knowledge", "/knowledge/library"),
             m("knowledge.view", "知识库查看", "knowledge", "/knowledge/view"),
+            m("knowledge.category", "知识分类", "knowledge", "/knowledge/view"),
             m("data", "数据中心", null, "/data/view"),
             m("data.upload", "数据上传", "data", "/data/upload"),
             m("data.view", "数据查看", "data", "/data/view"),
+            m("data.category", "数据分类", "data", "/data/view"),
             m("inventory", "库存管理", null, "/inventory/rnd"),
             m("inventory.query", "库存查询", "inventory", "/inventory/query"),
             m("inventory.rnd", "研发库存表", "inventory", "/inventory/rnd"),
@@ -135,7 +141,8 @@ public final class PermissionModelCatalog {
                                                      List<com.jsd.aird.iam.api.PermissionDefinitionContributor.PermissionDefinition> definitions) {
         return definitions.stream()
                 .filter(definition -> include(definition, levelCode))
-                .map(definition -> new Binding(definition.code(), "ALLOW", defaultScope(definition), List.of()))
+                .map(definition -> new Binding(definition.code(), "ALLOW",
+                        "ALL", List.of()))
                 .toList();
     }
 
@@ -148,17 +155,6 @@ public final class PermissionModelCatalog {
         if ("L1_OPERATOR".equals(levelCode)) return !Set.of("HIGH", "CRITICAL").contains(definition.risk())
                 && !definition.code().equals("system.permission.manage");
         return !"CRITICAL".equals(definition.risk()) && !definition.code().startsWith("system.");
-    }
-
-    private static String defaultScope(com.jsd.aird.iam.api.PermissionDefinitionContributor.PermissionDefinition definition) {
-        return switch (definition.defaultScope()) {
-            case "ALL" -> "ORG";
-            case "SELF" -> "CREATOR";
-            case "ASSIGNED" -> "ASSIGNED";
-            case "PROJECT" -> "PROJECT_GROUP";
-            case "CATEGORY" -> "CATEGORY";
-            default -> definition.defaultScope();
-        };
     }
 
     private static Menu m(String key, String label, String parent, String route) {

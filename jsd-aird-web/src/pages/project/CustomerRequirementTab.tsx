@@ -3,6 +3,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { CloseCircleFilled, PlusOutlined } from '@ant-design/icons';
 import { useEffect, useMemo, useState } from 'react';
 import dayjs from '@/utils/dayjs';
+import { Can } from '@/components/auth/Can';
 
 import {
   createProjectRequirement,
@@ -276,10 +277,10 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
         width: 120,
         render: (_, record) => (
           <Space className="management-table-actions" size={0}>
-            <Button type="link" size="small" onClick={() => openEdit(record)}>
+            <Can permission="project.customer-needs.update"><Button type="link" size="small" onClick={() => openEdit(record)}>
               编辑
-            </Button>
-            <Popconfirm
+            </Button></Can>
+            <Can permission="project.customer-needs.delete"><Popconfirm
               title="确认删除该客户需求？"
               okText="删除"
               cancelText="取消"
@@ -289,7 +290,7 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
               <Button type="link" size="small" danger>
                 删除
               </Button>
-            </Popconfirm>
+            </Popconfirm></Can>
           </Space>
         ),
       },
@@ -304,9 +305,9 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
         <div className="pm-cr-tab-tip">
           记录需求日期、处理状态、关联项目（当前项目：{projectName ?? projectId}）和需求详情。
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+        <Can permission="project.customer-needs.create"><Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
           新建需求
-        </Button>
+        </Button></Can>
       </div>
 
       <Table<Requirement>

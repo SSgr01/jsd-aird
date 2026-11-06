@@ -10,7 +10,7 @@ public interface KnowledgeUploadTaskRepository {
 
     UploadTaskRow create(UUID id, UUID organizationId, UUID actorId, String fileName, long size, JsonNode uploadContext);
 
-    List<UploadTaskRow> list(UUID organizationId, UUID actorId, int limit);
+    List<UploadTaskRow> list(UUID organizationId, int limit);
 
     Optional<UploadTaskRow> update(UUID organizationId, UUID actorId, UUID id, String status, int progress,
                                    UUID sourceFileId, JsonNode uploadContext, UUID documentId,
@@ -18,7 +18,7 @@ public interface KnowledgeUploadTaskRepository {
 
     boolean delete(UUID organizationId, UUID actorId, UUID id);
 
-    record UploadTaskRow(UUID id, String fileName, long size, String status, int progress,
+    record UploadTaskRow(UUID id, UUID actorId, String fileName, long size, String status, int progress,
                          UUID sourceFileId, JsonNode uploadContext, UUID documentId,
                          UUID documentVersionId, String message,
                          Instant createdAt, Instant updatedAt) { }

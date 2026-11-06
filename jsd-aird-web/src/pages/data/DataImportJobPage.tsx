@@ -125,10 +125,12 @@ export function DataImportJobPage({
     });
   };
   const [versionContainer, setVersionContainer] = useState<HTMLDivElement | null>(null);
-  const hasUpdatePermission = usePermission(workspaceMode === 'EXPERIMENT' ? 'experiment.create' : 'data.update');
-  const canUpdate = hasUpdatePermission && !['PENDING_REVIEW', 'APPROVED', 'PUBLISHED', 'DISABLED'].includes(publication?.status || '');
+  const hasUpdatePermission = usePermission(workspaceMode === 'EXPERIMENT' ? 'eln.upload.create' : 'data.upload.create');
   const canAssign = usePermission('project.assign');
-  const canCreate = usePermission(workspaceMode === 'EXPERIMENT' ? 'experiment.create' : 'data.create');
+  const canCreate = usePermission(workspaceMode === 'EXPERIMENT' ? 'eln.upload.create' : 'data.upload.create');
+  const canUpdate = (hasUpdatePermission || (workspaceMode === 'EXPERIMENT' && canCreate))
+    && !['PENDING_REVIEW', 'APPROVED', 'PUBLISHED', 'DISABLED'].includes(publication?.status || '');
+  const canDownload = usePermission(workspaceMode === 'EXPERIMENT' ? 'eln.upload.download' : 'data.upload.download');
 
   const load = useCallback(async (options: { silent?: boolean; preserveSnapshot?: boolean; skipWorkbook?: boolean } = {}) => {
     if (!options.silent) {
@@ -136,11 +138,11 @@ export function DataImportJobPage({
       setLoadError(undefined);
     }
     try {
-      const nextPreview = await dataApi.preview(id);
+      const nextPreview = await dataApi.preview(id, workspaceMode === 'EXPERIMENT');
       const stillProcessing = ['PARSING', 'VALIDATING', 'COMMITTING'].includes(nextPreview.job.status);
       const nextWorkbook = options.skipWorkbook && stillProcessing
         ? undefined
-        : await dataApi.getImportWorkbookSnapshot(id).catch((error: unknown) => {
+        : await dataApi.getImportWorkbookSnapshot(id, workspaceMode === 'EXPERIMENT').catch((error: unknown) => {
           if (stillProcessing || ['DOC', 'DOCX', 'IMAGE'].includes(nextPreview.job.sourceFormat)) return undefined;
           throw error;
         });
@@ -169,7 +171,7 @@ export function DataImportJobPage({
     } finally {
       if (!options.silent) setLoading(false);
     }
-  }, [id, message]);
+  }, [id, message, workspaceMode]);
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
@@ -318,7 +320,7 @@ export function DataImportJobPage({
     setSaving(true);
     try {
       if (structureDirtyRef.current) throw new Error('请先保存工作簿草稿，再完成数据核对');
-      await dataApi.commit(id);
+      await dataApi.commit(id, workspaceMode === 'EXPERIMENT');
       await load();
       if (workspaceMode === 'EXPERIMENT') await loadAssembly();
       void message.success(workspaceMode === 'EXPERIMENT'
@@ -498,7 +500,7 @@ export function DataImportJobPage({
         <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
         {canUpdate && !processing && preview.job.status !== 'COMPLETED' && <Button loading={saving} onClick={() => void reExtract()}>重新解析</Button>}
         <Button icon={<EyeOutlined />} onClick={() => setPreviewFile(sourceFile)}>预览原文件</Button>
-        <Button icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(sourceFile)}>下载原文件</Button>
+        {canDownload && <Button icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(sourceFile)}>下载原文件</Button>}
         {canAssign && canUpdate ? <Button icon={<LinkOutlined />} onClick={() => setRelationOpen(true)}>关联项目</Button> : null}
       </>}
       notice={<>

@@ -10,6 +10,7 @@ import { App, Button, Form, Modal, Select, Space, Upload } from 'antd';
 import type { UploadFile, UploadProps } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { usePermission } from '@/components/auth/usePermission';
 
 import { downloadFile, stageFile } from '@/services/files/file-api';
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
@@ -87,6 +88,11 @@ function formatSize(size: number) {
 }
 
 export function QualityUploadPage() {
+  const canUpload = usePermission('quality.upload.create');
+  const canDownload = usePermission('quality.upload.download');
+  const hasRetryPermission = usePermission('quality.upload.retry');
+  const canRetry = canUpload || hasRetryPermission;
+  const canDelete = usePermission('quality.upload.delete');
   const { message } = App.useApp();
   const navigate = useNavigate();
   const [types, setTypes] = useState<QualityType[]>([]);
@@ -194,6 +200,10 @@ export function QualityUploadPage() {
   };
 
   const submit = async () => {
+    if (!canUpload) {
+      void message.warning('当前账号没有品管数据上传权限，请联系管理员开通');
+      return;
+    }
     const sourceFiles = files.flatMap((item) => (item.originFileObj ? [item.originFileObj] : []));
     if (!sourceFiles.length) {
       void message.warning('请先选择品管源文件');
@@ -333,7 +343,7 @@ export function QualityUploadPage() {
           >
             查看
           </Button>
-          <Button
+          {canDownload && <Button
             type="link"
             icon={<DownloadOutlined />}
             loading={downloadingId === upload.id}
@@ -346,16 +356,16 @@ export function QualityUploadPage() {
             }}
           >
             下载
-          </Button>
-          <Button
+          </Button>}
+          {canRetry && <Button
             type="link"
             icon={<ReloadOutlined />}
             loading={retryingId === upload.id}
             onClick={() => void retryUpload(upload)}
           >
             重试
-          </Button>
-          <Button
+          </Button>}
+          {canDelete && <Button
             type="link"
             danger
             icon={<DeleteOutlined />}
@@ -363,7 +373,7 @@ export function QualityUploadPage() {
             onClick={() => removeUpload(upload)}
           >
             删除
-          </Button>
+          </Button>}
         </Space>
       ),
     };
@@ -399,6 +409,9 @@ export function QualityUploadPage() {
           </Form>
         }
         accept={accept}
+        uploadDisabled={!canUpload}
+        uploadReadOnly={!canUpload}
+        showSubmit={canUpload}
         beforeUpload={validate}
         multiple
         files={files}

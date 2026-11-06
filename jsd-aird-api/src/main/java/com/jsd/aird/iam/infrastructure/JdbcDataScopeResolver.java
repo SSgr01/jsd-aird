@@ -96,6 +96,21 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
                 sql = "SELECT EXISTS (SELECT 1 FROM mfg.production_order WHERE organization_id = ? AND (created_by = ? OR owner_id = ?) AND id = ?)";
                 args = new Object[]{check.organizationId(), check.userId(), check.userId(), check.resourceId()};
             }
+            case "QUALITY" -> {
+                sql = "SELECT EXISTS (SELECT 1 FROM quality.data_record WHERE organization_id = ? AND created_by = ? AND id = ? AND deleted = false)";
+                args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
+            }
+            case "PROJECT_DOCUMENT" -> {
+                sql = "SELECT EXISTS (SELECT 1 FROM mdm.project_document d JOIN mdm.project p ON p.id=d.project_id "
+                        + "JOIN iam.app_user u ON u.organization_id=p.organization_id AND u.id=? "
+                        + "WHERE p.organization_id=? AND d.id=? AND d.deleted=false "
+                        + "AND (d.created_by=u.username OR p.created_by=u.username))";
+                args = new Object[]{check.userId(), check.organizationId(), check.resourceId()};
+            }
+            case "RESEARCH_TEST" -> {
+                sql = "SELECT EXISTS (SELECT 1 FROM rnd.research_test_record WHERE organization_id = ? AND (created_by = ? OR owner_id = ?) AND id = ? AND deleted = false)";
+                args = new Object[]{check.organizationId(), check.userId(), check.userId(), check.resourceId()};
+            }
             case "PROJECT" -> {
                 sql = "SELECT EXISTS (SELECT 1 FROM mdm.project WHERE organization_id = ? AND created_by::text = ? AND id = ? AND deleted = false)";
                 args = new Object[]{check.organizationId(), check.userId().toString(), check.resourceId()};

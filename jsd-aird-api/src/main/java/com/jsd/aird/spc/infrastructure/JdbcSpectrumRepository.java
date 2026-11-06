@@ -96,6 +96,31 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
     }
 
     @Override
+    public UUID ensureUncategorizedCategory(UUID organizationId, UUID createdBy) {
+        var existing = findCategoryByCode(organizationId, "UNCATEGORIZED");
+        if (existing.isPresent()) return existing.get().id();
+        var byName = jdbc.query("SELECT id FROM spc.chart_category WHERE organization_id = ? AND btrim(name) = '未分类' ORDER BY sort_order LIMIT 1",
+                (rs, n) -> rs.getObject(1, UUID.class), organizationId);
+        if (!byName.isEmpty()) {
+            var id = byName.getFirst();
+            jdbc.update("UPDATE spc.chart_category SET system_category = true WHERE organization_id = ? AND id = ?", organizationId, id);
+            return id;
+        }
+        var id = UUID.randomUUID();
+        try {
+            jdbc.update("""
+                    INSERT INTO spc.chart_category (
+                        id, organization_id, code, name, description, analysis_hint, fields_jsonb,
+                        sort_order, system_category, created_by
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?, true, ?)
+                    """, id, organizationId, "UNCATEGORIZED", "未分类", "未归属分类的图谱", "", "[]", 9999, createdBy);
+        } catch (org.springframework.dao.DuplicateKeyException duplicate) {
+            return findCategoryByCode(organizationId, "UNCATEGORIZED").map(CategoryRow::id).orElse(id);
+        }
+        return id;
+    }
+
+    @Override
     public CategoryRow createCategory(NewCategory command) {
         jdbc.update("""
                 INSERT INTO spc.chart_category (
@@ -120,7 +145,22 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
     }
 
     @Override
-    public void deleteCategory(UUID organizationId, UUID categoryId) {
+    public void deleteCategory(UUID organizationId, UUID categoryId, UUID replacementCategoryId) {
+        if (replacementCategoryId != null) {
+            if (replacementCategoryId.equals(categoryId)) {
+                throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.VALIDATION_ERROR,
+                        "迁移目标不能是当前分类");
+            }
+            if (findCategory(organizationId, replacementCategoryId).isEmpty()) {
+                throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND,
+                        "迁移目标分类不存在");
+            }
+            jdbc.update("""
+                    UPDATE spc.chart_asset
+                    SET category_id = ?, updated_at = now()
+                    WHERE organization_id = ? AND category_id = ?
+                    """, replacementCategoryId, organizationId, categoryId);
+        }
         jdbc.update("DELETE FROM spc.chart_category WHERE organization_id = ? AND id = ?",
                 organizationId, categoryId);
     }

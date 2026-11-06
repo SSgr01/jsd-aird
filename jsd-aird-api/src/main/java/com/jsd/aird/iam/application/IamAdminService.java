@@ -40,7 +40,7 @@ public class IamAdminService {
     }
 
     public PageResponse<UserView> users(Actor actor, String keyword, int page, int size) {
-        require(actor, "system.user.view");
+        requireAny(actor, "system.user.view", "system.permissions.view");
         var safePage = Math.max(1, page);
         var safeSize = Math.min(100, Math.max(1, size));
         var items = store.users(actor.organizationId(), keyword, safePage, safeSize).stream().map(this::userView).toList();
@@ -61,7 +61,7 @@ public class IamAdminService {
         if (command.password() == null || command.password().length() < 6 || command.password().length() > 200) {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "密码长度为 6-200 位");
         }
-        require(actor, "system.user.manage");
+        requireAny(actor, "system.users.create", "system.user.manage");
         var role = role(actor, command.roleId());
         var id = UUID.randomUUID();
         store.insertUser(id, actor.organizationId(), command.username(), command.displayName(), command.email(), command.phone(),
@@ -74,7 +74,7 @@ public class IamAdminService {
     public UserView update(Actor actor, UUID userId, UpdateUserCommand command) {
         store.lockAdministration(actor.organizationId());
         requireUserVersion(actor,userId,command.expectedVersion());
-        require(actor, "system.user.manage");
+        requireAny(actor, "system.users.update", "system.user.manage");
         var existing = requireUser(actor, userId);
         var targetRole=role(actor, command.roleId());
         if("SYSTEM_ADMIN".equals(existing.roleCode()) && "ACTIVE".equals(existing.status()) && !"SYSTEM_ADMIN".equals(targetRole.code()) && store.activeSystemAdmins(actor.organizationId())<=1)
@@ -89,7 +89,7 @@ public class IamAdminService {
     public void setStatus(Actor actor, UUID userId, boolean enabled,long expectedVersion) {
         store.lockAdministration(actor.organizationId());
         requireUserVersion(actor,userId,expectedVersion);
-        require(actor, "system.user.manage");
+        requireAny(actor, "system.users.status", "system.user.manage");
         var existing = requireUser(actor, userId);
         if (!enabled && "SYSTEM_ADMIN".equals(existing.roleCode()) && store.activeSystemAdmins(actor.organizationId()) <= 1) {
             throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "不能停用最后一个系统管理员");
@@ -105,7 +105,7 @@ public class IamAdminService {
         if (password == null || password.length() < 6 || password.length() > 200) {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "密码长度为 6-200 位");
         }
-        require(actor, "system.user.manage");
+        requireAny(actor, "system.users.reset", "system.user.manage");
         requireUser(actor, userId);
         store.resetPassword(actor.organizationId(), userId, passwordEncoder.encode(password));
         audit(actor, "IAM_PASSWORD_RESET", "USER", userId);
@@ -115,7 +115,7 @@ public class IamAdminService {
     public void forceLogout(Actor actor, UUID userId,long expectedVersion) {
         store.lockAdministration(actor.organizationId());
         requireUserVersion(actor,userId,expectedVersion);
-        require(actor, "system.user.manage");
+        requireAny(actor, "system.users.logout", "system.user.manage");
         requireUser(actor, userId);
         store.bumpUserVersion(actor.organizationId(),userId);
         store.revokeUserSessions(actor.organizationId(), userId);
@@ -123,13 +123,13 @@ public class IamAdminService {
     }
 
     public List<RoleView> roles(Actor actor) {
-        require(actor, "system.role.view");
+        requireAny(actor, "system.role.view", "system.permissions.view");
         return store.roles(actor.organizationId()).stream().map(role ->
                 new RoleView(role.id(), role.code(), role.name(), role.builtin(), role.enabled(), role.policyVersion())).toList();
     }
 
     public PermissionModelView permissionModel(Actor actor) {
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.view", "system.permission.manage");
         var menus = PermissionModelCatalog.menus().stream()
                 .map(menu -> new MenuView(menu.key(), menu.label(), menu.parent(), menu.route())).toList();
         var levels = store.permissionLevels(actor.organizationId()).stream().map(this::levelView).toList();
@@ -137,14 +137,14 @@ public class IamAdminService {
     }
 
     public MenuPermissionsView roleMenus(Actor actor, UUID roleId) {
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.view", "system.permission.manage");
         var role = role(actor, roleId);
         return new MenuPermissionsView(role.policyVersion(), store.roleMenus(actor.organizationId(), roleId));
     }
 
     @Transactional
     public long saveRoleMenus(Actor actor, UUID roleId, long expectedVersion, List<String> menuKeys) {
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.update", "system.permission.manage");
         var role = role(actor, roleId);
         if (role.builtin() && "SYSTEM_ADMIN".equals(role.code())) {
             throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "系统管理员菜单不可修改");
@@ -160,13 +160,13 @@ public class IamAdminService {
     }
 
     public List<PermissionLevelView> permissionLevels(Actor actor) {
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.view", "system.permission.manage");
         return store.permissionLevels(actor.organizationId()).stream().map(this::levelView).toList();
     }
 
     @Transactional
     public PermissionLevelView createPermissionLevel(Actor actor, String code, String name, String description, int tier) {
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.create", "system.permission.manage");
         if (code == null || !code.matches("[A-Z][A-Z0-9_]{2,79}")) {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "权限等级编码必须使用大写字母、数字和下划线");
         }
@@ -180,7 +180,7 @@ public class IamAdminService {
 
     @Transactional
     public void renamePermissionLevel(Actor actor, UUID levelId, String name, String description) {
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.update", "system.permission.manage");
         var level = store.permissionLevel(actor.organizationId(), levelId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "权限等级不存在"));
         if (level.builtin()) throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "内置权限等级不可重命名");
@@ -190,7 +190,7 @@ public class IamAdminService {
 
     @Transactional
     public void deletePermissionLevel(Actor actor, UUID levelId) {
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.delete", "system.permission.manage");
         var level = store.permissionLevel(actor.organizationId(), levelId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "权限等级不存在"));
         if (level.builtin()) throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "内置权限等级不可删除");
@@ -200,13 +200,13 @@ public class IamAdminService {
     }
 
     public PermissionLevelView permissionLevel(Actor actor, UUID levelId) {
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.view", "system.permission.manage");
         return levelView(store.permissionLevel(actor.organizationId(), levelId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "权限等级不存在")));
     }
 
     public PermissionLevelPayload permissionLevelBindings(Actor actor, UUID levelId) {
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.view", "system.permission.manage");
         var level = store.permissionLevel(actor.organizationId(), levelId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "权限等级不存在"));
         return new PermissionLevelPayload(level.policyVersion(), store.permissionLevelBindings(actor.organizationId(), levelId));
@@ -214,7 +214,7 @@ public class IamAdminService {
 
     @Transactional
     public long savePermissionLevelBindings(Actor actor, UUID levelId, long expectedVersion, List<PermissionLevelBinding> bindings) {
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.update", "system.permission.manage");
         var level = store.permissionLevel(actor.organizationId(), levelId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "权限等级不存在"));
         if (level.builtin() && "L3_ADMIN".equals(level.code())) {
@@ -228,7 +228,7 @@ public class IamAdminService {
     }
 
     public UserModelView userModel(Actor actor, UUID userId) {
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.view", "system.permission.manage");
         var user = requireUser(actor, userId);
         var roles = store.userRoles(actor.organizationId(), userId);
         if ((roles == null || roles.isEmpty()) && user.roleId() != null) {
@@ -245,7 +245,7 @@ public class IamAdminService {
 
     @Transactional
     public long saveUserModel(Actor actor, UUID userId, SaveUserModelCommand command) {
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.update", "system.permission.manage");
         var user = requireUser(actor, userId);
         if (command.expectedVersion() != user.authVersion()) {
             throw new ApiException(ApiErrorCode.POLICY_VERSION_CONFLICT);
@@ -282,7 +282,7 @@ public class IamAdminService {
     public RoleView createRole(Actor actor, String code, String name) {
         store.lockAdministration(actor.organizationId());
 
-        require(actor, "system.role.create");
+        requireAny(actor, "system.permissions.create", "system.role.create");
         if (!code.matches("[A-Z][A-Z0-9_]{2,79}")) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "角色编码必须使用大写字母、数字和下划线");
         var role = store.roleByCode(actor.organizationId(), code);
         if (role.isPresent()) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "角色编码已存在");
@@ -295,7 +295,7 @@ public class IamAdminService {
     public void renameRole(Actor actor, UUID roleId, String name,long expectedVersion) {
         store.lockAdministration(actor.organizationId());
         requireRoleVersion(actor,roleId,expectedVersion);
-        require(actor, "system.role.manage");
+        requireAny(actor, "system.permissions.update", "system.role.manage");
         var role = role(actor, roleId);
         if (role.builtin()) throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "内置角色不可重命名");
         store.renameRole(actor.organizationId(), roleId, name);
@@ -306,7 +306,7 @@ public class IamAdminService {
     public void deleteRole(Actor actor, UUID roleId,long expectedVersion) {
         store.lockAdministration(actor.organizationId());
         requireRoleVersion(actor,roleId,expectedVersion);
-        require(actor, "system.role.manage");
+        requireAny(actor, "system.permissions.delete", "system.role.manage");
         role(actor, roleId);
         try { store.deleteRole(actor.organizationId(), roleId); }
         catch (IllegalArgumentException exception) { throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, exception.getMessage()); }
@@ -314,7 +314,7 @@ public class IamAdminService {
     }
 
     public List<Binding> rolePermissions(Actor actor, UUID roleId) {
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.view", "system.permission.manage");
         role(actor, roleId);
         return store.roleBindings(actor.organizationId(), roleId);
     }
@@ -323,7 +323,7 @@ public class IamAdminService {
     public long saveRolePermissions(Actor actor, UUID roleId, long expectedVersion, List<Binding> bindings) {
         store.lockAdministration(actor.organizationId());
         requireRoleVersion(actor,roleId,expectedVersion);
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.update", "system.permission.manage");
         var role = role(actor, roleId);
         validateBindings(bindings);
         try { store.replaceRoleBindings(actor.organizationId(), roleId, expectedVersion, bindings); }
@@ -333,7 +333,7 @@ public class IamAdminService {
     }
 
     public PermissionOverrides userPermissions(Actor actor, UUID userId) {
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.view", "system.permission.manage");
         var user = requireUser(actor, userId);
         return new PermissionOverrides(user.authVersion(), store.userOverrides(actor.organizationId(), userId));
     }
@@ -342,7 +342,7 @@ public class IamAdminService {
     public long saveUserPermissions(Actor actor, UUID userId, long expectedVersion, List<Binding> bindings) {
         store.lockAdministration(actor.organizationId());
         requireUserVersion(actor,userId,expectedVersion);
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.update", "system.permission.manage");
         requireUser(actor, userId);
         validateBindings(bindings);
         try { store.replaceUserOverrides(actor.organizationId(), userId, expectedVersion, bindings); }
@@ -355,14 +355,14 @@ public class IamAdminService {
     public void deleteUserOverride(Actor actor, UUID userId, String permissionCode,long expectedVersion) {
         store.lockAdministration(actor.organizationId());
         requireUserVersion(actor,userId,expectedVersion);
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.update", "system.permission.manage");
         requireUser(actor, userId);
         store.deleteUserOverride(actor.organizationId(), userId, permissionCode);
         audit(actor, "IAM_USER_PERMISSION_RESTORED", "USER", userId);
     }
 
     public List<PermissionDefinition> permissionDefinitions(Actor actor) {
-        require(actor, "system.permission.manage");
+        requireAny(actor, "system.permissions.view", "system.permission.manage");
         return store.permissionDefinitions();
     }
 
@@ -374,6 +374,11 @@ public class IamAdminService {
 
     private void require(Actor actor, String permission) {
         authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), permission, "IAM", null, null));
+    }
+
+    private void requireAny(Actor actor, String first, String second) {
+        if (authorization.check(new PermissionCheck(actor.organizationId(), actor.userId(), first, "IAM", null, null)).allowed()) return;
+        require(actor, second);
     }
 
     private IamStore.User requireUser(Actor actor, UUID userId) {

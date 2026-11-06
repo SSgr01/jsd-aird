@@ -163,9 +163,13 @@ public class IamAuthService {
                             new Binding(binding.permissionCode(), binding.effect(), binding.scopeType(), binding.targetIds()))));
         }
         var operationOverrides = store.userOperationOverrides(organization.id(), user.id());
+        var deniedOperations = new LinkedHashSet<String>();
         if (operationOverrides != null) operationOverrides.forEach(binding -> {
             if ("ALLOW".equals(binding.effect())) bindings.put(binding.permissionCode(), binding);
-            else bindings.remove(binding.permissionCode());
+            else {
+                deniedOperations.add(binding.permissionCode());
+                bindings.remove(binding.permissionCode());
+            }
         });
         var menuOverrides = store.userMenuOverrides(organization.id(), user.id());
         if (menuOverrides != null) menuOverrides.forEach(override -> {
@@ -175,6 +179,10 @@ public class IamAuthService {
         if ((v2Roles == null || v2Roles.isEmpty()) && (levelId == null || levelId.isEmpty())) {
             store.userOverrides(organization.id(), user.id()).forEach(binding -> bindings.put(binding.permissionCode(), binding));
         }
+        MenuViewPermissions.impliedBy(menuKeys).stream()
+                .filter(code -> !deniedOperations.contains(code))
+                .forEach(code -> bindings.compute(code, (key, existing) -> existing == null || "DENY".equals(existing.effect())
+                        ? new Binding(code, "ALLOW", "ALL", List.of()) : existing));
         if (v2Roles != null && v2Roles.stream().anyMatch(role -> "SYSTEM_ADMIN".equals(role.code()))) {
             menuKeys.addAll(PermissionModelCatalog.allMenuKeys());
             store.permissionDefinitions().forEach(definition -> bindings.put(definition.code(),
@@ -184,9 +192,14 @@ public class IamAuthService {
         // every permission in local development mode. Return the same effective
         // permission set to the web client; otherwise the UI hides all protected
         // menus even though the API accepts their requests.
+        bindings.values().stream().filter(b -> "DENY".equals(b.effect()))
+                .map(Binding::permissionCode).forEach(deniedOperations::add);
+        var granted = bindings.values().stream().filter(b -> "ALLOW".equals(b.effect()))
+                .map(Binding::permissionCode).collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        granted.addAll(TransferViewPermissions.impliedBy(granted, deniedOperations));
         var permissions = developmentMode
                 ? store.permissionDefinitions().stream().map(definition -> definition.code()).toList()
-                : bindings.values().stream().filter(b -> "ALLOW".equals(b.effect())).map(Binding::permissionCode).toList();
+                : List.copyOf(granted);
         if (developmentMode) menuKeys.addAll(PermissionModelCatalog.allMenuKeys());
         return new MeView(user.id(), organization.id(), organization.name(), user.username(), user.displayName(),
                 user.email(), user.departmentName(), user.roleId(), user.roleCode(), user.roleName(), user.status(),

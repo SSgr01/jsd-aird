@@ -27,7 +27,7 @@ import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { ClipboardEvent, ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import {
@@ -46,6 +46,7 @@ import { getPartnerContacts, getPartners, type BusinessPartner } from '@/service
 import { qualityApi, type QualityRecord } from '@/services/quality/quality-api';
 import { errorMessage } from '@/services/http/errors';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermission } from '@/components/auth/usePermission';
 import { parseRecipient } from './sample-recipient-parse';
 import { isShipmentWorkbook, parseShipmentWorkbook, shipmentWorkbookTemplate } from './shipment-workbook';
 import './inventory-pages.css';
@@ -101,8 +102,9 @@ const reasonLabels: Record<string, string> = {
 function inventoryIsReadOnly() {
   return window.localStorage.getItem('inventory-role') === 'READ_ONLY';
 }
-const kg = (v?: number) =>
-  `${Number(v || 0).toLocaleString('zh-CN', { maximumFractionDigits: 6 })} KG`;
+const kgNumber = (v?: number) =>
+  Number(v || 0).toLocaleString('zh-CN', { maximumFractionDigits: 6 });
+const kg = (v?: number) => `${kgNumber(v)} KG`;
 
 function SummaryCards({
   summary,
@@ -149,6 +151,7 @@ function SummaryCards({
 }
 
 export function InventoryQueryPage() {
+  const canUpdate = usePermission('inventory.query.update');
   const [data, setData] = useState<Awaited<ReturnType<typeof inventoryApi.balances>>>();
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState<Record<string, unknown>>({ page: 1, size: 10 });
@@ -180,18 +183,32 @@ export function InventoryQueryPage() {
     },
     { title: '类别', dataIndex: 'category' },
     { title: '产品编码', dataIndex: 'productCode' },
-    { title: '产品名称', dataIndex: 'productName' },
-    { title: '库存', dataIndex: 'quantityKg', align: 'right', render: kg },
     {
-      title: '桶数',
+      title: '产品名称',
+      dataIndex: 'productName',
+      width: 240,
+      className: 'inventory-product-column',
+      render: (v: string) => <span className="inventory-cell-wrap">{v || '—'}</span>,
+    },
+    {
+      title: '规格（KG/桶）',
+      dataIndex: 'packageKg',
+      width: 120,
+      align: 'right',
+      render: (v?: number) => (v ? kgNumber(v) : '—'),
+    },
+    { title: '库存（KG）', dataIndex: 'quantityKg', align: 'right', render: (v?: number) => kgNumber(v) },
+    {
+      title: '桶数（桶）',
+      align: 'right',
       render: (_, r) =>
         r.packageKg
           ? (r.quantityKg / r.packageKg).toLocaleString('zh-CN', { maximumFractionDigits: 2 })
           : '—',
     },
     {
-      title: '预警规则',
-      render: (_, r) => (r.lowStockKg > 0 ? `低于 ${kg(r.lowStockKg)}` : '未配置'),
+      title: '预警规则（KG）',
+      render: (_, r) => (r.lowStockKg > 0 ? `低于 ${kgNumber(r.lowStockKg)}` : '未配置'),
     },
     {
       title: '状态',
@@ -258,7 +275,7 @@ export function InventoryQueryPage() {
         width={560}
         okText="保存策略"
         cancelText="关闭"
-        okButtonProps={{ disabled: inventoryIsReadOnly() }}
+        okButtonProps={{ disabled: inventoryIsReadOnly(), style: canUpdate ? undefined : { display: 'none' } }}
         onOk={async () => {
           if (!selected) return;
           if (inventoryIsReadOnly()) {
@@ -304,6 +321,7 @@ export function InventoryQueryPage() {
           <Form
             form={policyForm}
             layout="vertical"
+            disabled={!canUpdate || inventoryIsReadOnly()}
             initialValues={{ packageKg: selected.packageKg, lowStockKg: selected.lowStockKg }}
             key={`${selected.productId}-${selected.scope}`}
           >
@@ -321,6 +339,13 @@ export function InventoryQueryPage() {
 }
 
 export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
+  const pageKey = scope === 'RND' ? 'inventory.rnd' : 'inventory.production';
+  const canCreate = usePermission(`${pageKey}.create`);
+  const canUpdate = usePermission(`${pageKey}.update`);
+  const pageReversePermission = usePermission(`${pageKey}.reverse`);
+  const moduleReversePermission = usePermission('inventory.reverse');
+  // 冲销与编辑同权：拥有库存表编辑权限即可看到冲销；单独授予冲销权限时同样可见。
+  const canReverse = canUpdate || pageReversePermission || moduleReversePermission;
   const [data, setData] = useState<Awaited<ReturnType<typeof inventoryApi.transactions>>>();
   const [filters, setFilters] = useState<Record<string, unknown>>({ scope, page: 1, size: 10 });
   const [open, setOpen] = useState(false);
@@ -473,8 +498,21 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
   }, [scope, reasonSearch, historyReasons]);
   const columns: ColumnsType<InventoryTransaction> = [
     { title: '日期', dataIndex: 'businessDate' },
-    { title: '单号', dataIndex: 'documentNo' },
-    { title: '产品名称', render: (_, r) => `${r.productCode} · ${r.productName}` },
+    {
+      title: '单号',
+      dataIndex: 'documentNo',
+      width: 180,
+      className: 'inventory-doc-column',
+      render: (v) => <span className="inventory-cell-wrap">{v || '—'}</span>,
+    },
+    {
+      title: '产品名称',
+      width: 240,
+      className: 'inventory-product-column',
+      render: (_, r) => (
+        <span className="inventory-cell-wrap">{`${r.productCode} · ${r.productName}`}</span>
+      ),
+    },
     {
       title: '变动方向',
       dataIndex: 'direction',
@@ -483,11 +521,17 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
       ),
     },
     { title: '业务原因', dataIndex: 'reason', render: (v) => reasonLabels[v] || v },
-    { title: '数量 KG', dataIndex: 'quantityKg', align: 'right', render: kg },
-    { title: '变动前', dataIndex: 'beforeKg', render: kg },
-    { title: '变动后', dataIndex: 'afterKg', render: kg },
+    { title: '数量（KG）', dataIndex: 'quantityKg', align: 'right', render: (v?: number) => kgNumber(v) },
+    { title: '变动前（KG）', dataIndex: 'beforeKg', align: 'right', render: (v?: number) => kgNumber(v) },
+    { title: '变动后（KG）', dataIndex: 'afterKg', align: 'right', render: (v?: number) => kgNumber(v) },
     { title: '经办人', dataIndex: 'actorName' },
-    { title: '备注', dataIndex: 'note', render: (v) => v || '—' },
+    {
+      title: '备注',
+      dataIndex: 'note',
+      width: 260,
+      className: 'inventory-note-column',
+      render: (v) => <span className="inventory-cell-wrap">{v || '—'}</span>,
+    },
     {
       title: '操作',
       width: 250,
@@ -496,7 +540,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
           <Button type="link" onClick={() => setDetail(r)}>
             查看
           </Button>
-          <Button
+          {canUpdate && <Button
             type="link"
             disabled={readOnly || r.reversed || !!r.reversalOf}
             onClick={() => {
@@ -515,8 +559,8 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
             }}
           >
             编辑
-          </Button>
-          {!r.reversed && !r.reversalOf && (
+          </Button>}
+          {canReverse && !r.reversed && !r.reversalOf && (
             <Popconfirm
               title="确认生成反向冲销流水？"
               onConfirm={async () => {
@@ -545,7 +589,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
       extra={
         <Space>
           <LedgerImportExport scope={scope} products={products} onDone={load} disabled={readOnly} />
-          <Button
+          {canCreate && <Button
             type="primary"
             icon={<PlusOutlined />}
             disabled={readOnly}
@@ -561,7 +605,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
             }}
           >
             新增库存变动
-          </Button>
+          </Button>}
         </Space>
       }
     >
@@ -757,6 +801,8 @@ export function ShipmentDetailsPage() {
 }
 function ShipmentHeaders() {
   const navigate = useNavigate();
+  const canUpdate = usePermission('inventory.shipment.update');
+  const canDelete = usePermission('inventory.shipment.delete');
   const [productsByScope, setProductsByScope] = useState<Record<InventoryScope, InventoryProductOption[]>>({ RND: [], PRODUCTION: [] });
   const [customers, setCustomers] = useState<BusinessPartner[]>([]);
   const [data, setData] = useState<{ items: ShipmentHeader[]; page: number; size: number; total: number }>();
@@ -881,18 +927,18 @@ function ShipmentHeaders() {
       />
       <Button type="primary" icon={<SearchOutlined />} onClick={applyQuery}>查询</Button>
       <Button icon={<ReloadOutlined />} onClick={resetQuery}>重置</Button>
-      <Popconfirm title="确认删除出货单"
+      {canDelete && !inventoryIsReadOnly() && <Popconfirm title="确认删除出货单"
         description={`将删除选中的 ${selectedHeaderNos.length} 张未完成出货单及其明细，此操作不可撤销。`}
         onConfirm={() => { void deleteSelectedHeaders(); }} okButtonProps={{ loading: bulkDeleting }}>
         <Button danger icon={<DeleteOutlined />}
-          disabled={inventoryIsReadOnly() || selectedHeaderNos.length === 0 || bulkDeleting || hasUndeletableHeader}>删除</Button>
-      </Popconfirm>
-      <Popconfirm title="确认批量完成出货" description={`将选中的 ${selectedHeaderNos.length} 张出货单设为已完成并扣减库存？`}
+          disabled={selectedHeaderNos.length === 0 || bulkDeleting || hasUndeletableHeader}>删除</Button>
+      </Popconfirm>}
+      {canUpdate && !inventoryIsReadOnly() && <Popconfirm title="确认批量完成出货" description={`将选中的 ${selectedHeaderNos.length} 张出货单设为已完成并扣减库存？`}
         onConfirm={() => { void completeSelectedHeaders(); }} okButtonProps={{ loading: bulkSaving }}>
-        <Button icon={<CheckOutlined />} disabled={inventoryIsReadOnly() || selectedHeaderNos.length === 0 || bulkSaving}>
+        <Button icon={<CheckOutlined />} disabled={selectedHeaderNos.length === 0 || bulkSaving}>
           设为已完成{selectedHeaderNos.length > 0 ? ` (${selectedHeaderNos.length})` : ''}
         </Button>
-      </Popconfirm>
+      </Popconfirm>}
     </div>
     <Table rowKey="shipmentNo" dataSource={data?.items} rowSelection={{
       selectedRowKeys: selectedHeaderNos,
@@ -911,23 +957,25 @@ function ShipmentHeaders() {
           {row.detailCount > 0 && row.completedCount === row.detailCount ? '已完成' : '未完成'}
         </Tag> },
       { title: '明细条数', dataIndex: 'detailCount', width: 85 },
-      { title: '总数量 KG', dataIndex: 'totalQuantityKg', width: 120 },
+      { title: '总数量（KG）', dataIndex: 'totalQuantityKg', width: 120 },
       { title: '备注', dataIndex: 'note', width: 200, ellipsis: true },
       { title: '操作', width: 200, render: (_: unknown, row: ShipmentHeader) => <Space>
         <Button type="link"
-          onClick={() => navigate(`/inventory/shipment-details?shipmentNo=${encodeURIComponent(row.shipmentNo)}`)}>明细</Button>
-        <Button type="link" disabled={inventoryIsReadOnly()}
-          onClick={() => { setEditingHeader(row); form.setFieldsValue({ shipmentNo: row.shipmentNo, businessDate: dayjs(row.businessDate), note: row.note ?? '' }); setOpen(true); }}>编辑</Button>
-        <Popconfirm title="确认删除出货单"
+          onClick={() => navigate(`/inventory/shipment-details?shipmentNo=${encodeURIComponent(row.shipmentNo)}`)}>查看</Button>
+        {canUpdate && !inventoryIsReadOnly() && <Button type="link"
+          onClick={() => { setEditingHeader(row); form.setFieldsValue({ shipmentNo: row.shipmentNo, businessDate: dayjs(row.businessDate), note: row.note ?? '' }); setOpen(true); }}>重命名</Button>}
+        {canDelete && !inventoryIsReadOnly() && <Popconfirm title="确认删除出货单"
           description={`将删除出货单 ${row.shipmentNo} 及其全部未完成明细，此操作不可撤销。`}
           onConfirm={() => { void deleteHeader(row); }}
           okButtonProps={{ loading: deletingNo === row.shipmentNo }}>
-          <Button type="link" danger disabled={inventoryIsReadOnly() || row.completedCount > 0}>删除</Button>
-        </Popconfirm>
+          <Button type="link" danger
+            title={row.completedCount > 0 ? '存在已完成明细的出货单不可删除' : undefined}
+            disabled={row.completedCount > 0}>删除</Button>
+        </Popconfirm>}
       </Space> },
     ]} pagination={{ current: page, pageSize: size, total: data?.total, showSizeChanger: true,
       onChange: (nextPage, nextSize) => { setPage(nextPage); setSize(nextSize); } }} />
-    <Modal title={editingHeader ? '编辑出货单' : '新增出货单'} open={open} confirmLoading={saving} onCancel={() => { setOpen(false); setEditingHeader(undefined); form.resetFields(); }}
+    <Modal title={editingHeader ? '重命名出货单' : '新增出货单'} open={open} confirmLoading={saving} onCancel={() => { setOpen(false); setEditingHeader(undefined); form.resetFields(); }}
       onOk={() => { void saveHeader(); }}>
       <Form form={form} layout="vertical">
         <Form.Item name="shipmentNo" label="出货单号" rules={[{ required: true, whitespace: true }]}><Input disabled={!!editingHeader} /></Form.Item>
@@ -968,7 +1016,7 @@ type BusinessFormValues = {
   note?: string;
 };
 
-function ShipmentSheet({ date, rows, total, page, pages, readOnly, addDisabled, selectedIds, deleting, statusSaving,
+function ShipmentSheet({ date, rows, total, page, pages, readOnly, canAdd, addDisabled, selectedIds, deleting, statusSaving,
   statusDisabled, extraActions, onBack, onEdit, onAdd, onPage, onSelect, onDelete, onSetStatus }: {
   date?: string;
   rows: Shipment[];
@@ -976,6 +1024,7 @@ function ShipmentSheet({ date, rows, total, page, pages, readOnly, addDisabled, 
   page: number;
   pages: number;
   readOnly: boolean;
+  canAdd: boolean;
   addDisabled: boolean;
   selectedIds: string[];
   deleting: boolean;
@@ -992,23 +1041,27 @@ function ShipmentSheet({ date, rows, total, page, pages, readOnly, addDisabled, 
 }) {
   const pendingIds = rows.filter((row) => row.status === 'PENDING' && !row.transactionId).map((row) => row.id);
   const selectedOnPage = pendingIds.filter((id) => selectedIds.includes(id));
+  // 已完成或已扣减库存的明细不可删除，出现这类选中项时删除按钮置灰。
+  const hasUndeletableSelected = rows.some((row) =>
+    selectedIds.includes(row.id) && (row.status !== 'PENDING' || !!row.transactionId));
   return <div className="shipment-sheet-layout">
     <div className="shipment-sheet-actions">
       {onBack && <Button icon={<ArrowLeftOutlined />} onClick={onBack}>返回</Button>}
-      <Button type="primary" icon={<PlusOutlined />} disabled={addDisabled} onClick={onAdd}>添加客户</Button>
-      <Popconfirm title="确认批量删除明细" description={`将删除选中的 ${selectedIds.length} 条未完成明细，此操作不可撤销。`}
+      {canAdd && <Button type="primary" icon={<PlusOutlined />} disabled={addDisabled} onClick={onAdd}>添加客户</Button>}
+      {!readOnly && <Popconfirm title="确认批量删除明细" description={`将删除选中的 ${selectedIds.length} 条未完成明细，此操作不可撤销。`}
         onConfirm={() => onDelete(selectedIds)} okButtonProps={{ loading: deleting }}>
-        <Button danger icon={<DeleteOutlined />} disabled={readOnly || deleting || selectedIds.length === 0}>
+        <Button danger icon={<DeleteOutlined />}
+          disabled={deleting || selectedIds.length === 0 || hasUndeletableSelected}>
           删除{selectedIds.length ? ` (${selectedIds.length})` : ''}
         </Button>
-      </Popconfirm>
+      </Popconfirm>}
       {extraActions}
-      <Popconfirm title="确认设置状态" description="将该出货单状态设置为已完成并扣减库存？"
+      {!readOnly && <Popconfirm title="确认设置状态" description="将该出货单状态设置为已完成并扣减库存？"
         onConfirm={onSetStatus} okButtonProps={{ loading: statusSaving }}>
-        <Button icon={<CheckOutlined />} disabled={readOnly || statusSaving || statusDisabled}>
+        <Button icon={<CheckOutlined />} disabled={statusSaving || statusDisabled}>
           设置状态
         </Button>
-      </Popconfirm>
+      </Popconfirm>}
     </div>
     <div className="shipment-sheet-scroll">
       <div className="shipment-sheet-mobile-title">出货记录表</div>
@@ -1029,8 +1082,8 @@ function ShipmentSheet({ date, rows, total, page, pages, readOnly, addDisabled, 
               onChange={(event) => onSelect(event.target.checked
                 ? [...new Set([...selectedIds, ...pendingIds])]
                 : selectedIds.filter((id) => !pendingIds.includes(id)))} />
-          </th><th>客户名</th><th>品名</th><th>批次号</th><th>规格</th><th>数量</th>
-            <th>总数量</th><th>快递公司</th><th>备注</th><th>操作</th></tr>
+          </th><th>客户名</th><th>品名</th><th>批次号</th><th>规格（KG/桶）</th><th>数量（桶）</th>
+            <th>总数量（KG）</th><th>快递公司</th><th>备注</th><th>操作</th></tr>
         </thead>
         <tbody>
           {rows.map((row) => (
@@ -1051,10 +1104,10 @@ function ShipmentSheet({ date, rows, total, page, pages, readOnly, addDisabled, 
               <td>{row.totalQuantityKg ?? row.quantityKg}</td>
               <td>{row.courierCompany || ''}</td>
               <td>{row.note || ''}</td>
-              <td><Tooltip title="编辑明细"><Button type="text" size="small" icon={<EditOutlined />}
+              <td>{!readOnly && <Tooltip title="编辑明细"><Button type="text" size="small" icon={<EditOutlined />}
                 aria-label={`编辑 ${row.productName}`}
-                disabled={readOnly || row.status !== 'PENDING' || !!row.transactionId}
-                onClick={() => onEdit(row)} /></Tooltip></td>
+                disabled={row.status !== 'PENDING' || !!row.transactionId}
+                onClick={() => onEdit(row)} /></Tooltip>}</td>
             </tr>
           ))}
           {Array.from({ length: Math.max(0, 12 - rows.length) }, (_, index) => (
@@ -1073,6 +1126,10 @@ function ShipmentSheet({ date, rows, total, page, pages, readOnly, addDisabled, 
 }
 
 function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; shipmentNo?: string }) {
+  const pageKey = type === 'sample' ? 'inventory.sample' : 'inventory.shipment';
+  const canCreate = usePermission(`${pageKey}.create`);
+  const canUpdate = usePermission(`${pageKey}.update`);
+  const canDelete = usePermission(`${pageKey}.delete`);
   const sample = type === 'sample';
   const navigate = useNavigate();
   const [header, setHeader] = useState<ShipmentHeader>();
@@ -1109,6 +1166,13 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
   const [coaVerified, setCoaVerified] = useState(true);
   const coaRequest = useRef(0);
   const [readOnly] = useState(() => inventoryIsReadOnly());
+  // 只有查看权限（或只读角色）时，单号仍可点开查看，但弹窗不提供保存。
+  const canEdit = canUpdate && !readOnly;
+  // 「查看」按钮打开的弹窗强制只读，与「编辑」区分。
+  const [dialogReadOnly, setDialogReadOnly] = useState(false);
+  const editable = canEdit && !dialogReadOnly;
+  // 新增只需要新增权限，编辑才需要更新权限。
+  const dialogEditable = editing ? editable : canCreate && !readOnly;
   const [searchKeyword, setSearchKeyword] = useState('');
   const [filters, setFilters] = useState<{
     keyword: string; page: number; size: number;
@@ -1143,6 +1207,27 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
     form.setFieldsValue({ recipientName: parsed.name,
       recipientPhone: parsed.phone, [sample ? 'sampleAddress' : 'shippingAddress']: parsed.address,
       clientContact: parsed.name, clientContactPhone: parsed.phone });
+  };
+  // 直接粘贴到收件人/电话/地址输入框时，同样按「收件信息」拆分回填（类似电商填写收件地址）。
+  const fillRecipientFromPaste = (event: ClipboardEvent<HTMLInputElement>) => {
+    const text = event.clipboardData.getData('text');
+    if (!text || !/[\u4e00-\u9fa5]/.test(text)) return;
+    const parsed = parseRecipient(text);
+    if (!parsed.phone && !parsed.address) return;
+    event.preventDefault();
+    recipientRequest.current += 1;
+    setRecipientText(text);
+    const patch: Record<string, unknown> = {};
+    if (parsed.name) {
+      patch.recipientName = parsed.name;
+      patch.clientContact = parsed.name;
+    }
+    if (parsed.phone) {
+      patch.recipientPhone = parsed.phone;
+      patch.clientContactPhone = parsed.phone;
+    }
+    if (parsed.address) patch[sample ? 'sampleAddress' : 'shippingAddress'] = parsed.address;
+    form.setFieldsValue(patch);
   };
   const searchCustomers = async (keyword: string) => {
     if (!keyword.trim()) return;
@@ -1278,11 +1363,13 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
     if (shipmentNo) void inventoryApi.shipmentHeader(shipmentNo).then(setHeader)
       .catch((error: unknown) => message.error(errorMessage(error, '出货单加载失败')));
   }, [shipmentNo]);
-  const openEdit = (record: SampleDispatch | Shipment) => {
-    if (!sample && (record.status === 'COMPLETED' || record.transactionId)) {
+  const openEdit = (record: SampleDispatch | Shipment, readonly = false) => {
+    if (!readonly && canEdit && !sample && (record.status === 'COMPLETED' || record.transactionId)) {
       message.warning('已完成的出货明细不可修改');
       return;
     }
+    setDialogReadOnly(readonly);
+    setRecipientText('');
     coaRequest.current += 1;
     setCoaOptions([]);
     setCoaSearch('');
@@ -1352,11 +1439,11 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
     setOpen(true);
   };
   const save = async () => {
-    const v = (await form.validateFields()) as BusinessFormValues;
-    if (inventoryIsReadOnly()) {
-      message.error(`当前角色为只读用户，不能修改${sample ? '发样' : '出货'}记录`);
+    if (!dialogEditable) {
+      message.error(`当前用户没有修改${sample ? '发样' : '出货'}记录的权限`);
       return;
     }
+    const v = (await form.validateFields()) as BusinessFormValues;
     if (sample && editing && 'dispatchNo' in editing && editing.status === 'COMPLETED' && sampleTotalKg !== editing.quantityKg) {
       message.error('已扣库存的总数量不能在编辑时修改');
       return;
@@ -1482,14 +1569,14 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
         ? [
             { title: '日期', dataIndex: 'businessDate' },
             { title: '发样单号', dataIndex: 'dispatchNo', render: (value: string, record: SampleDispatch | Shipment) => (
-              <Button type="link" disabled={readOnly} style={{ padding: 0 }} onClick={() => openEdit(record)}>
+              <Button type="link" style={{ padding: 0 }} onClick={() => openEdit(record)}>
                 {value}
               </Button>
             ) },
             { title: '状态', dataIndex: 'status', render: (status: string) =>
               <Tag color={status === 'COMPLETED' ? 'success' : 'processing'}>{status === 'COMPLETED' ? '已完成' : '未完成'}</Tag> },
             { title: '产品名称', dataIndex: 'productName' },
-            { title: '总数量 KG', dataIndex: 'quantityKg', align: 'right', render: kg },
+            { title: '总数量（KG）', dataIndex: 'quantityKg', align: 'right', render: (v?: number) => kgNumber(v) },
             {
               title: '本公司发样人',
               dataIndex: 'senderName',
@@ -1499,20 +1586,25 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
             { title: '客户名称', dataIndex: 'customerName' },
             {
               title: '操作',
-              width: 140,
+              width: 180,
               render: (_: unknown, record: SampleDispatch | Shipment) => (
                 <Space className="management-table-actions">
-                  <Button type="link" disabled={readOnly} onClick={() => openEdit(record)}>
-                    编辑
+                  <Button type="link" onClick={() => openEdit(record, true)}>
+                    查看
                   </Button>
-                  <Popconfirm title="确认删除发样记录" description="该操作不可撤销。"
+                  {canEdit && <Button type="link" onClick={() => openEdit(record)}>
+                    编辑
+                  </Button>}
+                  {canDelete && !readOnly && <Popconfirm title="确认删除发样记录" description="该操作不可撤销。"
                     onConfirm={() => { void removeSamples([record.id]); }}
                     okButtonProps={{ loading: deletingSamples }}>
                     <Button type="link" danger
-                      disabled={readOnly || record.status !== 'PENDING' || !!record.transactionId}>
+                      title={record.status !== 'PENDING' || record.transactionId
+                        ? '已完成或已扣减库存的记录不可删除' : undefined}
+                      disabled={record.status !== 'PENDING' || !!record.transactionId}>
                       删除
                     </Button>
-                  </Popconfirm>
+                  </Popconfirm>}
                 </Space>
               ),
             },
@@ -1520,7 +1612,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
         : [
             { title: '日期', dataIndex: 'businessDate' },
             { title: '出货单号', dataIndex: 'shipmentNo', render: (value: string, record: SampleDispatch | Shipment) => (
-              <Button type="link" disabled={readOnly} style={{ padding: 0 }} onClick={() => openEdit(record)}>
+              <Button type="link" style={{ padding: 0 }} onClick={() => openEdit(record)}>
                 {value}
               </Button>
             ) },
@@ -1532,11 +1624,11 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
               render: (value: InventoryScope | undefined) => scopeLabels[value ?? 'PRODUCTION'],
             },
             { title: '产品名称', dataIndex: 'productName' },
-            { title: '数量', dataIndex: 'packageQuantity', align: 'right', render: (v: number | undefined) => v == null ? '—' : v },
+            { title: '数量（桶）', dataIndex: 'packageQuantity', align: 'right', render: (v: number | undefined) => v == null ? '—' : v },
             { title: '客户名称', dataIndex: 'customerName' },
             { title: '批次号', dataIndex: 'batchNo', render: (v: string | undefined) => v || '—' },
-            { title: '规格', dataIndex: 'specification', render: (v: string | undefined) => v || '—' },
-            { title: '总数量 KG', dataIndex: 'totalQuantityKg', align: 'right', render: (v: number | undefined, row: SampleDispatch | Shipment) => kg(v ?? row.quantityKg) },
+            { title: '规格（KG/桶）', dataIndex: 'specification', render: (v: string | undefined) => v || '—' },
+            { title: '总数量（KG）', dataIndex: 'totalQuantityKg', align: 'right', render: (v: number | undefined, row: SampleDispatch | Shipment) => kgNumber(v ?? row.quantityKg) },
             { title: '收件人', dataIndex: 'recipientName', render: (v: string | undefined) => v || '—' },
             { title: '收件人电话', dataIndex: 'recipientPhone', render: (v: string | undefined) => v || '—' },
             { title: '收货地址', dataIndex: 'shippingAddress', render: (v: string | undefined) => v || '—' },
@@ -1560,18 +1652,18 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
               width: 100,
               render: (_: unknown, record: SampleDispatch | Shipment) => (
                 <Space className="management-table-actions">
-                  <Button
+                  {canUpdate && <Button
                     type="link"
                     disabled={inventoryIsReadOnly()}
                     onClick={() => openEdit(record)}
                   >
                     编辑
-                  </Button>
+                  </Button>}
                 </Space>
               ),
             },
           ],
-    [openEdit, sample],
+    [canDelete, canEdit, openEdit, readOnly, sample],
   );
   const openCreate = () => {
     if (!sample && header && header.detailCount > 0 && header.completedCount === header.detailCount) {
@@ -1580,6 +1672,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
     }
     form.resetFields();
     setEditing(undefined);
+    setDialogReadOnly(false);
     setRecipientText('');
     setFormScope(sample ? 'RND' : 'PRODUCTION');
     setProductSearch('');
@@ -1616,14 +1709,14 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
             onDone={load}
             disabled={readOnly}
           />
-          <Button
+          {canCreate && <Button
             type="primary"
             icon={<PlusOutlined />}
             disabled={readOnly}
             onClick={openCreate}
           >
             新增发样
-          </Button>
+          </Button>}
         </div>
       ) : undefined}
     >
@@ -1691,8 +1784,9 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
       </Card> : <ShipmentSheet date={header?.businessDate}
         rows={data?.items.filter((row): row is Shipment => 'shipmentNo' in row) ?? []}
         total={data?.total ?? 0} page={data?.page ?? 1} pages={data?.totalPages ?? 0}
-        readOnly={readOnly}
-        addDisabled={readOnly || !header || (header.detailCount > 0 && header.completedCount === header.detailCount)}
+        readOnly={!canEdit}
+        canAdd={canCreate && !readOnly}
+        addDisabled={!canCreate || readOnly || !header || (header.detailCount > 0 && header.completedCount === header.detailCount)}
         selectedIds={selectedRecordIds} deleting={deletingDetails} statusSaving={sheetStatusSaving}
         statusDisabled={!header || header.detailCount === 0 || header.completedCount === header.detailCount}
         extraActions={<BusinessImportExport
@@ -1702,7 +1796,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
           productsByScope={productsByScope}
           customers={customers}
           onDone={load}
-          disabled={readOnly}
+          disabled={!(canCreate && !readOnly)}
         />}
         onBack={() => navigate('/inventory/shipments')}
         onEdit={openEdit} onAdd={openCreate}
@@ -1731,22 +1825,26 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
       <Modal
         width={650}
         className="inventory-entry-modal"
-        title={`${editing ? '编辑' : '新增'}${sample ? '发样' : '出货明细'}`}
+        title={`${editing ? (editable ? '编辑' : '查看') : '新增'}${sample ? '发样' : '出货明细'}`}
         open={open}
         okText="保存"
-        cancelText="取消"
+        cancelText={dialogEditable ? '取消' : '关闭'}
         confirmLoading={saving}
-        okButtonProps={{ disabled: readOnly || (!selectedCustomerId && !canCreateCustomer) }}
+        okButtonProps={{
+          disabled: readOnly || (!selectedCustomerId && !canCreateCustomer),
+          style: dialogEditable ? undefined : { display: 'none' },
+        }}
         onCancel={() => {
           setOpen(false);
           setEditing(undefined);
+          setDialogReadOnly(false);
           setProductSearch('');
           setRecipientText('');
           form.resetFields();
         }}
         onOk={save}
       >
-        <Form form={form} layout="vertical" onValuesChange={(changed) => {
+        <Form form={form} layout="vertical" disabled={!dialogEditable} onValuesChange={(changed) => {
           if (['recipientName', 'recipientPhone', 'sampleAddress', 'shippingAddress'].some((field) => field in changed))
             recipientRequest.current += 1;
           if (!sample && ('specification' in changed || 'packageQuantity' in changed)) {
@@ -1760,7 +1858,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="businessDate" label="日期" rules={[{ required: true }]}>
-                <DatePicker className="inventory-full" disabled={!sample && !!shipmentNo} />
+                <DatePicker className="inventory-full" disabled={!dialogEditable || (!sample && !!shipmentNo)} />
               </Form.Item>
             </Col>
             <Col span={12}>
@@ -1769,7 +1867,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
                 label={sample ? '发样单号' : '出货单号'}
                 rules={[{ required: true }]}
               >
-                <Input disabled={!sample && !!shipmentNo} />
+                <Input disabled={!dialogEditable || (!sample && !!shipmentNo)} />
               </Form.Item>
             </Col>
           </Row>
@@ -1779,7 +1877,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
                 <Col span={12}>
                   <Form.Item name="scope" label="库存类型" rules={[{ required: true }]}>
                     <Select
-                      disabled={!!editing}
+                      disabled={!dialogEditable || !!editing}
                       options={[
                         { value: 'RND', label: '研发库存' },
                         { value: 'PRODUCTION', label: '生产库存' },
@@ -1795,7 +1893,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
                 <Col span={12}>
                   <Form.Item name="productId" label="产品名称" rules={[{ required: true }]}>
                     <Select
-                      disabled={!!editing}
+                      disabled={!dialogEditable || !!editing}
                       labelInValue
                       showSearch
                       filterOption
@@ -1814,12 +1912,12 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
               </Row>
               <Row gutter={16}>
                 <Col span={12}>
-                  <Form.Item name="specification" label="规格 KG" rules={[{ required: true, type: 'number', min: 0.000001 }]}>
+                  <Form.Item name="specification" label="规格（KG/桶）" rules={[{ required: true, type: 'number', min: 0.000001 }]}>
                     <InputNumber min={0.000001} precision={6} className="inventory-full" />
                   </Form.Item>
                 </Col>
                 <Col span={12}>
-                  <Form.Item name="packageQuantity" label="数量" rules={[{ required: true, type: 'number', min: 0.000001 }]}>
+                  <Form.Item name="packageQuantity" label="数量（桶）" rules={[{ required: true, type: 'number', min: 0.000001 }]}>
                     <InputNumber min={0.000001} precision={6} className="inventory-full" />
                   </Form.Item>
                 </Col>
@@ -1858,7 +1956,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
                   </Form.Item>
                 </Col>
               </Row>
-              {!editing && <Form.Item label="收件信息">
+              {dialogEditable && <Form.Item label="收件信息">
                 <Input.TextArea rows={3} value={recipientText} onChange={(event) => setRecipientText(event.target.value)}
                   onPaste={(event) => {
                     const text = event.clipboardData.getData('text');
@@ -1872,17 +1970,17 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
               <Row gutter={16}>
                 <Col span={12}>
                   <Form.Item name="recipientName" label="收件人" rules={[{ required: true }]}>
-                    <Input />
+                    <Input onPaste={fillRecipientFromPaste} />
                   </Form.Item>
                 </Col>
                 <Col span={12}>
                   <Form.Item name="recipientPhone" label="收件人电话" rules={[{ required: true }]}>
-                    <Input />
+                    <Input onPaste={fillRecipientFromPaste} />
                   </Form.Item>
                 </Col>
               </Row>
               <Form.Item name="sampleAddress" label="发样地址" rules={[{ required: true, whitespace: true }]}>
-                <Input />
+                <Input onPaste={fillRecipientFromPaste} />
               </Form.Item>
               <Row gutter={16}>
                 <Col span={12}>
@@ -1931,7 +2029,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
                 <Col span={12}>
                   <Form.Item name="scope" label="库存类型" rules={[{ required: true }]}>
                     <Select
-                      disabled={!!editing}
+                      disabled={!dialogEditable || !!editing}
                       options={[
                         { value: 'RND', label: '研发库存' },
                         { value: 'PRODUCTION', label: '生产库存' },
@@ -1947,7 +2045,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
                 <Col span={12}>
                   <Form.Item name="productId" label="产品名称" rules={[{ required: true }]}>
                     <Select
-                      disabled={!!editing}
+                      disabled={!dialogEditable || !!editing}
                       labelInValue
                       showSearch
                       filterOption
@@ -1965,7 +2063,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
               <Row gutter={16}>
                 <Col span={12}>
                   <Form.Item name="specification" label="规格 KG" rules={[{ required: !editing }, { type: 'number', min: 0.000001 }]}>
-                    <InputNumber min={0.000001} precision={6} className="inventory-full" disabled={!!editing} />
+                    <InputNumber min={0.000001} precision={6} className="inventory-full" disabled={!dialogEditable || !!editing} />
                   </Form.Item>
                 </Col>
                 <Col span={12}>
@@ -1974,7 +2072,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
                       min={0.000001}
                       precision={6}
                       className="inventory-full"
-                      disabled={!!editing}
+                      disabled={!dialogEditable || !!editing}
                     />
                   </Form.Item>
                 </Col>
@@ -2013,7 +2111,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
                 </Col>
               </Row>
               {!canCreateCustomer && !selectedCustomerId && <Alert type="warning" showIcon style={{ marginBottom: 16 }} message="自定义客户名称需要新建客户权限" />}
-              {!editing && <Form.Item label="收件信息">
+              {dialogEditable && <Form.Item label="收件信息">
                 <Input.TextArea rows={3} value={recipientText} onChange={(event) => setRecipientText(event.target.value)}
                   onPaste={(event) => {
                     const text = event.clipboardData.getData('text');
@@ -2025,11 +2123,11 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
                   placeholder="粘贴收件人、手机号和地址，自动识别并填入" />
               </Form.Item>}
               <Row gutter={16}>
-                <Col span={12}><Form.Item name="recipientName" label="收件人" rules={[{ required: true }]}><Input /></Form.Item></Col>
-                <Col span={12}><Form.Item name="recipientPhone" label="收件人电话" rules={[{ required: true }]}><Input /></Form.Item></Col>
+                <Col span={12}><Form.Item name="recipientName" label="收件人" rules={[{ required: true }]}><Input onPaste={fillRecipientFromPaste} /></Form.Item></Col>
+                <Col span={12}><Form.Item name="recipientPhone" label="收件人电话" rules={[{ required: true }]}><Input onPaste={fillRecipientFromPaste} /></Form.Item></Col>
               </Row>
               <Row gutter={16}>
-                <Col span={24}><Form.Item name="shippingAddress" label="收货地址" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item></Col>
+                <Col span={24}><Form.Item name="shippingAddress" label="收货地址" rules={[{ required: true, whitespace: true }]}><Input onPaste={fillRecipientFromPaste} /></Form.Item></Col>
               </Row>
               <Row gutter={16}>
                 <Col span={12}><Form.Item name="courierCompany" label="快递公司"><Input /></Form.Item></Col>
@@ -2164,6 +2262,10 @@ function BusinessImportExport({
 }) {
   const sample = type === 'sample';
   const [importing, setImporting] = useState(false);
+  const pageKey = sample ? 'inventory.sample' : 'inventory.shipment';
+  const canImport = usePermission(`${pageKey}.import`);
+  const canExport = usePermission(`${pageKey}.export`);
+  const canDownload = usePermission(`${pageKey}.download`);
   const importQueue = useRef<Promise<void>>(Promise.resolve());
   const queuedImports = useRef(0);
   const template = () => {
@@ -2497,8 +2599,8 @@ function BusinessImportExport({
     <Space wrap>
       {!hideImport && (
         <>
-          <Button icon={<DownloadOutlined />} onClick={template}>模板下载</Button>
-          <Upload
+          {canDownload && <Button icon={<DownloadOutlined />} onClick={template}>模板下载</Button>}
+          {canImport && <Upload
             showUploadList={false}
             accept=".xlsx"
             multiple={!sample}
@@ -2518,10 +2620,10 @@ function BusinessImportExport({
             }}
           >
             <Button icon={<UploadOutlined />} disabled={disabled || importing} loading={importing}>导入</Button>
-          </Upload>
+          </Upload>}
         </>
       )}
-      {!hideExport && <Button icon={<DownloadOutlined />} onClick={() => {
+      {!hideExport && canExport && <Button icon={<DownloadOutlined />} onClick={() => {
         void exportRows().catch((error: unknown) => message.error(errorMessage(error, '导出失败')));
       }}>
         导出
@@ -2541,6 +2643,10 @@ function LedgerImportExport({
   onDone: () => void | Promise<void>;
   disabled?: boolean;
 }) {
+  const pageKey = scope === 'RND' ? 'inventory.rnd' : 'inventory.production';
+  const canImport = usePermission(`${pageKey}.import`);
+  const canExport = usePermission(`${pageKey}.export`);
+  const canDownload = usePermission(`${pageKey}.download`);
   const download = () => {
     const direction = '入库';
     const reasonCode = reasonOptions[scope][0] ?? '';
@@ -2635,10 +2741,10 @@ function LedgerImportExport({
   };
   return (
     <Space>
-      <Button icon={<DownloadOutlined />} onClick={download}>
+      {canDownload && <Button icon={<DownloadOutlined />} onClick={download}>
         模板下载
-      </Button>
-      <Upload
+      </Button>}
+      {canImport && <Upload
         showUploadList={false}
         accept=".xlsx"
         beforeUpload={(file) => {
@@ -2651,10 +2757,10 @@ function LedgerImportExport({
         <Button icon={<UploadOutlined />} disabled={disabled}>
           导入
         </Button>
-      </Upload>
-      <Button icon={<DownloadOutlined />} onClick={() => void exportRows()}>
+      </Upload>}
+      {canExport && <Button icon={<DownloadOutlined />} onClick={() => void exportRows()}>
         导出
-      </Button>
+      </Button>}
     </Space>
   );
 }

@@ -3,12 +3,15 @@ import { App, Button, Card, Empty, Select, Space, Table, Tag, Typography } from 
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+import { usePermission } from '@/components/auth/usePermission';
 import { knowledgeApi, type ReviewQueueItem } from '@/services/knowledge';
 import { reviewQueueStatus } from './knowledge-workflow-status';
 
 export function KnowledgeReviewQueuePage({ embedded = false, initialStatus }: { embedded?: boolean; initialStatus?: string } = {}) {
   const { message } = App.useApp();
   const navigate = useNavigate();
+  // 校对需要知识库编辑权限；没有编辑权限时只能查看解析失败的详情。
+  const canEditDocument = usePermission('knowledge.view.update');
   const [items, setItems] = useState<ReviewQueueItem[]>([]);
   const [status, setStatus] = useState<string | undefined>(initialStatus);
   const [loading, setLoading] = useState(false);
@@ -30,7 +33,7 @@ export function KnowledgeReviewQueuePage({ embedded = false, initialStatus }: { 
         { title: '解析', width: 110, dataIndex: 'processingStatus', render: (value: string) => <Tag color={value === 'READY' ? 'success' : value === 'FAILED' ? 'error' : 'processing'}>{value === 'READY' ? '解析完成' : value === 'FAILED' ? '解析失败' : '解析中'}</Tag> },
         { title: '校对', width: 100, render: (_: unknown, item: ReviewQueueItem) => { const state = reviewQueueStatus(item); return <Tag color={state.color}>{state.label}</Tag>; } },
         { title: '最近更新', width: 180, dataIndex: 'updatedAt', render: (value: string) => new Date(value).toLocaleString('zh-CN') },
-        { title: '操作', width: 130, render: (_: unknown, item: ReviewQueueItem) => <Button type={item.reviewRevisionStatus === 'FAILED' ? 'default' : 'primary'} onClick={() => navigate(`/knowledge/review/${item.documentId}/${item.versionId}`)}>{item.reviewRevisionStatus === 'FAILED' ? '查看详情' : '开始校对'}</Button> },
+        { title: '操作', width: 130, render: (_: unknown, item: ReviewQueueItem) => <Button type={item.reviewRevisionStatus === 'FAILED' ? 'default' : 'primary'} disabled={!canEditDocument} title={canEditDocument ? undefined : '需要知识库编辑权限才能校对'} onClick={() => navigate(`/knowledge/review/${item.documentId}/${item.versionId}`)}>{item.reviewRevisionStatus === 'FAILED' ? '查看详情' : '开始校对'}</Button> },
       ]} />
     </Card>
   </div>;

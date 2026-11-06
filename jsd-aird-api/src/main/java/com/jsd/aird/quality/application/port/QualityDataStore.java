@@ -27,7 +27,21 @@ public interface QualityDataStore {
                       UUID projectId, String projectName, UUID stageId, String stageName,
                       UUID taskId, String taskName,
                       String visibility, JsonNode workbookSnapshot, long lockVersion,
-                      Instant createdAt, Instant updatedAt) {
+                      Instant createdAt, Instant updatedAt, String workflowStatus) {
+        public String getDocumentFormat() {
+            var configured = data == null ? "" : data.path("fileType").asText("").toUpperCase(java.util.Locale.ROOT);
+            if ("EXCEL".equals(configured) || "XLSX".equals(configured)) return "EXCEL";
+            if ("WORD".equals(configured) || "DOCX".equals(configured)) return "WORD";
+            if ("CSV".equals(configured) || "PDF".equals(configured)) return configured;
+            if ("IMAGE".equals(configured) || "PHOTO".equals(configured) || "图片".equals(configured)) return "IMAGE";
+            var name = sourceFileName == null ? "" : sourceFileName.toLowerCase(java.util.Locale.ROOT);
+            if (name.endsWith(".xlsx") || name.endsWith(".xls")) return "EXCEL";
+            if (name.endsWith(".docx") || name.endsWith(".doc")) return "WORD";
+            if (name.endsWith(".csv")) return "CSV";
+            if (name.endsWith(".pdf")) return "PDF";
+            if (name.matches(".*\\.(jpg|jpeg|png|tif|tiff)$")) return "IMAGE";
+            return null;
+        }
         public List<String> getAllowedActions() {
             // Quality records currently expose no completed/reference marker;
             // the existing service permits soft deletion and re-checks it at command time.
@@ -50,11 +64,15 @@ public interface QualityDataStore {
     }
 
     List<Category> categories(UUID organizationId, String type);
+    UUID ensureUncategorizedCategory(UUID organizationId, String type, UUID createdBy);
     Category category(UUID organizationId, UUID categoryId);
     Category createCategory(UUID organizationId, UUID userId, String type, String name, String description);
     Category updateCategory(UUID organizationId, UUID categoryId, String name, String description);
-    void deleteCategory(UUID organizationId, UUID categoryId);
-    PageResponse<RecordView> records(UUID organizationId, String role, String type, UUID categoryId, String keyword, UUID projectId, String status, int page, int size);
+    void deleteCategory(UUID organizationId, UUID categoryId, UUID replacementCategoryId);
+    PageResponse<RecordView> records(UUID organizationId, String role, String type, UUID categoryId, String keyword, UUID projectId, String status, String format, int page, int size);
+    default PageResponse<RecordView> records(UUID organizationId, String role, String type, UUID categoryId, String keyword, UUID projectId, String status, int page, int size) {
+        return records(organizationId, role, type, categoryId, keyword, projectId, status, null, page, size);
+    }
     default PageResponse<RecordView> records(UUID organizationId, String role, String type, UUID categoryId, String keyword, UUID projectId, int page, int size) {
         return records(organizationId, role, type, categoryId, keyword, projectId, null, page, size);
     }
@@ -67,8 +85,8 @@ public interface QualityDataStore {
                       UUID projectId, String projectName, UUID stageId, String stageName,
                       UUID taskId, String taskName, long lockVersion);
     RecordView rename(UUID organizationId, UUID userId, UUID recordId, String displayName,
-                      UUID projectId, String projectName, UUID stageId, String stageName,
-                      UUID taskId, String taskName, long lockVersion);
+                      String businessNo, UUID projectId, String projectName, UUID stageId, String stageName,
+                      UUID taskId, String taskName, JsonNode dataPatch, long lockVersion);
     void insertVersion(UUID organizationId, UUID userId, UUID recordId, int versionNo, String businessNo,
                         JsonNode data, JsonNode workbookSnapshot, long lockVersion, String changeType);
     void lockRecord(UUID organizationId, UUID id);
@@ -77,6 +95,7 @@ public interface QualityDataStore {
     UUID insertDraft(UUID organizationId, UUID userId, String type, UUID categoryId, String businessNo,
                      JsonNode data, QualityDataService.UploadInput input, JsonNode workbookSnapshot);
     VersionView publish(UUID organizationId, UUID userId, UUID id, long expectedVersion);
+    RecordView createRevision(UUID organizationId, UUID userId, UUID id, long expectedVersion);
     UploadView insertUpload(UUID organizationId, UUID userId, UUID recordId, QualityDataService.UploadInput input);
     Optional<UploadView> findUpload(UUID organizationId, UUID uploadId);
     UploadView updateUploadStatus(UUID organizationId, UUID uploadId, String status,

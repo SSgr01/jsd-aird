@@ -11,7 +11,7 @@ public final class ResearchTestModels {
 
     public enum Type { REPORT, STANDARD }
     public enum Status {
-        DRAFT, PENDING_REVIEW, RETURNED, PUBLISHED, ARCHIVED;
+        DRAFT, PENDING_REVIEW, RETURNED, APPROVED, PUBLISHED, ARCHIVED;
         public boolean editable() { return this == DRAFT || this == RETURNED; }
     }
 

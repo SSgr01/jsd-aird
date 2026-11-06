@@ -157,10 +157,10 @@ public class ProductionUploadService {
     }
 
     public ProductionUploadRepository.PageResult<ProductionUploadRepository.UploadView> list(
-            String keyword, String status, UUID projectId, boolean viewableOnly, int page, int size) {
+            String keyword, String status, String format, UUID projectId, boolean viewableOnly, int page, int size) {
         var safePage = Math.max(1, page);
         var safeSize = Math.min(100, Math.max(1, size));
-        return repository.list(ActorContext.required().organizationId(), keyword, status, projectId,
+        return repository.list(ActorContext.required().organizationId(), keyword, status, format, projectId,
                 viewableOnly, safePage, safeSize);
     }
 

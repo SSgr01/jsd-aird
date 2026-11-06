@@ -12,6 +12,7 @@ import {
   FilePreviewModal,
   type FilePreviewDescriptor,
 } from '@/components/file-preview';
+import { usePermission } from '@/components/auth/usePermission';
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import { downloadFile, fetchFileBlob, stageFile } from '@/services/files';
@@ -30,6 +31,8 @@ const formatSize = (size: number) =>
   size < 1024 * 1024 ? `${Math.ceil(size / 1024)} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`;
 
 export function SpectrumUploadPage() {
+  const canUpload = usePermission('spectrum.upload.create');
+  const canDeleteUpload = usePermission('spectrum.upload.delete');
   const { message, modal } = App.useApp();
   const navigate = useNavigate();
   const [categories, setCategories] = useState<SpectrumCategory[]>([]);
@@ -104,6 +107,10 @@ export function SpectrumUploadPage() {
   });
 
   const upload = async () => {
+    if (!canUpload) {
+      void message.warning('当前账号没有图谱上传权限，请联系管理员开通');
+      return;
+    }
     if (uploadingRef.current) return;
     const files = fileList.flatMap((item) => (item.originFileObj ? [item.originFileObj] : []));
     if (!files.length) {
@@ -359,16 +366,20 @@ export function SpectrumUploadPage() {
               .catch((error) => void message.error(error instanceof Error ? error.message : '源文件下载失败'));
           },
         },
-        retry: {
-          disabled: !attempt.fileObjectId || !attempt.categoryId,
-          loading: retryingRequestId === attempt.requestId,
-          title: attempt.fileObjectId ? '使用原参数重新处理' : '记录中没有可重试的源文件',
-          onClick: () => retryAttempt(attempt),
-        },
-        delete: {
-          loading: deletingRequestId === attempt.requestId,
-          onClick: () => hideAttempt(attempt),
-        },
+        ...(canUpload ? {
+          retry: {
+            disabled: !attempt.fileObjectId || !attempt.categoryId,
+            loading: retryingRequestId === attempt.requestId,
+            title: attempt.fileObjectId ? '使用原参数重新处理' : '记录中没有可重试的源文件',
+            onClick: () => retryAttempt(attempt),
+          },
+        } : {}),
+        ...(canDeleteUpload ? {
+          delete: {
+            loading: deletingRequestId === attempt.requestId,
+            onClick: () => hideAttempt(attempt),
+          },
+        } : {}),
       },
       actions: (
         attempt.chartId ? <Button type="link" icon={<MessageOutlined />}
@@ -481,8 +492,10 @@ export function SpectrumUploadPage() {
         submitIcon={<UploadOutlined />}
         onSubmit={() => void upload()}
         submitting={uploading}
-        onCancelSubmit={requestStopUploads}
-        uploadDisabled={uploading}
+        onCancelSubmit={canUpload ? requestStopUploads : undefined}
+        uploadDisabled={uploading || !canUpload}
+        uploadReadOnly={!canUpload}
+        showSubmit={canUpload}
         rightTitle="已上传图谱"
         rightCount={filteredAttempts.length}
         rightFilters={[

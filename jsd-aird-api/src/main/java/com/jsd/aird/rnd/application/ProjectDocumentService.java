@@ -173,9 +173,12 @@ public class ProjectDocumentService {
         if (detail.status() == ProjectDocumentStatus.ARCHIVED) {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "已归档文档不可发布");
         }
-        saveContent(id, snapshot, schema, mapping, data);
-        detail = repository.findById(id)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "项目文档不存在"));
+        if (!java.util.Objects.equals(detail.contentSnapshot(), snapshot)
+                || !java.util.Objects.equals(detail.contentSchema(), schema)
+                || !java.util.Objects.equals(detail.contentMapping(), mapping)
+                || !java.util.Objects.equals(detail.contentData(), data)) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "请先保存当前内容并重新提交审核");
+        }
         var mergedSnapshot = mergeContentSnapshot(detail);
         var versionId = repository.publish(id, mergedSnapshot, "文档发布", detail.templateVersionId(), actor.username());
         repository.appendReview(id, versionId, "PUBLISHED", null, actor.userId(), actor.username());

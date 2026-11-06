@@ -1,5 +1,5 @@
 import { AppstoreOutlined, ArrowLeftOutlined, DeleteOutlined, EditOutlined, PlusOutlined, UnorderedListOutlined, UpOutlined } from '@ant-design/icons';
-import { App, Breadcrumb, Button, Empty, Input, Modal, Popconfirm, Select, Space, Spin, Tabs, Tooltip } from 'antd';
+import { App, Breadcrumb, Button, Empty, Input, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, Tooltip } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useBlocker, useParams } from 'react-router-dom';
 import { createContact, deleteContact, getContactProjectVectors, getPartner, getPartnerAudits, getPartnerContacts, updateContact, updatePartner, type ContactProjectVector, type PartnerAuditEntry } from '@/services/partners/partner-api';
@@ -77,6 +77,11 @@ const projectStatusTagClasses: Record<string, string> = {
   COMPLETED: 'status-completed',
   CANCELLED: 'status-cancelled',
 };
+const followupStatusLabels: Record<Communication['status'], string> = {
+  OPEN: '待跟进',
+  FOLLOWING: '跟进中',
+  CLOSED: '已完成',
+};
 
 export function PartnerDetailPage() {
   const { id } = useParams();
@@ -108,7 +113,8 @@ export function PartnerDetailPage() {
   const [businessModal, setBusinessModal] = useState<{ mode: 'requirement' | 'followup'; edit?: Requirement | Communication }>();
   const [activeKey, setActiveKey] = useState<string>('overview');
   const authUser = useAuthStore((state) => state.user);
-  const menuKeys = authUser?.menuKeys ?? [];
+  const can = (area: string, action: string) => authUser?.permissions.includes(`customer.${area}.${action}`) ?? false;
+  const menuKeys = authUser?.menuKeys;
   const tabMenuKeys: Record<string, string> = {
     overview: 'customer.overview',
     requirements: 'customer.needs',
@@ -116,7 +122,7 @@ export function PartnerDetailPage() {
     meetings: 'customer.followup',
   };
   const allowedTabKeys = useMemo(() => Object.entries(tabMenuKeys)
-    .filter(([, menuKey]) => menuKeys.length === 0 || menuKeys.includes(menuKey))
+    .filter(([, menuKey]) => menuKeys === undefined || menuKeys.includes(menuKey))
     .map(([tabKey]) => tabKey), [menuKeys]);
   const [followupViewMode, setFollowupViewMode] = useState<'table' | 'card'>('card');
   const [projectOptions, setProjectOptions] = useState<{ value: string; label: string }[]>([]);
@@ -381,7 +387,7 @@ export function PartnerDetailPage() {
           <h3>公司资料</h3>
           <p>修改公司字段后单独保存。</p>
         </div>
-        <Button size="small" type="primary" icon={<EditOutlined />} loading={companySaving} onClick={() => void saveCompany()}>保存</Button>
+        {can('list', 'update') && <Button size="small" type="primary" icon={<EditOutlined />} loading={companySaving} onClick={() => void saveCompany()}>保存</Button>}
       </div>
       <label className="cm-block-field"><span className="cm-required">公司名称</span><Input value={partner.name ?? ''} status={!partner.name ? 'error' : undefined} maxLength={20} showCount placeholder="请输入公司名称" onChange={(e) => setPartner({ ...partner, name: e.target.value })} /></label>
       <div className="cm-form-grid">
@@ -397,10 +403,10 @@ export function PartnerDetailPage() {
           <div className="cm-custom-field-row" key={`ext-${index}`}>
             <Input value={field.key} placeholder="字段名" onChange={(e) => { const next = [...extFields]; next[index] = { ...next[index], key: e.target.value }; setExtFields(next); }} />
             <Input value={field.value ?? ''} placeholder="值" onChange={(e) => { const next = [...extFields]; next[index] = { ...next[index], value: e.target.value }; setExtFields(next); }} />
-            <Button danger icon={<DeleteOutlined />} onClick={() => setExtFields(extFields.filter((_, i) => i !== index))} />
+            {can('overview', 'update') && <Button danger icon={<DeleteOutlined />} onClick={() => setExtFields(extFields.filter((_, i) => i !== index))} />}
           </div>
         ))}
-        <Button className="cm-custom-field" icon={<PlusOutlined />} onClick={() => setExtFields([...extFields, { key: '', value: '' }])}>新增字段</Button>
+        {can('overview', 'update') && <Button className="cm-custom-field" icon={<PlusOutlined />} onClick={() => setExtFields([...extFields, { key: '', value: '' }])}>新增字段</Button>}
       </div>
     </section>
     <section className="cm-modal-panel">
@@ -410,7 +416,7 @@ export function PartnerDetailPage() {
           <p>维护负责人资料，并从项目列表选择负责项目。</p>
         </div>
         <Space size={6}>
-          <Button type="primary" icon={<PlusOutlined />} onClick={addContact}>新增负责人</Button>
+          {can('overview', 'create') && <Button type="primary" icon={<PlusOutlined />} onClick={addContact}>新增负责人</Button>}
         </Space>
       </div>
       {partner.contacts.length === 0 && <div className="cm-related-empty">暂无负责人</div>}
@@ -480,16 +486,16 @@ export function PartnerDetailPage() {
                 <div className="cm-custom-field-row" key={`p-ext-${person.id}-${index}`}>
                   <Input value={key} placeholder="字段名" onChange={(e) => { const next: Record<string, string> = { ...(person.customFields as Record<string, string> ?? {}) }; delete next[key]; next[e.target.value] = String(value ?? ''); setField('customFields', next); }} />
                   <Input value={String(value ?? '')} placeholder="值" onChange={(e) => { const next: Record<string, string> = { ...(person.customFields as Record<string, string> ?? {}) }; next[key] = e.target.value; setField('customFields', next); }} />
-                  <Button danger icon={<DeleteOutlined />} onClick={() => { const next: Record<string, string> = { ...(person.customFields as Record<string, string> ?? {}) }; delete next[key]; setField('customFields', next); }} />
+                  {can('overview', 'update') && <Button danger icon={<DeleteOutlined />} onClick={() => { const next: Record<string, string> = { ...(person.customFields as Record<string, string> ?? {}) }; delete next[key]; setField('customFields', next); }} />}
                 </div>
               ))}
-              <Button className="cm-custom-field" icon={<PlusOutlined />} onClick={() => { const next: Record<string, string> = { ...(person.customFields as Record<string, string> ?? {}) }; next[`字段${Object.keys(next).length + 1}`] = ''; setField('customFields', next); }}>新增字段</Button>
+              {can('overview', 'update') && <Button className="cm-custom-field" icon={<PlusOutlined />} onClick={() => { const next: Record<string, string> = { ...(person.customFields as Record<string, string> ?? {}) }; next[`字段${Object.keys(next).length + 1}`] = ''; setField('customFields', next); }}>新增字段</Button>}
             </div>
             </>
             )}
             <div className="cm-repeat-footer">
               <Space size={8}>
-                {isNew
+                {(isNew ? can('overview', 'create') : can('overview', 'delete')) && (isNew
                   ? <Button danger type="primary" icon={<DeleteOutlined />} onClick={() => cancelNewContact(person.id)}>删除</Button>
                   : <Popconfirm title="删除该负责人？" description="历史业务关联将继续保留；客户至少保留一位负责人。" onConfirm={() => void (async () => {
                     const activeContactCount = partner.contacts.length;
@@ -502,8 +508,8 @@ export function PartnerDetailPage() {
                     await load();
                   })()}>
                     <Button danger type="primary" icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()}>删除</Button>
-                  </Popconfirm>}
-                <Button type="primary" icon={<EditOutlined />} loading={savingContactIds.has(person.id)} disabled={(!isNew && person.status === 'INACTIVE') || savingContactIds.has(person.id)} onClick={() => void savePersonSnapshot(person)}>保存</Button>
+                  </Popconfirm>)}
+                {(isNew ? can('overview', 'create') : can('overview', 'update')) && <Button type="primary" icon={<EditOutlined />} loading={savingContactIds.has(person.id)} disabled={(!isNew && person.status === 'INACTIVE') || savingContactIds.has(person.id)} onClick={() => void savePersonSnapshot(person)}>保存</Button>}
               </Space>
             </div>
           </div>
@@ -524,7 +530,7 @@ export function PartnerDetailPage() {
           <div className="cm-tab-body">
             <div className="cm-section-title">
               <h5>客户需求 <small>{requirements.length} 条</small></h5>
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => setBusinessModal({ mode: 'requirement' })}>新建客户需求</Button>
+              {can('needs', 'create') && <Button type="primary" icon={<PlusOutlined />} onClick={() => setBusinessModal({ mode: 'requirement' })}>新建客户需求</Button>}
             </div>
             <div className="cm-table-card" style={{ marginTop: 12 }} aria-busy={requirementsLoading}>
               {requirementsLoading ? (
@@ -554,10 +560,10 @@ export function PartnerDetailPage() {
                           <td><span className={`pm-tag ${requirementDisplayStatusTagClasses[row.customStatusName?.trim() || ''] ?? (row.customStatusName ? 'status-custom' : requirementStatusTagClasses[row.status])}`}>{row.customStatusName || requirementStateName[row.status]}</span></td>
                           <td>
                             <div className="cm-row-actions management-table-actions">
-                              <button className="cm-link-button" onClick={() => setBusinessModal({ mode: 'requirement', edit: row })}>编辑</button>
-                              <Popconfirm title="删除该客户需求？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteRequirement(row.id, row.version); msg.success('客户需求已删除'); await load(); })()}>
+                              {can('needs', 'update') && <button className="cm-link-button" onClick={() => setBusinessModal({ mode: 'requirement', edit: row })}>编辑</button>}
+                              {can('needs', 'delete') && <Popconfirm title="删除该客户需求？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteRequirement(row.id, row.version); msg.success('客户需求已删除'); await load(); })()}>
                                 <Button danger type="text" onClick={(e) => e.stopPropagation()}>删除</Button>
-                              </Popconfirm>
+                              </Popconfirm>}
                             </div>
                           </td>
                         </tr>
@@ -599,9 +605,9 @@ export function PartnerDetailPage() {
                         </td>
                         <td>{(row.progress ?? 0).toFixed(2)}%</td>
                         <td>
-                          <Link to={`/projects/${row.projectId}`}>
+                          {can('projects', 'view') && <Link to={`/projects/${row.projectId}`}>
                             <Button type="link" size="small">查看</Button>
-                          </Link>
+                          </Link>}
                         </td>
                       </tr>
                     ))}
@@ -621,7 +627,7 @@ export function PartnerDetailPage() {
             <div className="cm-section-title">
               <h5>跟进记录 <small>{communications.length} 条</small></h5>
               <Space size={8}>
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => setBusinessModal({ mode: 'followup' })}>新建跟进记录</Button>
+                {can('followup', 'create') && <Button type="primary" icon={<PlusOutlined />} onClick={() => setBusinessModal({ mode: 'followup' })}>新建跟进记录</Button>}
                 <Space.Compact>
                   <Tooltip title="竖版视图">
                     <Button
@@ -659,10 +665,10 @@ export function PartnerDetailPage() {
                           <td>{row.internalParticipants || '—'}</td>
                           <td>
                             <div className="cm-row-actions management-table-actions">
-                              <button className="cm-link-button" onClick={() => setBusinessModal({ mode: 'followup', edit: row })}>编辑</button>
-                              <Popconfirm title="删除该跟进记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('跟进记录已删除'); await load(); })()}>
+                              {can('followup', 'update') && <button className="cm-link-button" onClick={() => setBusinessModal({ mode: 'followup', edit: row })}>编辑</button>}
+                              {can('followup', 'delete') && <Popconfirm title="删除该跟进记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('跟进记录已删除'); await load(); })()}>
                                 <Button danger type="text" onClick={(e) => e.stopPropagation()}>删除</Button>
-                              </Popconfirm>
+                              </Popconfirm>}
                             </div>
                           </td>
                         </tr>
@@ -683,6 +689,7 @@ export function PartnerDetailPage() {
                         <div className="cm-timeline-content">
                           <div className="cm-timeline-head">
                             <span className="cm-timeline-time">{fmtTime(row.communicatedAt)}</span>
+                            <Tag color="blue">{followupStatusLabels[row.status] ?? row.status}</Tag>
                           </div>
                           <div className="cm-timeline-title">
                             <span className="cm-timeline-code">{row.recordCode}</span>
@@ -694,10 +701,10 @@ export function PartnerDetailPage() {
                           </div>
                           {row.content && <div className="cm-timeline-text">{row.content}</div>}
                           <div className="cm-timeline-actions">
-                            <button className="cm-link-button" onClick={() => setBusinessModal({ mode: 'followup', edit: row })}>编辑</button>
-                            <Popconfirm title="删除该跟进记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('跟进记录已删除'); await load(); })()}>
+                            {can('followup', 'update') && <button className="cm-link-button cm-followup-edit" onClick={() => setBusinessModal({ mode: 'followup', edit: row })}>编辑</button>}
+                            {can('followup', 'delete') && <Popconfirm title="删除该跟进记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('跟进记录已删除'); await load(); })()}>
                               <Button danger type="text" size="small">删除</Button>
-                            </Popconfirm>
+                            </Popconfirm>}
                           </div>
                         </div>
                       </div>

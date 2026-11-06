@@ -479,6 +479,11 @@ export function prepareFormalMappings(
     const field = fieldModel.fields.find((item) => item.bindingId === binding.bindingId);
     const next = structuredClone(binding) as TemplateBinding & { targetPath?: unknown };
     delete next.targetPath;
+    if (requiredParentBindingIds.has(binding.bindingId)) {
+      // A confirmed child needs its structural parent mapping even while the
+      // parent recognition candidate is still pending review.
+      delete next.diagnostic?.recognitionItemId;
+    }
     next.experimentField = field?.experimentField;
     next.experimentItemLabel = field?.experimentItemLabel;
     next.experimentSemanticConfidence = field?.experimentSemanticConfidence;

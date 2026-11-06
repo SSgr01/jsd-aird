@@ -2,6 +2,7 @@ package com.jsd.aird.iam.infrastructure;
 
 import java.util.Map;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -9,6 +10,10 @@ import com.jsd.aird.iam.api.AuthorizationService;
 import com.jsd.aird.iam.api.DataScopeResolver;
 import com.jsd.aird.iam.api.PermissionCheck;
 import com.jsd.aird.iam.api.PermissionDecision;
+import com.jsd.aird.iam.application.IamPermissionCatalog;
+import com.jsd.aird.iam.application.MenuViewPermissions;
+import com.jsd.aird.iam.application.PermissionModelCatalog;
+import com.jsd.aird.iam.application.TransferViewPermissions;
 import com.jsd.aird.iam.application.port.IamStore;
 import com.jsd.aird.iam.application.port.IamStore.User;
 import com.jsd.aird.iam.application.port.IamStore.Binding;
@@ -49,6 +54,20 @@ public class JdbcAuthorizationService implements AuthorizationService {
 
     @Override
     public PermissionDecision check(PermissionCheck check) {
+        var decision = checkExact(check);
+        var viewCodes = TransferViewPermissions.viewsFor(check.permissionCode());
+        if (decision.allowed() || viewCodes.isEmpty() || String.valueOf(decision.source()).startsWith("USER_")
+                || "ALLOW".equals(decision.effect())) return decision;
+        for (var viewCode : viewCodes) {
+            var view = checkExact(new PermissionCheck(check.organizationId(), check.userId(), viewCode,
+                    check.resourceType(), check.resourceId(), "READ", check.menuKey()));
+            if (view.allowed()) return new PermissionDecision(true, check.permissionCode(),
+                    "ALLOW", view.scopeType(), "VIEW:" + view.source());
+        }
+        return decision;
+    }
+
+    private PermissionDecision checkExact(PermissionCheck check) {
         if (developmentMode) {
             return new PermissionDecision(true, check.permissionCode(), "ALLOW", "ALL", "DEVELOPMENT");
         }
@@ -91,23 +110,150 @@ public class JdbcAuthorizationService implements AuthorizationService {
 
     private BindingSelection binding(PermissionCheck check, User user) {
         var v2 = v2Binding(check, user);
+        if (v2.binding() == null && v2.v2Active()) {
+            for (var pageCode : alternateCodes(check.permissionCode())) {
+                var pageCheck = new PermissionCheck(check.organizationId(), check.userId(), pageCode,
+                        check.resourceType(), check.resourceId(), check.operation(), null);
+                var pageGrant = v2Binding(pageCheck, user);
+                if (pageGrant.binding() != null && "ALLOW".equals(pageGrant.binding().effect())) return pageGrant;
+            }
+        }
         if (v2.binding() != null || v2.v2Active()) return v2;
         Binding binding = null;
         var source = "DEFAULT_DENY";
+        var candidates = new java.util.ArrayList<String>();
+        candidates.add(check.permissionCode());
+        candidates.addAll(alternateCodes(check.permissionCode()));
         var overrides = store.userOverrides(check.organizationId(), check.userId()).stream()
                 .collect(Collectors.toMap(Binding::permissionCode, Function.identity(), (left, right) -> right));
-        if (overrides.containsKey(check.permissionCode())) {
-            binding = overrides.get(check.permissionCode());
-            source = "USER_OVERRIDE";
-        } else if (user.roleId() != null) {
+        for (var code : candidates) {
+            if (overrides.containsKey(code)) {
+                binding = overrides.get(code);
+                source = "USER_OVERRIDE";
+                break;
+            }
+        }
+        if (binding == null && user.roleId() != null) {
             var role = store.role(check.organizationId(), user.roleId()).orElse(null);
             if (role != null && role.enabled()) {
-                binding = store.roleBindings(check.organizationId(), role.id()).stream()
-                        .filter(item -> item.permissionCode().equals(check.permissionCode())).findFirst().orElse(null);
                 source = "ROLE:" + role.code();
+                var roleBindings = store.roleBindings(check.organizationId(), role.id());
+                for (var code : candidates) {
+                    binding = roleBindings.stream()
+                            .filter(item -> item.permissionCode().equals(code)).findFirst().orElse(null);
+                    if (binding != null) break;
+                }
             }
         }
         return new BindingSelection(binding, source, false);
+    }
+
+    /**
+     * Some operations are granted on a page row (for example
+     * {@code research-test.report.view.update}) while other code paths or roles still
+     * refer to the module-level code ({@code research-test.report.update}). Keep both
+     * spellings working so UI configuration and legacy role grants stay valid.
+     */
+    private static final Map<String, List<String>> ALTERNATE_CODES = Map.ofEntries(
+            Map.entry("template.view", List.of("template.view.view")),
+            Map.entry("template.create", List.of("template.view.create", "template.upload.create")),
+            Map.entry("eln.upload.retry", List.of("eln.upload.create")),
+            Map.entry("research-test.report.create", List.of("research-test.report.view.create")),
+            Map.entry("research-test.report.view.create", List.of("research-test.report.create")),
+            Map.entry("research-test.report.update", List.of("research-test.report.view.update")),
+            Map.entry("research-test.report.view.update", List.of("research-test.report.update")),
+            Map.entry("research-test.report.delete", List.of("research-test.report.view.delete")),
+            Map.entry("research-test.report.view.delete", List.of("research-test.report.delete")),
+            Map.entry("research-test.report.submit", List.of("research-test.report.view.submit")),
+            Map.entry("research-test.report.view.submit", List.of("research-test.report.submit")),
+            Map.entry("research-test.report.approve", List.of("research-test.report.view.approve")),
+            Map.entry("research-test.report.view.approve", List.of("research-test.report.approve")),
+            Map.entry("research-test.report.publish", List.of("research-test.report.view.publish")),
+            Map.entry("research-test.report.view.publish", List.of("research-test.report.publish")),
+            Map.entry("research-test.report.view.archive", List.of("research-test.report.publish")),
+            Map.entry("research-test.report.export", List.of("research-test.report.view.export")),
+            Map.entry("research-test.report.view.export", List.of("research-test.report.export")),
+            // Publish and review are separate columns in the permission UI, while the
+            // built-in roles still hold the legacy module action. Accept both.
+            Map.entry("eln.view.publish", List.of("experiment.approve")),
+            Map.entry("experiment.review", List.of("eln.view.approve")),
+            Map.entry("template.view.submit", List.of("template.review")),
+            // 审核既有旧配置页发放的 template.approve，也有内置角色与旧接口
+            // 共用的 template.review；两者都视为通过审核。
+            Map.entry("template.view.approve", List.of("template.review", "template.approve")),
+            Map.entry("template.view.review", List.of("template.review")),
+            Map.entry("knowledge.review", List.of("knowledge.view.approve")),
+            Map.entry("knowledge.view.submit", List.of("knowledge.submit")),
+            Map.entry("knowledge.view.approve", List.of("knowledge.review", "knowledge.approve")),
+            Map.entry("data.create", List.of("data.view.create")),
+            Map.entry("data.upload.create", List.of("data.view.create")),
+            Map.entry("data.update", List.of("data.view.update")),
+            Map.entry("data.submit", List.of("data.view.submit")),
+            Map.entry("data.approve", List.of("data.view.approve")),
+            Map.entry("production.view.publish", List.of("production.submit")),
+            // 库存冲销与库存表「编辑」同权：只授予研发/生产库存表编辑权限时也允许冲销流水。
+            Map.entry("inventory.reverse", List.of("inventory.rnd.reverse", "inventory.production.reverse",
+                    "inventory.rnd.update", "inventory.production.update")),
+            // 系统管理早期只发放统一的 *.manage 编码；权限配置页现在按「用户管理」
+            // 「用户权限配置」功能行发放原子操作，两种写法都要继续可用。
+            Map.entry("system.users.create", List.of("system.user.manage")),
+            Map.entry("system.users.update", List.of("system.user.manage")),
+            // 账号维护（停用/启用、重置密码、强制下线）与「编辑用户」同权：权限配置页的
+            // 用户管理行只发放查看/新增/编辑/删除，不授予编辑就无法维护账号。
+            Map.entry("system.users.status", List.of("system.users.update", "system.user.manage")),
+            Map.entry("system.users.reset", List.of("system.users.update", "system.user.manage")),
+            Map.entry("system.users.logout", List.of("system.users.update", "system.user.manage")),
+            Map.entry("system.permissions.create", List.of("system.role.create", "system.permission.manage")),
+            Map.entry("system.permissions.update", List.of("system.role.manage", "system.permission.manage")),
+            Map.entry("system.permissions.delete", List.of("system.role.manage", "system.permission.manage")));
+
+    /**
+     * The API filter checks module-level actions ({@code project.update}) while the
+     * permission UI grants the bracketing page row ({@code project.list.update}).
+     * Without this alias a configured page action would never authorize its API.
+     * Only codes present in the catalog are offered, so unknown rows stay denied.
+     */
+    private static final Map<String, String> MODULE_PAGE_ROWS = Map.ofEntries(
+            Map.entry("customer", "customer.list"),
+            Map.entry("project", "project.list"),
+            Map.entry("template", "template.view"),
+            Map.entry("experiment", "eln.view"),
+            Map.entry("research-test.report", "research-test.report.view"),
+            Map.entry("quality", "quality.view"),
+            Map.entry("spectrum", "spectrum.view"),
+            Map.entry("production", "production.view"),
+            Map.entry("knowledge", "knowledge.view"),
+            Map.entry("data", "data.view"),
+            Map.entry("inventory", "inventory.rnd"),
+            Map.entry("system.user", "system.users"),
+            Map.entry("system.role", "system.permissions"),
+            Map.entry("system.permission", "system.permissions"));
+
+    private static final List<String> PAGE_ACTION_SUFFIXES =
+            List.of("view", "create", "update", "delete", "approve", "publish");
+
+    private static List<String> alternateCodes(String permissionCode) {
+        var codes = new LinkedHashSet<>(ALTERNATE_CODES.getOrDefault(permissionCode, List.of()));
+        var dot = permissionCode.lastIndexOf('.');
+        if (dot > 0) {
+            var page = MODULE_PAGE_ROWS.get(permissionCode.substring(0, dot));
+            if (page != null) {
+                var candidate = page + permissionCode.substring(dot);
+                if (IamPermissionCatalog.codes().contains(candidate)) codes.add(candidate);
+            }
+        }
+        // Some API actions use the menu row key itself (knowledge.upload,
+        // template.upload, knowledge.review). The UI grants that row's actions.
+        var menuRow = PermissionModelCatalog.menus().stream()
+                .filter(menu -> permissionCode.equals(menu.key()) && menu.parent() != null)
+                .findFirst();
+        if (menuRow.isPresent()) {
+            for (var suffix : PAGE_ACTION_SUFFIXES) {
+                var candidate = permissionCode + "." + suffix;
+                if (IamPermissionCatalog.codes().contains(candidate)) codes.add(candidate);
+            }
+        }
+        return List.copyOf(codes);
     }
 
     private BindingSelection v2Binding(PermissionCheck check, User user) {
@@ -115,7 +261,9 @@ public class JdbcAuthorizationService implements AuthorizationService {
         var levelId = safeLevel(check.organizationId(), check.userId());
         var operationOverrides = safeBindings(() -> store.userOperationOverrides(check.organizationId(), check.userId()));
         var scopeOverrides = safeBindings(() -> store.userScopeOverrides(check.organizationId(), check.userId()));
-        var v2Active = !roles.isEmpty() || levelId != null || !operationOverrides.isEmpty() || !scopeOverrides.isEmpty();
+        var menuOverrides = store.userMenuOverrides(check.organizationId(), check.userId());
+        var v2Active = !roles.isEmpty() || levelId != null || !operationOverrides.isEmpty()
+                || !scopeOverrides.isEmpty() || (menuOverrides != null && !menuOverrides.isEmpty());
         if (!v2Active) return new BindingSelection(null, "DEFAULT_DENY", false);
 
         if (roles.stream().anyMatch(role -> "SYSTEM_ADMIN".equals(role.code())) || "SYSTEM_ADMIN".equals(user.roleCode())) {
@@ -141,6 +289,20 @@ public class JdbcAuthorizationService implements AuthorizationService {
                 .findFirst().orElse(null);
         var binding = levelBinding == null ? null
                 : new Binding(levelBinding.permissionCode(), levelBinding.effect(), levelBinding.scopeType(), levelBinding.targetIds());
+        var menuKeys = new LinkedHashSet<String>();
+        roles.forEach(role -> {
+            var keys = store.roleMenus(check.organizationId(), role.id());
+            if (keys != null) menuKeys.addAll(keys);
+        });
+        if (roles.isEmpty() && user.roleId() != null) {
+            menuKeys.addAll(PermissionModelCatalog.presetMenus(user.roleCode()));
+        }
+        if (menuOverrides != null) menuOverrides.forEach(item -> {
+            if ("ALLOW".equals(item.effect())) menuKeys.add(item.menuKey());
+            else menuKeys.remove(item.menuKey());
+        });
+        var menuView = MenuViewPermissions.impliedBy(menuKeys).contains(check.permissionCode());
+        if (menuView) binding = new Binding(check.permissionCode(), "ALLOW", "ALL", List.of());
         var scope = scopeOverrides.stream()
                 .filter(item -> item.permissionCode().equals(check.permissionCode()))
                 .filter(item -> check.menuKey() == null || check.menuKey().equals(item.menuKey()))
@@ -162,7 +324,8 @@ public class JdbcAuthorizationService implements AuthorizationService {
                     : new Binding(binding.permissionCode(), "ALLOW", binding.scopeType(), binding.targetIds());
             return new BindingSelection(binding, "USER_OPERATION_OVERRIDE", true);
         }
-        if (binding != null) return new BindingSelection(binding, "PERMISSION_LEVEL:" + level.code(), true);
+        if (binding != null) return new BindingSelection(binding,
+                menuView ? "FEATURE_MENU" : "PERMISSION_LEVEL:" + level.code(), true);
         return new BindingSelection(null, level == null ? "V2_NO_PERMISSION_LEVEL" : "PERMISSION_LEVEL:" + level.code(), true);
     }
 

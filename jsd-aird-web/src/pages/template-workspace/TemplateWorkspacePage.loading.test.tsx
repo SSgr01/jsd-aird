@@ -30,7 +30,7 @@ describe('template workspace loading', () => {
       </AppProviders>,
     );
     await waitFor(() => {
-      expect(api.downloadSnapshot).toHaveBeenCalledWith('snapshot-1');
+      expect(api.downloadSnapshot).toHaveBeenCalledWith('version-1');
       expect(preload).toHaveBeenCalledWith('XLSX');
     });
     expect(api.listVersions).toHaveBeenCalledWith('template-1');

@@ -12,6 +12,7 @@ import com.jsd.aird.mfg.application.port.ProductionOrderRepository;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
+import com.jsd.aird.shared.review.WorkspaceReviewService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -39,10 +40,13 @@ public class ProductionOrderController {
 
     private final ProductionOrderService service;
     private final ProductionOfficeExportService officeExportService;
+    private final WorkspaceReviewService reviews;
 
-    public ProductionOrderController(ProductionOrderService service, ProductionOfficeExportService officeExportService) {
+    public ProductionOrderController(ProductionOrderService service, ProductionOfficeExportService officeExportService,
+                                     WorkspaceReviewService reviews) {
         this.service = service;
         this.officeExportService = officeExportService;
+        this.reviews = reviews;
     }
 
     @GetMapping
@@ -153,6 +157,7 @@ public class ProductionOrderController {
 
     @PostMapping("/{orderId}/submit")
     public ApiResponse<SubmitResponse> submit(@PathVariable UUID orderId, @Valid @RequestBody VersionRequest request) {
+        reviews.requireApproved("PRODUCTION_ORDER", orderId);
         return success(new SubmitResponse(service.submit(orderId, request.lockVersion())));
     }
 

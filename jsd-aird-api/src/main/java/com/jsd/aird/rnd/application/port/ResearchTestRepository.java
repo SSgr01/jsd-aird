@@ -9,7 +9,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface ResearchTestRepository {
-    record Search(Type type,String keyword,String category,String status,String ownerName,UUID projectId,
+    record Search(Type type,String keyword,String category,String status,String ownerName,UUID projectId,String format,
                   LocalDate dateFrom,LocalDate dateTo,int page,int size) {}
     record Create(UUID organizationId,UUID actorId,String actorName,Type type,String businessNo,String name,
                   String category,String scope,String ownerName,LocalDate date,String format,String sourceType,
@@ -24,6 +24,8 @@ public interface ResearchTestRepository {
     PageResponse<Summary> search(UUID organizationId, Search search);
     Optional<Detail> detail(UUID organizationId, UUID id);
     Detail create(Create command);
+    String nextReportNumber();
+    String nextStandardNumber(UUID organizationId);
     Detail save(UUID organizationId,UUID id,Draft draft,UUID actor,String actorName);
     Detail rename(UUID organizationId, UUID id, String name, String businessNo, String ownerName, LocalDate date,
                   String category, String scope, LocalDate effectiveFrom, LocalDate effectiveTo,

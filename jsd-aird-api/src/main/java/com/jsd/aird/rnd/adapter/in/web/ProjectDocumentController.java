@@ -10,6 +10,7 @@ import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
+import com.jsd.aird.shared.review.WorkspaceReviewService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -29,10 +30,13 @@ public class ProjectDocumentController {
 
     private final ProjectDocumentService service;
     private final ProjectDocumentExportService exportService;
+    private final WorkspaceReviewService reviews;
 
-    public ProjectDocumentController(ProjectDocumentService service, ProjectDocumentExportService exportService) {
+    public ProjectDocumentController(ProjectDocumentService service, ProjectDocumentExportService exportService,
+                                     WorkspaceReviewService reviews) {
         this.service = service;
         this.exportService = exportService;
+        this.reviews = reviews;
     }
 
     @GetMapping
@@ -105,6 +109,7 @@ public class ProjectDocumentController {
     @PostMapping("/{documentId}/publish")
     public ApiResponse<?> publish(@PathVariable UUID projectId, @PathVariable UUID documentId,
                                   @Valid @RequestBody SaveContentRequest request) {
+        reviews.requireApproved("PROJECT_DOCUMENT", documentId);
         return ok(service.publish(documentId, request.snapshot(), request.schema(), request.mapping(), request.data()));
     }
 

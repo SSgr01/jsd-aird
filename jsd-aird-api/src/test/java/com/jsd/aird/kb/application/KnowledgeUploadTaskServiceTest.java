@@ -88,16 +88,31 @@ class KnowledgeUploadTaskServiceTest {
 
     @Test
     void limitsServerTaskHistoryToOneHundredRows() {
-        when(tasks.list(ORGANIZATION_ID, ACTOR_ID, 100)).thenReturn(List.of());
+        when(tasks.list(ORGANIZATION_ID, 100)).thenReturn(List.of());
 
         assertThat(service.list(500)).isEmpty();
 
-        verify(tasks).list(ORGANIZATION_ID, ACTOR_ID, 100);
+        verify(tasks).list(ORGANIZATION_ID, 100);
+    }
+
+    @Test
+    void listsOtherUsersTasksWithinTheOrganization() {
+        var otherActorId = UUID.randomUUID();
+        var taskId = UUID.randomUUID();
+        when(tasks.list(ORGANIZATION_ID, 100)).thenReturn(List.of(
+                new KnowledgeUploadTaskRepository.UploadTaskRow(taskId, otherActorId, "shared.pdf", 1024,
+                        "COMPLETED", 100, null, JsonNodeFactory.instance.objectNode(), null, null,
+                        null, Instant.now(), Instant.now())));
+
+        assertThat(service.list(100)).singleElement().satisfies(task -> {
+            assertThat(task.id()).isEqualTo(taskId);
+            assertThat(task.actorId()).isEqualTo(otherActorId);
+        });
     }
 
     private KnowledgeUploadTaskRepository.UploadTaskRow row(UUID id, String status,
                                                              UUID documentId, UUID versionId) {
-        return new KnowledgeUploadTaskRepository.UploadTaskRow(id, "report.pdf", 1024, status, 100,
+        return new KnowledgeUploadTaskRepository.UploadTaskRow(id, ACTOR_ID, "report.pdf", 1024, status, 100,
                 null, JsonNodeFactory.instance.objectNode(), documentId, versionId, "已提交解析",
                 Instant.now(), Instant.now());
     }

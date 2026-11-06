@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
+import { usePermission } from '@/components/auth/usePermission';
 import {
   templateApi,
   type CreateTemplateInput,
@@ -31,12 +32,15 @@ import { HttpError } from '@/services/http/errors';
 import { buildDisplaySuggestions, recognitionCounts } from './recognition-display';
 import { sourceFormatOf } from './normalize-template-file';
 import { isUserUploadHistoryFile } from './upload-history';
-import { downloadFile } from '@/services/files';
+import { triggerNativeDownload } from '@/services/files';
 
 // Show all files in the picker so unsupported formats are not silently hidden;
 // beforeUpload remains the single source of truth for rejecting them.
 const accepted = '*/*';
 export function TemplateUploadPage() {
+  const canUpload = usePermission('template.upload.create');
+  const canCreateTemplate = usePermission('template.upload.create');
+  const canDelete = usePermission('template.upload.delete');
   const { message, modal } = App.useApp();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -90,18 +94,21 @@ export function TemplateUploadPage() {
   const load = useCallback(async ({ silent = false, includeCategories = true }: { silent?: boolean; includeCategories?: boolean } = {}) => {
     if (!silent) setJobsLoading(true);
     try {
-      const [imports, categoryItems] = await Promise.all([
-        templateApi.listImports(),
-        includeCategories ? templateApi.listCategories() : Promise.resolve(undefined),
-      ]);
+      const imports = await templateApi.listImports();
       setJobs(imports);
-      if (categoryItems) setCategories(categoryItems);
     } catch (error) {
       if (!silent) void message.error(error instanceof Error ? error.message : '识别记录加载失败');
     } finally {
       if (!silent) setJobsLoading(false);
     }
-  }, [message]);
+    if (includeCategories && (canUpload || canCreateTemplate)) {
+      try {
+        setCategories(await templateApi.listCategories());
+      } catch (error) {
+        void message.error(error instanceof Error ? error.message : '模板分类加载失败');
+      }
+    }
+  }, [canCreateTemplate, canUpload, message]);
 
   useEffect(() => {
     void load();
@@ -135,6 +142,10 @@ export function TemplateUploadPage() {
   }, [load, running]);
 
   const startUpload = async () => {
+    if (!canUpload) {
+      void message.warning('当前账号没有模板上传权限，请联系管理员开通');
+      return;
+    }
     const sourceFiles = files.flatMap((item) => item.originFileObj ? [item.originFileObj] : []);
     if (!sourceFiles.length) {
       void message.warning('请先选择 Excel 或 Word 文件');
@@ -222,13 +233,14 @@ export function TemplateUploadPage() {
       progress: job.progress,
       commonActions: {
         view: { onClick: () => void openRecognition(job) },
-        download: { onClick: () => downloadFile(job.originalSourceFileId || job.sourceFileId, job.sourceFileName) },
+        download: { permission: 'template.upload.view', onClick: () => triggerNativeDownload(`/api/v1/template-imports/${job.id}/source`, job.sourceFileName) },
         retry: {
+          permission: 'template.upload.create',
           disabled: !['PARSED', 'FAILED', 'CANCELLED'].includes(job.status),
           loading: retryingJobId === job.id,
           onClick: () => void retryRecognition(job),
         },
-        delete: {
+        ...(canDelete ? { delete: {
           disabled: !['PARSED', 'FAILED', 'CANCELLED'].includes(job.status),
           loading: deletingJobId === job.id,
           onClick: () => Modal.confirm({
@@ -237,9 +249,9 @@ export function TemplateUploadPage() {
             okText: '删除记录', okButtonProps: { danger: true }, cancelText: '取消',
             onOk: () => deleteRecognition(job),
           }),
-        },
+        } } : {}),
       },
-      actions: <Button type="link" disabled={job.status !== 'PARSED'} onClick={() => openCreate(job)}>创建模板</Button>,
+      actions: canCreateTemplate && <Button type="link" disabled={job.status !== 'PARSED'} onClick={() => openCreate(job)}>创建模板</Button>,
     };
   });
   const uploadRecords = allUploadRecords.slice((recordPage.current - 1) * recordPage.pageSize, recordPage.current * recordPage.pageSize);
@@ -280,6 +292,7 @@ export function TemplateUploadPage() {
   }
 
   const deleteRecognition = async (job: TemplateImportJob) => {
+    if (!canDelete) return;
     setDeletingJobId(job.id);
     try {
       await templateApi.deleteImport(job.id);
@@ -340,6 +353,9 @@ export function TemplateUploadPage() {
   return (
     <>
       <UploadWorkspace
+        uploadDisabled={!canUpload}
+        uploadReadOnly={!canUpload}
+        showSubmit={canUpload}
         breadcrumbs={[{ title: '模板中心' }, { title: '模板上传' }]}
         title="模板上传"
         description="上传后检查字段和表格结构，确认无误后发布模板。"
@@ -420,7 +436,7 @@ export function TemplateUploadPage() {
           viewingJob ? (
             <Space>
               <Button onClick={closeRecognition}>关闭</Button>
-              <Button
+              {canCreateTemplate && <Button
                 type="primary"
                 onClick={() => {
                   const job = viewingJob;
@@ -429,7 +445,7 @@ export function TemplateUploadPage() {
                 }}
               >
                 填写模板信息并创建
-              </Button>
+              </Button>}
             </Space>
           ) : null
         }

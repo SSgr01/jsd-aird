@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -15,6 +16,20 @@ class StandardFieldServiceTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final StandardFieldService service = new StandardFieldService(mock(StandardFieldRepository.class));
+
+    @Test
+    void dictionaryRequestsCanBeReadWithoutTheLegacyAdminFlag() {
+        var repository = mock(StandardFieldRepository.class);
+        var organizationId = java.util.UUID.randomUUID();
+        var actor = new com.jsd.aird.shared.security.Actor(organizationId, java.util.UUID.randomUUID(), "viewer", "USER");
+        com.jsd.aird.shared.security.ActorContext.set(actor);
+        try {
+            new StandardFieldService(repository).requests("PENDING");
+            verify(repository).listRequests(organizationId, "PENDING");
+        } finally {
+            com.jsd.aird.shared.security.ActorContext.clear();
+        }
+    }
 
     @Test
     void unmatchedRecognitionFieldBecomesTemplateLocalAndCanBeSaved() {

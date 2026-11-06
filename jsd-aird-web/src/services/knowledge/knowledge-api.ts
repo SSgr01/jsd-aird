@@ -5,7 +5,7 @@ import { appEnv } from '@/app/config/env';
 export type KnowledgeStatus = 'QUEUED' | 'PROCESSING' | 'READY' | 'FAILED' | 'REJECTED' | 'PENDING_PROVIDER';
 export type KnowledgeUploadTaskStatus = 'STAGING' | 'CHECKING' | 'SUBMITTING' | 'QUEUED' | 'COMPLETED' | 'DUPLICATE' | 'FAILED';
 export interface KnowledgeUploadContext { libraryScope: string; categoryId?: string; tags?: string[]; sourceDescription?: string; visibility?: string; projectRelations?: Array<{ projectId: string; stageId?: string; taskId?: string }> }
-export interface KnowledgeUploadTask { id: string; fileName: string; size: number; status: KnowledgeUploadTaskStatus; progress: number; sourceFileId?: string; uploadContext?: KnowledgeUploadContext; documentId?: string; documentVersionId?: string; message?: string; createdAt: string; updatedAt: string }
+export interface KnowledgeUploadTask { id: string; actorId?: string; fileName: string; size: number; status: KnowledgeUploadTaskStatus; progress: number; sourceFileId?: string; uploadContext?: KnowledgeUploadContext; documentId?: string; documentVersionId?: string; message?: string; createdAt: string; updatedAt: string }
 export type AiStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'REVOKED';
 export type ReviewRevisionStatus = 'DRAFT' | 'BUILDING' | 'PUBLISHED' | 'FAILED' | 'SUPERSEDED';
 export type StructuredDocument = { type: 'doc'; schemaVersion?: number; content?: StructuredNode[] };

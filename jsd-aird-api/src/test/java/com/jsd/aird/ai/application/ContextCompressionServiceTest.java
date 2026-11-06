@@ -18,9 +18,9 @@ class ContextCompressionServiceTest {
         var data = new DataSourceFileSearchFacade.SourceFileHit(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                 12, "B", "检测报告.xlsx", "b".repeat(500), 0.7, "DATA_CENTER:Sheet1:B12");
 
-        var context = new ContextCompressionService().compress(List.of(hit), List.of(data), 200);
+        var context = new ContextCompressionService().compress(List.of(hit), List.of(data), 400);
 
-        assertThat(context.characterCount()).isLessThanOrEqualTo(200);
+        assertThat(context.characterCount()).isLessThanOrEqualTo(400);
         assertThat(context.characterCount()).isEqualTo(context.text().length());
         // Mixed-source small budgets reserve a stable half for knowledge. A
         // source that cannot fit its metadata must not leak a partial citation.

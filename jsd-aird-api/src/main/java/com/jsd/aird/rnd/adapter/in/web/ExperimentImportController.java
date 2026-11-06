@@ -20,15 +20,21 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
 import java.util.UUID;
+import java.io.IOException;
+import jakarta.servlet.http.HttpServletResponse;
+import com.jsd.aird.ops.application.port.FileStorageFacade;
+import com.jsd.aird.shared.web.ImportSourceDownload;
 
 /** RND entry point for the original free-upload flow. */
 @RestController
 @RequestMapping("/api/v1/experiment-imports")
 public class ExperimentImportController {
     private final ExperimentImportService service;
+    private final FileStorageFacade files;
 
-    public ExperimentImportController(ExperimentImportService service) {
+    public ExperimentImportController(ExperimentImportService service, FileStorageFacade files) {
         this.service = service;
+        this.files = files;
     }
 
     @PostMapping
@@ -52,6 +58,11 @@ public class ExperimentImportController {
     @GetMapping("/{id}")
     public ApiResponse<?> get(@PathVariable UUID id) {
         return ok(service.get(id));
+    }
+
+    @GetMapping("/{id}/source")
+    public void source(@PathVariable UUID id, HttpServletResponse response) throws IOException {
+        ImportSourceDownload.write(files, service.get(id).sourceFileId(), response);
     }
 
     @GetMapping("/{id}/workspace")

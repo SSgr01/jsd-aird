@@ -4,7 +4,7 @@ import type { ApiResponse, PageResponse } from '@/types/api';
 import type { ExperimentModel } from '@/services/experiments/experiment-api';
 
 export type ResearchTestType = 'REPORT' | 'STANDARD';
-export type ResearchTestStatus = 'DRAFT' | 'PENDING_REVIEW' | 'RETURNED' | 'PUBLISHED' | 'ARCHIVED';
+export type ResearchTestStatus = 'DRAFT' | 'PENDING_REVIEW' | 'RETURNED' | 'APPROVED' | 'PUBLISHED' | 'ARCHIVED';
 export interface ResearchTestSummary {
   id: string;
   recordType: ResearchTestType;
@@ -95,6 +95,12 @@ export async function getResearchTest(type: ResearchTestType, id: string) {
 export async function createResearchTest(type: ResearchTestType, input: Record<string, unknown>) {
   return data(await httpClient.post<ApiResponse<ResearchTestDetail>>(root(type), input));
 }
+export async function nextReportNumber() {
+  return data(await httpClient.get<ApiResponse<string>>('/api/v1/comprehensive-reports/next-number'));
+}
+export async function nextStandardNumber() {
+  return data(await httpClient.get<ApiResponse<string>>('/api/v1/test-standards/next-number'));
+}
 export async function saveResearchTest(
   type: ResearchTestType,
   id: string,
@@ -129,7 +135,7 @@ export async function renameResearchTest(
 export async function actResearchTest(
   type: ResearchTestType,
   id: string,
-  action: 'submit-review' | 'approve' | 'return' | 'archive',
+  action: 'submit-review' | 'approve' | 'publish' | 'return' | 'archive',
   revision: number,
   comment?: string,
 ) {

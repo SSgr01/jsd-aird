@@ -45,7 +45,7 @@ public class KnowledgeUploadTaskService {
     public List<UploadTaskView> list(int requestedLimit) {
         var actor = ActorContext.required();
         var limit = Math.min(100, Math.max(1, requestedLimit));
-        return tasks.list(actor.organizationId(), actor.userId(), limit).stream().map(this::view).toList();
+        return tasks.list(actor.organizationId(), limit).stream().map(this::view).toList();
     }
 
     @Transactional
@@ -92,7 +92,7 @@ public class KnowledgeUploadTaskService {
     }
 
     private UploadTaskView view(UploadTaskRow row) {
-        return new UploadTaskView(row.id(), row.fileName(), row.size(), row.status(), row.progress(),
+        return new UploadTaskView(row.id(), row.actorId(), row.fileName(), row.size(), row.status(), row.progress(),
                 row.sourceFileId(), row.uploadContext(), row.documentId(), row.documentVersionId(),
                 row.message(), row.createdAt(), row.updatedAt());
     }
@@ -100,7 +100,7 @@ public class KnowledgeUploadTaskService {
     public record CreateCommand(String fileName, long size, JsonNode uploadContext) { }
     public record UpdateCommand(String status, int progress, UUID sourceFileId, JsonNode uploadContext,
                                 UUID documentId, UUID documentVersionId, String message) { }
-    public record UploadTaskView(UUID id, String fileName, long size, String status, int progress,
+    public record UploadTaskView(UUID id, UUID actorId, String fileName, long size, String status, int progress,
                                  UUID sourceFileId, JsonNode uploadContext, UUID documentId,
                                  UUID documentVersionId, String message,
                                  java.time.Instant createdAt, java.time.Instant updatedAt) { }

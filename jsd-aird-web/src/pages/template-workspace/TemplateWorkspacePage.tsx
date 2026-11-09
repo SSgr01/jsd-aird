@@ -1988,6 +1988,7 @@ export function TemplateWorkspacePage() {
           {view === 'edit' && (
             <RecognitionStatusBar
               review={recognitionReview}
+              configuredFieldCount={fieldModel.fields.filter((field) => !field.candidate && !isRegionModelField(field)).length}
               job={recognitionJob}
               busy={recognitionBusy}
               editable={editable}
@@ -2349,6 +2350,7 @@ function VersionView({
 
 function RecognitionStatusBar({
   review,
+  configuredFieldCount,
   job,
   busy,
   editable,
@@ -2360,6 +2362,7 @@ function RecognitionStatusBar({
   onRefreshReview,
 }: {
   review?: RecognitionReview;
+  configuredFieldCount: number;
   job?: TemplateImportJob;
   busy: boolean;
   editable: boolean;
@@ -2375,13 +2378,14 @@ function RecognitionStatusBar({
   const structureConflict = (review?.statistics?.structureConflictGroups ?? 0) > 0;
   const fieldConflict = (summary?.conflict ?? 0) > 0;
   const blockingIssue = (summary?.blockingIssueCount ?? 0) > 0;
+  const hasConfiguredFields = !review?.recognitionRunId && configuredFieldCount > 0;
   const tone = recognitionFailed
     ? 'pending'
     : structureConflict
       ? 'conflict'
       : fieldConflict || blockingIssue || (summary?.pending ?? 0) > 0
         ? 'pending'
-        : review?.recognitionRunId
+        : review?.recognitionRunId || hasConfiguredFields
           ? 'complete'
         : 'empty';
   const statusTitle = busy
@@ -2395,7 +2399,7 @@ function RecognitionStatusBar({
           : blockingIssue
             ? '识别结果待处理'
             : tone === 'complete'
-              ? 'AI 识别已完成'
+              ? hasConfiguredFields ? '模板字段已配置' : 'AI 识别已完成'
               : review?.recognitionRunId
                 ? 'AI 识别待确认'
                 : '等待启动字段识别';
@@ -2418,6 +2422,8 @@ function RecognitionStatusBar({
           </span>
         ) : recognitionFailed ? (
           <span>工作簿和原有字段已保留，可重新识别</span>
+        ) : hasConfiguredFields ? (
+          <span>字段 {configuredFieldCount}</span>
         ) : tone === 'complete' ? (
           <span>
             区域 {review?.statistics?.regionCount ?? 0} ｜ 字段 {review?.statistics?.fieldCount ?? 0}

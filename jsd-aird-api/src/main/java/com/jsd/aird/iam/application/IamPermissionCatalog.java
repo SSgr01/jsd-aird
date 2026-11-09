@@ -202,6 +202,13 @@ public final class IamPermissionCatalog {
                 p("production.upload.retry", "production", "重试生产单识别", "MEDIUM", "SELF"),
                 p("production.upload.delete", "production", "删除生产单上传记录", "HIGH", "SELF"),
 
+                p("quotation.view", "quotation", "查看报价记录", "LOW", "ALL"),
+                p("quotation.create", "quotation", "上传报价记录", "MEDIUM", "SELF"),
+                p("quotation.edit", "quotation", "编辑报价记录", "MEDIUM", "SELF"),
+                p("quotation.submit", "quotation", "提交报价审核", "MEDIUM", "SELF"),
+                p("quotation.review", "quotation", "审核报价记录", "HIGH", "ALL"),
+                p("quotation.delete", "quotation", "删除报价记录", "HIGH", "SELF"),
+
                 p("knowledge.view", "knowledge", "查看知识文档", "LOW", "ALL"),
                 p("knowledge.view.submit", "knowledge", "提交知识文档审核", "MEDIUM", "SELF"),
                 p("knowledge.view.approve", "knowledge", "审核知识文档", "HIGH", "ASSIGNED"),

@@ -48,17 +48,21 @@ public class RagRetrievalService {
         }
     };
 
-    private final KnowledgeSearchFacade knowledge;
-    private final DataSourceFileSearchFacade dataFiles;
-    private final QueryRewriteService rewrite;
-    private final RerankerProvider reranker;
-    private final WebSearchProvider webSearch;
-    private final Executor webSearchExecutor;
-    private final Executor retrievalExecutor;
+    final KnowledgeSearchFacade knowledge;
+    final DataSourceFileSearchFacade dataFiles;
+    final QueryRewriteService rewrite;
+    final RerankerProvider reranker;
+    final WebSearchProvider webSearch;
+    final Executor webSearchExecutor;
+    final Executor retrievalExecutor;
     private final Executor dataSearchExecutor;
-    private final Duration webSearchTimeout;
-    private final int maxWebCandidates;
-    private final int maxDataHits;
+    final Duration webSearchTimeout;
+    final int maxWebCandidates;
+    final int maxDataHits;
+
+    private org.springframework.beans.factory.ObjectProvider<RetrievalPipeline> pipelineProvider;
+    @Autowired void pipelineProvider(org.springframework.beans.factory.ObjectProvider<RetrievalPipeline> provider) { pipelineProvider=provider; }
+    RetrievalPipeline engine() { return pipelineProvider==null ? new RetrievalPipeline(this,null) : pipelineProvider.getObject(); }
 
     @Autowired
     public RagRetrievalService(KnowledgeSearchFacade knowledge, DataSourceFileSearchFacade dataFiles,
@@ -144,133 +148,10 @@ public class RagRetrievalService {
                               List<UUID> knowledgeCategoryIds, List<UUID> dataCategoryIds, boolean aiOnly,
                               boolean webSearchEnabled, DataSourceFileSearchFacade.RetrievalAccessScope accessScope,
                               boolean legacyFacadeCalls) {
-        var started = System.nanoTime();
-        var timings = new LinkedHashMap<String, Long>();
-        var stage = System.nanoTime();
-        var plan = rewrite.rewrite(question, history, webSearchEnabled);
-        timings.put("queryRewriteMs", elapsedMs(stage));
-        var explicitIdentifiers = explicitQueryIdentifiers(question, plan.plan());
-        var webTasks = launchWebSearch(webSearchEnabled, plan.plan().webQueries());
-        // The scope selectors are explicit module boundaries. When the user
-        // selects a knowledge category, data-center rows must not be used as a
-        // silent fallback (and vice versa), otherwise an unrelated file can be
-        // presented as evidence for a knowledge-base question.
-        var searchKnowledge = knowledgeCategoryIds != null && !knowledgeCategoryIds.isEmpty();
-        var searchData = dataCategoryIds != null && !dataCategoryIds.isEmpty();
-        var knowledgeFilters = knowledgeCategoryIds == null ? List.<UUID>of() : knowledgeCategoryIds;
-        var dataFilters = dataCategoryIds == null ? List.<UUID>of() : dataCategoryIds;
-        var dataQueries = searchData ? dataQueries(question, plan.plan()) : List.<String>of();
-        var dataDetailQuery = dataDetailQuery(plan.plan());
-        CompletableFuture<DataChannelResult> dataFuture;
-        try {
-            dataFuture = CompletableFuture.supplyAsync(
-                    () -> searchDataChannel(organizationId, question, dataQueries, dataDetailQuery,
-                            dataFilters, accessScope, searchData, legacyFacadeCalls),
-                    retrievalExecutor);
-        } catch (RejectedExecutionException exception) {
-            dataFuture = CompletableFuture.completedFuture(new DataChannelResult(List.of(), dataQueries.size(),
-                    dataQueries.size(), 0, searchData ? "FAILED" : "SKIPPED",
-                    DataSourceFileSearchFacade.DataDetailResult.empty(dataDetailQuery.mode())));
-        }
-        var internalFallbacks = new ArrayList<String>();
-        var knowledgeChannelStatus = searchKnowledge ? "SUCCEEDED" : "SKIPPED";
-        stage = System.nanoTime();
-        KnowledgeSearchFacade.SearchResult knowledgeResult;
-        if (searchKnowledge) {
-            try {
-                knowledgeResult = knowledge.search(new KnowledgeSearchFacade.SearchRequest(
-                        organizationId, plan.plan().rewrittenQuery(), aiOnly, 30, knowledgeFilters,
-                        plan.plan().subQueries(), searchTerms(plan.plan()), requiredFacts(plan.plan()), question));
-            } catch (RuntimeException exception) {
-                log.warn("Knowledge retrieval failed; continuing without knowledge evidence errorType={}",
-                        exception.getClass().getSimpleName());
-                knowledgeChannelStatus = "FAILED";
-                knowledgeResult = new KnowledgeSearchFacade.SearchResult(List.of(),
-                        new KnowledgeSearchFacade.RetrievalTrace("FAILED", 0, 0, 0,
-                                List.of("KNOWLEDGE_SEARCH_ERROR")));
-            }
-        } else {
-            knowledgeResult = new KnowledgeSearchFacade.SearchResult(List.of(),
-                        new KnowledgeSearchFacade.RetrievalTrace("SKIPPED", 0, 0, 0,
-                                List.of("KNOWLEDGE_SCOPE_NOT_SELECTED")));
-        }
-        timings.putAll(knowledgeResult.trace().timings());
-        timings.put("knowledgeSearchMs", elapsedMs(stage));
-        // Search original wording, generic phrase segments and rewrite terms
-        // independently. Exact record/field lookup is an optimization, not a
-        // gate: if it returns no evidence, the general structured search still
-        // gets a chance to match experiment/project metadata and row values.
-        DataChannelResult dataResult;
-        try {
-            dataResult = dataFuture.join();
-        } catch (RuntimeException exception) {
-            dataResult = new DataChannelResult(List.of(), dataQueries.size(), dataQueries.size(), 0,
-                    searchData ? "FAILED" : "SKIPPED",
-                    DataSourceFileSearchFacade.DataDetailResult.empty(dataDetailQuery.mode()));
-        }
-        dataResult = scopeDataResultToExplicitIdentifiers(dataResult, explicitIdentifiers);
-        var dataFailureCount = dataResult.failureCount();
-        if (dataFailureCount > 0) internalFallbacks.add(dataFailureCount >= Math.max(1, dataResult.queryCount())
-                ? "DATA_SEARCH_ERROR" : "DATA_SEARCH_PARTIAL");
-        var data = dataResult.hits();
-        timings.put("dataSearchMs", dataResult.elapsedMs());
-        stage = System.nanoTime();
-        Reranked reranked;
-        var knowledgeCandidates = scopeKnowledgeHitsForStructuredLookup(
-                knowledgeResult.hits(), explicitIdentifiers, dataDetailQuery.mode());
-        try {
-            reranked = rerank(plan.plan().rewrittenQuery(), knowledgeCandidates);
-        } catch (RuntimeException exception) {
-            internalFallbacks.add("RERANKER_PROVIDER_ERROR");
-            reranked = new Reranked(knowledgeCandidates,
-                    RerankerProvider.RerankOutcome.skipped("PROVIDER_ERROR", knowledgeCandidates.size()));
-        }
-        var coverage = selectCoverage(reranked.hits(), knowledgeResult.factCandidates(), 12);
-        var knowledgeHits = coverage.hits();
-        timings.put("rerankMs", elapsedMs(stage));
-        var webResult = collectWebSearch(webTasks);
-        timings.put("webSearchMs", webResult.trace().webSearchMs());
-        timings.put("retrievalTotalMs", elapsedMs(started));
-        var fallbacks = new ArrayList<String>(knowledgeResult.trace().fallbacks());
-        fallbacks.addAll(internalFallbacks);
-        if ("MODEL_UNAVAILABLE".equals(plan.status()) || "FALLBACK_ORIGINAL_QUERY".equals(plan.status())) {
-            fallbacks.add("QUERY_REWRITE_FALLBACK");
-        }
-        if (!"SUCCEEDED".equals(reranked.outcome().status())) fallbacks.add("RERANKER_" + reranked.outcome().status());
-        if (webResult.trace().failureReason() != null && !webResult.trace().failureReason().isBlank()) {
-            fallbacks.add("WEB_SEARCH_" + webResult.trace().status());
-        }
-        if (knowledgeHits.isEmpty() && data.isEmpty() && webResult.hits().isEmpty()) fallbacks.add("NO_RETRIEVAL_RESULT");
-        var allDataEvidence = new ArrayList<DataSourceFileSearchFacade.SourceFileHit>();
-        var seenDataEvidence = new LinkedHashSet<UUID>();
-        var allDataCandidates = new ArrayList<DataSourceFileSearchFacade.SourceFileHit>(data);
-        allDataCandidates.addAll(dataResult.detail().hits());
-        allDataCandidates.addAll(dataResult.detail().recordContexts().stream()
-                .flatMap(context -> context.contextHits().stream()).toList());
-        for (var hit : allDataCandidates) {
-            if (hit.hitId() == null || seenDataEvidence.add(hit.hitId())) allDataEvidence.add(hit);
-        }
-        var dataCenterHitCount = (int) allDataEvidence.stream()
-                .filter(hit -> "DATA_CENTER".equalsIgnoreCase(hit.sourceOwner())).count();
-        var experimentHitCount = (int) allDataEvidence.stream()
-                .filter(hit -> "EXPERIMENT".equalsIgnoreCase(hit.sourceOwner())).count();
-        return new Retrieval(plan.plan(), knowledgeHits, data, dataResult.detail(), webResult.hits(), new Trace(
-                plan.status(), plan.model(), plan.thinkingEnabled(), knowledgeResult.trace().strategy(), knowledgeResult.trace().bm25Candidates(),
-                knowledgeResult.trace().vectorCandidates(), knowledgeResult.trace().mergedCandidates(),
-                knowledgeResult.trace().variantCount(), data.size(), reranked.outcome().status(), fallbacks,
-                dataResult.queryCount(), List.of(
-                        new ChannelTrace("KNOWLEDGE_KEYWORD_VECTOR", knowledgeChannelStatus, knowledgeResult.trace().mergedCandidates()),
-                        new ChannelTrace("STRUCTURED_DATA_ROW", dataResult.status(), allDataEvidence.size()),
-                        new ChannelTrace("DATA_CENTER_ROW", scopedDataStatus(searchData,
-                                accessScope.dataScope(), dataCenterHitCount, dataResult), dataCenterHitCount),
-                        new ChannelTrace("EXPERIMENT_ROW", scopedDataStatus(searchData,
-                                accessScope.experimentScope(), experimentHitCount, dataResult), experimentHitCount),
-                        new ChannelTrace("WEB_PUBLIC", webResult.trace().status(), webResult.hits().size())),
-                timings, rerankTrace(reranked.outcome()), coverage.coverage(), knowledgeResult.trace().queries(),
-                webResult.trace()));
+        return engine().retrieveQa(organizationId, question, history, knowledgeCategoryIds, dataCategoryIds, aiOnly, webSearchEnabled, accessScope, legacyFacadeCalls);
     }
 
-    private DataChannelResult searchDataChannel(UUID organizationId, String question, List<String> queries,
+    DataChannelResult searchDataChannel(UUID organizationId, String question, List<String> queries,
                                                 DataSourceFileSearchFacade.DataDetailQuery detailQuery,
                                                 List<UUID> filters,
                                                 DataSourceFileSearchFacade.RetrievalAccessScope accessScope,
@@ -464,14 +345,14 @@ public class RagRetrievalService {
         return List.copyOf(prioritized);
     }
 
-    private static List<DataSourceFileSearchFacade.SourceFileHit> explicitlyMatchedRecordHits(
+    static List<DataSourceFileSearchFacade.SourceFileHit> explicitlyMatchedRecordHits(
             String question, List<DataSourceFileSearchFacade.SourceFileHit> hits) {
         var identifiers = explicitQueryIdentifiers(question, null);
         if (identifiers.isEmpty()) return List.of();
         return hits.stream().filter(hit -> containsExplicitIdentifier(identifiers, sourceHitText(hit))).toList();
     }
 
-    private static List<KnowledgeSearchFacade.SearchHit> scopeKnowledgeHitsForStructuredLookup(
+    static List<KnowledgeSearchFacade.SearchHit> scopeKnowledgeHitsForStructuredLookup(
             List<KnowledgeSearchFacade.SearchHit> hits, List<String> identifiers,
             DataSourceFileSearchFacade.DataQueryMode mode) {
         if (hits == null || hits.isEmpty() || identifiers == null || identifiers.isEmpty()
@@ -483,7 +364,7 @@ public class RagRetrievalService {
                         safeText(hit.fieldCode()), safeText(hit.content())))).toList();
     }
 
-    private static int requestedFieldRelevance(String question,
+    static int requestedFieldRelevance(String question,
                                                DataSourceFileSearchFacade.SourceFileHit hit) {
         if (question == null || question.isBlank() || hit == null) return 0;
         var normalizedQuestion = stripDataFileReferences(question)
@@ -514,29 +395,29 @@ public class RagRetrievalService {
         return score;
     }
 
-    private static boolean isFormulaEvidence(DataSourceFileSearchFacade.SourceFileHit hit) {
+    static boolean isFormulaEvidence(DataSourceFileSearchFacade.SourceFileHit hit) {
         if (hit == null) return false;
         if ("FORMULA".equalsIgnoreCase(hit.semanticDomain())) return true;
         return isFormulaTotalHit(hit);
     }
 
-    private static String businessRecordGroupKey(DataSourceFileSearchFacade.SourceFileHit hit) {
+    static String businessRecordGroupKey(DataSourceFileSearchFacade.SourceFileHit hit) {
         var matcher = BUSINESS_RECORD_LABEL.matcher(hit.content() == null ? "" : hit.content());
         return matcher.find() ? matcher.group(1).strip() : safeText(hit.recordKey());
     }
 
-    private static boolean isFormulaTotalHit(DataSourceFileSearchFacade.SourceFileHit hit) {
+    static boolean isFormulaTotalHit(DataSourceFileSearchFacade.SourceFileHit hit) {
         if (hit == null) return false;
         var label = (safeText(hit.sourceLabel()) + " " + safeText(hit.fieldName()) + " "
                 + safeText(hit.semanticField())).replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
         return label.matches(".*(合计|总计|小计|总和|total|subtotal|sum).*");
     }
 
-    private static boolean isCompositionQuestion(String question) {
+    static boolean isCompositionQuestion(String question) {
         return question != null && question.matches("(?s).*(配方|组分|成分|成份|组成|合计|总计|添加量|用量|formula|composition).*");
     }
 
-    private String scopedDataStatus(boolean enabled, DataSourceFileSearchFacade.AccessScope scope,
+    String scopedDataStatus(boolean enabled, DataSourceFileSearchFacade.AccessScope scope,
                                     int hitCount, DataChannelResult result) {
         if (!enabled || scope == null || scope.deniesAll()) return "SKIPPED";
         if ("AMBIGUOUS".equals(result.status())) return "AMBIGUOUS";
@@ -547,7 +428,7 @@ public class RagRetrievalService {
         return hitCount > 0 ? "SUCCEEDED" : "EMPTY";
     }
 
-    private static boolean preserveExplicitFileChoice(DataSourceFileSearchFacade.DataDetailQuery query) {
+    static boolean preserveExplicitFileChoice(DataSourceFileSearchFacade.DataDetailQuery query) {
         if (query.fileScope() != DataSourceFileSearchFacade.DataFileScope.AUTO || !query.fileName().isBlank()) {
             return true;
         }
@@ -598,17 +479,17 @@ public class RagRetrievalService {
         return identifiers.stream().limit(64).toList();
     }
 
-    private static void addIdentifier(Set<String> identifiers, String value) {
+    static void addIdentifier(Set<String> identifiers, String value) {
         if (looksLikeExplicitIdentifier(value)) identifiers.add(value.strip());
     }
 
-    private static boolean looksLikeExplicitIdentifier(String value) {
+    static boolean looksLikeExplicitIdentifier(String value) {
         if (value == null || value.isBlank() || value.length() > 128 || !value.matches("(?s).*\\d.*")) return false;
         var letters = value.replaceAll("[^A-Za-z\\u4E00-\\u9FFF]", "");
         return letters.length() >= 1 && value.replaceAll("[^A-Za-z0-9\\u4E00-\\u9FFF]", "").length() >= 4;
     }
 
-    private static DataChannelResult scopeDataResultToExplicitIdentifiers(DataChannelResult result,
+    static DataChannelResult scopeDataResultToExplicitIdentifiers(DataChannelResult result,
                                                                            List<String> identifiers) {
         if (result == null || identifiers == null || identifiers.isEmpty()) return result;
         var detail = result.detail() == null
@@ -663,19 +544,19 @@ public class RagRetrievalService {
                 hasEvidence ? result.status() : (result.failureCount() == 0 ? "EMPTY" : "PARTIAL"), scopedDetail);
     }
 
-    private static String sourceHitText(DataSourceFileSearchFacade.SourceFileHit hit) {
+    static String sourceHitText(DataSourceFileSearchFacade.SourceFileHit hit) {
         if (hit == null) return "";
         return String.join(" ", safeText(hit.originalName()), safeText(hit.content()), safeText(hit.recordKey()),
                 safeText(hit.fieldCode()), safeText(hit.fieldName()), safeText(hit.fieldValue()),
                 safeText(hit.sourceLabel()), safeText(hit.semanticField()));
     }
 
-    private static String sourceRecordGroup(DataSourceFileSearchFacade.SourceFileHit hit) {
+    static String sourceRecordGroup(DataSourceFileSearchFacade.SourceFileHit hit) {
         if (hit == null || hit.importJobId() == null || hit.recordKey() == null || hit.recordKey().isBlank()) return "";
         return hit.importJobId() + "|" + hit.recordKey().strip();
     }
 
-    private static String contextRecordGroup(DataSourceFileSearchFacade.RecordContext context) {
+    static String contextRecordGroup(DataSourceFileSearchFacade.RecordContext context) {
         if (context == null || context.recordKey().isBlank()) return "";
         var hit = java.util.stream.Stream.concat(context.targetHits().stream(), context.contextHits().stream())
                 .filter(java.util.Objects::nonNull).findFirst().orElse(null);
@@ -698,11 +579,11 @@ public class RagRetrievalService {
         return false;
     }
 
-    private static String safeText(String value) {
+    static String safeText(String value) {
         return value == null ? "" : value;
     }
 
-    private DataSourceFileSearchFacade.DataDetailQuery dataDetailQuery(QueryRewriteService.QueryPlan plan) {
+    DataSourceFileSearchFacade.DataDetailQuery dataDetailQuery(QueryRewriteService.QueryPlan plan) {
         var value = plan == null ? null : plan.dataRequest();
         var request = value == null ? new QueryRewriteService.DataRequest("NONE", "", List.of(), List.of()) : value;
         var originalQuestion = plan == null ? "" : plan.originalQuery();
@@ -793,13 +674,13 @@ public class RagRetrievalService {
                 contextMode, 32, request.analysisGoal().equals("EVALUATE") ? 5 : 1, request.analysisGoal());
     }
 
-    private static String stripDataFileReferences(String question) {
+    static String stripDataFileReferences(String question) {
         if (question == null || question.isBlank()) return "";
         var value = question.replaceAll("(?i)[“\\\"《][^”\\\"》\\r\\n]{1,260}\\.(?:xlsx|xls|csv)[”\\\"》]", " ");
         return value.replaceAll("(?i)[^\\s，。；;：:“”\\\"》]{1,260}\\.(?:xlsx|xls|csv)", " ");
     }
 
-    private static List<String> removeFileNameFragments(List<String> terms, String fileName) {
+    static List<String> removeFileNameFragments(List<String> terms, String fileName) {
         if (terms == null || terms.isEmpty() || fileName == null || fileName.isBlank()) return terms == null ? List.of() : terms;
         var fragments = new LinkedHashSet<>(List.of(fileName.split("[^A-Za-z0-9\\u4E00-\\u9FFF]+")));
         return terms.stream().filter(term -> term != null && !fragments.contains(term.strip())).toList();
@@ -833,7 +714,7 @@ public class RagRetrievalService {
                 .stream().anyMatch(normalized::contains);
     }
 
-    private static boolean usableInferredField(String field) {
+    static boolean usableInferredField(String field) {
         if (field == null || field.isBlank() || field.length() > 40) return false;
         return !field.contains("、") && !field.contains("，") && !field.contains(",")
                 && !field.contains("和") && !field.contains("请") && !field.contains("来源")
@@ -868,7 +749,7 @@ public class RagRetrievalService {
         return true;
     }
 
-    private static boolean isExplicitlyLabelledIdentifier(String question, String value) {
+    static boolean isExplicitlyLabelledIdentifier(String question, String value) {
         if (question == null || question.isBlank() || value == null || value.isBlank()) return false;
         var label = "(?:记录编号|实验编号|样品编号|业务记录编号|配方编号|编号|记录号|实验号|样品号|型号|ID)";
         var token = java.util.regex.Pattern.quote(value);
@@ -878,7 +759,7 @@ public class RagRetrievalService {
         return pattern.matcher(question).find();
     }
 
-    private static boolean isMeasurementValueToken(String value) {
+    static boolean isMeasurementValueToken(String value) {
         if (value == null || value.isBlank()) return false;
         var measurement = java.util.regex.Pattern.compile(
                 "(?i)^[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)\\s*(?:°\\s*C|℃|度|小时|小時|分钟|分鐘|秒|天|周|月|年|"
@@ -888,7 +769,7 @@ public class RagRetrievalService {
         return measurement.matcher(value.strip()).find();
     }
 
-    private static boolean isMeasurementConditionNumber(String question, String number) {
+    static boolean isMeasurementConditionNumber(String question, String number) {
         if (question == null || question.isBlank()) return false;
         var token = java.util.regex.Pattern.quote(number);
         var measurement = java.util.regex.Pattern.compile(
@@ -900,7 +781,7 @@ public class RagRetrievalService {
         return measurement.matcher(question).find();
     }
 
-    private static List<String> canonicalRecordTerms(Set<String> terms) {
+    static List<String> canonicalRecordTerms(Set<String> terms) {
         if (terms == null || terms.isEmpty()) return List.of();
         var result = new LinkedHashSet<String>();
         var opaque = java.util.regex.Pattern.compile(
@@ -1031,7 +912,7 @@ public class RagRetrievalService {
      * `UV-01A` and `甲油胶耐磨实验` intact while still allowing two separate
      * entities such as `陈琪` and `UV-01A` to coexist.
      */
-    private static List<String> longestSpecificTerms(Set<String> candidates) {
+    static List<String> longestSpecificTerms(Set<String> candidates) {
         var ordered = candidates == null ? List.<String>of() : candidates.stream()
                 .filter(value -> value != null && !value.isBlank())
                 .map(String::strip)
@@ -1051,15 +932,15 @@ public class RagRetrievalService {
         return List.copyOf(selected);
     }
 
-    private static String compactTerm(String value) {
+    static String compactTerm(String value) {
         return value == null ? "" : value.replaceAll("\\s+", "").strip();
     }
 
-    private static boolean containsAsciiOrDigit(String value) {
+    static boolean containsAsciiOrDigit(String value) {
         return value != null && value.matches(".*[A-Za-z0-9].*");
     }
 
-    private static String ownerPrefix(String value) {
+    static String ownerPrefix(String value) {
         if (value == null) return "";
         var result = value.strip();
         if (result.endsWith("的")) result = result.substring(0, result.length() - 1).strip();
@@ -1067,7 +948,7 @@ public class RagRetrievalService {
                 ? result.substring(2) : result;
     }
 
-    private static void addStructuredEntity(Set<String> entities, String value) {
+    static void addStructuredEntity(Set<String> entities, String value) {
         if (value == null) return;
         var normalized = value.replaceAll("^[请问请查询分析查询检索查找查看了解统计研究]+|[的，,。；;：:?？!！]+$", "").strip();
         // A labeled identifier is often followed by the rest of a natural
@@ -1094,7 +975,7 @@ public class RagRetrievalService {
         }
     }
 
-    private static String inferStandaloneField(String question) {
+    static String inferStandaloneField(String question) {
         var fields = inferRequestedFields(question);
         return fields.isEmpty() ? "" : fields.getFirst();
     }
@@ -1113,15 +994,15 @@ public class RagRetrievalService {
         return List.copyOf(fields);
     }
 
-    private static String stripDataSelectionPrefix(String question) {
+    static String stripDataSelectionPrefix(String question) {
         return question.replaceFirst("^在数据文件[《“\\\"]?[^》”\\\"\\r\\n]+\\.(?:xlsx|xls|csv)[》”\\\"]?中(?:查询)?[：:]\\s*", "");
     }
 
-    private long elapsedMs(long started) {
+    long elapsedMs(long started) {
         return Math.max(0, (System.nanoTime() - started) / 1_000_000);
     }
 
-    private WebTasks launchWebSearch(boolean requested, List<QueryRewriteService.WebQuery> queries) {
+    WebTasks launchWebSearch(boolean requested, List<QueryRewriteService.WebQuery> queries) {
         var started = System.nanoTime();
         if (!requested) return new WebTasks(false, "SKIPPED", started, started, List.of(), List.of());
         if (!webSearch.isAvailable()) {
@@ -1146,91 +1027,6 @@ public class RagRetrievalService {
                 started + webSearchTimeout.toNanos(), List.copyOf(futures), List.copyOf(failures));
     }
 
-    private WebSearchResult collectWebSearch(WebTasks tasks) {
-        if (!tasks.requested()) return new WebSearchResult(List.of(), new WebTrace(
-                false, false, tasks.initialStatus(), 0, 0, 0, 0, ""));
-        if (tasks.futures().isEmpty()) return new WebSearchResult(List.of(), new WebTrace(
-                true, false, tasks.initialStatus(), elapsedMs(tasks.startedNanos()), 0, 0, 0,
-                String.join(",", new LinkedHashSet<>(tasks.failures()))));
-        var failures = new ArrayList<>(tasks.failures());
-        var responses = new ArrayList<WebSearchProvider.SearchResponse>();
-        long providerResponseMs = 0;
-        for (var item : tasks.futures()) {
-            var remaining = tasks.deadlineNanos() - System.nanoTime();
-            if (remaining <= 0) {
-                item.future().cancel(true);
-                failures.add("TIMEOUT");
-                continue;
-            }
-            try {
-                var response = item.future().get(remaining, TimeUnit.NANOSECONDS);
-                if (response == null) {
-                    failures.add("EMPTY_RESPONSE");
-                    continue;
-                }
-                responses.add(response);
-                providerResponseMs += Math.max(0, response.providerResponseMs());
-                if (!"SUCCEEDED".equals(response.status()) && !"EMPTY".equals(response.status())) {
-                    failures.add(response.status() + (response.httpStatus() == null ? "" : "_" + response.httpStatus()));
-                }
-            } catch (TimeoutException exception) {
-                item.future().cancel(true);
-                failures.add("TIMEOUT");
-            } catch (Exception exception) {
-                failures.add("PROVIDER_ERROR");
-            }
-        }
-        var hits = fuseWebResults(responses);
-        var status = !hits.isEmpty() ? (failures.isEmpty() ? "SUCCEEDED" : "PARTIAL")
-                : failures.stream().anyMatch("TIMEOUT"::equals) ? "TIMEOUT"
-                : failures.isEmpty() ? "EMPTY" : tasks.initialStatus().equals("REJECTED") ? "REJECTED" : "PROVIDER_ERROR";
-        var failureReason = String.join(",", new LinkedHashSet<>(failures));
-        return new WebSearchResult(hits, new WebTrace(true, !hits.isEmpty(), status, elapsedMs(tasks.startedNanos()),
-                tasks.futures().size(), hits.size(), providerResponseMs, failureReason));
-    }
-
-    private List<WebHit> fuseWebResults(List<WebSearchProvider.SearchResponse> responses) {
-        var candidates = new LinkedHashMap<String, WebCandidate>();
-        for (var response : responses) {
-            for (var index = 0; index < response.results().size(); index++) {
-                var result = response.results().get(index);
-                var url = canonicalWebUrl(result.url());
-                var content = boundedWebText(result.content(), 2_000);
-                if (url.isBlank() || content.isBlank()) continue;
-                var title = boundedWebText(result.title(), 300);
-                var siteName = URI.create(url).getHost();
-                var rrf = 1d / (60d + index + 1d);
-                var current = candidates.get(url);
-                if (current == null) {
-                    candidates.put(url, new WebCandidate(title.isBlank() ? siteName : title, siteName, url, content,
-                            Math.max(0d, result.score()), rrf, normalizedDate(result.publishedAt())));
-                } else {
-                    var useNew = result.score() > current.providerScore();
-                    candidates.put(url, new WebCandidate(useNew && !title.isBlank() ? title : current.title(),
-                            current.siteName(), url, useNew ? content : current.content(),
-                            Math.max(current.providerScore(), Math.max(0d, result.score())), current.rrfScore() + rrf,
-                            useNew ? normalizedDate(result.publishedAt()) : current.publishedAt()));
-                }
-            }
-        }
-        var fetchedAt = Instant.now().toString();
-        var seenContent = new LinkedHashSet<String>();
-        return candidates.values().stream()
-                .sorted(Comparator.comparingInt((WebCandidate item) -> webAuthorityTier(item.url())).reversed()
-                        .thenComparing(Comparator.comparingDouble(WebCandidate::rrfScore).reversed())
-                        .thenComparing(Comparator.comparingDouble(WebCandidate::providerScore).reversed()))
-                .filter(item -> seenContent.add(sha256(item.content())))
-                .limit(maxWebCandidates)
-                .map(item -> new WebHit(item.title(), item.siteName(), item.url(), item.content(),
-                        item.rrfScore(), item.providerScore(), item.publishedAt(), fetchedAt, sha256(item.content())))
-                .toList();
-    }
-
-    /**
-     * Gives public authorities and academic institutions a generic priority without
-     * maintaining product, manufacturer or subject-matter domain lists. Relevance
-     * ordering is preserved inside the same authority tier.
-     */
     static int webAuthorityTier(String value) {
         try {
             var host = URI.create(value == null ? "" : value).getHost();
@@ -1266,7 +1062,7 @@ public class RagRetrievalService {
         }
     }
 
-    private static boolean privateWebHost(String host) {
+    static boolean privateWebHost(String host) {
         if ("localhost".equals(host) || host.endsWith(".local") || "::1".equals(host)) return true;
         if (host.startsWith("127.") || host.startsWith("10.") || host.startsWith("192.168.")
                 || host.startsWith("169.254.")) return true;
@@ -1281,17 +1077,17 @@ public class RagRetrievalService {
         }
     }
 
-    private static String boundedWebText(String value, int maximum) {
+    static String boundedWebText(String value, int maximum) {
         if (value == null) return "";
         var normalized = value.replaceAll("[\\p{Cntrl}\\s]+", " ").strip();
         return normalized.length() <= maximum ? normalized : normalized.substring(0, maximum).strip() + "…";
     }
 
-    private static String normalizedDate(String value) {
+    static String normalizedDate(String value) {
         return value == null ? "" : boundedWebText(value, 80);
     }
 
-    private static String sha256(String value) {
+    static String sha256(String value) {
         try {
             var digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
             var output = new StringBuilder();
@@ -1302,7 +1098,7 @@ public class RagRetrievalService {
         }
     }
 
-    private String dataChannelStatus(boolean searched, List<DataSourceFileSearchFacade.SourceFileHit> hits,
+    String dataChannelStatus(boolean searched, List<DataSourceFileSearchFacade.SourceFileHit> hits,
                                      int failureCount, int queryCount) {
         if (!searched) return "SKIPPED";
         if (failureCount > 0 && failureCount >= queryCount) return "FAILED";
@@ -1310,14 +1106,14 @@ public class RagRetrievalService {
         return hits.isEmpty() ? "EMPTY" : "SUCCEEDED";
     }
 
-    private static String rootCauseText(Throwable exception) {
+    static String rootCauseText(Throwable exception) {
         var root = exception;
         while (root.getCause() != null && root.getCause() != root) root = root.getCause();
         var message = root.getMessage();
         return root.getClass().getSimpleName() + (message == null || message.isBlank() ? "" : ": " + message);
     }
 
-    private List<String> dataQueries(String question, QueryRewriteService.QueryPlan plan) {
+    List<String> dataQueries(String question, QueryRewriteService.QueryPlan plan) {
         var queries = new LinkedHashSet<String>();
         if (question != null && !question.isBlank()) queries.add(question.strip());
         // Keep a generic lexical fallback from the user's wording. This is not
@@ -1353,7 +1149,7 @@ public class RagRetrievalService {
         return queries.stream().limit(8).toList();
     }
 
-    private static List<String> extractDataSearchTerms(String question) {
+    static List<String> extractDataSearchTerms(String question) {
         if (question == null || question.isBlank()) return List.of();
         var normalized = stripDataFileReferences(stripDataSelectionPrefix(question))
                 .replaceFirst("^(?:(?:只)?查|只看)?数据中心[:：]?", "").strip();
@@ -1387,28 +1183,7 @@ public class RagRetrievalService {
         return terms.stream().limit(6).toList();
     }
 
-    private Reranked rerank(String query, List<KnowledgeSearchFacade.SearchHit> hits) {
-        var safeHits = hits == null ? List.<KnowledgeSearchFacade.SearchHit>of() : hits;
-        if (safeHits.isEmpty()) return new Reranked(List.of(), RerankerProvider.RerankOutcome.skipped("EMPTY_INPUT", 0));
-        if (!reranker.isConfigured()) {
-            return new Reranked(safeHits, RerankerProvider.RerankOutcome.skipped("NOT_CONFIGURED", safeHits.size()));
-        }
-        var candidates = safeHits.stream().limit(30).map(hit -> new RerankerProvider.RankCandidate(
-                hit.chunkId().toString(), hit.content(), hit.retrievalScore(), hit.rrfScore())).toList();
-        var outcome = reranker.rerank(query, candidates);
-        if (outcome.documents().isEmpty()) return new Reranked(safeHits, outcome);
-        var scores = outcome.documents().stream().collect(java.util.stream.Collectors.toMap(RerankerProvider.RankedDocument::id,
-                RerankerProvider.RankedDocument::score, (a, b) -> a));
-        var result = new ArrayList<KnowledgeSearchFacade.SearchHit>();
-        safeHits.stream().filter(hit -> scores.containsKey(hit.chunkId().toString()))
-                .sorted(Comparator.comparingDouble((KnowledgeSearchFacade.SearchHit hit) -> scores.get(hit.chunkId().toString())).reversed())
-                .map(hit -> hit.withScores(hit.retrievalScore(), hit.rrfScore(), scores.get(hit.chunkId().toString())))
-                .forEach(result::add);
-        safeHits.stream().filter(hit -> !scores.containsKey(hit.chunkId().toString())).forEach(result::add);
-        return new Reranked(List.copyOf(result), outcome);
-    }
-
-    private CoverageSelection selectCoverage(List<KnowledgeSearchFacade.SearchHit> ranked,
+    CoverageSelection selectCoverage(List<KnowledgeSearchFacade.SearchHit> ranked,
                                              List<KnowledgeSearchFacade.FactCandidateSet> facts, int limit) {
         var byId = ranked.stream().collect(java.util.stream.Collectors.toMap(
                 KnowledgeSearchFacade.SearchHit::chunkId, value -> value, (left, right) -> left, LinkedHashMap::new));
@@ -1430,17 +1205,17 @@ public class RagRetrievalService {
         return new CoverageSelection(List.copyOf(selected.values()), List.copyOf(traces));
     }
 
-    private List<KnowledgeSearchFacade.SearchTerm> searchTerms(QueryRewriteService.QueryPlan plan) {
+    List<KnowledgeSearchFacade.SearchTerm> searchTerms(QueryRewriteService.QueryPlan plan) {
         return plan.retrievalTerms().stream().map(value -> new KnowledgeSearchFacade.SearchTerm(
                 value.text(), value.aliases(), value.kind())).toList();
     }
 
-    private List<KnowledgeSearchFacade.RequiredFact> requiredFacts(QueryRewriteService.QueryPlan plan) {
+    List<KnowledgeSearchFacade.RequiredFact> requiredFacts(QueryRewriteService.QueryPlan plan) {
         return plan.requiredFacts().stream().map(value -> new KnowledgeSearchFacade.RequiredFact(
                 value.label(), value.retrievalQuery())).toList();
     }
 
-    private RerankTrace rerankTrace(RerankerProvider.RerankOutcome value) {
+    RerankTrace rerankTrace(RerankerProvider.RerankOutcome value) {
         return new RerankTrace(value.status(), value.provider(), value.model(), value.httpStatus(), value.error(),
                 value.elapsedMs(), value.inputCount(), value.outputCount());
     }
@@ -1448,7 +1223,13 @@ public class RagRetrievalService {
     public record Retrieval(QueryRewriteService.QueryPlan plan, List<KnowledgeSearchFacade.SearchHit> knowledgeHits,
                             List<DataSourceFileSearchFacade.SourceFileHit> dataHits,
                             DataSourceFileSearchFacade.DataDetailResult dataDetail,
-                            List<WebHit> webHits, Trace trace) {
+                            List<WebHit> webHits, Trace trace,
+                            List<com.jsd.aird.kb.api.ResearchKnowledgeFacade.Candidate> contextCandidates,
+                            Map<UUID,com.jsd.aird.kb.api.ResearchKnowledgeFacade.SourceRef> sourceRefs,
+                            Map<String,Object> pipelineTrace) {
+        public Retrieval(QueryRewriteService.QueryPlan plan,List<KnowledgeSearchFacade.SearchHit> knowledge,
+                         List<DataSourceFileSearchFacade.SourceFileHit> data,DataSourceFileSearchFacade.DataDetailResult detail,
+                         List<WebHit> web,Trace trace) {this(plan,knowledge,data,detail,web,trace,List.of(),Map.of(),Map.of());}
         public Retrieval(QueryRewriteService.QueryPlan plan, List<KnowledgeSearchFacade.SearchHit> knowledgeHits,
                          List<DataSourceFileSearchFacade.SourceFileHit> dataHits, List<WebHit> webHits, Trace trace) {
             this(plan, knowledgeHits, dataHits,
@@ -1457,6 +1238,9 @@ public class RagRetrievalService {
         }
 
         public Retrieval {
+            contextCandidates=contextCandidates==null?List.of():List.copyOf(contextCandidates);
+            sourceRefs=sourceRefs==null?Map.of():Map.copyOf(sourceRefs);
+            pipelineTrace=pipelineTrace==null?Map.of():Map.copyOf(pipelineTrace);
             knowledgeHits = knowledgeHits == null ? List.of() : List.copyOf(knowledgeHits);
             dataHits = dataHits == null ? List.of() : List.copyOf(dataHits);
             dataDetail = dataDetail == null ? DataSourceFileSearchFacade.DataDetailResult.empty(
@@ -1505,25 +1289,25 @@ public class RagRetrievalService {
 
     record InferredFieldLookup(String recordTerm, String fieldTerm) { }
 
-    private record Reranked(List<KnowledgeSearchFacade.SearchHit> hits,
+    record Reranked(List<KnowledgeSearchFacade.SearchHit> hits,
                             RerankerProvider.RerankOutcome outcome) { }
 
-    private record CoverageSelection(List<KnowledgeSearchFacade.SearchHit> hits,
+    record CoverageSelection(List<KnowledgeSearchFacade.SearchHit> hits,
                                      List<FactCoverageTrace> coverage) { }
 
-    private record DataChannelResult(List<DataSourceFileSearchFacade.SourceFileHit> hits, int failureCount,
+    record DataChannelResult(List<DataSourceFileSearchFacade.SourceFileHit> hits, int failureCount,
                                      int queryCount, long elapsedMs, String status,
                                      DataSourceFileSearchFacade.DataDetailResult detail) {
-        private DataChannelResult {
+        DataChannelResult {
             hits = hits == null ? List.of() : List.copyOf(hits);
             detail = detail == null ? DataSourceFileSearchFacade.DataDetailResult.empty(
                     DataSourceFileSearchFacade.DataQueryMode.NONE) : detail;
         }
     }
 
-    private record DataSearchResponse(String query, List<DataSourceFileSearchFacade.SourceFileHit> hits,
+    record DataSearchResponse(String query, List<DataSourceFileSearchFacade.SourceFileHit> hits,
                                       RuntimeException error, long elapsedMs) {
-        private DataSearchResponse {
+        DataSearchResponse {
             hits = hits == null ? List.of() : List.copyOf(hits);
         }
     }
@@ -1570,14 +1354,14 @@ public class RagRetrievalService {
         }
     }
 
-    private record WebFuture(WebSearchProvider.SearchQuery query,
+    record WebFuture(WebSearchProvider.SearchQuery query,
                              CompletableFuture<WebSearchProvider.SearchResponse> future) { }
 
-    private record WebTasks(boolean requested, String initialStatus, long startedNanos, long deadlineNanos,
+    record WebTasks(boolean requested, String initialStatus, long startedNanos, long deadlineNanos,
                             List<WebFuture> futures, List<String> failures) { }
 
-    private record WebSearchResult(List<WebHit> hits, WebTrace trace) { }
+    record WebSearchResult(List<WebHit> hits, WebTrace trace) { }
 
-    private record WebCandidate(String title, String siteName, String url, String content, double providerScore,
+    record WebCandidate(String title, String siteName, String url, String content, double providerScore,
                                 double rrfScore, String publishedAt) { }
 }

@@ -59,4 +59,51 @@ describe('synchronizeStructuredData', () => {
     expect(result.data).toEqual({ order: { code: 'existing' } });
     expect(result.bindingValues).toEqual([]);
   });
+
+  it('removes stale repeat records before comparing editor values with structured data', () => {
+    const parent = binding('parent', '/records/component/items', 'REPEAT_REGION');
+    const product = binding('product', '/records/component/items/*/产品', 'REPEAT_FIELD', parent.bindingId);
+    const specification = binding('specification', '/records/component/items/*/规格', 'REPEAT_FIELD', parent.bindingId);
+    const result = synchronizeStructuredData(
+      { records: { component: { items: [
+        { 产品: 'A', 规格: 'small' },
+        { 产品: 'B', 规格: 'large' },
+        { 产品: 'stale', 规格: 'stale' },
+      ] } } },
+      [parent, product, specification],
+      (item) => ({ product: ['A', 'B'], specification: ['small', 'large'] })[item.bindingId as 'product' | 'specification'],
+    );
+
+    expect(result.data).toEqual({ records: { component: { items: [
+      { 产品: 'A', 规格: 'small' },
+      { 产品: 'B', 规格: 'large' },
+    ] } } });
+    expect(result.bindingValues.every((pair) => JSON.stringify(pair.dataValue) === JSON.stringify(pair.editorValue))).toBe(true);
+  });
+
+  it('clears old values when only one repeat column becomes shorter', () => {
+    const parent = binding('parent', '/records/component', 'REPEAT_REGION');
+    const product = binding('product', '/records/component/*/产品', 'REPEAT_FIELD', parent.bindingId);
+    const specification = binding('specification', '/records/component/*/规格', 'REPEAT_FIELD', parent.bindingId);
+    const result = synchronizeStructuredData(
+      { records: { component: [
+        { 产品: 'A', 规格: 'small' },
+        { 产品: 'B', 规格: 'medium' },
+        { 产品: 'old-3', 规格: 'large' },
+      ] } },
+      [parent, product, specification],
+      (item) => ({ product: ['A', 'B'], specification: ['small', 'medium', 'large'] })[item.bindingId as 'product' | 'specification'],
+    );
+
+    expect(result.data).toEqual({ records: { component: [
+      { 产品: 'A', 规格: 'small' },
+      { 产品: 'B', 规格: 'medium' },
+      { 产品: null, 规格: 'large' },
+    ] } });
+    expect(result.bindingValues.find((pair) => pair.dataPath.endsWith('/产品'))).toEqual({
+      dataPath: '/records/component/*/产品',
+      dataValue: ['A', 'B', null],
+      editorValue: ['A', 'B', null],
+    });
+  });
 });

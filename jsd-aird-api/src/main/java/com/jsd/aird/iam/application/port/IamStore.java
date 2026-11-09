@@ -1,5 +1,6 @@
 package com.jsd.aird.iam.application.port;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -53,11 +54,11 @@ public interface IamStore {
 
     void resetPassword(UUID organizationId, UUID userId, String passwordHash);
 
-    void changePassword(UUID organizationId, UUID userId, String passwordHash);
+    void changePassword(UUID organizationId, UUID userId, UUID currentSessionId, String passwordHash);
 
     void markLoginSuccess(UUID organizationId, UUID userId);
 
-    void markLoginFailure(UUID organizationId, UUID userId, boolean locked);
+    void markLoginFailure(UUID organizationId, UUID userId, boolean locked, Duration lockDuration);
 
     boolean hasSystemAdmin(UUID organizationId);
 
@@ -102,17 +103,21 @@ public interface IamStore {
      */
     Optional<Session> activeSession(String token);
 
+    boolean wasReplaced(String token);
+
     Session createSession(UUID organizationId, UUID userId, long authVersion, String tokenHash,
                           Instant expiresAt, Instant absoluteExpiresAt, String ip, String userAgent,
                           boolean rememberMe);
 
-    void touchSession(UUID sessionId, Instant expiresAt);
+    boolean touchSession(UUID sessionId, Instant expiresAt, long idleTimeoutMillis);
 
     void revokeSession(UUID sessionId);
 
     List<SessionSummary> sessions(UUID organizationId, UUID userId);
 
     void revokeUserSessions(UUID organizationId, UUID userId);
+
+    void replaceUserSessions(UUID organizationId, UUID userId);
 
     long recentFailures(UUID organizationId, String username, Instant since);
 

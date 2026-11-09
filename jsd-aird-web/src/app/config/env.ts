@@ -1,4 +1,5 @@
 export const appEnv = {
-  title: import.meta.env.VITE_APP_TITLE || '杰事达研发数字化与AI平台',
+  title: import.meta.env.VITE_APP_TITLE || '',
+  version: import.meta.env.VITE_APP_VERSION || '',
   apiBaseUrl: import.meta.env.VITE_API_BASE_URL || '',
 } as const;

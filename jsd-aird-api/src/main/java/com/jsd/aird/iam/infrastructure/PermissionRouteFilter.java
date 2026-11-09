@@ -338,6 +338,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         var method = request.getMethod();
         var read = Set.of("GET", "HEAD", "OPTIONS").contains(method);
 
+        if (path.startsWith("/api/v1/agents/")) return permission("ai.use", "AI", read ? "READ" : "WRITE");
+
         if (path.startsWith("/api/v1/workspace-reviews/")) {
             var parts = path.split("/");
             if (parts.length < 6) return null;
@@ -539,6 +541,19 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             return read ? permission("template.view.view", "TEMPLATE", "READ") : null;
         }
 
+        // 报价记录：上传任务与查看列表同属一个业务模块，读写权限独立授予。
+        if (path.startsWith("/api/v1/quotation-imports") || path.startsWith("/api/v1/quotations")) {
+            if (read) return permission("quotation.view", "QUOTATION", "READ");
+            if (path.endsWith("/rollback")) return permission("quotation.edit", "QUOTATION", "WRITE");
+            if (path.endsWith("/review/submit")) return permission("quotation.submit", "QUOTATION", "WRITE");
+            if (path.endsWith("/review/approve") || path.endsWith("/review/reject"))
+                return permission("quotation.review", "QUOTATION", "WRITE");
+            if (method.equals("DELETE")) return permission("quotation.delete", "QUOTATION", "WRITE");
+            if (method.equals("PUT")) return permission("quotation.edit", "QUOTATION", "WRITE");
+            if (method.equals("POST")) return permission("quotation.create", "QUOTATION", "WRITE");
+            return null;
+        }
+
         if (path.startsWith("/api/v1/production-orders")) {
             if (path.contains("/export")) return permission("production.export", "PRODUCTION", "READ");
             if (read) return permission("production.view", "PRODUCTION", "READ");
@@ -715,6 +730,12 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
                 return permission("research-test.report.upload.create", "RESEARCH_TEST", "WRITE");
             if ("RESEARCH_TEST_STANDARD_SOURCE".equals(kind))
                 return permission("research-test.standard.upload.create", "RESEARCH_TEST", "WRITE");
+            if ("QUOTATION_SOURCE".equals(kind))
+                return permission("quotation.create", "QUOTATION", "WRITE");
+        }
+        if (path.startsWith("/api/v1/files")) {
+            if (path.endsWith("/content")) return permission("ops.file.download", "FILE", "READ");
+            return method.equals("POST") ? permission("ops.file.upload", "FILE", "WRITE") : read ? permission("ops.file.view", "FILE", "READ") : null;
         }
         return null;
     }

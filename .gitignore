@@ -33,6 +33,7 @@ Thumbs.db
 /.codex-import-inputs/
 /artifacts/
 /.runtime/
+/.taste-skill/
 /ragent-main/
 /.codex-tmp/
 /qa/
@@ -48,6 +49,7 @@ Thumbs.db
 /catboost_info/
 **/catboost_info/
 **/__pycache__/
+**/.venv/
 **/.pytest_cache/
 /.runtime/demo/
 .codex-temp
@@ -64,4 +66,4 @@ Thumbs.db
 !/scripts/testdata/r10_bulk_client_template_import.py
 !/scripts/testdata/r10_noformula_bundle.py
 !/scripts/testdata/r10_register_noformula_model.sql
-/jsd-aird-agents/.coverage
+/jsd-aird-agent/control/.coverage

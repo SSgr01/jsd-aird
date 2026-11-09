@@ -56,7 +56,7 @@ interface InfoFormValues {
   projectCode?: string;
   name: string;
   owner?: string;
-  startDate?: dayjs.Dayjs | null;
+  dates?: [dayjs.Dayjs | null, dayjs.Dayjs | null];
   priority?: Project['priority'];
   status?: Project['status'];
   teamMembers?: string[];
@@ -136,7 +136,9 @@ export function ProjectDetailPage() {
       projectCode: project.projectCode,
       name: project.name,
       owner: project.owner,
-      startDate: project.startDate ? dayjs(project.startDate) : null,
+      dates: project.startDate || project.endDate
+        ? [project.startDate ? dayjs(project.startDate) : null, project.endDate ? dayjs(project.endDate) : null]
+        : undefined,
       priority: project.priority,
       status: project.status,
       teamMembers: members,
@@ -181,7 +183,8 @@ export function ProjectDetailPage() {
       projectCode: projectCode || undefined,
       name: values.name.trim(),
       owner: values.owner?.trim() || undefined,
-      startDate: values.startDate?.format('YYYY-MM-DD') || undefined,
+      startDate: values.dates?.[0]?.format('YYYY-MM-DD') || undefined,
+      endDate: values.dates?.[1]?.format('YYYY-MM-DD') || undefined,
       priority: values.priority,
       status: values.status,
       teamSize: (values.teamMembers ?? []).length,
@@ -223,7 +226,9 @@ export function ProjectDetailPage() {
                     projectCode: project.projectCode,
                     name: project.name,
                     owner: project.owner,
-                startDate: project.startDate ? dayjs(project.startDate) : null,
+                dates: project.startDate || project.endDate
+                  ? [project.startDate ? dayjs(project.startDate) : null, project.endDate ? dayjs(project.endDate) : null]
+                  : undefined,
                 priority: project.priority,
                 status: project.status,
                 teamMembers: members,
@@ -256,8 +261,8 @@ export function ProjectDetailPage() {
           <Form.Item name="owner" label="负责人">
             <Input placeholder="请输入负责人" maxLength={100} />
           </Form.Item>
-          <Form.Item name="startDate" label="开始日期">
-            <DatePicker style={{ width: '100%' }} placeholder="请选择开始日期" />
+          <Form.Item name="dates" label="项目日期" className="pm-form-span-2">
+            <DatePicker.RangePicker style={{ width: '100%' }} placeholder={['开始日期', '结束日期']} allowEmpty={[true, true]} />
           </Form.Item>
           <Form.Item name="priority" label="优先级">
             <Select placeholder="请选择" options={projectPriorities.map(({ value, label }) => ({ value, label }))} />

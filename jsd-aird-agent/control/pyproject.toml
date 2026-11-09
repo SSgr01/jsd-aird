@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jsd-aird-agent-control"
+version = "0.1.0"
+description = "Shared JSD AI platform with vertical packs and governed simulated business tools"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "fastapi==0.139.2",
+  "uvicorn==0.52.4",
+  "httpx==0.28.1",
+  "openai==2.45.0",
+  "pydantic-settings==2.16.1",
+  "psycopg[binary]==3.3.6",
+  "psycopg-pool==3.3.3",
+  "pyyaml==6.0.3",
+  "jsonschema==4.25.1",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "pytest-cov==7.1.0", "ruff==0.15.6"]
+research = ["paper-qa @ git+https://github.com/Future-House/paper-qa.git@c692d0dfeac4a0296599f7fe21a253a58b7ac12a"]
+
+[project.scripts]
+jsd-aird-agent-control = "aird_agent.server.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aird_agent"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+testpaths = ["harness_tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra"
+markers = ["integration: requires an isolated agents PostgreSQL test database", "live: explicitly enabled real provider smoke test"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

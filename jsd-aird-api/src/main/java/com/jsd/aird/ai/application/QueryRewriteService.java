@@ -153,6 +153,15 @@ public class QueryRewriteService {
         return rewrite(question, history, false);
     }
 
+    public Result original(String question, List<AssistantRepository.MessageRow> history, boolean webSearchEnabled) {
+        var fallbackWebQueries = webSearchEnabled && StringUtils.hasText(question)
+                ? List.of(new WebQuery(bounded(question, MAX_WEB_QUERY_LENGTH), "GENERAL", "ALL")) : List.<WebQuery>of();
+        var sourceText = dataSourceText(question, history);
+        var fallback = new QueryPlan(question, question, List.of(), List.of(), List.of(), Map.of(), "",
+                fallbackWebQueries, sanitizeDataRequest(null, sourceText, question));
+        return new Result(fallback,"SKIPPED_CONFIG","",false);
+    }
+
     public Result rewrite(String question, List<AssistantRepository.MessageRow> history, boolean webSearchEnabled) {
         var fallbackWebQueries = webSearchEnabled && StringUtils.hasText(question)
                 ? List.of(new WebQuery(bounded(question, MAX_WEB_QUERY_LENGTH), "GENERAL", "ALL")) : List.<WebQuery>of();

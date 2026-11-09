@@ -40,6 +40,21 @@ class FileObjectServiceDataSourceTest {
     }
 
     @Test
+    void privateFilePolicyGuardsDownloadPreviewOpenAndPresignedUrlsBeforeStorage() {
+        var policy = mock(com.jsd.aird.ops.api.FileReadPolicy.class);
+        service.configureReadPolicies(java.util.List.of(policy));
+        var actor = ActorContext.required();
+        var fileId = UUID.randomUUID();
+        org.mockito.Mockito.doThrow(new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND))
+            .when(policy).requireRead(actor.organizationId(), actor.userId(), fileId);
+        assertThatThrownBy(() -> service.download(fileId)).isInstanceOf(com.jsd.aird.shared.error.ApiException.class);
+        assertThatThrownBy(() -> service.open(actor.organizationId(), fileId)).isInstanceOf(com.jsd.aird.shared.error.ApiException.class);
+        assertThatThrownBy(() -> service.presignedUrl(actor.organizationId(), fileId, java.time.Duration.ofMinutes(1)))
+            .isInstanceOf(com.jsd.aird.shared.error.ApiException.class);
+        verifyNoInteractions(storage, repository);
+    }
+
+    @Test
     void stagesExcelCsvWordAndPdfSources() {
         var xls = oleBytes();
         var pdf = "%PDF-1.7\nvalid test source".getBytes(StandardCharsets.US_ASCII);

@@ -29,6 +29,13 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
         this.jdbc = jdbc;
     }
 
+    @Override public boolean matchesSource(UUID organizationId, UUID valueId, UUID fileId, UUID ownerId, boolean experiment) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM ai.structured_retrieval_projection "
+            + "WHERE organization_id=? AND value_id=? AND file_object_id=? AND "
+            + (experiment ? "source_owner='EXPERIMENT' AND experiment_id=?" : "source_owner='DATA_CENTER' AND import_job_id=?") + ")",
+            Boolean.class, organizationId, valueId, fileId, ownerId));
+    }
+
     @Override
     public DataDetailResult queryDetails(UUID organizationId, DataDetailQuery query,
                                          List<UUID> categoryIds, AccessScope accessScope) {

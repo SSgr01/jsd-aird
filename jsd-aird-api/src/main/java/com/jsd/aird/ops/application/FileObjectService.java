@@ -35,6 +35,18 @@ public class FileObjectService implements FileStorageFacade {
     private com.jsd.aird.shared.resource.CapacityProperties capacity=com.jsd.aird.shared.resource.CapacityProperties.defaults();
     private com.jsd.aird.shared.resource.TemporarySpace temporarySpace;
     private org.springframework.transaction.support.TransactionTemplate stagingTransaction;
+    private java.util.List<com.jsd.aird.ops.api.FileReadPolicy> readPolicies = java.util.List.of();
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void configureReadPolicies(java.util.List<com.jsd.aird.ops.api.FileReadPolicy> policies) {
+        readPolicies = java.util.List.copyOf(policies);
+    }
+
+    private void requireRead(UUID organizationId, UUID fileId) {
+        var actor = ActorContext.current();
+        var actorId = actor != null && organizationId.equals(actor.organizationId()) ? actor.userId() : null;
+        readPolicies.forEach(policy -> policy.requireRead(organizationId, actorId, fileId));
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
     void configureCapacity(com.jsd.aird.shared.resource.CapacityProperties limits,
@@ -47,7 +59,7 @@ public class FileObjectService implements FileStorageFacade {
 
     private long uploadLimit(String kind){return switch(kind==null?"":kind.toUpperCase(java.util.Locale.ROOT)){
         case "KNOWLEDGE"->Math.min(capacity.fileBytes(),MAX_KNOWLEDGE_UPLOAD_BYTES);
-        case "PROJECT_DOCUMENT","EXPERIMENT_SOURCE"->Math.min(capacity.fileBytes(),MAX_DOCUMENT_UPLOAD_BYTES);
+        case "PROJECT_DOCUMENT","EXPERIMENT_SOURCE","QUOTATION_SOURCE"->Math.min(capacity.fileBytes(),MAX_DOCUMENT_UPLOAD_BYTES);
         case "SPC_CHART"->Math.min(capacity.fileBytes(),MAX_SPC_UPLOAD_BYTES);
         default->capacity.fileBytes();
     };}
@@ -124,6 +136,9 @@ public class FileObjectService implements FileStorageFacade {
             if ("EXPERIMENT_SOURCE".equalsIgnoreCase(kind) && size > MAX_DOCUMENT_UPLOAD_BYTES) {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "实验文档超过 200MB 限制");
             }
+            if ("QUOTATION_SOURCE".equalsIgnoreCase(kind) && size > MAX_DOCUMENT_UPLOAD_BYTES) {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST, "报价文件超过 200MB 限制");
+            }
             if ("SPC_CHART".equalsIgnoreCase(kind) && size > MAX_SPC_UPLOAD_BYTES) {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "图谱文件超过 100MB 限制");
             }
@@ -164,6 +179,7 @@ public class FileObjectService implements FileStorageFacade {
 
     public DownloadedFile download(UUID fileId) {
         var actor = ActorContext.required();
+        requireRead(actor.organizationId(), fileId);
         var file = repository.find(actor.organizationId(), fileId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "文件不存在"));
         if ("DELETED".equals(file.status())) {
@@ -190,6 +206,7 @@ public class FileObjectService implements FileStorageFacade {
 
     @Override
     public FileStorageFacade.StoredFile open(UUID organizationId, UUID fileId) {
+        requireRead(organizationId, fileId);
         var file = repository.find(organizationId, fileId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "文件不存在"));
         if ("DELETED".equals(file.status())) {
@@ -208,6 +225,7 @@ public class FileObjectService implements FileStorageFacade {
 
     @Override
     public Optional<String> presignedUrl(UUID organizationId, UUID fileId, Duration expiry) {
+        requireRead(organizationId, fileId);
         var file = repository.find(organizationId, fileId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "文件不存在"));
         if ("DELETED".equals(file.status())) return Optional.empty();

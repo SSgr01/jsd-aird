@@ -14,24 +14,17 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
-import java.time.Duration;
 
 public class SessionAuthenticationFilter extends OncePerRequestFilter {
 
     public static final String SESSION_ATTRIBUTE = SessionAuthenticationFilter.class.getName() + ".session";
+    public static final String REPLACED_ATTRIBUTE = SessionAuthenticationFilter.class.getName() + ".replaced";
     private final IamAuthService auth;
     private final String cookieName;
-    private final Duration touchInterval;
 
     public SessionAuthenticationFilter(IamAuthService auth, String cookieName) {
-        this(auth, cookieName, Duration.ofSeconds(30));
-    }
-
-    public SessionAuthenticationFilter(IamAuthService auth, String cookieName, Duration touchInterval) {
         this.auth = auth;
         this.cookieName = cookieName;
-        this.touchInterval = touchInterval == null || touchInterval.isNegative()
-                ? Duration.ofSeconds(30) : touchInterval;
     }
 
     @Override
@@ -46,7 +39,7 @@ public class SessionAuthenticationFilter extends OncePerRequestFilter {
         var token = cookie(request, cookieName);
         var session = auth.activeSession(token);
         try {
-            if (session != null && isCurrent(session)) {
+            if (auth.isCurrent(session)) {
                 var user = auth.user(session.userId());
                 var actor = new Actor(session.organizationId(), session.userId(), session.username(),
                         user == null || user.roleCode() == null ? "USER" : user.roleCode());
@@ -54,10 +47,8 @@ public class SessionAuthenticationFilter extends OncePerRequestFilter {
                 request.setAttribute(SESSION_ATTRIBUTE, session);
                 SecurityContextHolder.getContext().setAuthentication(
                         UsernamePasswordAuthenticationToken.authenticated(actor, null, java.util.List.of()));
-                var now = java.time.Instant.now();
-                if (session.lastSeenAt() == null || session.lastSeenAt().plus(touchInterval).isBefore(now)) {
-                    auth.touch(session);
-                }
+            } else if (auth.wasReplaced(token)) {
+                request.setAttribute(REPLACED_ATTRIBUTE, true);
             }
             if (request.getRequestURI().startsWith("/api/v1/assistant/qa")) {
                 RequestTimingHolder.put("sessionAuthMs", elapsedMs(started));
@@ -66,12 +57,6 @@ public class SessionAuthenticationFilter extends OncePerRequestFilter {
         } finally {
             ActorContext.clear();
         }
-    }
-
-    private boolean isCurrent(IamStore.Session session) {
-        var now = java.time.Instant.now();
-        return session.expiresAt() != null && session.absoluteExpiresAt() != null
-                && session.expiresAt().isAfter(now) && session.absoluteExpiresAt().isAfter(now);
     }
 
     private long elapsedMs(long started) {

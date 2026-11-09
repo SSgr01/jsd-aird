@@ -15,7 +15,7 @@ class AssistantDataDetailTest {
         var detail = DataSourceFileSearchFacade.DataDetailResult.empty(
                 DataSourceFileSearchFacade.DataQueryMode.FIELD_LOOKUP);
 
-        assertThat(AssistantService.dataLookupContext(detail))
+        assertThat(RetrievalContextSupport.dataLookupContext(detail))
                 .contains("未找到匹配文件或记录")
                 .doesNotContain("可能原因", "数据不存在");
     }
@@ -25,8 +25,8 @@ class AssistantDataDetailTest {
         var detail = DataSourceFileSearchFacade.DataDetailResult.empty(
                 DataSourceFileSearchFacade.DataQueryMode.RECORD_DETAIL);
 
-        assertThat(AssistantService.dataLookupContext(detail, true))
-                .contains("本轮没有检索结构化数据来源", "不包含数据中心")
+        assertThat(RetrievalContextSupport.dataLookupContext(detail, true))
+                .contains("本轮没有检索结构化数据来源", "不包含数据中心或实验记录")
                 .doesNotContain("未找到匹配文件或记录");
     }
 
@@ -44,8 +44,8 @@ class AssistantDataDetailTest {
                         List.of(target), List.of(sameRecord, sharedSheet), false, false, "")), "VALUE");
         var retrieval = new RagRetrievalService.Retrieval(null, List.of(), List.of(target), detail, List.of(), null);
 
-        var answerHits = AssistantService.answerDataHits(retrieval);
-        var compressed = new ContextCompressionService().compress(List.of(), answerHits, 2_000);
+        var answerHits = RetrievalContextSupport.answerDataHits(retrieval);
+        var compressed = new ContextCompressionService().compress(List.of(), answerHits, 2_000, true);
 
         assertThat(answerHits).containsExactly(target, sameRecord, sharedSheet);
         assertThat(compressed.evidenceRefs()).containsExactly("D1", "D2", "D3");
@@ -66,11 +66,11 @@ class AssistantDataDetailTest {
                 UUID.randomUUID(), UUID.randomUUID(), "多来源数据.xlsx", 2, 2,
                 List.of(confirmed, draft), false, List.of(), false, List.of(), "VALUE");
 
-        var boundary = AssistantService.dataEvidenceBoundary(result);
+        var boundary = RetrievalContextSupport.dataEvidenceBoundary(result);
 
         assertThat(boundary.observationOnly()).isTrue();
         assertThat(boundary.description()).contains("已确认记录，也有草稿").contains("逐条注明状态");
-        assertThat(AssistantService.dataLookupContext(result)).contains("找到匹配记录");
+        assertThat(RetrievalContextSupport.dataLookupContext(result)).contains("找到匹配记录");
     }
 
     @Test
@@ -78,11 +78,11 @@ class AssistantDataDetailTest {
         var massDensity = hit("REC-001", "密度", "1.08", "CONFIRMED", "TARGET", "mass_density", "g/cm³");
         var opticalDensity = hit("REC-002", "密度", "0.42", "CONFIRMED", "TARGET", "optical_density", "");
 
-        var ambiguity = AssistantService.detectFieldAmbiguity("请问密度是什么？", List.of(massDensity, opticalDensity));
+        var ambiguity = RetrievalContextSupport.detectFieldAmbiguity("请问密度是什么？", List.of(massDensity, opticalDensity));
 
         assertThat(ambiguity).isNotNull();
         assertThat(ambiguity.fieldName()).isEqualTo("密度");
-        assertThat(ambiguity.candidates()).extracting(AssistantService.FieldCandidate::code)
+        assertThat(ambiguity.candidates()).extracting(RetrievalContextSupport.FieldCandidate::code)
                 .containsExactly("mass_density", "optical_density");
     }
 
@@ -91,7 +91,7 @@ class AssistantDataDetailTest {
         var first = hit("REC-001", "密度", "1.08", "CONFIRMED", "TARGET");
         var second = hit("REC-002", "密度", "1.12", "CONFIRMED", "TARGET");
 
-        assertThat(AssistantService.detectFieldAmbiguity("查询密度", List.of(first, second))).isNull();
+        assertThat(RetrievalContextSupport.detectFieldAmbiguity("查询密度", List.of(first, second))).isNull();
     }
 
     private DataSourceFileSearchFacade.SourceFileHit hit(String recordKey, String fieldName, String value,

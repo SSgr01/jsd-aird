@@ -238,6 +238,17 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
                 sql = "SELECT EXISTS (SELECT 1 FROM mdm.project WHERE organization_id = ? AND created_by::text = ? AND id = ? AND deleted = false)";
                 args = new Object[]{check.organizationId(), check.userId().toString(), check.resourceId()};
             }
+            case "QUOTATION" -> {
+                // 上传任务与报价记录共用报价权限：重试/删除上传记录时资源 id 是导入任务 id。
+                sql = """
+                        SELECT EXISTS (SELECT 1 FROM rnd.quotation_record
+                                       WHERE organization_id = ? AND created_by = ? AND id = ? AND deleted = false)
+                            OR EXISTS (SELECT 1 FROM rnd.quotation_import_job
+                                       WHERE organization_id = ? AND created_by = ? AND id = ?)
+                        """;
+                args = new Object[]{check.organizationId(), check.userId(), check.resourceId(),
+                        check.organizationId(), check.userId(), check.resourceId()};
+            }
             case "FILE" -> {
                 sql = "SELECT EXISTS (SELECT 1 FROM ops.file_object WHERE organization_id = ? AND created_by = ? AND id = ?)";
                 args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};

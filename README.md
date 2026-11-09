@@ -7,6 +7,8 @@
 - `jsd-aird-web`：React 管理端基础外壳。
 - `jsd-aird-api`：Java/Spring Boot 模块化单体。
 - `jsd-aird-ai`：T07-PRE 独立 Python 配方模型计算服务，已完成A.2～A.5算法门禁、适用域、实验优化与分类目标Pipeline。
+- `jsd-aird-agent/control`：原生 Python Harness 控制服务，提供可插拔业务能力包、受控技能读取与工具发现、统一调度、运行预算、审批约束、检查点恢复和 SSE。宿主无关控制层位于 `src/aird_agent/core`，JSD 权限、文献及问答策略通过 `src/aird_agent/hosts/jsd` 与能力包接入；任务账本使用独立 PostgreSQL。Java 宿主负责真实业务权限、检索与成果存储，业务写入仍需相应工具和正式审批接入，不能将旧模拟闭环视为已具备的业务能力。参见 [平台说明](jsd-aird-agent/README.md)与[控制服务说明](jsd-aird-agent/control/README.md)。
+- `jsd-aird-agent/pi-worker`：从固定 `vendor/pi` 子模块源码构建的 Node.js 原生模型执行循环，由 Python Harness 调度，当前不再使用 LangGraph 循环。普通问答可通过现有开关切换 pi 固定生成并保留 Java 历史与消息 ID；文献研究按需调用授权工具，两种策略共用底座但保留独立会话。私有资料及成果回执依赖对应数据库结构和存储配置；Docker 仅用于启用后的隔离沙箱计算，问答与普通工具调用不要求 Docker。参见 [pi 执行器说明](jsd-aird-agent/pi-worker/README.md)、[证据协议](jsd-aird-agent/docs/evidence-protocol.md)、[检索链路说明](jsd-aird-agent/docs/retrieval-pipeline.md)。
 - `compose.yaml`：提供 PostgreSQL 18/pgvector、MinIO、Worker 与 AI 计算服务的容器编排。
 
 T07-A 仅新增算法、适用域、不可变制品和跨语言契约，不接入 T03–T06 尚未合并的客户接口和数据库结构。
@@ -84,6 +86,8 @@ jdbc:postgresql://localhost:5432/jsd_aird
 ```
 
 仅限本机开发时使用默认账号。若需要修改连接信息，请修改根目录 `.env` 中的 `JSD_AIRD_DATASOURCE_*` 变量，再运行 `dev-api.ps1`。如果 PostgreSQL 的 `bin` 目录未加入 PATH，可在 `.env` 设置 `JSD_AIRD_PSQL_PATH` 指向 `psql.exe`；Java 21 未加入 PATH 时，可设置 `JSD_AIRD_JAVA_HOME` 指向 JDK 根目录。
+
+登录会话的无操作超时时间由根目录 `.env` 的 `JSD_AIRD_SESSION_IDLE_TIMEOUT` 控制，默认 `30m`；修改后重启后端即可，前端会从后端读取相同的时长。普通 API 请求和后台轮询不会延长会话。
 
 Windows 开发不需要运行 `db-down.ps1`；该命令只输出说明并且不会删除数据。Docker Compose 是 Linux/CI 的可选工具，固定使用 PostgreSQL 18 基线。
 

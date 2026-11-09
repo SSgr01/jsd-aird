@@ -1,4 +1,5 @@
 import { fileURLToPath, URL } from 'node:url';
+import { realpathSync } from 'node:fs';
 
 import react from '@vitejs/plugin-react';
 import { defineConfig, loadEnv } from 'vite';
@@ -8,10 +9,13 @@ import { browserCssCompat } from './scripts/browser-css-compat';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
+  const rootEnv = loadEnv(mode, fileURLToPath(new URL('..', import.meta.url)), '');
   const apiTarget = env.VITE_DEV_API_TARGET || 'http://localhost:8080';
+  const appVersion = rootEnv.VITE_APP_VERSION || '';
 
   return {
     plugins: [react(), buildInfoPlugin()],
+    define: { 'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion) },
     css: { postcss: { plugins: [browserCssCompat()] } },
     resolve: {
       // Univer declares RxJS as a peer dependency. Keep every Univer package
@@ -24,6 +28,14 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: 5173,
+      // Worktrees may reuse installed dependencies through a junction. Allow only
+      // that dependency directory, not its parent repository or private .env.
+      fs: {
+        allow: [
+          fileURLToPath(new URL('.', import.meta.url)),
+          realpathSync(fileURLToPath(new URL('./node_modules', import.meta.url))),
+        ],
+      },
       proxy: {
         '/api': createDevProxy(apiTarget),
         '/actuator': createDevProxy(apiTarget),

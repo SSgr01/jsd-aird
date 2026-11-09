@@ -1,0 +1,122 @@
+.app-shell-assistant .app-content-assistant {
+  padding: 64px 12px 0 0;
+  background: #fff;
+}
+.app-shell-assistant .ant-pro-sider {
+  box-shadow: none;
+}
+.assistant-hub {
+  position: relative;
+  gap: 0;
+  padding: 0;
+  background: #fff;
+  max-width: none;
+  margin: 0;
+}
+.assistant-hub-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  padding: 12px 20px;
+}
+.assistant-hub-heading h1.ant-typography {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.4;
+}
+.assistant-hub-heading > div > .ant-typography-secondary {
+  display: none;
+}
+/* The original page component and its data/stream lifecycle remain unchanged. */
+.assistant-hub .assistant-page > .page-heading {
+  display: none;
+}
+.assistant-hub .assistant-page,
+.assistant-hub .research-workspace {
+  padding: 0;
+  margin: 0;
+  max-width: none;
+  min-width: 0;
+}
+.assistant-mode-tabs > .ant-tabs-nav {
+  position: absolute;
+  left: 170px;
+  top: 8px;
+  margin: 0;
+  height: 40px;
+}
+.assistant-mode-tabs > .ant-tabs-nav::before {
+  border: 0;
+}
+.assistant-mode-tabs > .ant-tabs-nav .ant-tabs-tab-active .ant-tabs-tab-btn {
+  text-shadow: none;
+  color: var(--app-text);
+}
+.assistant-hub .ai-conversation-workspace {
+  height: var(--assistant-workspace-height, calc(100dvh - 160px));
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+}
+/* These overrides apply only inside the research tab, never to ordinary Q&A. */
+.assistant-hub .research-workspace .ai-message-assistant-body {
+  min-height: 0;
+}
+.assistant-hub .research-workspace .ai-conversation-welcome {
+  min-height: 0;
+  padding-block: 24px;
+}
+.assistant-hub .research-workspace .ai-conversation-welcome-mark,
+.assistant-hub .research-workspace .ai-message-assistant-icon {
+  display: none;
+}
+.assistant-hub .research-workspace .ai-conversation-composer .ant-btn-primary:not(:disabled) {
+  background: #1677ff;
+  border-color: #1677ff;
+  box-shadow: none;
+}
+.assistant-hub .research-workspace .ai-conversation-side {
+  box-shadow: none;
+}
+.assistant-hub
+  .research-workspace
+  .ai-conversation-workspace:not(.is-side-open)
+  .ai-conversation-scrim {
+  visibility: hidden;
+}
+.assistant-hub .research-workspace .harness-examples {
+  width: min(100%, 680px);
+  margin-inline: 0;
+}
+.assistant-hub .research-workspace .ai-conversation-workspace {
+  box-shadow: none;
+}
+@media (max-width: 760px) {
+  .app-shell-assistant .app-content-assistant {
+    padding: 64px 0 0;
+  }
+  .assistant-hub {
+    padding: 0;
+  }
+  .assistant-hub-heading {
+    align-items: flex-start;
+    gap: 8px;
+    min-height: 50px;
+    padding: 8px 12px;
+  }
+  .assistant-hub-heading h1.ant-typography {
+    font-size: 18px;
+  }
+  .assistant-hub .ai-conversation-workspace {
+    height: var(--assistant-workspace-height, calc(100dvh - 164px));
+    min-height: 0;
+  }
+  .assistant-mode-tabs > .ant-tabs-nav {
+    left: 135px;
+    top: 4px;
+  }
+  .assistant-mode-tabs > .ant-tabs-nav .ant-tabs-tab + .ant-tabs-tab {
+    margin-left: 20px;
+  }
+}

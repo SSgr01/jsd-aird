@@ -8,6 +8,10 @@ import com.jsd.aird.shared.api.AllowedActions;
 import com.jsd.aird.iam.api.RecordDataScope;
 
 public interface KnowledgeRepository {
+    record ResearchDocument(UUID id, UUID publicationId, UUID versionId, String title) { }
+    default List<ResearchDocument> researchDocuments(UUID organizationId, int offset, int limit) {
+        throw new UnsupportedOperationException("Authorized research discovery requires published AI document enumeration");
+    }
     void lockCategory(UUID organizationId,UUID categoryId);
 
 
@@ -134,6 +138,12 @@ public interface KnowledgeRepository {
         return vectorSearch(organizationId, vector, aiOnly, categoryIds, limit);
     }
 
+    default List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly,
+                                         List<UUID> categoryIds, Set<UUID> documentIds, int limit, int dimension) {
+        if (documentIds != null && documentIds.isEmpty()) return List.of();
+        throw new UnsupportedOperationException("Scoped vector search must filter before ranking");
+    }
+
     default List<RankedChunk> batchBm25Rank(UUID organizationId, List<AnalyzedQuery> queries,
                                             boolean aiOnly, List<UUID> categoryIds, int limit) {
         if (queries == null || queries.isEmpty()) return List.of();
@@ -165,6 +175,12 @@ public interface KnowledgeRepository {
     default List<SearchRow> loadSearchRows(UUID organizationId, List<UUID> chunkIds) {
         return List.of();
     }
+
+    record ChunkPublication(UUID chunkId, UUID publicationId) { }
+    record ParentChunk(UUID childId, UUID parentId, UUID documentId, UUID versionId, UUID publicationId,
+                       UUID reviewRevisionId, String originalName, String content, String childContent) { }
+    default List<ParentChunk> loadParents(UUID organizationId, List<ChunkPublication> children) { return List.of(); }
+    default Optional<ParentChunk> parentAtPublication(UUID organizationId, UUID parentId, UUID publicationId) { return Optional.empty(); }
 
     record CategoryRow(UUID id, String scope, String name, String description, int sortOrder, long documentCount) {
         public String getRevision(){return com.jsd.aird.shared.json.RevisionToken.of(id,scope,name,description,sortOrder);}

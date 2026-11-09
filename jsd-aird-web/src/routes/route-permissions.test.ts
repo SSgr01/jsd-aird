@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { canViewPathWithMenus, filterMenuRoute, firstAccessiblePath } from './route-permissions';
+import { canViewPathWithMenus, filterMenuRoute, firstAccessiblePath, firstAccessibleSystemPath } from './route-permissions';
 
 describe('knowledge workspace access', () => {
   it('allows the catalog workspace for viewers and reviewers', () => {
@@ -43,6 +43,32 @@ describe('system settings view access', () => {
   ])('opens %s with its view permission', (path, permission) => {
     expect(canViewPathWithMenus(path, [permission])).toBe(true);
     expect(canViewPathWithMenus(path, [])).toBe(false);
+  });
+});
+
+describe('system settings navigation', () => {
+  const systemRoute = {
+    path: '/system',
+    name: '系统设置',
+    routes: [
+      { path: '/system/users', name: '用户管理' },
+      { path: '/system/user-permissions', name: '用户权限配置' },
+      { path: '/system/dictionary', name: '基础字典' },
+      { path: '/system/audit-logs', name: '操作日志' },
+      { path: '/system/parameters', name: '系统参数' },
+    ],
+  };
+
+  it('hides the menu without a system grant', () => {
+    expect(firstAccessibleSystemPath([], [])).toBeUndefined();
+    expect(filterMenuRoute(systemRoute, [], [])).toBeNull();
+  });
+
+  it('respects menu grants and permission grants', () => {
+    expect(firstAccessibleSystemPath([], ['system.permissions'])).toBe('/system/user-permissions');
+    expect(firstAccessibleSystemPath(['system.user.view'], ['system.users'])).toBe('/system/users');
+    expect(firstAccessibleSystemPath(['system.audit.view'], ['system.audit'])).toBe('/system/audit-logs');
+    expect(firstAccessibleSystemPath(['system.user.view'], ['system.audit'])).toBe('/system/audit-logs');
   });
 });
 

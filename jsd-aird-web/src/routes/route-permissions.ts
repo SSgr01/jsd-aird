@@ -68,6 +68,12 @@ export const permissionLabels: Record<string, string> = {
   'production.submit': '提交生产单（production.submit）',
   'production.cancel': '取消生产单（production.cancel）',
   'production.export': '导出生产单（production.export）',
+  'quotation.view': '查看报价记录',
+  'quotation.create': '上传报价记录（quotation.create）',
+  'quotation.edit': '编辑报价记录（quotation.edit）',
+  'quotation.submit': '提交报价审核（quotation.submit）',
+  'quotation.review': '审核报价记录（quotation.review）',
+  'quotation.delete': '删除报价记录（quotation.delete）',
   'inventory.view': '查看库存（inventory.view）',
   'inventory.create': '新增库存业务（inventory.create）',
   'inventory.update': '维护库存策略（inventory.update）',
@@ -176,6 +182,8 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   if (path.startsWith('/system/dictionary')) return 'system.dictionary.view';
   if (path.startsWith('/system/parameters')) return 'system.parameters.view';
   if (path.startsWith('/system/audit-logs')) return 'system.audit.view';
+  if (path.startsWith('/system/dictionary')) return 'system.dictionary.manage';
+  if (path.startsWith('/system/parameters')) return 'system.parameter.manage';
   if (path.startsWith('/partners')) return 'customer.view';
   if (path.startsWith('/projects')) return 'project.view';
   if (path === '/experiments/upload') return 'eln.upload.create';
@@ -191,6 +199,8 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   if (path.startsWith('/templates') || path.startsWith('/render/import')) return 'template.view';
   if (path === '/production-orders/upload') return 'production.upload.create';
   if (path.startsWith('/production-orders')) return 'production.view';
+  if (path === '/quotations/upload') return 'quotation.create';
+  if (path.startsWith('/quotations')) return 'quotation.view';
   if (path.startsWith('/inventory')) return 'inventory.view';
   if (path.startsWith('/data')) return 'data.view';
   if (path === '/spectrum/upload') return 'spectrum.upload.create';
@@ -227,6 +237,8 @@ export function requiredMenuForPath(pathname: string): string | undefined {
   if (path.startsWith('/quality')) return 'quality.view';
   if (path.startsWith('/production-orders/upload')) return 'production.upload';
   if (path.startsWith('/production-orders')) return 'production.view';
+  if (path.startsWith('/quotations/upload')) return 'quotation.upload';
+  if (path.startsWith('/quotations')) return 'quotation.view';
   if (path.startsWith('/inventory/query')) return 'inventory.query';
   if (path.startsWith('/inventory/rnd')) return 'inventory.rnd';
   if (path.startsWith('/inventory/production')) return 'inventory.production';
@@ -304,6 +316,9 @@ export function hasPermission(required: string, permissions: string[]): boolean 
       'production.submit', 'production.cancel', 'production.export',
     ].includes(permission) || permission.startsWith('production.upload.'));
   }
+  if (required === 'quotation.view') {
+    return permissions.some((permission) => ['quotation.create', 'quotation.edit', 'quotation.delete'].includes(permission));
+  }
   if (required === 'research-test.report.view') return permissions.some((permission) => permission.startsWith('research-test.report.'));
   if (required === 'research-test.standard.view') return permissions.some((permission) => permission.startsWith('research-test.standard.'));
   return false;
@@ -325,6 +340,7 @@ export function firstAccessiblePath(permissions: string[], menuKeys?: string[]):
     ['/experiments/list', 'experiment.view'],
     ['/research-test/reports', 'research-test.report.view'],
     ['/production-orders/list', 'production.view'],
+    ['/quotations/list', 'quotation.view'],
     ['/data/view', 'data.view'],
     ['/quality/view', 'quality.view'],
     ['/spectrum/view', 'spectrum.view'],
@@ -332,6 +348,19 @@ export function firstAccessiblePath(permissions: string[], menuKeys?: string[]):
     ['/system/users', 'system.user.view'],
   ] as const;
   return candidates.find(([path, permission]) => canViewPathWithMenus(path, permissions, menuKeys) && hasPermission(permission, permissions))?.[0] ?? null;
+}
+
+const systemMenuPaths = [
+  '/system/users',
+  '/system/user-permissions',
+  '/system/dictionary',
+  '/system/audit-logs',
+  '/system/parameters',
+];
+
+/** Returns the first system-settings page the user may open, or undefined to hide the entry. */
+export function firstAccessibleSystemPath(permissions: string[], menuKeys: string[] = []): string | undefined {
+  return systemMenuPaths.find((path) => canViewPathWithMenus(path, permissions, menuKeys));
 }
 
 type MenuRoute = {

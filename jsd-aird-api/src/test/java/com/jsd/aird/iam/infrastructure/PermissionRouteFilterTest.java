@@ -765,6 +765,20 @@ class PermissionRouteFilterTest {
     }
 
     @Test
+    void mapsQuotationRoutesToQuotationPermissions() {
+        var id = "00000000-0000-0000-0000-000000000001";
+        assertThat(code("GET", "/api/v1/quotations")).isEqualTo("quotation.view");
+        assertThat(code("GET", "/api/v1/quotations/" + id)).isEqualTo("quotation.view");
+        assertThat(code("GET", "/api/v1/quotation-imports")).isEqualTo("quotation.view");
+        assertThat(code("POST", "/api/v1/quotation-imports")).isEqualTo("quotation.create");
+        assertThat(code("POST", "/api/v1/quotation-imports/" + id + "/retry")).isEqualTo("quotation.create");
+        assertThat(code("DELETE", "/api/v1/quotations/" + id)).isEqualTo("quotation.delete");
+        assertThat(code("DELETE", "/api/v1/quotation-imports/" + id)).isEqualTo("quotation.delete");
+        assertThat(codeWithKind("POST", "/api/v1/files/staged", "QUOTATION_SOURCE"))
+                .isEqualTo("quotation.create");
+    }
+
+    @Test
     void mapsExperimentLifecycleActionsToTheirActualPermissions() {
         var id = "00000000-0000-0000-0000-000000000001";
         assertThat(code("GET", "/api/v1/experiments")).isEqualTo("experiment.view");

@@ -28,9 +28,9 @@ import {
   AimOutlined,
 } from '@ant-design/icons';
 import { ProLayout, type MenuDataItem } from '@ant-design/pro-components';
-import { Avatar, Button, Dropdown, Input, Result, Tooltip, Typography, type InputRef } from 'antd';
+import { App, Avatar, Button, Dropdown, Input, Modal, Result, Tooltip, Typography, type InputRef, type MenuProps } from 'antd';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { ContentBoundary } from '@/components/loading/ContentBoundary';
 import { PrefetchLink } from '@/components/loading/PrefetchLink';
@@ -39,7 +39,9 @@ import { appEnv } from '@/app/config/env';
 import { AuthGate } from '@/components/auth/AuthGate';
 import { useAppStore } from '@/stores/app-store';
 import { useAuthStore } from '@/stores/auth-store';
-import { canViewPathWithMenus, filterMenuRoute, firstAccessiblePath, requiredPermissionForPath } from '@/routes/route-permissions';
+import { ChangePasswordForm, type PasswordValues } from '@/pages/auth/ChangePasswordForm';
+import { HttpError } from '@/services/http/errors';
+import { canViewPathWithMenus, filterMenuRoute, firstAccessiblePath, firstAccessibleSystemPath, requiredPermissionForPath } from '@/routes/route-permissions';
 
 const route = {
   path: '/',
@@ -123,6 +125,15 @@ const route = {
       ],
     },
     {
+      path: '/quotations-root',
+      name: '报价记录',
+      icon: <FileTextOutlined />,
+      routes: [
+        { path: '/quotations/upload', name: '报价上传', icon: <UploadOutlined /> },
+        { path: '/quotations/list', name: '报价查看', icon: <EyeOutlined /> },
+      ],
+    },
+    {
       path: '/ai-assistant',
       name: 'AI研发助手',
       icon: <RobotOutlined />,
@@ -182,21 +193,40 @@ const route = {
 
 function UserMenu() {
   const navigate = useNavigate();
+  const { message } = App.useApp();
+  const [passwordOpen, setPasswordOpen] = useState(false);
+  const [submittingPassword, setSubmittingPassword] = useState(false);
   const user = useAuthStore((state) => state.user);
   const logout = useAuthStore((state) => state.logout);
+  const changePassword = useAuthStore((state) => state.changePassword);
+  const submitPassword = async (values: PasswordValues) => {
+    setSubmittingPassword(true);
+    try {
+      await changePassword(values.currentPassword, values.newPassword);
+      setPasswordOpen(false);
+      message.success('密码修改成功');
+    } catch (error) {
+      message.error(error instanceof HttpError ? error.message : '密码修改失败');
+    } finally {
+      setSubmittingPassword(false);
+    }
+  };
   if (!user) return null;
   const initial = (user.displayName || user.username || '用').slice(0, 1);
-  const items = [
+  const systemSettingsPath = firstAccessibleSystemPath(user.permissions ?? [], user.menuKeys ?? []);
+  const items: MenuProps['items'] = [
     { key: 'workbench', icon: <HomeOutlined />, label: '工作台' },
+    ...(systemSettingsPath ? [{ key: 'system-settings', icon: <SettingOutlined />, label: '系统设置' }] : []),
     { key: 'change-password', icon: <LockOutlined />, label: '修改密码' },
-    { type: 'divider' as const },
+    { type: 'divider' },
     { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true },
   ];
-  return <Dropdown
+  return <><Dropdown
     trigger={['click']}
     menu={{ items, onClick: ({ key }: { key: string }) => {
       if (key === 'workbench') navigate('/dashboard');
-      if (key === 'change-password') navigate('/change-password');
+      if (key === 'system-settings' && systemSettingsPath) navigate(systemSettingsPath);
+      if (key === 'change-password') setPasswordOpen(true);
       if (key === 'logout') void logout();
     } }}
     popupRender={(menu) => <div className="app-user-dropdown">
@@ -205,7 +235,10 @@ function UserMenu() {
     </div>}
   >
     <button type="button" className="app-user-trigger" aria-label="打开用户菜单"><Avatar size={34}>{initial}</Avatar></button>
-  </Dropdown>;
+  </Dropdown>
+    <Modal title="修改密码" open={passwordOpen} onCancel={() => { if (!submittingPassword) setPasswordOpen(false); }} footer={null} destroyOnHidden>
+      <ChangePasswordForm onSubmit={submitPassword} submitting={submittingPassword} onCancel={() => setPasswordOpen(false)} />
+    </Modal></>;
 }
 
 function AppHeaderTools({ permissions, menuKeys }: { permissions: string[]; menuKeys: string[] }) {
@@ -231,7 +264,7 @@ function AppHeaderTools({ permissions, menuKeys }: { permissions: string[]; menu
 
   return (
     <div className="app-header-tools">
-      <Input
+      {canViewPathWithMenus('/knowledge/search', permissions, menuKeys) && <Input
         ref={searchRef}
         className="app-command-search"
         aria-label="全局搜索"
@@ -240,18 +273,8 @@ function AppHeaderTools({ permissions, menuKeys }: { permissions: string[]; menu
         placeholder="搜索知识库、文档、问题…"
         suffix={<kbd>Ctrl K</kbd>}
         onPressEnter={(event) => search(event.currentTarget.value)}
-      />
-      {canViewPathWithMenus('/system/users', permissions, menuKeys) && (
-        <Tooltip title="系统设置">
-          <Button
-            type="text"
-            className="app-header-icon-button"
-            icon={<SettingOutlined />}
-            aria-label="打开系统设置"
-            onClick={() => navigate('/system/users')}
-          />
-        </Tooltip>
-      )}
+      />}
+      {appEnv.version && <span className="app-version" title="系统版本" aria-label={`系统版本 ${appEnv.version}`}>{appEnv.version}</span>}
       <UserMenu />
     </div>
   );
@@ -270,12 +293,17 @@ export function BasicLayout() {
   const isExperimentWorkspace = /^\/experiments\/template-imports\/[^/]+$/.test(location.pathname)
     || /^\/experiments\/(?!imports\/)[^/]+$/.test(location.pathname) && !isExperimentPage;
   const isDataWorkspace = /^\/data\/(?:import-jobs|assets)\/[^/]+$/.test(location.pathname);
+  const isQuotationWorkspace = /^\/quotations\/[^/]+$/.test(location.pathname)
+    && !['/quotations/list', '/quotations/upload'].includes(location.pathname);
   const isProjectDocumentWorkspace = /^\/projects\/[^/]+\/documents\/[^/]+$/.test(location.pathname);
   const isKnowledgeWorkbench = location.pathname.startsWith('/knowledge/review/') || location.pathname.startsWith('/knowledge/documents/');
   const isPermissionManagement = location.pathname.startsWith('/system/user-permissions');
-  const isWorkspace = isTemplateWorkspace || isExperimentWorkspace || isDataWorkspace;
+  const isWorkspace = isTemplateWorkspace || isExperimentWorkspace || isDataWorkspace || isQuotationWorkspace;
   const collapsed = useAppStore((state) => state.sidebarCollapsed);
   const setCollapsed = useAppStore((state) => state.setSidebarCollapsed);
+  const isAssistant = location.pathname === '/assistant';
+  const [assistantNavExpanded, setAssistantNavExpanded] = useState(false);
+  const layoutCollapsed = isAssistant ? !assistantNavExpanded : collapsed;
   const user = useAuthStore((state) => state.user);
   const permissions = user?.permissions ?? [];
   const menuKeys = user?.menuKeys;
@@ -284,7 +312,7 @@ export function BasicLayout() {
 
   return (
     <AuthGate>
-      <div className={`app-shell${collapsed ? ' app-shell-sidebar-collapsed' : ''}${isPermissionManagement ? ' permission-management-shell' : ''}`}>
+      <div className={`app-shell${layoutCollapsed ? ' app-shell-sidebar-collapsed' : ''}${isAssistant ? ' app-shell-assistant' : ''}${isPermissionManagement ? ' permission-management-shell' : ''}`}>
       <div className="app-topbar" aria-label="全局工具区">
         <AppHeaderTools permissions={permissions} menuKeys={menuKeys ?? []} />
       </div>
@@ -294,8 +322,9 @@ export function BasicLayout() {
         route={visibleRoute}
         location={{ pathname: location.pathname }}
         selectedKeys={[location.pathname.startsWith('/assistant/model-center') ? '/assistant/model-center' : location.pathname]}
-        collapsed={collapsed}
-        onCollapse={setCollapsed}
+        collapsed={layoutCollapsed}
+        onCollapse={isAssistant ? () => undefined : setCollapsed}
+        collapsedButtonRender={isAssistant ? () => <Tooltip title={layoutCollapsed ? '展开导航' : '收起导航'}><Button type="text" aria-label={layoutCollapsed ? '展开导航' : '收起导航'} icon={<UnorderedListOutlined />} onClick={(event) => { event.stopPropagation(); setAssistantNavExpanded((value) => !value); }} /></Tooltip> : undefined}
         layout="side"
         fixedHeader
         fixSiderbar
@@ -307,7 +336,7 @@ export function BasicLayout() {
         menuItemRender={(item: MenuDataItem & { isUrl: boolean; onClick: () => void }, dom: React.ReactNode, menuProps: { isMobile?: boolean }) => (item.path ? <PrefetchLink to={item.path} onClick={menuProps.isMobile ? item.onClick : undefined}>{dom}</PrefetchLink> : dom)}
       >
         <main
-          className={`app-content${isWorkspace ? ' app-content-workspace' : ''}${isProjectDocumentWorkspace ? ' app-content-project-document-workspace' : ''}${isKnowledgeWorkbench ? ' app-content-knowledge-workbench' : ''}${isPermissionManagement ? ' app-content-permission-management' : ''}`}
+          className={`app-content${isAssistant ? ' app-content-assistant' : ''}${isWorkspace ? ' app-content-workspace' : ''}${isProjectDocumentWorkspace ? ' app-content-project-document-workspace' : ''}${isKnowledgeWorkbench ? ' app-content-knowledge-workbench' : ''}${isPermissionManagement ? ' app-content-permission-management' : ''}`}
           id="main-content"
         >
           {requiredPermission && !canViewPathWithMenus(location.pathname, permissions, menuKeys) ? <AccessDenied permissions={permissions} menuKeys={menuKeys} /> : <ContentBoundary><Outlet /><RouteScrollRestoration /></ContentBoundary>}

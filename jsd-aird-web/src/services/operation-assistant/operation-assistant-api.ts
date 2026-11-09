@@ -141,7 +141,7 @@ export const operationAssistantApi = {
         `操作问答请求失败（${response.status}），请重试。`,
         response.headers.get('X-Request-Id'),
       );
-      if (response.status === 401 || error.code === 'AUTH_REQUIRED') notifyAuthRequired();
+      if (response.status === 401 || error.code === 'AUTH_REQUIRED') notifyAuthRequired(error.code);
       if (attempt === 0 && response.status === 403 && error.code === 'CSRF_TOKEN_INVALID') {
         response = await request(await refreshCsrfToken());
       } else throw error;
@@ -154,7 +154,7 @@ export const operationAssistantApi = {
       if (event === 'error') {
         terminal = true;
         const error = failure(data, '回答未完成，请重试。');
-        if (error.code === 'AUTH_REQUIRED') notifyAuthRequired();
+        if (error.code === 'AUTH_REQUIRED' || error.code === 'SESSION_REPLACED') notifyAuthRequired(error.code);
         throw error;
       }
       if (event === 'done') {

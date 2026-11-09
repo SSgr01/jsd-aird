@@ -9,7 +9,7 @@ import { AuthorizedHomeRedirect, PageAnyPermissionGate, PagePermissionGate } fro
 
 const BasicLayout = routePage(async () => ({ default: (await import('@/layouts/BasicLayout')).BasicLayout }));
 
-const AssistantPage = routePage(async () => ({ default: (await import('@/pages/assistant/AssistantPage')).AssistantPage }));
+const AssistantPage = routePage(async () => ({ default: (await import('@/pages/assistant/AssistantHubPage')).AssistantHubPage }));
 const FormulaPredictionPage = routePage(async () => ({ default: (await import('@/pages/formula-research/FormulaPredictionPage')).FormulaPredictionPage }));
 const ExperimentOptimizationPage = routePage(async () => ({ default: (await import('@/pages/formula-research/HistoricalOptimizationWorkbench')).HistoricalOptimizationWorkbench }));
 const ModelCenterPage = routePage(async () => ({ default: (await import('@/pages/model-center/ModelCenterPage')).ModelCenterPage }));
@@ -33,6 +33,9 @@ const KnowledgeLibraryPage = routePage(async () => ({ default: (await import('@/
 const KnowledgeReviewPage = routePage(async () => ({ default: (await import('@/pages/knowledge/KnowledgeReviewPage')).KnowledgeReviewPage }));
 const KnowledgeSearchPage = routePage(async () => ({ default: (await import('@/pages/knowledge/KnowledgeSearchPage')).KnowledgeSearchPage }));
 const KnowledgeViewPage = routePage(async () => ({ default: (await import('@/pages/knowledge/KnowledgeViewPage')).KnowledgeViewPage }));
+const QuotationUploadPage = routePage(async () => ({ default: (await import('@/pages/quotations/QuotationUploadPage')).QuotationUploadPage }));
+const QuotationListPage = routePage(async () => ({ default: (await import('@/pages/quotations/QuotationListPage')).QuotationListPage }));
+const QuotationWorkspacePage = routePage(async () => ({ default: (await import('@/pages/quotations/QuotationWorkspacePage')).QuotationWorkspacePage }));
 const ProductionOrderListPage = routePage(async () => ({ default: (await import('@/pages/production-orders/ProductionOrderListPage')).ProductionOrderListPage }));
 const ProductionOrderUploadPage = routePage(async () => ({ default: (await import('@/pages/production-orders/ProductionOrderUploadPage')).ProductionOrderUploadPage }));
 const ProductionUploadWorkspacePage = routePage(async () => ({ default: (await import('@/pages/production-orders/ProductionUploadWorkspacePage')).ProductionUploadWorkspacePage }));
@@ -91,6 +94,7 @@ const applicationRoutes: RouteObject[] = [
       { path: 'knowledge/review/:documentId/:versionId', element: <PagePermissionGate permission="knowledge.view.update"><KnowledgeReviewPage /></PagePermissionGate> },
       { path: 'knowledge/documents/:id', element: <KnowledgeDocumentPage /> },
       { path: 'assistant', element: <AssistantPage /> },
+      { path: 'assistant/research', element: <PagePermissionGate permission="ai.use"><Navigate to="/assistant?mode=research" replace /></PagePermissionGate> },
       { path: 'assistant/formula-prediction', element: <PagePermissionGate permission="ai.formula.predict"><FormulaPredictionPage /></PagePermissionGate> },
       { path: 'assistant/performance-prediction', element: <PagePermissionGate permission="ai.performance.predict"><PerformancePredictionPage /></PagePermissionGate> },
       { path: 'assistant/experiment-optimization', element: <PagePermissionGate permission="ai.experiment.optimize"><ExperimentOptimizationPage /></PagePermissionGate> },
@@ -127,6 +131,10 @@ const applicationRoutes: RouteObject[] = [
         path: 'production-orders/uploads/:uploadId/workspace',
         element: <ProductionUploadWorkspacePage />,
       },
+      { path: 'quotations', element: <Navigate to="/quotations/list" replace /> },
+      { path: 'quotations/upload', element: <QuotationUploadPage /> },
+      { path: 'quotations/list', element: <QuotationListPage /> },
+      { path: 'quotations/:id', element: <QuotationWorkspacePage /> },
       { path: 'data', element: <Navigate to="/data/upload" replace /> },
       { path: 'data/upload', element: <PageAnyPermissionGate permissions={['data.upload.view', 'data.upload.create', 'data.upload.download', 'data.upload.retry', 'data.upload.delete', 'data.view']}><DataUploadPage /></PageAnyPermissionGate> },
       { path: 'data/import-jobs/:id', element: <DataImportJobPage /> },
@@ -216,6 +224,7 @@ registerRoutePreload('/knowledge/search', KnowledgeSearchPage.preload);
 registerRoutePreload('/knowledge/review/:documentId/:versionId', KnowledgeReviewPage.preload);
 registerRoutePreload('/knowledge/documents/:id', KnowledgeDocumentPage.preload);
 registerRoutePreload('/assistant', AssistantPage.preload);
+registerRoutePreload('/assistant/research', AssistantPage.preload);
 registerRoutePreload('/assistant/formula-prediction', FormulaPredictionPage.preload);
 registerRoutePreload('/assistant/performance-prediction', PerformancePredictionPage.preload);
 registerRoutePreload('/assistant/experiment-optimization', ExperimentOptimizationPage.preload);
@@ -223,6 +232,9 @@ registerRoutePreload('/assistant/model-center', ModelCenterPage.preload);
 registerRoutePreload('/templates/upload', TemplateUploadPage.preload);
 registerRoutePreload('/templates/library', TemplatesPage.preload);
 registerRoutePreload('/templates/:versionId/workspace', TemplateWorkspacePage.preload);
+registerRoutePreload('/quotations/upload', QuotationUploadPage.preload);
+registerRoutePreload('/quotations/list', QuotationListPage.preload);
+registerRoutePreload('/quotations/:id', QuotationWorkspacePage.preload);
 registerRoutePreload('/production-orders/upload', ProductionOrderUploadPage.preload);
 registerRoutePreload('/production-orders/list', ProductionOrderListPage.preload);
 registerRoutePreload('/production-orders/uploads/:uploadId/workspace', ProductionUploadWorkspacePage.preload);

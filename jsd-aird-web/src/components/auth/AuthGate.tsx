@@ -23,7 +23,8 @@ export function AuthGate({ children }: PropsWithChildren) {
     return <StartupSkeleton error onRetry={() => void load()} />;
   }
   if (!user) {
-    return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}` }} />;
+    const from = location.pathname === '/change-password' ? undefined : `${location.pathname}${location.search}`;
+    return <Navigate to="/login" replace state={from ? { from } : null} />;
   }
   return <Fragment key={JSON.stringify([user.organizationId,user.userId,user.authVersion,[...user.permissions].sort(),[...(user.menuKeys ?? [])].sort()])}>{children}</Fragment>;
 }

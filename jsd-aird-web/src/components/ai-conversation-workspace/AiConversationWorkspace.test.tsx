@@ -1,6 +1,11 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 
 import { AiConversationWorkspace } from './AiConversationWorkspace';
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe('AiConversationWorkspace', () => {
   it('hides conversation creation and sending when creation is not granted', () => {
@@ -17,12 +22,57 @@ describe('AiConversationWorkspace', () => {
         onSubmit={vi.fn()}
       />,
     );
-
     expect(screen.queryByRole('button', { name: '新建对话' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '发送问题' })).not.toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: '输入问题' })).not.toBeInTheDocument();
   });
-
+  it('offers icon tools in the input and copies only the readable answer', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    render(
+      <AiConversationWorkspace
+        conversations={[]}
+        messages={[{ id: 'answer', role: 'ASSISTANT', content: <p>水约为 0.81 kg。</p>, copyText: '**任务状态**：`PARTIAL`\n水约为 0.81 kg。' }]}
+        question=""
+        compactComposer
+        scopePlacement="composer"
+        scopeContent={<p>文献选择</p>}
+        onNewConversation={vi.fn()}
+        onSelectConversation={vi.fn()}
+        onQuestionChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+    const select = screen.getByRole('button', { name: '选择资料' });
+    expect(select.textContent).toBe('');
+    expect(select.closest('.ai-conversation-composer-row')).not.toBeNull();
+    const copy = screen.getByRole('button', { name: '复制回答' });
+    expect(copy.textContent).toBe('');
+    fireEvent.click(copy);
+    expect(await screen.findByText('已复制')).toBeInTheDocument();
+    expect(writeText).toHaveBeenCalledWith('水约为 0.81 kg。');
+  });
+  it('opens the material selector from the composer without keeping scope controls in the sidebar', async () => {
+    render(
+      <AiConversationWorkspace
+        conversations={[]}
+        messages={[]}
+        question=""
+        scopePlacement="composer"
+        scopeContent={<button>选定一份文献</button>}
+        onNewConversation={vi.fn()}
+        onSelectConversation={vi.fn()}
+        onQuestionChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText('选定一份文献')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '选择资料' }));
+    expect(await screen.findByRole('button', { name: '选定一份文献' })).toBeVisible();
+    expect(document.querySelector('.ai-conversation-side')?.textContent).not.toContain(
+      '选定一份文献',
+    );
+  });
   it('keeps user messages on the user side without rendering a user avatar', () => {
     render(
       <AiConversationWorkspace
@@ -112,7 +162,11 @@ describe('AiConversationWorkspace', () => {
         messages={[]}
         scopeContent={<div>资料范围</div>}
         composerTopContent={<div>全部已授权资料</div>}
-        composerActions={<button type="button" aria-pressed="false">联网搜索</button>}
+        composerActions={
+          <button type="button" aria-pressed="false">
+            联网搜索
+          </button>
+        }
         question=""
         onNewConversation={vi.fn()}
         onSelectConversation={vi.fn()}
@@ -121,7 +175,10 @@ describe('AiConversationWorkspace', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: '联网搜索' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: '联网搜索' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
     expect(screen.getByText('全部已授权资料')).toBeInTheDocument();
   });
 
@@ -151,7 +208,8 @@ describe('AiConversationWorkspace', () => {
     const actionRow = userMessage?.querySelector('.ai-message-actions');
     expect(actionRow).toContainElement(editButton);
     expect(
-      messageBody && actionRow &&
+      messageBody &&
+        actionRow &&
         Boolean(messageBody.compareDocumentPosition(actionRow) & Node.DOCUMENT_POSITION_FOLLOWING),
     ).toBe(true);
 
@@ -176,7 +234,9 @@ describe('AiConversationWorkspace', () => {
     render(
       <AiConversationWorkspace
         conversations={[]}
-        messages={[{ id: 'user-1', role: 'USER', content: <p>用户问题</p>, editableText: '用户问题' }]}
+        messages={[
+          { id: 'user-1', role: 'USER', content: <p>用户问题</p>, editableText: '用户问题' },
+        ]}
         scopeContent={<div>资料范围</div>}
         question=""
         streaming
@@ -221,5 +281,63 @@ describe('AiConversationWorkspace', () => {
 
     expect(scrollTo).toHaveBeenCalledWith({ top: 1000, behavior: 'smooth' });
     expect(screen.queryByRole('button', { name: '跳到最新消息' })).not.toBeInTheDocument();
+  });
+
+  it('follows growing text gradually and stops when the user scrolls back to read', () => {
+    const observed = new Map<Element, ResizeObserverCallback>();
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(private callback: ResizeObserverCallback) {}
+        observe(element: Element) {
+          observed.set(element, this.callback);
+        }
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    let nextFrame: FrameRequestCallback | undefined;
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      nextFrame = callback;
+      return 1;
+    });
+    vi.stubGlobal('cancelAnimationFrame', () => {
+      nextFrame = undefined;
+    });
+    const { container } = render(
+      <AiConversationWorkspace
+        conversations={[]}
+        messages={[{ id: 'answer', role: 'ASSISTANT', content: <p>正在核对实验条件。</p> }]}
+        question=""
+        streaming
+        onNewConversation={vi.fn()}
+        onSelectConversation={vi.fn()}
+        onQuestionChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+    const area = container.querySelector('.ai-conversation-messages') as HTMLDivElement;
+    Object.defineProperties(area, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 300 },
+      scrollTop: { configurable: true, writable: true, value: 0 },
+    });
+    const content = area.querySelector('.ant-list-items')!;
+    act(() => {
+      observed.get(content)!([], {} as ResizeObserver);
+    });
+    act(() => {
+      nextFrame?.(16);
+    });
+    expect(area.scrollTop).toBeGreaterThan(0);
+    expect(area.scrollTop).toBeLessThan(700);
+    fireEvent.wheel(area, { deltaY: -100 });
+    area.scrollTop = 100;
+    fireEvent.scroll(area);
+    act(() => {
+      nextFrame?.(32);
+    });
+    expect(area.scrollTop).toBe(100);
+    expect(screen.getByRole('button', { name: '跳到最新消息' })).toBeVisible();
   });
 });

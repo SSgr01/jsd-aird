@@ -33,19 +33,28 @@ public class IamAuthService {
     private final Duration idleTimeout;
     private final Duration absoluteTimeout;
     private final boolean developmentMode;
+    private final int maxLoginFailures;
+    private final Duration loginLockDuration;
 
     public IamAuthService(IamStore store, PasswordEncoder passwordEncoder,
-                          @Value("${app.security.session-idle-timeout:12h}") Duration idleTimeout,
+                          @Value("${app.security.session-idle-timeout:30m}") Duration idleTimeout,
                           @Value("${app.security.session-absolute-timeout:30d}") Duration absoluteTimeout,
-                          @Value("${app.identity.development-mode:false}") boolean developmentMode) {
+                          @Value("${app.identity.development-mode:false}") boolean developmentMode,
+                          @Value("${app.security.max-login-failures:5}") int maxLoginFailures,
+                          @Value("${app.security.login-lock-duration:5m}") Duration loginLockDuration) {
+        if (maxLoginFailures < 1 || loginLockDuration.isZero() || loginLockDuration.isNegative()) {
+            throw new IllegalArgumentException("登录失败阈值和锁定时长必须大于零");
+        }
         this.store = store;
         this.passwordEncoder = passwordEncoder;
         this.idleTimeout = idleTimeout;
         this.absoluteTimeout = absoluteTimeout;
         this.developmentMode = developmentMode;
+        this.maxLoginFailures = maxLoginFailures;
+        this.loginLockDuration = loginLockDuration;
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = LoginFailure.class)
     public LoginResult login(LoginCommand command, String ip, String userAgent) {
         var organization = store.defaultOrganization()
                 .orElseThrow(() -> new ApiException(ApiErrorCode.AUTH_INVALID));
@@ -53,21 +62,26 @@ public class IamAuthService {
         if (store.recentIpFailures(ip, now.minus(Duration.ofMinutes(5))) >= 30) {
             throw new ApiException(ApiErrorCode.AUTH_RATE_LIMITED);
         }
-        var user = store.user(organization.id(), command.username())
+        var found = store.user(organization.id(), command.username())
                 .orElseThrow(() -> failed(organization.id(), command.username(), ip, null));
+        store.lockUser(organization.id(), found.id());
+        var user = store.user(found.id()).orElseThrow(() -> new ApiException(ApiErrorCode.AUTH_INVALID));
         if ("DISABLED".equals(user.status())) throw new ApiException(ApiErrorCode.ACCOUNT_DISABLED);
-        if (user.lockedUntil() != null && user.lockedUntil().isAfter(now)) throw new ApiException(ApiErrorCode.ACCOUNT_LOCKED);
+        if (user.lockedUntil() != null && user.lockedUntil().isAfter(now)) throw locked(user.lockedUntil(), now);
 
         if (user.passwordHash() == null || !passwordEncoder.matches(command.password(), user.passwordHash())) {
             throw failed(organization.id(), command.username(), ip, user);
         }
 
+        var firstLogin = store.user(user.id())
+                .orElseThrow(() -> new ApiException(ApiErrorCode.AUTH_REQUIRED)).lastLoginAt() == null;
         store.attempt(organization.id(), user.username(), ip, true);
         store.markLoginSuccess(organization.id(), user.id());
+        store.replaceUserSessions(organization.id(), user.id());
         var token = randomToken();
         var session = store.createSession(organization.id(), user.id(), user.authVersion(), hash(token),
                 now.plus(idleTimeout), now.plus(absoluteTimeout), ip, userAgent, command.rememberMe());
-        return new LoginResult(token, session.id(), profile(user, organization), command.rememberMe());
+        return new LoginResult(token, session.id(), profile(user, organization), command.rememberMe(), firstLogin);
     }
 
     @Transactional
@@ -77,7 +91,7 @@ public class IamAuthService {
     }
 
     @Transactional
-    public void changePassword(Actor actor, String currentPassword, String newPassword) {
+    public void changePassword(Actor actor, UUID currentSessionId, String currentPassword, String newPassword) {
         if (newPassword == null || newPassword.length() < 6) {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "新密码至少 6 位");
         }
@@ -85,8 +99,7 @@ public class IamAuthService {
         if (user.passwordHash() == null || !passwordEncoder.matches(currentPassword, user.passwordHash())) {
             throw new ApiException(ApiErrorCode.AUTH_INVALID, "当前密码错误");
         }
-        store.changePassword(actor.organizationId(), actor.userId(), passwordEncoder.encode(newPassword));
-        store.revokeUserSessions(actor.organizationId(), actor.userId());
+        store.changePassword(actor.organizationId(), actor.userId(), currentSessionId, passwordEncoder.encode(newPassword));
     }
 
     public IamStore.Session session(String token) {
@@ -95,6 +108,17 @@ public class IamAuthService {
 
     public IamStore.Session activeSession(String token) {
         return token == null || token.isBlank() ? null : store.activeSession(token).orElse(null);
+    }
+
+    public boolean isCurrent(IamStore.Session session) {
+        var now = Instant.now();
+        return session != null && session.lastSeenAt() != null && session.expiresAt() != null
+                && session.absoluteExpiresAt() != null && session.lastSeenAt().plus(idleTimeout).isAfter(now)
+                && session.expiresAt().isAfter(now) && session.absoluteExpiresAt().isAfter(now);
+    }
+
+    public boolean wasReplaced(String token) {
+        return token != null && !token.isBlank() && store.wasReplaced(token);
     }
 
     public IamStore.User user(UUID userId) {
@@ -115,9 +139,9 @@ public class IamAuthService {
 
     @Transactional
     public void touch(IamStore.Session session) {
-        var now = Instant.now();
-        if (session.absoluteExpiresAt().isBefore(now)) return;
-        store.touchSession(session.id(), now.plus(idleTimeout));
+        if (!isCurrent(session) || !store.touchSession(session.id(), Instant.now().plus(idleTimeout), idleTimeout.toMillis())) {
+            throw new ApiException(ApiErrorCode.AUTH_REQUIRED);
+        }
     }
 
     public MeView me(Actor actor) {
@@ -128,14 +152,32 @@ public class IamAuthService {
 
     public boolean developmentMode() { return developmentMode; }
 
+    public long sessionIdleTimeoutMillis() { return idleTimeout.toMillis(); }
+
     private ApiException failed(UUID organizationId, String username, String ip, IamStore.User user) {
         store.attempt(organizationId, username, ip, false);
         if (user != null) {
-            var count = store.recentFailures(organizationId, username, Instant.now().minus(Duration.ofMinutes(15)));
-            store.markLoginFailure(organizationId, user.id(), count >= 5);
-            if (count >= 5) return new ApiException(ApiErrorCode.ACCOUNT_LOCKED);
+            var expired = user.lockedUntil() != null && !user.lockedUntil().isAfter(Instant.now());
+            var count = (expired ? 0 : user.failedLoginCount()) + 1;
+            var locked = count >= maxLoginFailures;
+            store.markLoginFailure(organizationId, user.id(), locked, loginLockDuration);
+            if (locked) return locked(Instant.now().plus(loginLockDuration), Instant.now());
+            return new LoginFailure(ApiErrorCode.AUTH_INVALID,
+                    "密码错误，已连续输错 " + count + " 次，还可尝试 " + (maxLoginFailures - count) + " 次");
         }
-        return new ApiException(ApiErrorCode.AUTH_INVALID);
+        return new LoginFailure(ApiErrorCode.AUTH_INVALID);
+    }
+
+    private LoginFailure locked(Instant until, Instant now) {
+        var seconds = Math.max(1, (Duration.between(now, until).toMillis() + 999) / 1000);
+        var remaining = seconds >= 60
+                ? (seconds / 60) + " 分 " + (seconds % 60) + " 秒" : seconds + " 秒";
+        return new LoginFailure(ApiErrorCode.ACCOUNT_LOCKED, "账号已锁定，剩余 " + remaining);
+    }
+
+    private static final class LoginFailure extends ApiException {
+        private LoginFailure(ApiErrorCode code) { super(code); }
+        private LoginFailure(ApiErrorCode code, String message) { super(code, message); }
     }
 
     private String randomToken() {
@@ -216,7 +258,8 @@ public class IamAuthService {
     }
 
     public record LoginCommand(String username, String password, boolean rememberMe) { }
-    public record LoginResult(String token, UUID sessionId, MeView profile, boolean rememberMe) { }
+    public record LoginResult(String token, UUID sessionId, MeView profile, boolean rememberMe,
+                              boolean firstLogin) { }
     public record MeView(UUID userId, UUID organizationId, String organizationName,
                          String username, String displayName, String email, String departmentName, UUID roleId,
                          String roleCode, String roleName, String status, long authVersion,

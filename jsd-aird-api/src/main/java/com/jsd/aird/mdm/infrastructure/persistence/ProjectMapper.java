@@ -18,11 +18,13 @@ public interface ProjectMapper {
         "p.created_at createdAt, p.updated_at updatedAt FROM mdm.project p ";
 
     String SCOPE_FILTER = "<choose>" +
+        "<when test='scopeType == &quot;ALL&quot; or scopeType == &quot;ORG&quot;'></when>" +
         "<when test='scopeType == &quot;SELF&quot; or scopeType == &quot;CREATOR&quot;'> AND p.created_by::text = CAST(#{scopeUserId} AS text)</when>" +
+        "<when test='scopeType == &quot;DEPARTMENT&quot;'> AND p.department_id IS NOT NULL AND p.department_id=(SELECT u.department_id FROM iam.app_user u WHERE u.id=#{scopeUserId} AND u.organization_id=#{organizationId})</when>" +
         "<when test='scopeType == &quot;OWNER&quot; or scopeType == &quot;MANAGER&quot;'> AND EXISTS (SELECT 1 FROM iam.resource_owner_identity roi WHERE roi.organization_id=p.organization_id AND roi.resource_type='PROJECT' AND roi.resource_id=p.id AND roi.user_id=#{scopeUserId} AND roi.relation_type=#{scopeType})</when>" +
         "<when test='scopeType == &quot;PARTICIPANT&quot; or scopeType == &quot;PROJECT_GROUP&quot;'> AND EXISTS (SELECT 1 FROM iam.project_member pm WHERE pm.organization_id=p.organization_id AND pm.project_id=p.id AND pm.user_id=#{scopeUserId})</when>" +
-        "<when test='scopeType == &quot;SELECTED&quot; or scopeType == &quot;PROJECT&quot;'> AND p.id IN <foreach collection='scopeTargetIds' item='scopeId' open='(' separator=',' close=')'>#{scopeId,jdbcType=OTHER}</foreach></when>" +
-        "</choose>";
+        "<when test='(scopeType == &quot;SELECTED&quot; or scopeType == &quot;PROJECT&quot;) and scopeTargetIds != null and scopeTargetIds.size() > 0'> AND p.id IN <foreach collection='scopeTargetIds' item='scopeId' open='(' separator=',' close=')'>#{scopeId,jdbcType=OTHER}</foreach></when>" +
+        "<otherwise> AND 1=0</otherwise></choose>";
 
     // 日期筛选的是“开始日期”区间（与项目列表页的 开始日期 列、开始日期起/止 参数一致），
     // 两个边界都必须落在 start_date 上。此前下界误用 end_date 匹配，未填写结束日期（end_date 为 null）

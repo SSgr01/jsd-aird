@@ -19,20 +19,28 @@ public interface CustomerRequirementMapper {
         "cr.deleted, cr.deleted_at deletedAt, cr.deleted_by deletedBy " +
         "FROM mdm.customer_requirement cr ";
 
+    String CUSTOMER_SCOPE = "AND (EXISTS (SELECT 1 FROM mdm.business_partner p WHERE p.id=cr.partner_id AND p.deleted=false " +
+        BusinessPartnerMapper.SCOPE_CLAUSE + ") " +
+        "<if test='projectId != null'> OR (cr.partner_id IS NULL AND cr.project_id=#{projectId})</if>) ";
+
     @Select("<script>" + COLS +
-        "WHERE cr.deleted = false " +
+        "WHERE cr.deleted = false " + CUSTOMER_SCOPE +
         "<if test='partnerId != null'> AND cr.partner_id=#{partnerId}</if>" +
         "<if test='status != null'> AND cr.status=#{status}</if>" +
         "<if test='projectId != null'> AND (cr.project_id=#{projectId} OR cr.assigned_project_ids @> jsonb_build_array(CAST(#{projectId} AS text)))</if> " +
         "ORDER BY cr.updated_at DESC LIMIT #{size} OFFSET #{offset}</script>")
     List<RequirementRow> findPage(@Param("partnerId") UUID partnerId, @Param("projectId") UUID projectId,
-                                  @Param("status") String status, @Param("offset") int offset, @Param("size") int size);
+                                  @Param("status") String status, @Param("offset") int offset, @Param("size") int size,
+                                  @Param("organizationId") UUID organizationId, @Param("userId") UUID userId,
+                                  @Param("scopeType") String scopeType, @Param("targetIds") List<UUID> targetIds);
 
-    @Select("<script>SELECT count(*) FROM mdm.customer_requirement cr WHERE cr.deleted = false " +
+    @Select("<script>SELECT count(*) FROM mdm.customer_requirement cr WHERE cr.deleted = false " + CUSTOMER_SCOPE +
         "<if test='partnerId != null'> AND cr.partner_id=#{partnerId}</if>" +
         "<if test='status != null'> AND cr.status=#{status}</if>" +
         "<if test='projectId != null'> AND (cr.project_id=#{projectId} OR cr.assigned_project_ids @> jsonb_build_array(CAST(#{projectId} AS text)))</if></script>")
-    long count(@Param("partnerId") UUID partnerId, @Param("projectId") UUID projectId, @Param("status") String status);
+    long count(@Param("partnerId") UUID partnerId, @Param("projectId") UUID projectId, @Param("status") String status,
+               @Param("organizationId") UUID organizationId, @Param("userId") UUID userId,
+               @Param("scopeType") String scopeType, @Param("targetIds") List<UUID> targetIds);
 
     @Select(COLS + "WHERE cr.id=#{id} AND cr.deleted = false")
     Optional<RequirementRow> findById(@Param("id") UUID id);

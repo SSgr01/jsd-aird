@@ -23,24 +23,92 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
     public ResolvedDataScope resolve(PermissionCheck check, Binding binding) {
         var scope = binding.scopeType() == null ? "ALL" : binding.scopeType().toUpperCase(Locale.ROOT);
         if ("ALL".equals(scope)) return ResolvedDataScope.allow(scope);
-        if ("ORG".equals(scope)) return ResolvedDataScope.allow(scope);
+        if ("ORG".equals(scope)) return ResolvedDataScope.allow("ALL");
         if (check.resourceId() == null) {
             return switch (scope) {
                 case "SELECTED", "PROJECT", "CATEGORY" -> binding.targetIds().isEmpty()
                         ? ResolvedDataScope.deny(scope, "EMPTY_SCOPE")
                         : ResolvedDataScope.allow(scope, Set.copyOf(binding.targetIds()));
-                case "SELF", "ASSIGNED", "CREATOR", "OWNER", "MANAGER", "PARTICIPANT", "PROJECT_GROUP"
+                case "SELF", "ASSIGNED", "CREATOR", "DEPARTMENT", "OWNER", "MANAGER", "PARTICIPANT", "PROJECT_GROUP"
                         -> ResolvedDataScope.allow(scope);
                 default -> ResolvedDataScope.deny(scope, "UNKNOWN_DATA_SCOPE");
             };
         }
         if ("SELECTED".equals(scope)) {
+            if ("PRODUCTION".equalsIgnoreCase(check.resourceType())) {
+                if (binding.targetIds().isEmpty()) return ResolvedDataScope.deny(scope, "EMPTY_SCOPE");
+                var placeholders = String.join(",", binding.targetIds().stream().map(id -> "?").toList());
+                var args = new java.util.ArrayList<Object>();
+                args.add(check.organizationId());
+                args.add(check.resourceId());
+                args.addAll(binding.targetIds());
+                return exists("SELECT EXISTS (SELECT 1 FROM mfg.production_order WHERE organization_id = ? " +
+                                "AND id = ? AND project_id IN (" + placeholders + "))",
+                        args.toArray(), scope, "NOT_IN_SELECTED_PROJECT");
+            }
+            if ("PRODUCTION_UPLOAD".equalsIgnoreCase(check.resourceType())) {
+                if (binding.targetIds().isEmpty()) return ResolvedDataScope.deny(scope, "EMPTY_SCOPE");
+                var placeholders = String.join(",", binding.targetIds().stream().map(id -> "?").toList());
+                var args = new java.util.ArrayList<Object>();
+                args.add(check.organizationId());
+                args.add(check.resourceId());
+                args.addAll(binding.targetIds());
+                return exists("SELECT EXISTS (SELECT 1 FROM mfg.production_upload WHERE organization_id = ? " +
+                                "AND id = ? AND status <> 'DELETED' AND project_id IN (" + placeholders + "))",
+                        args.toArray(), scope, "NOT_IN_SELECTED_PROJECT");
+            }
+            if ("RESEARCH_TEST".equalsIgnoreCase(check.resourceType())
+                    && check.permissionCode() != null && check.permissionCode().startsWith("research-test.standard")) {
+                if (check.permissionCode().startsWith("research-test.standard.upload.")) {
+                    if (binding.targetIds().isEmpty()) return ResolvedDataScope.deny(scope, "EMPTY_SCOPE");
+                    var placeholders = String.join(",", binding.targetIds().stream().map(id -> "?").toList());
+                    var args = new java.util.ArrayList<Object>();
+                    args.add(check.organizationId());
+                    args.add(check.resourceId());
+                    args.addAll(binding.targetIds());
+                    return exists("SELECT EXISTS (SELECT 1 FROM rnd.research_test_upload u " +
+                                    "JOIN rnd.research_test_record r ON r.id = u.record_id AND r.organization_id = u.organization_id " +
+                                    "WHERE u.organization_id = ? AND u.id = ? AND u.deleted = false " +
+                                    "AND r.deleted = false AND r.record_type = 'STANDARD' AND r.id IN (" + placeholders + "))",
+                            args.toArray(), scope, "TARGET_NOT_SELECTED");
+                }
+                if (!binding.targetIds().contains(check.resourceId()))
+                    return ResolvedDataScope.deny(scope, "TARGET_NOT_SELECTED");
+                return exists("SELECT EXISTS (SELECT 1 FROM rnd.research_test_record WHERE organization_id = ? " +
+                                "AND id = ? AND record_type = 'STANDARD' AND deleted = false)",
+                        new Object[]{check.organizationId(), check.resourceId()}, scope, "TARGET_NOT_SELECTED");
+            }
+            var projectScopedTable = switch (check.resourceType() == null ? "" : check.resourceType().toUpperCase(Locale.ROOT)) {
+                case "EXPERIMENT" -> "rnd.experiment";
+                case "RESEARCH_TEST" -> "rnd.research_test_record";
+                case "QUALITY" -> "quality.data_record";
+                default -> null;
+            };
+            if (projectScopedTable != null) {
+                if (binding.targetIds().isEmpty()) return ResolvedDataScope.deny(scope, "EMPTY_SCOPE");
+                var placeholders = String.join(",", binding.targetIds().stream().map(id -> "?").toList());
+                var args = new java.util.ArrayList<Object>();
+                args.add(check.organizationId());
+                args.add(check.resourceId());
+                args.addAll(binding.targetIds());
+                return exists("SELECT EXISTS (SELECT 1 FROM " + projectScopedTable +
+                                " WHERE organization_id = ? AND id = ? AND deleted = false AND project_id IN (" + placeholders + "))",
+                        args.toArray(), scope, "NOT_IN_SELECTED_PROJECT");
+            }
+            if ("CUSTOMER".equalsIgnoreCase(check.resourceType())) {
+                return binding.targetIds().contains(check.resourceId()) &&
+                        Boolean.TRUE.equals(jdbc.queryForObject(
+                                "SELECT EXISTS (SELECT 1 FROM mdm.business_partner WHERE id = ? AND organization_id = ? AND deleted = false)",
+                                Boolean.class, check.resourceId(), check.organizationId()))
+                        ? ResolvedDataScope.allow(scope) : ResolvedDataScope.deny(scope, "TARGET_NOT_SELECTED");
+            }
             return binding.targetIds().contains(check.resourceId())
                     ? ResolvedDataScope.allow(scope)
                     : ResolvedDataScope.deny(scope, "TARGET_NOT_SELECTED");
         }
         var resourceType = check.resourceType() == null ? "" : check.resourceType().toUpperCase(Locale.ROOT);
         return switch (scope) {
+            case "DEPARTMENT" -> department(resourceType, check);
             case "SELF", "CREATOR" -> self(resourceType, check);
             case "ASSIGNED" -> assigned(resourceType, check);
             case "OWNER" -> relationOwner(resourceType, check, "OWNER");
@@ -61,11 +129,53 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
                 : ResolvedDataScope.deny("PROJECT", "NOT_IN_SELECTED_PROJECT");
     }
 
+    private ResolvedDataScope department(String resourceType, PermissionCheck check) {
+        var table = scopedTable(resourceType);
+        if (table == null)
+            return ResolvedDataScope.deny("DEPARTMENT", "RESOURCE_SCOPE_UNSUPPORTED");
+        return exists("""
+                SELECT EXISTS (SELECT 1 FROM %s p
+                  JOIN iam.app_user u ON u.id = ? AND u.organization_id = p.organization_id
+                  WHERE p.id = ? AND p.organization_id = ? %s
+                    AND p.department_id IS NOT NULL AND p.department_id = u.department_id)
+                """.formatted(table, deletedCondition(resourceType)), new Object[]{check.userId(), check.resourceId(), check.organizationId()},
+                "DEPARTMENT", "NOT_IN_DEPARTMENT");
+    }
+
+    private String scopedTable(String resourceType) {
+        return switch (resourceType == null ? "" : resourceType.toUpperCase(Locale.ROOT)) {
+            case "CUSTOMER" -> "mdm.business_partner";
+            case "PROJECT" -> "mdm.project";
+            case "EXPERIMENT" -> "rnd.experiment";
+            case "RESEARCH_TEST" -> "rnd.research_test_record";
+            case "TEMPLATE" -> "tpl.template";
+            case "KNOWLEDGE" -> "kb.document";
+            case "DATA" -> "data.import_job";
+            case "QUALITY" -> "quality.data_record";
+            case "PRODUCTION" -> "mfg.production_order";
+            case "PRODUCTION_UPLOAD" -> "mfg.production_upload";
+            case "FILE" -> "ops.file_object";
+            case "SPECTRUM" -> "spc.chart_asset";
+            case "INVENTORY" -> "mfg.inventory_product";
+            default -> null;
+        };
+    }
+
+    private String deletedCondition(String resourceType) {
+        return Set.of("CUSTOMER", "PROJECT", "EXPERIMENT", "RESEARCH_TEST", "QUALITY")
+                .contains(resourceType == null ? "" : resourceType.toUpperCase(Locale.ROOT))
+                ? " AND deleted = false" : "";
+    }
+
     private ResolvedDataScope self(String resourceType, PermissionCheck check) {
         Boolean found;
         Object[] args;
         String sql;
         switch (resourceType) {
+            case "CUSTOMER" -> {
+                sql = "SELECT EXISTS (SELECT 1 FROM mdm.business_partner WHERE organization_id = ? AND created_by::text = ? AND id = ? AND deleted = false)";
+                args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
+            }
             case "TEMPLATE" -> {
                 sql = """
                         SELECT EXISTS (SELECT 1 FROM tpl.template t
@@ -89,12 +199,20 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
                         check.organizationId(), check.userId(), check.resourceId()};
             }
             case "EXPERIMENT" -> {
-                sql = "SELECT EXISTS (SELECT 1 FROM rnd.experiment WHERE organization_id = ? AND (created_by = ? OR owner_id = ?) AND id = ?)";
-                args = new Object[]{check.organizationId(), check.userId(), check.userId(), check.resourceId()};
+                sql = "SELECT EXISTS (SELECT 1 FROM rnd.experiment WHERE organization_id = ? AND created_by = ? AND id = ? AND deleted = false)";
+                args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
             }
             case "PRODUCTION" -> {
-                sql = "SELECT EXISTS (SELECT 1 FROM mfg.production_order WHERE organization_id = ? AND (created_by = ? OR owner_id = ?) AND id = ?)";
-                args = new Object[]{check.organizationId(), check.userId(), check.userId(), check.resourceId()};
+                sql = "SELECT EXISTS (SELECT 1 FROM mfg.production_order WHERE organization_id = ? AND created_by = ? AND id = ?)";
+                args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
+            }
+            case "PRODUCTION_UPLOAD" -> {
+                sql = "SELECT EXISTS (SELECT 1 FROM mfg.production_upload WHERE organization_id = ? AND created_by = ? AND id = ? AND status <> 'DELETED')";
+                args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
+            }
+            case "SPECTRUM" -> {
+                sql = "SELECT EXISTS (SELECT 1 FROM spc.chart_asset WHERE organization_id = ? AND created_by = ? AND id = ? AND status <> 'DELETED')";
+                args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
             }
             case "QUALITY" -> {
                 sql = "SELECT EXISTS (SELECT 1 FROM quality.data_record WHERE organization_id = ? AND created_by = ? AND id = ? AND deleted = false)";
@@ -108,8 +226,13 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
                 args = new Object[]{check.userId(), check.organizationId(), check.resourceId()};
             }
             case "RESEARCH_TEST" -> {
-                sql = "SELECT EXISTS (SELECT 1 FROM rnd.research_test_record WHERE organization_id = ? AND (created_by = ? OR owner_id = ?) AND id = ? AND deleted = false)";
-                args = new Object[]{check.organizationId(), check.userId(), check.userId(), check.resourceId()};
+                sql = "SELECT EXISTS (SELECT 1 FROM rnd.research_test_record WHERE organization_id = ? AND created_by = ? AND id = ? AND deleted = false)";
+                args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
+            }
+            // 库存业务（流水、发样、出货）都挂在库存产品上，部门与创建人范围统一按产品判定。
+            case "INVENTORY" -> {
+                sql = "SELECT EXISTS (SELECT 1 FROM mfg.inventory_product WHERE organization_id = ? AND created_by = ? AND id = ?)";
+                args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
             }
             case "PROJECT" -> {
                 sql = "SELECT EXISTS (SELECT 1 FROM mdm.project WHERE organization_id = ? AND created_by::text = ? AND id = ? AND deleted = false)";

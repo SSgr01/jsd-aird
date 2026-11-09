@@ -156,6 +156,15 @@ public class JdbcDataRepository implements DataRepository {
     public PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, boolean uncategorized,
                                                     String status, String keyword,
                                                     java.util.Set<UUID> allowedImportJobIds, int page, int size) {
+        return listSourceFiles(organizationId, categoryId, uncategorized, status, keyword,
+                allowedImportJobIds, page, size, com.jsd.aird.iam.api.RecordDataScope.all());
+    }
+
+    @Override
+    public PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, boolean uncategorized,
+                                                    String status, String keyword,
+                                                    java.util.Set<UUID> allowedImportJobIds, int page, int size,
+                                                    com.jsd.aird.iam.api.RecordDataScope dataScope) {
         if (allowedImportJobIds != null && allowedImportJobIds.isEmpty()) {
             return new PageResponse<>(List.of(), page, size, 0, 0);
         }
@@ -167,6 +176,23 @@ public class JdbcDataRepository implements DataRepository {
         // and experiment facts have separate ELN endpoints and must never be
         // projected into this list.
         conditions.add("source_owner = 'DATA_CENTER'");
+        conditions.add("hidden_at IS NULL");
+        switch (dataScope.type()) {
+            case "ALL", "ORG" -> { }
+            case "SELF", "CREATOR" -> { conditions.add("created_by = ?"); parameters.add(dataScope.actorId()); }
+            case "DEPARTMENT" -> {
+                conditions.add("department_id = (SELECT department_id FROM iam.app_user WHERE id = ? AND organization_id = source_entries.organization_id)");
+                parameters.add(dataScope.actorId());
+            }
+            case "SELECTED" -> {
+                if (dataScope.targetIds().isEmpty()) conditions.add("false");
+                else {
+                    conditions.add("entry_id IN (" + String.join(",", java.util.Collections.nCopies(dataScope.targetIds().size(), "?")) + ")");
+                    parameters.addAll(dataScope.targetIds());
+                }
+            }
+            default -> conditions.add("false");
+        }
         if (uncategorized) {
             conditions.add("category_id IS NULL");
         } else if (categoryId != null) {
@@ -195,7 +221,7 @@ public class JdbcDataRepository implements DataRepository {
                 WITH source_entries AS (
                     SELECT j.id entry_id,j.source_file_id,j.source_file_name,j.source_format,
                         j.template_version_id,j.category_id,c.name category_name,j.status,j.progress,
-                        j.created_at,j.updated_at,j.source_owner,j.recognition_mode,
+                        j.created_at,j.updated_at,j.source_owner,j.recognition_mode,j.created_by,j.department_id,j.hidden_at,
                         coalesce((SELECT p.status FROM data.publication p WHERE p.organization_id=j.organization_id AND p.import_job_id=j.id),
                           (SELECT s.status FROM data.confirmed_submission_head h
                             JOIN data.confirmed_submission s ON s.organization_id=h.organization_id

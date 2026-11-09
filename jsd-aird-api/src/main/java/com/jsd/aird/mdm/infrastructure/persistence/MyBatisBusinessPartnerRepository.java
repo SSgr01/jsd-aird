@@ -5,6 +5,8 @@ import com.jsd.aird.mdm.domain.model.*;
 import com.jsd.aird.mdm.infrastructure.model.BusinessPartnerRow;
 import com.jsd.aird.mdm.infrastructure.model.PartnerContactRow;
 import com.jsd.aird.shared.api.PageResponse;
+import com.jsd.aird.iam.api.DataScopeResolver.ResolvedDataScope;
+import com.jsd.aird.shared.security.ActorContext;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Repository;
@@ -26,8 +28,18 @@ public class MyBatisBusinessPartnerRepository implements BusinessPartnerReposito
     public PageResponse<BusinessPartner> findPage(String k, String industry, String customerLevel,
                                                   String cooperationStatus, String owner, PartnerStatus s,
                                                   int p, int z) {
-        var total = mapper.count(k, industry, customerLevel, cooperationStatus, owner, value(s));
-        var rows = mapper.findPage(k, industry, customerLevel, cooperationStatus, owner, value(s), (p - 1) * z, z);
+        return findPage(k, industry, customerLevel, cooperationStatus, owner, s, p, z, null, null, null);
+    }
+
+    @Override
+    public PageResponse<BusinessPartner> findPage(String k, String industry, String customerLevel,
+            String cooperationStatus, String owner, PartnerStatus s, int p, int z,
+            UUID organizationId, UUID userId, ResolvedDataScope scope) {
+        var scopeType = scope == null ? null : scope.scopeType();
+        var targetIds = scope == null ? List.<UUID>of() : scope.targetIds().stream().toList();
+        var total = mapper.count(k, industry, customerLevel, cooperationStatus, owner, value(s), organizationId, userId, scopeType, targetIds);
+        var rows = mapper.findPage(k, industry, customerLevel, cooperationStatus, owner, value(s), (p - 1) * z, z,
+                organizationId, userId, scopeType, targetIds);
         var items = rows.stream().map(row -> toDomain(row, List.of())).toList();
         if (!items.isEmpty()) {
             var stats = mapper.selectPartnerStats(items.stream().map(BusinessPartner::id).toList()).stream()
@@ -55,8 +67,10 @@ public class MyBatisBusinessPartnerRepository implements BusinessPartnerReposito
     }
 
     public void insert(BusinessPartner p, String n, String o) {
+        var actor = ActorContext.required();
         mapper.insert(p.id(), p.partnerCode(), p.name(), n, p.industry(), p.address(), p.status().name(), p.remark(),
-            p.customerLevel(), p.cooperationStatus(), p.mainBusiness(), json(p.customFields()), p.createdAt(), o);
+            p.customerLevel(), p.cooperationStatus(), p.mainBusiness(), json(p.customFields()), p.createdAt(), o,
+            actor.organizationId(), actor.userId());
     }
 
     public boolean update(BusinessPartner p, String n, String o) {

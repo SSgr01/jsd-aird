@@ -118,8 +118,8 @@ VALUES (
     'R01_FIXTURE',
     'R01',
     'ACTIVE',
-    'r01-rehearsal',
-    'r01-rehearsal'
+    '00000000-0000-0000-0000-000000000101',
+    '00000000-0000-0000-0000-000000000101'
 )
 ON CONFLICT (id) DO NOTHING;
 
@@ -136,8 +136,8 @@ VALUES (
     1,
     '{"synthetic":true}'::jsonb,
     '["r01-user"]'::jsonb,
-    'r01-rehearsal',
-    'r01-rehearsal'
+    '00000000-0000-0000-0000-000000000101',
+    '00000000-0000-0000-0000-000000000101'
 )
 ON CONFLICT (id) DO NOTHING;
 

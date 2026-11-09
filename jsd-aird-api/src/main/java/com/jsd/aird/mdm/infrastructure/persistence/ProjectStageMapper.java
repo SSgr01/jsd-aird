@@ -25,7 +25,8 @@ public interface ProjectStageMapper {
         "s.version,s.created_at createdAt,s.updated_at updatedAt FROM mdm.project_stage s " +
         "JOIN mdm.project p ON p.id=s.project_id ";
 
-    String FILTERS = "<if test='keyword != null'> AND (s.name ILIKE concat('%',#{keyword},'%') OR p.name ILIKE concat('%',#{keyword},'%') OR p.project_code ILIKE concat('%',#{keyword},'%') OR s.stage_code ILIKE concat('%',#{keyword},'%'))</if>" +
+    String FILTERS = "<if test='organizationId != null'> AND p.organization_id=#{organizationId}</if>" + ProjectMapper.SCOPE_FILTER +
+        "<if test='keyword != null'> AND (s.name ILIKE concat('%',#{keyword},'%') OR p.name ILIKE concat('%',#{keyword},'%') OR p.project_code ILIKE concat('%',#{keyword},'%') OR s.stage_code ILIKE concat('%',#{keyword},'%'))</if>" +
         "<if test='projectId != null'> AND s.project_id=#{projectId}</if>" +
         "<if test='status != null'> AND s.status=#{status}</if>" +
         "<if test='owner != null'> AND s.owner=#{owner}</if>" +
@@ -43,13 +44,17 @@ public interface ProjectStageMapper {
     List<ProjectStageRow> findPage(@Param("keyword") String keyword, @Param("projectId") UUID projectId,
                                    @Param("status") String status, @Param("owner") String owner,
                                    @Param("plannedFrom") LocalDate plannedFrom, @Param("plannedTo") LocalDate plannedTo,
-                                   @Param("offset") int offset, @Param("size") int size);
+                                   @Param("offset") int offset, @Param("size") int size,
+                                   @Param("organizationId") UUID organizationId, @Param("scopeType") String scopeType,
+                                   @Param("scopeUserId") UUID scopeUserId, @Param("scopeTargetIds") java.util.Set<UUID> scopeTargetIds);
 
     @Select("<script>SELECT count(*) FROM mdm.project_stage s JOIN mdm.project p ON p.id=s.project_id " +
         "WHERE s.deleted=false AND p.deleted=false " + FILTERS + "</script>")
     long count(@Param("keyword") String keyword, @Param("projectId") UUID projectId,
                @Param("status") String status, @Param("owner") String owner,
-               @Param("plannedFrom") LocalDate plannedFrom, @Param("plannedTo") LocalDate plannedTo);
+               @Param("plannedFrom") LocalDate plannedFrom, @Param("plannedTo") LocalDate plannedTo,
+               @Param("organizationId") UUID organizationId, @Param("scopeType") String scopeType,
+               @Param("scopeUserId") UUID scopeUserId, @Param("scopeTargetIds") java.util.Set<UUID> scopeTargetIds);
 
     @Select("<script>SELECT EXISTS(SELECT 1 FROM mdm.project_stage WHERE project_id=#{projectId} AND deleted=false " +
         "AND lower(name)=lower(#{name}) <if test='excludedId != null'>AND id&lt;&gt;#{excludedId}</if>)</script>")

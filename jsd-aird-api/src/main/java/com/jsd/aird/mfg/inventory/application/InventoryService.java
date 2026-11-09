@@ -1,6 +1,9 @@
 package com.jsd.aird.mfg.inventory.application;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jsd.aird.iam.api.AuthorizationService;
+import com.jsd.aird.iam.api.PermissionCheck;
+import com.jsd.aird.iam.api.RecordDataScope;
 import com.jsd.aird.mfg.inventory.domain.InventoryModels.*;
 import com.jsd.aird.mfg.inventory.application.port.InventoryRepository;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
@@ -9,6 +12,7 @@ import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
 import com.jsd.aird.shared.security.Actor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,15 +25,39 @@ import java.util.UUID;
 public class InventoryService {
     private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(InventoryService.class);
     private static final java.util.regex.Pattern CONSTRAINT_PATTERN=java.util.regex.Pattern.compile("constraint\\s+\"([^\"]+)\"");
-    private final InventoryRepository repository; private final AuditLogFacade audit; private final ObjectMapper mapper; private final QualityDataStore qualityData;
-    public InventoryService(InventoryRepository repository, AuditLogFacade audit, ObjectMapper mapper, QualityDataStore qualityData){this.repository=repository;this.audit=audit;this.mapper=mapper;this.qualityData=qualityData;}
-    public BalancePage balances(String keyword,Scope scope,AlertStatus alert,int page,int size,String sort){return repository.balances(actor().organizationId(),keyword,scope,alert,Math.max(page,1),Math.min(Math.max(size,1),100),sort);}
-    public java.util.List<ProductOption> productOptions(Scope scope,String keyword){return repository.productOptions(actor().organizationId(),scope,keyword);}
+    private final InventoryRepository repository; private final AuditLogFacade audit; private final ObjectMapper mapper; private final QualityDataStore qualityData; private final AuthorizationService authorization;
+    public InventoryService(InventoryRepository repository, AuditLogFacade audit, ObjectMapper mapper, QualityDataStore qualityData){this(repository,audit,mapper,qualityData,null);}
+    @Autowired public InventoryService(InventoryRepository repository, AuditLogFacade audit, ObjectMapper mapper, QualityDataStore qualityData, AuthorizationService authorization){this.repository=repository;this.audit=audit;this.mapper=mapper;this.qualityData=qualityData;this.authorization=authorization;}
+
+    /** 未配置数据范围时沿用原权限；指定范围由各页面按其记录 ID 过滤。 */
+    private RecordDataScope viewScope(String... permissionCodes) {
+        if (authorization == null) return RecordDataScope.all();
+        var a = actor();
+        for (var code : permissionCodes) {
+            var resolved = authorization.resolveScope(new PermissionCheck(a.organizationId(), a.userId(), code, "INVENTORY", null, "READ"));
+            if (resolved.allowed()) return new RecordDataScope(resolved.scopeType(), a.userId(), resolved.targetIds());
+            if (!"PERMISSION_DENIED".equals(resolved.reason()))
+                return new RecordDataScope(resolved.scopeType(), a.userId(), java.util.Set.of());
+        }
+        return RecordDataScope.all();
+    }
+    private RecordDataScope ledgerScope(Scope scope) {
+        if (scope == Scope.PRODUCTION) return viewScope("inventory.production.view", "inventory.view");
+        if (scope == Scope.RND) return viewScope("inventory.rnd.view", "inventory.view");
+        return viewScope("inventory.query.view", "inventory.view");
+    }
+    public BalancePage balances(String keyword,Scope scope,AlertStatus alert,int page,int size,String sort){return balances(keyword,scope,alert,page,size,sort,false);}
+    public BalancePage balances(String keyword,Scope scope,AlertStatus alert,int page,int size,String sort,boolean queryView){var dataScope=queryView?viewScope("inventory.query.view","inventory.view"):ledgerScope(scope);return repository.balances(actor().organizationId(),keyword,scope,alert,Math.max(page,1),Math.min(Math.max(size,1),100),sort,queryView?dataScope:ledgerProductScope(scope,dataScope));}
+    private RecordDataScope ledgerProductScope(Scope scope,RecordDataScope dataScope){
+        if(scope==null||!"SELECTED".equals(dataScope.type()))return dataScope;
+        return new RecordDataScope("SELECTED",dataScope.actorId(),repository.productIdsForTransactions(actor().organizationId(),scope,dataScope.targetIds()));
+    }
+    public java.util.List<ProductOption> productOptions(Scope scope,String keyword){return repository.productOptions(actor().organizationId(),scope,keyword,ledgerProductScope(scope,ledgerScope(scope)));}
     @Transactional public ProductOption createProduct(ProductInput input){if(input==null||input.scope()==null)throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"库存域不能为空");var a=actor();var name=required(input.name(),"产品名称");var product=repository.createProduct(a.organizationId(),name,input.scope(),a.userId());audit.append(a.organizationId(),a.userId(),"INVENTORY_PRODUCT_CREATED","INVENTORY_PRODUCT",product.id(),mapper.valueToTree(input));return product;}
     public Balance balance(UUID product,Scope scope){return repository.balance(actor().organizationId(),product,scope).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"库存产品不存在"));}
     @Transactional public Balance updatePolicy(UUID product,Scope scope,PolicyInput input){var a=actor();if(!repository.productExists(a.organizationId(),product,scope))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"该库存域中产品不存在或已停用");if(input.lowStockKg()==null||input.lowStockKg().signum()<0||input.packageKg()!=null&&input.packageKg().signum()<=0)throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"包装规格必须大于 0，预警阈值不能为负数");repository.lockBalance(a.organizationId(),product,scope,a.userId());com.jsd.aird.shared.json.RevisionToken.require(input.revision(),balance(product,scope).getPolicyRevision());repository.upsertPolicy(a.organizationId(),product,scope,input.packageKg(),input.lowStockKg(),a.userId());audit.append(a.organizationId(),a.userId(),"INVENTORY_POLICY_UPDATED","INVENTORY_POLICY",product,mapper.valueToTree(input));return balance(product,scope);}
-    public Page<Transaction> transactions(Scope scope,String keyword,String direction,String reason,int page,int size){return repository.transactions(actor().organizationId(),scope,keyword,direction,reason,Math.max(page,1),Math.min(Math.max(size,1),100));}
-    public java.util.List<String> transactionReasons(Scope scope){return repository.transactionReasons(actor().organizationId(),scope);}
+    public Page<Transaction> transactions(Scope scope,String keyword,String direction,String reason,int page,int size){return repository.transactions(actor().organizationId(),scope,keyword,direction,reason,Math.max(page,1),Math.min(Math.max(size,1),100),ledgerScope(scope));}
+    public java.util.List<String> transactionReasons(Scope scope){return repository.transactionReasons(actor().organizationId(),scope,ledgerScope(scope));}
     public Transaction transaction(UUID id){return repository.findTransaction(actor().organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"库存流水不存在"));}
 
     @Transactional
@@ -352,9 +380,9 @@ public class InventoryService {
         audit.append(a.organizationId(),a.userId(),"INVENTORY_SHIPMENT_UPDATED","INVENTORY_SHIPMENT",id,mapper.valueToTree(input));
         return repository.findShipment(a.organizationId(),id).orElseThrow();
     }
-    public Page<Sample> samples(String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size){return repository.samples(actor().organizationId(),keyword,optionalStatus(status),startDate,endDate,Math.max(page,1),Math.min(Math.max(size,1),100));} public Page<Shipment> shipments(String keyword,int page,int size){return repository.shipments(actor().organizationId(),keyword,Math.max(page,1),Math.min(Math.max(size,1),100));}
-    public Page<ShipmentHeader> shipmentHeaders(String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size){return repository.shipmentHeaders(actor().organizationId(),keyword,optionalStatus(status),startDate,endDate,Math.max(page,1),Math.min(Math.max(size,1),100));}
-    public Page<Shipment> shipmentDetails(String shipmentNo,int page,int size){shipmentHeader(shipmentNo);return repository.shipmentDetails(actor().organizationId(),shipmentNo,Math.max(page,1),Math.min(Math.max(size,1),100));}
+    public Page<Sample> samples(String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size){return repository.samples(actor().organizationId(),keyword,optionalStatus(status),startDate,endDate,Math.max(page,1),Math.min(Math.max(size,1),100),viewScope("inventory.sample.view","inventory.view"));} public Page<Shipment> shipments(String keyword,int page,int size){return repository.shipments(actor().organizationId(),keyword,Math.max(page,1),Math.min(Math.max(size,1),100),viewScope("inventory.shipment.view","inventory.view"));}
+    public Page<ShipmentHeader> shipmentHeaders(String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size){return repository.shipmentHeaders(actor().organizationId(),keyword,optionalStatus(status),startDate,endDate,Math.max(page,1),Math.min(Math.max(size,1),100),viewScope("inventory.shipment.view","inventory.view"));}
+    public Page<Shipment> shipmentDetails(String shipmentNo,int page,int size){shipmentHeader(shipmentNo);return repository.shipmentDetails(actor().organizationId(),shipmentNo,Math.max(page,1),Math.min(Math.max(size,1),100),viewScope("inventory.shipment.view","inventory.view"));}
     public ShipmentHeader shipmentHeader(String shipmentNo){return repository.shipmentHeader(actor().organizationId(),shipmentNo).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"出货单不存在"));}
     @Transactional public ShipmentHeader createShipmentHeader(String shipmentNo,LocalDate businessDate,String note){
         var a=actor();var number=required(shipmentNo,"出货单号");

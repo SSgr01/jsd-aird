@@ -5,6 +5,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import com.jsd.aird.shared.api.AllowedActions;
+import com.jsd.aird.iam.api.RecordDataScope;
 
 public interface KnowledgeRepository {
     void lockCategory(UUID organizationId,UUID categoryId);
@@ -25,6 +26,12 @@ public interface KnowledgeRepository {
                 reviewStatus, page, size).stream()
                 .filter(row -> allowedDocumentIds == null || allowedDocumentIds.contains(row.id())).toList();
     }
+    default List<DocumentRow> listDocuments(UUID organizationId, String keyword, String status,
+                                            String scope, UUID categoryId, String lifecycleStatus, String reviewStatus,
+                                            Set<UUID> allowedDocumentIds, int page, int size, RecordDataScope dataScope) {
+        return listDocuments(organizationId, keyword, status, scope, categoryId, lifecycleStatus,
+                reviewStatus, allowedDocumentIds, page, size);
+    }
     long countDocuments(UUID organizationId, String keyword, String status,
                         String scope, UUID categoryId, String lifecycleStatus, String reviewStatus);
     default long countDocuments(UUID organizationId, String keyword, String status,
@@ -34,8 +41,17 @@ public interface KnowledgeRepository {
         return countDocuments(organizationId, keyword, status, scope, categoryId,
                 lifecycleStatus, reviewStatus);
     }
+    default long countDocuments(UUID organizationId, String keyword, String status,
+                                String scope, UUID categoryId, String lifecycleStatus, String reviewStatus,
+                                Set<UUID> allowedDocumentIds, RecordDataScope dataScope) {
+        return countDocuments(organizationId, keyword, status, scope, categoryId,
+                lifecycleStatus, reviewStatus, allowedDocumentIds);
+    }
 
     List<CategoryRow> listCategories(UUID organizationId, String scope);
+    default List<CategoryRow> listCategories(UUID organizationId, String scope, RecordDataScope dataScope) {
+        return listCategories(organizationId, scope);
+    }
     Optional<CategoryRow> findCategory(UUID organizationId, UUID categoryId);
     Optional<CategoryRow> findDefaultCategory(UUID organizationId, String scope);
     void lockCategoryName(UUID organizationId, String scope, String name);

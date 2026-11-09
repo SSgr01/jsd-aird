@@ -24,6 +24,9 @@ import com.jsd.aird.core.api.ProjectResourceFacade;
 import com.jsd.aird.core.api.ProjectResourceFacade.ResourceType;
 import com.jsd.aird.kb.api.KnowledgeEmbeddingFacade;
 import com.jsd.aird.kb.api.KnowledgeSearchFacade;
+import com.jsd.aird.iam.api.AuthorizationService;
+import com.jsd.aird.iam.api.PermissionCheck;
+import com.jsd.aird.iam.api.RecordDataScope;
 import com.jsd.aird.kb.application.port.KnowledgeRepository;
 import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
 import com.jsd.aird.kb.domain.DocumentParser;
@@ -75,6 +78,10 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     private final LexicalAnalyzer lexicalAnalyzer;
     private final SystemParsingPolicy systemParsingPolicy;
     private final ProjectResourceFacade projectResources;
+    private AuthorizationService authorization;
+
+    @Autowired
+    public void setAuthorization(AuthorizationService authorization) { this.authorization = authorization; }
     private final Executor retrievalExecutor;
 
     @Autowired
@@ -213,13 +220,14 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var actor = ActorContext.required();
         var safePage = Math.max(1, page);
         var safeSize = Math.min(100, Math.max(1, size));
+        var dataScope = viewDataScope(actor);
         var allowed = projectId == null || projectResources == null ? null
                 : projectResources.resourceIdsForProject(actor, ResourceType.KNOWLEDGE_DOCUMENT, projectId);
         var items = repository.listDocuments(actor.organizationId(), keyword, status, scope, categoryId,
-                        lifecycleStatus, reviewStatus, allowed, safePage, safeSize)
+                        lifecycleStatus, reviewStatus, allowed, safePage, safeSize, dataScope)
                 .stream().map(this::view).toList();
         var total = repository.countDocuments(actor.organizationId(), keyword, status, scope, categoryId,
-                lifecycleStatus, reviewStatus, allowed);
+                lifecycleStatus, reviewStatus, allowed, dataScope);
         items = withProjects(actor, items);
         return new PageResponse<>(items, safePage, safeSize, total, (total + safeSize - 1) / safeSize);
     }
@@ -235,7 +243,16 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     }
 
     public List<KnowledgeRepository.CategoryRow> categories(String scope) {
-        return repository.listCategories(ActorContext.required().organizationId(), scope);
+        var actor = ActorContext.required();
+        return repository.listCategories(actor.organizationId(), scope, viewDataScope(actor));
+    }
+
+    private RecordDataScope viewDataScope(com.jsd.aird.shared.security.Actor actor) {
+        if (authorization == null) return RecordDataScope.all();
+        var resolved = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
+                "knowledge.view", "KNOWLEDGE", null, "READ"));
+        if (!resolved.allowed()) throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有知识库查看权限");
+        return new RecordDataScope(resolved.scopeType(), actor.userId(), resolved.targetIds());
     }
 
     @Transactional

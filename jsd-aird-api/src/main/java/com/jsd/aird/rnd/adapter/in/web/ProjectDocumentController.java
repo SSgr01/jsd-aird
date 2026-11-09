@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.rnd.application.ProjectDocumentExportService;
 import com.jsd.aird.rnd.application.ProjectDocumentService;
+import com.jsd.aird.mdm.application.service.ProjectService;
 import com.jsd.aird.rnd.domain.ProjectDocumentFormat;
 import com.jsd.aird.rnd.domain.ProjectDocumentSource;
 import com.jsd.aird.shared.api.ApiResponse;
@@ -20,6 +21,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
@@ -31,12 +33,29 @@ public class ProjectDocumentController {
     private final ProjectDocumentService service;
     private final ProjectDocumentExportService exportService;
     private final WorkspaceReviewService reviews;
+    private final ProjectService projectAccess;
 
+    @Autowired
     public ProjectDocumentController(ProjectDocumentService service, ProjectDocumentExportService exportService,
-                                     WorkspaceReviewService reviews) {
+                                     WorkspaceReviewService reviews, ProjectService projectAccess) {
         this.service = service;
         this.exportService = exportService;
         this.reviews = reviews;
+        this.projectAccess = projectAccess;
+    }
+
+    public ProjectDocumentController(ProjectDocumentService service, ProjectDocumentExportService exportService,
+                                     WorkspaceReviewService reviews) {
+        this(service, exportService, reviews, null);
+    }
+
+    @ModelAttribute
+    void requireProjectAccess(@PathVariable("projectId") UUID projectId,
+                              @PathVariable(value = "documentId", required = false) UUID documentId) {
+        if (projectAccess == null) return;
+        projectAccess.get(projectId);
+        if (documentId != null && !projectId.equals(service.get(documentId).projectId()))
+            throw new ApiException(ApiErrorCode.NOT_FOUND, "项目文档不存在");
     }
 
     @GetMapping

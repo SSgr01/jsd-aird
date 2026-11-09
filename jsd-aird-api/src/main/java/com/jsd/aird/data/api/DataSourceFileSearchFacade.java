@@ -367,9 +367,9 @@ public interface DataSourceFileSearchFacade {
 
         public boolean deniesAll() {
             return (Set.of("SELECTED", "CATEGORY", "PROJECT").contains(type) && targetIds.isEmpty())
-                    || "SELF".equals(type) && actorId == null
+                    || Set.of("SELF", "DEPARTMENT").contains(type) && actorId == null
                     || "ASSIGNED".equals(type)
-                    || !Set.of("ALL", "SELECTED", "CATEGORY", "PROJECT", "SELF", "ASSIGNED").contains(type);
+                    || !Set.of("ALL", "SELECTED", "CATEGORY", "PROJECT", "SELF", "DEPARTMENT", "ASSIGNED").contains(type);
         }
     }
 }

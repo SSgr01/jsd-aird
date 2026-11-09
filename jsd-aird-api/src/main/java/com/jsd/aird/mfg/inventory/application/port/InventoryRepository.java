@@ -12,21 +12,24 @@ public interface InventoryRepository {
     void lockTransaction(UUID org,UUID id);
 
     boolean productExists(UUID org,UUID productId,Scope scope);
-    java.util.List<ProductOption> productOptions(UUID org,Scope scope,String keyword);
+    java.util.List<ProductOption> productOptions(UUID org,Scope scope,String keyword,com.jsd.aird.iam.api.RecordDataScope dataScope);
+    default java.util.Set<UUID> productIdsForTransactions(UUID org, Scope scope, java.util.Set<UUID> transactionIds) {
+        return java.util.Set.of();
+    }
     ProductOption createProduct(UUID org,String name,Scope scope,UUID actor);
     java.util.List<ProductOption> productOptionsExact(UUID org,Scope scope,String name);
-    BalancePage balances(UUID org,String keyword,Scope scope,AlertStatus alert,int page,int size,String sort);
+    BalancePage balances(UUID org,String keyword,Scope scope,AlertStatus alert,int page,int size,String sort,com.jsd.aird.iam.api.RecordDataScope dataScope);
     Optional<Balance> balance(UUID org,UUID productId,Scope scope);
     void upsertPolicy(UUID org,UUID productId,Scope scope,BigDecimal packageKg,BigDecimal lowStockKg,UUID actor);
     BigDecimal lockBalance(UUID org,UUID product,Scope scope,UUID actor);
     void updateBalance(UUID org,UUID product,Scope scope,BigDecimal quantity);
     void insertTransaction(UUID org,Transaction tx,String idempotencyKey);
     int updateTransaction(UUID org,UUID id,LocalDate businessDate,String documentNo,String reason,String note,String actorName);
-    java.util.List<String> transactionReasons(UUID org,Scope scope);
+    java.util.List<String> transactionReasons(UUID org,Scope scope,com.jsd.aird.iam.api.RecordDataScope dataScope);
     Optional<Transaction> findTransaction(UUID org,UUID id);
     Optional<Transaction> findByIdempotency(UUID org,String key);
     Optional<Transaction> findByDocumentNo(UUID org,String documentNo,String businessType);
-    Page<Transaction> transactions(UUID org,Scope scope,String keyword,String direction,String reason,int page,int size);
+    Page<Transaction> transactions(UUID org,Scope scope,String keyword,String direction,String reason,int page,int size,com.jsd.aird.iam.api.RecordDataScope dataScope);
     void insertSample(UUID org,Sample sample,UUID actor);
     void insertShipment(UUID org,Shipment shipment,UUID actor);
     Optional<String> activeCustomerName(UUID customerId);
@@ -34,11 +37,11 @@ public interface InventoryRepository {
     Optional<RecipientPreference> recipientPreference(UUID customerId);
     Optional<RecipientPreference> latestSampleRecipient(UUID customerId);
     void upsertRecipientPreference(UUID customerId,String recipientName,String recipientPhone,String sampleAddress);
-    Page<Sample> samples(UUID org,String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size);
-    Page<Shipment> shipments(UUID org,String keyword,int page,int size);
-    Page<Shipment> shipmentDetails(UUID org,String shipmentNo,int page,int size);
+    Page<Sample> samples(UUID org,String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size,com.jsd.aird.iam.api.RecordDataScope dataScope);
+    Page<Shipment> shipments(UUID org,String keyword,int page,int size,com.jsd.aird.iam.api.RecordDataScope dataScope);
+    Page<Shipment> shipmentDetails(UUID org,String shipmentNo,int page,int size,com.jsd.aird.iam.api.RecordDataScope dataScope);
     java.util.List<UUID> pendingShipmentIds(UUID org,String shipmentNo);
-    Page<ShipmentHeader> shipmentHeaders(UUID org,String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size);
+    Page<ShipmentHeader> shipmentHeaders(UUID org,String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size,com.jsd.aird.iam.api.RecordDataScope dataScope);
     Optional<ShipmentHeader> shipmentHeader(UUID org,String shipmentNo);
     ShipmentHeader insertShipmentHeader(UUID org,String shipmentNo,LocalDate businessDate,String note,UUID actor);
     int updateShipmentHeaderDate(UUID org,String shipmentNo,LocalDate businessDate);

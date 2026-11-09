@@ -16,6 +16,19 @@ public class ProjectWorkSqlProvider {
         sql.JOIN("mdm.project p ON p.id = t.project_id AND p.deleted = false");
         sql.JOIN("mdm.project_stage s ON s.id = t.stage_id AND s.deleted = false");
         sql.WHERE("t.deleted = false");
+        if (query.organizationId() != null) sql.WHERE("p.organization_id = #{query.organizationId}");
+        switch (query.scopeType() == null ? "ALL" : query.scopeType()) {
+            case "ALL", "ORG" -> { }
+            case "SELF", "CREATOR" -> sql.WHERE("p.created_by = #{query.scopeUserId}");
+            case "DEPARTMENT" -> sql.WHERE("p.department_id IS NOT NULL AND p.department_id = (SELECT u.department_id FROM iam.app_user u WHERE u.id = #{query.scopeUserId} AND u.organization_id = #{query.organizationId})");
+            case "SELECTED", "PROJECT" -> {
+                if (query.scopeTargetIds().isEmpty()) sql.WHERE("1 = 0");
+                else sql.WHERE("p.id IN (" + java.util.stream.IntStream.range(0, query.scopeTargetIds().size())
+                        .mapToObj(index -> "#{query.scopeTargetIds[" + index + "]}")
+                        .collect(java.util.stream.Collectors.joining(",")) + ")");
+            }
+            default -> sql.WHERE("1 = 0");
+        }
         if (query.keyword() != null && !query.keyword().isBlank()) {
             sql.WHERE("(t.name ILIKE concat('%', #{query.keyword}, '%') OR t.task_code ILIKE concat('%', #{query.keyword}, '%'))");
         }
@@ -50,6 +63,16 @@ public class ProjectWorkSqlProvider {
         sql.SELECT("count(*)");
         sql.FROM("mdm.project_task t");
         applyFilters(sql, query);
+        return sql.toString();
+    }
+
+    public String owners(ProjectTaskQuery query) {
+        SQL sql = new SQL();
+        sql.SELECT("DISTINCT t.owner");
+        sql.FROM("mdm.project_task t");
+        applyFilters(sql, query);
+        sql.WHERE("t.owner IS NOT NULL AND t.owner <> ''");
+        sql.ORDER_BY("t.owner");
         return sql.toString();
     }
 }

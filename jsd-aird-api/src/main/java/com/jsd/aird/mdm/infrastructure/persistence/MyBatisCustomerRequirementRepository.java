@@ -4,6 +4,7 @@ import com.jsd.aird.mdm.application.port.CustomerRequirementRepository;
 import com.jsd.aird.mdm.domain.model.CustomerRequirement;
 import com.jsd.aird.mdm.infrastructure.model.RequirementRow;
 import com.jsd.aird.shared.api.PageResponse;
+import com.jsd.aird.iam.api.DataScopeResolver.ResolvedDataScope;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Repository;
@@ -25,8 +26,17 @@ public class MyBatisCustomerRequirementRepository implements CustomerRequirement
 
     @Override
     public PageResponse<CustomerRequirement> findRequirements(UUID partnerId, UUID projectId, String status, int page, int size) {
-        var total = mapper.count(partnerId, projectId, status);
-        var rows = mapper.findPage(partnerId, projectId, status, (page - 1) * size, size);
+        return findRequirements(partnerId, projectId, status, page, size, null, null, null);
+    }
+
+    @Override
+    public PageResponse<CustomerRequirement> findRequirements(UUID partnerId, UUID projectId, String status, int page, int size,
+            UUID organizationId, UUID userId, ResolvedDataScope scope) {
+        var scopeType = scope == null ? null : scope.scopeType();
+        var targetIds = scope == null ? List.<UUID>of() : scope.targetIds().stream().toList();
+        var total = mapper.count(partnerId, projectId, status, organizationId, userId, scopeType, targetIds);
+        var rows = mapper.findPage(partnerId, projectId, status, (page - 1) * size, size,
+                organizationId, userId, scopeType, targetIds);
         var items = rows.stream().map(MyBatisCustomerRequirementRepository::toDomain).toList();
         return new PageResponse<>(items, page, size, total, (total + size - 1) / size);
     }

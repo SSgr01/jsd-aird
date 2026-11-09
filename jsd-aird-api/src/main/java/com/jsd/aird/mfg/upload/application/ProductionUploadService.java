@@ -11,6 +11,9 @@ import java.util.UUID;
 
 import com.jsd.aird.mfg.upload.application.port.ProductionUploadRepository;
 import com.jsd.aird.mfg.application.port.ProductionOrderRepository;
+import com.jsd.aird.iam.api.AuthorizationService;
+import com.jsd.aird.iam.api.PermissionCheck;
+import com.jsd.aird.iam.api.RecordDataScope;
 import com.jsd.aird.ops.application.port.FileObjectRepository;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import com.jsd.aird.shared.error.ApiErrorCode;
@@ -18,6 +21,7 @@ import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -31,12 +35,23 @@ public class ProductionUploadService {
     private final ProductionOrderRepository orders;
     private final ProductionUploadWorkbookBuilder workbookBuilder;
     private final ProductionUploadRecognitionReviewAssembler reviewAssembler;
+    private final AuthorizationService authorization;
 
     public ProductionUploadService(ProductionUploadRepository repository, FileObjectRepository files,
                                    OpsAsyncFacade async, ObjectMapper objectMapper,
                                    ProductionOrderRepository orders,
                                    ProductionUploadWorkbookBuilder workbookBuilder,
                                    ProductionUploadRecognitionReviewAssembler reviewAssembler) {
+        this(repository, files, async, objectMapper, orders, workbookBuilder, reviewAssembler, null);
+    }
+
+    @Autowired
+    public ProductionUploadService(ProductionUploadRepository repository, FileObjectRepository files,
+                                   OpsAsyncFacade async, ObjectMapper objectMapper,
+                                   ProductionOrderRepository orders,
+                                   ProductionUploadWorkbookBuilder workbookBuilder,
+                                   ProductionUploadRecognitionReviewAssembler reviewAssembler,
+                                   AuthorizationService authorization) {
         this.repository = repository;
         this.files = files;
         this.async = async;
@@ -44,6 +59,7 @@ public class ProductionUploadService {
         this.orders = orders;
         this.workbookBuilder = workbookBuilder;
         this.reviewAssembler = reviewAssembler;
+        this.authorization = authorization;
     }
 
     @Transactional
@@ -160,8 +176,16 @@ public class ProductionUploadService {
             String keyword, String status, String format, UUID projectId, boolean viewableOnly, int page, int size) {
         var safePage = Math.max(1, page);
         var safeSize = Math.min(100, Math.max(1, size));
-        return repository.list(ActorContext.required().organizationId(), keyword, status, format, projectId,
+        var actor = ActorContext.required();
+        if (authorization == null) return repository.list(actor.organizationId(), keyword, status, format, projectId,
                 viewableOnly, safePage, safeSize);
+        var code = viewableOnly ? "production.view" : "production.upload.view";
+        var resolved = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
+                code, "PRODUCTION_UPLOAD", null, "READ"));
+        if (!resolved.allowed()) throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有生产单查看权限");
+        return repository.list(actor.organizationId(), keyword, status, format, projectId,
+                viewableOnly, safePage, safeSize,
+                new RecordDataScope(resolved.scopeType(), actor.userId(), resolved.targetIds()));
     }
 
     @Transactional
@@ -479,6 +503,11 @@ public class ProductionUploadService {
     }
 
     public ProductionUploadRepository.UploadView getViewable(UUID id) {
+        if (authorization != null) {
+            var actor = ActorContext.required();
+            authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(),
+                    "production.view", "PRODUCTION_UPLOAD", id, "READ"));
+        }
         var upload = get(id);
         // REVIEW_REQUIRED is retained only for backward compatibility with
         // rows created before recognition completion became a saved draft.

@@ -31,16 +31,47 @@ interface RowScopeSetting {
 const scopeOptions = [
   { value: 'ALL', label: '全部' },
   { value: 'CREATOR', label: '我创建' },
-  { value: 'ORG', label: '本部门' },
+  { value: 'DEPARTMENT', label: '本部门' },
   { value: 'SELECTED', label: '指定' },
 ];
+const projectTargetMenus = new Set(['eln.view', 'research-test.report.view', 'quality.view', 'production.view']);
+const selectedScopeLabels: Record<string, string> = {
+  'project.list': '指定项目',
+  'customer.list': '指定客户',
+  'template.view': '指定模板',
+  'spectrum.view': '指定文件',
+  'knowledge.view': '指定文件',
+  'data.view': '指定文件',
+  'research-test.standard': '指定文件',
+};
 
 // Modules / functional rows that do not offer the 指定 data scope.
-const modulesWithoutSelectedScope = new Set(['inventory', 'system']);
+const modulesWithoutSelectedScope = new Set(['system']);
 const menusWithoutSelectedScope = new Set<string>();
-const dataScopeOptionsFor = (menuKey: string, definition: PermissionDefinition) => {
+// 用户管理 / 用户权限配置的数据对象是用户，支持本部门范围，但不提供「指定」。
+const userScopeMenus = new Set(['system.users', 'system.permissions']);
+const isUserScopeRow = (menuKey: string | null | undefined, permissionCode: string) =>
+  (!!menuKey && userScopeMenus.has(menuKey))
+  || [...userScopeMenus].some((key) => permissionCode.startsWith(`${key}.`));
+// 历史遗留的「指定」在这两行归一为全部：界面不会出现无选中项，保存时也会清掉旧配置。
+const rowScopeValue = (menuKey: string, value: string) =>
+  userScopeMenus.has(menuKey) && normalizedScope(value) === 'SELECTED' ? 'ALL' : normalizedScope(value);
+const withoutSelectedScope = <T extends PermissionBinding | PermissionLevelBinding>(binding: T): T =>
+  isUserScopeRow(binding.menuKey, binding.permissionCode) && normalizedScope(binding.scopeType) === 'SELECTED'
+    ? { ...binding, scopeType: 'ALL', targetIds: [] }
+    : binding;
+const dataScopeOptionsFor = (menuKey: string, definition: PermissionDefinition, grant?: { scopeType: string; targetIds: string[] }, unrestricted = true) => {
   const withoutSelected = modulesWithoutSelectedScope.has(definition.module) || menusWithoutSelectedScope.has(menuKey);
-  return withoutSelected ? scopeOptions.filter((option) => option.value !== 'SELECTED') : scopeOptions;
+  return scopeOptions.filter((option) =>
+    (option.value !== 'SELECTED' || !withoutSelected)
+    && (unrestricted || grant?.scopeType === 'ALL' || grant?.scopeType === 'ORG' || normalizedScope(grant?.scopeType || '') === option.value)
+    && (option.value !== 'DEPARTMENT' || userScopeMenus.has(menuKey)
+      || ['quality.view', 'spectrum.view', 'production.view', 'knowledge.view', 'data.view'].includes(menuKey)
+      || ['customer', 'project', 'experiment', 'research-test', 'template', 'inventory'].includes(definition.module)))
+    .map((option) => option.value === 'SELECTED'
+      ? { ...option, label: selectedScopeLabels[menuKey]
+          || (projectTargetMenus.has(menuKey) ? '指定项目' : menuKey.startsWith('inventory.') ? '指定产品' : option.label) }
+      : option);
 };
 
 // Legacy stored scopes are folded onto the four standard options: "我负责/我管理/我参与"
@@ -48,7 +79,8 @@ const dataScopeOptionsFor = (menuKey: string, definition: PermissionDefinition) 
 const normalizedScope = (value: string) => {
   if (['SELF', 'CREATOR', 'ASSIGNED', 'OWNER', 'MANAGER', 'PARTICIPANT', 'PROJECT_GROUP'].includes(value)) return 'CREATOR';
   if (['PROJECT', 'CATEGORY', 'SELECTED'].includes(value)) return 'SELECTED';
-  return value || 'ORG';
+  if (value === 'ORG') return 'ALL';
+  return value || 'ALL';
 };
 const standardOperationSpecs = [
   { suffix: 'view', label: '查看', risk: 'LOW', defaultScope: 'ALL' },
@@ -82,8 +114,44 @@ const menusWithoutApproveAndPublish = new Set([
   'project.log',
   'project.materials',
 ]);
+// 基础字典、操作日志、系统参数配置是组织级配置与审计能力，不存在可划分的数据对象，
+// 因此不提供任何数据范围权限；历史配置在保存时一并清除。
+const dataScopeFreeMenus = ['system.dictionary', 'system.audit', 'system.parameters'];
+const isDataScopeFree = (menuKey: string | null | undefined, permissionCode: string) =>
+  (!!menuKey && dataScopeFreeMenus.includes(menuKey))
+  || dataScopeFreeMenus.some((key) => permissionCode.startsWith(`${key}.`));
+const withoutDataScope = <T extends PermissionBinding | PermissionLevelBinding>(binding: T): T =>
+  isDataScopeFree(binding.menuKey, binding.permissionCode)
+    ? { ...binding, scopeType: 'ALL', targetIds: [] }
+    : binding;
+const withoutOwnProjectTargets = <T extends PermissionBinding | PermissionLevelBinding>(binding: T): T =>
+  binding.menuKey && projectTargetMenus.has(binding.menuKey) && binding.scopeType === 'SELECTED'
+    ? { ...binding, targetIds: [] } : binding;
 // Functional rows that do not carry a data scope at all.
 const menusWithoutDataScope = new Set([
+  ...dataScopeFreeMenus,
+  'customer.overview',
+  'customer.needs',
+  'customer.projects',
+  'customer.followup',
+  'project.stage',
+  'project.task',
+  'project.document',
+  'project.customer-needs',
+  'project.reference',
+  'project.meeting',
+  'project.log',
+  'project.materials',
+  'spectrum.ai',
+  'ai.search',
+  'ai.qa',
+  'ai.formula',
+  'ai.analysis',
+  'ai.optimization',
+  'ai.model',
+  'knowledge.review',
+  'knowledge.upload',
+  'data.upload',
   'template.upload',
   'eln.create',
   'eln.upload',
@@ -233,6 +301,10 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
   const activeUser = users.find((user) => user.id === activeUserId);
   const activeRole = roles.find((role) => role.id === activeRoleId);
   const activeLevel = model?.levels.find((level) => level.id === activeLevelId);
+  const currentUserId = useAuthStore((state) => state.user?.userId);
+  const editingSelf = activeUserId === currentUserId;
+  const editingOwnRole = !!activeRoleId && (model?.ownRoleIds ?? []).includes(activeRoleId);
+  const editingOwnLevel = !!activeLevelId && model?.ownLevelId === activeLevelId;
 
   const matrixRows = useMemo(() => {
     const availableCodes = new Set((model?.operations ?? []).map((definition) => definition.code));
@@ -246,7 +318,7 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
     setLoading(true);
     try {
       const [userPage, roleItems, permissionModel] = await Promise.all([
-        iamApi.users({ size: 100 }),
+        iamApi.users({ size: 100, permissionView: 'permissions' }),
         iamApi.roles(),
         iamApi.permissionModel(),
       ]);
@@ -273,7 +345,9 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
       : matrixRows
       .filter((row) => row.operations.some((definition) => definition.code === item.permissionCode))
       .map((row) => [levelBindingKey(row.menu.key, item.permissionCode), { ...item, menuKey: row.menu.key }] as const))));
-    setScopeOverrides(Object.fromEntries(data.scopeOverrides.flatMap((item) => item.menuKey
+    setScopeOverrides(Object.fromEntries(data.scopeOverrides
+      .filter((item) => !isDataScopeFree(item.menuKey, item.permissionCode))
+      .flatMap((item) => item.menuKey
       ? [[levelBindingKey(item.menuKey, item.permissionCode), item] as const]
       : matrixRows
       .filter((row) => row.operations.some((definition) => definition.code === item.permissionCode))
@@ -369,8 +443,11 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
         primaryRoleId: roleIds[0],
         permissionLevelId: levelId,
         menus: Object.values(menuOverrides),
-        operations: uniqueBindings(Object.values(operationOverrides)),
-        scopes: uniqueBindings(Object.values(scopeOverrides)),
+        operations: uniqueBindings(Object.values(operationOverrides))
+          .map(withoutDataScope).map(withoutSelectedScope),
+        scopes: uniqueBindings(Object.values(scopeOverrides))
+          .filter((item) => !isDataScopeFree(item.menuKey, item.permissionCode))
+          .map(withoutSelectedScope).map(withoutOwnProjectTargets),
       });
       await loadUserModel(false);
       await useAuthStore.getState().load();
@@ -402,7 +479,8 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
     if (!activeLevelId) return;
     setSaving(true);
     try {
-      const result = await iamApi.savePermissionLevelPermissions(activeLevelId, levelVersion, Object.values(levelBindings));
+      const result = await iamApi.savePermissionLevelPermissions(activeLevelId, levelVersion,
+        Object.values(levelBindings).map(withoutDataScope).map(withoutSelectedScope).map(withoutOwnProjectTargets));
       setLevelVersion(result.version);
       await loadLevelBindings();
       await useAuthStore.getState().load();
@@ -562,7 +640,7 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
     const overridden = personal && Boolean(menuOverrides[row.menu.key]);
     const inherited = personal && roleIds.length > 0;
     return <div className={`permission-v4-function ${row.menu.parent ? 'child' : 'parent'}${overridden ? ' overridden' : ''}`}>
-      <input type="checkbox" checked={checked} disabled={!personal && activeRole?.code === 'SYSTEM_ADMIN'} onChange={(event) => personal ? togglePersonalMenu(row.menu, event.target.checked) : toggleRoleMenu(row.menu, event.target.checked)} />
+      <input type="checkbox" checked={checked} disabled={personal ? editingSelf : activeRole?.code === 'SYSTEM_ADMIN' || editingOwnRole} onChange={(event) => personal ? togglePersonalMenu(row.menu, event.target.checked) : toggleRoleMenu(row.menu, event.target.checked)} />
       <span className="permission-v4-tree">{row.menu.parent ? '└─' : ''}</span>
       <span className="permission-v4-function-label">{row.menu.label}</span>
       {personal && renderSource(overridden, inherited)}
@@ -583,12 +661,12 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
         if (!override && !inherited) return undefined;
         return {
           definition,
-          scopeType: normalizedScope(override?.scopeType || inherited!.scopeType),
+          scopeType: rowScopeValue(menuKey, override?.scopeType || inherited!.scopeType),
           targetIds: override?.targetIds || inherited!.targetIds || [],
         } satisfies RowScopeSetting;
       })
       .find(Boolean);
-    return stored || { definition: anchor, scopeType: normalizedScope(anchor.defaultScope), targetIds: [] };
+    return stored || { definition: anchor, scopeType: rowScopeValue(menuKey, anchor.defaultScope), targetIds: [] };
   };
   const renderPersonalScopeCell = (row: PermissionMatrixRow) => {
     const setting = personalRowScope(row.menu.key);
@@ -596,14 +674,15 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
     const updateRowScope = (scopeType: string, ids: string[] = []) => setScopeOverrides((current) =>
       updateUserRowScopeOverrides(current, userLevelBindings, row.menu.key, row.operations, scopeType, ids));
     return <div className="permission-v4-scope-list"><div className="permission-v4-scope-line">
-      <PermissionScopeChoices value={setting.scopeType} options={dataScopeOptionsFor(row.menu.key, setting.definition)} onChange={updateRowScope} />
-      {setting.scopeType === 'SELECTED' && <PermissionTargetPicker key={setting.definition.code} permissionCode={setting.definition.code} module={setting.definition.module} scopeType="SELECTED" value={setting.targetIds} onChange={(ids) => updateRowScope('SELECTED', ids)} />}
+      <PermissionScopeChoices value={setting.scopeType} options={dataScopeOptionsFor(row.menu.key, setting.definition, model?.delegableScopes[setting.definition.code], model?.unrestricted)} disabled={editingSelf} onChange={updateRowScope} />
+      {setting.scopeType === 'SELECTED' && menusWithoutSelectedScope.has(row.menu.key) && <Typography.Text type="warning">历史指定范围，请改选其他范围</Typography.Text>}
+      {setting.scopeType === 'SELECTED' && !menusWithoutSelectedScope.has(row.menu.key) && !projectTargetMenus.has(row.menu.key) && !editingSelf && <PermissionTargetPicker key={setting.definition.code} permissionCode={setting.definition.code} module={setting.definition.module} scopeType="SELECTED" value={setting.targetIds} allowedTargetIds={model?.unrestricted || model?.delegableScopes[setting.definition.code]?.scopeType !== 'SELECTED' ? undefined : model.delegableScopes[setting.definition.code]?.targetIds} onChange={(ids) => updateRowScope('SELECTED', ids)} />}
     </div></div>;
   };
 
   const renderPersonalMatrix = () => <div className="permission-v4-table-wrap"><table className="permission-v4-table permission-v4-personal-table"><thead><tr><th>功能权限</th><th>操作权限</th><th>数据范围权限</th></tr></thead><tbody>{matrixRows.map((row) => <tr className={row.menu.parent ? 'child-row' : 'parent-row'} key={row.menu.key}>
     <td>{renderMenuCell(row, true)}</td>
-    <td>{row.operations.length ? <div className="permission-v4-checks">{row.operations.map((definition) => { const key = levelBindingKey(row.menu.key, definition.code); const overridden = Boolean(operationOverrides[key]); return <label className={`permission-v4-check${overridden ? ' manual' : ''}`} key={definition.code} title={overridden ? '个人覆盖' : '继承权限等级'}><input type="checkbox" checked={userOperationValue(row.menu.key, definition)} onChange={(event) => setOperationOverride(row.menu.key, definition, event.target.checked, personalRowScope(row.menu.key))} /><span>{definition.name}</span></label>; })}</div> : <span className="permission-v4-muted">—</span>}</td>
+    <td>{row.operations.length ? <div className="permission-v4-checks">{row.operations.map((definition) => { const key = levelBindingKey(row.menu.key, definition.code); const overridden = Boolean(operationOverrides[key]); return <label className={`permission-v4-check${overridden ? ' manual' : ''}`} key={definition.code} title={overridden ? '个人覆盖' : '继承权限等级'}><input type="checkbox" disabled={editingSelf} checked={userOperationValue(row.menu.key, definition)} onChange={(event) => setOperationOverride(row.menu.key, definition, event.target.checked, personalRowScope(row.menu.key))} /><span>{definition.name}</span></label>; })}</div> : <span className="permission-v4-muted">—</span>}</td>
     <td>{renderPersonalScopeCell(row)}</td>
   </tr>)}</tbody></table></div>;
 
@@ -612,8 +691,8 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
       <div className="permission-v4-user-config">
         <div className="permission-v4-user-toolbar">
           <label className="permission-v4-config-field"><span>搜索用户</span><Select showSearch value={activeUserId} onChange={setActiveUserId} optionFilterProp="label" options={users.map((user) => ({ value: user.id, label: `${user.displayName} · ${user.username}`, email: user.email }))} placeholder="输入姓名、编号或邮箱搜索" /></label>
-          <label className="permission-v4-config-field"><span>业务角色 <small>可多选；不选择时菜单权限由个人手工配置</small></span><Select mode="multiple" value={roleIds} onChange={setRoleIds} options={roles.map((role) => ({ value: role.id, label: `${role.name}${role.builtin ? '（内置）' : ''}` }))} placeholder="不选择业务角色" maxTagCount="responsive" /></label>
-          <label className="permission-v4-config-field"><span>权限等级 </span><Select allowClear value={levelId} onChange={setLevelId} options={(model?.levels ?? []).map((level) => ({ value: level.id, label: `${level.name}（${level.code}）` }))} placeholder="不选择权限等级（手工配置）" /></label>
+          <label className="permission-v4-config-field"><span>业务角色 <small>可多选；不选择时菜单权限由个人手工配置</small></span><Select mode="multiple" disabled={editingSelf} value={roleIds} onChange={setRoleIds} options={roles.map((role) => ({ value: role.id, label: `${role.name}${role.builtin ? '（内置）' : ''}` }))} placeholder="不选择业务角色" maxTagCount="responsive" /></label>
+          <label className="permission-v4-config-field"><span>权限等级 </span><Select allowClear disabled={editingSelf} value={levelId} onChange={setLevelId} options={(model?.levels ?? []).map((level) => ({ value: level.id, label: `${level.name}（${level.code}）` }))} placeholder="不选择权限等级（手工配置）" /></label>
         </div>
       </div>
       {renderPersonalMatrix()}
@@ -636,15 +715,15 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
       if (!row?.operations.length || menusWithoutDataScope.has(menuKey)) return undefined;
       const anchor = row.operations[0]!;
       const draft = levelScopeDrafts[menuKey];
-      if (draft) return { definition: anchor, scopeType: normalizedScope(draft.scopeType), targetIds: draft.targetIds };
+      if (draft) return { definition: anchor, scopeType: rowScopeValue(menuKey, draft.scopeType), targetIds: draft.targetIds };
       const stored = row.operations
         .map((definition) => {
           const binding = levelBindings[levelBindingKey(menuKey, definition.code)];
           if (!binding) return undefined;
-          return { definition, scopeType: normalizedScope(binding.scopeType), targetIds: binding.targetIds } satisfies RowScopeSetting;
+          return { definition, scopeType: rowScopeValue(menuKey, binding.scopeType), targetIds: binding.targetIds } satisfies RowScopeSetting;
         })
         .find(Boolean);
-      return stored || { definition: anchor, scopeType: normalizedScope(anchor.defaultScope), targetIds: [] };
+      return stored || { definition: anchor, scopeType: rowScopeValue(menuKey, anchor.defaultScope), targetIds: [] };
     };
     const renderLevelScope = (row: PermissionMatrixRow) => {
       const setting = levelRowScope(row.menu.key);
@@ -654,8 +733,9 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
         setLevelBindings((current) => updateLevelRowScopeBindings(current, row.menu.key, row.operations, scopeType, ids));
       };
       return <div className="permission-v4-scope-list"><div className="permission-v4-scope-line">
-        <PermissionScopeChoices value={setting.scopeType} options={dataScopeOptionsFor(row.menu.key, setting.definition)} onChange={updateRowScope} />
-        {setting.scopeType === 'SELECTED' && <PermissionTargetPicker key={setting.definition.code} permissionCode={setting.definition.code} module={setting.definition.module} scopeType="SELECTED" value={setting.targetIds} onChange={(ids) => updateRowScope('SELECTED', ids)} />}
+        <PermissionScopeChoices value={setting.scopeType} options={dataScopeOptionsFor(row.menu.key, setting.definition, model?.delegableScopes[setting.definition.code], model?.unrestricted)} disabled={editingOwnLevel} onChange={updateRowScope} />
+        {setting.scopeType === 'SELECTED' && menusWithoutSelectedScope.has(row.menu.key) && <Typography.Text type="warning">历史指定范围，请改选其他范围</Typography.Text>}
+        {setting.scopeType === 'SELECTED' && !menusWithoutSelectedScope.has(row.menu.key) && !projectTargetMenus.has(row.menu.key) && !editingOwnLevel && <PermissionTargetPicker key={setting.definition.code} permissionCode={setting.definition.code} module={setting.definition.module} scopeType="SELECTED" value={setting.targetIds} allowedTargetIds={model?.unrestricted || model?.delegableScopes[setting.definition.code]?.scopeType !== 'SELECTED' ? undefined : model.delegableScopes[setting.definition.code]?.targetIds} onChange={(ids) => updateRowScope('SELECTED', ids)} />}
       </div></div>;
     };
     return <div className="permission-v4-workarea permission-v4-level-workarea">
@@ -674,7 +754,7 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
                 <td><div className={`permission-v4-function ${row.menu.parent ? 'child' : 'parent'}`}><span className="permission-v4-tree">{row.menu.parent ? '└─' : ''}</span><strong>{row.menu.label}</strong></div></td>
                 <td>{row.operations.length ? <div className="permission-v4-checks">{row.operations.map((definition) => {
                   const bindingKey = levelBindingKey(row.menu.key, definition.code);
-                  return <label className="permission-v4-check" key={definition.code} title={riskDisplayLabel(definition.risk)}><input type="checkbox" checked={Boolean(levelBindings[bindingKey])} onChange={(event) => setLevelBindings((current) => {
+                  return <label className="permission-v4-check" key={definition.code} title={riskDisplayLabel(definition.risk)}><input type="checkbox" disabled={editingOwnLevel} checked={Boolean(levelBindings[bindingKey])} onChange={(event) => setLevelBindings((current) => {
                     const rowScope = levelRowScope(row.menu.key);
                     return updateLevelOperationBinding(current, row.menu.key, definition, event.target.checked, rowScope?.scopeType, rowScope?.targetIds || []);
                   })} /><span>{definition.name}</span></label>;
@@ -690,7 +770,26 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
 
   if (loading) return <div className="iam-loading"><Spin /><span>加载权限模型…</span></div>;
   return <div className="iam-page permission-v4-page">
-    <div className="page-heading"><div><Typography.Title level={2}>用户权限配置</Typography.Title><Typography.Text type="secondary">业务角色决定一级/二级功能入口；权限等级决定操作权限和数据范围；个人权限可继承、覆盖或完全独立配置。</Typography.Text></div>{mode === 'user' ? <div className="permission-v4-heading-actions"><PermissionButton permission="update" onClick={resetUserOverrides} disabled={!activeUserId || saving}><ReloadOutlined />恢复默认</PermissionButton><PermissionButton permission="update" onClick={() => void cancelUserChanges()} disabled={!activeUserId || saving}>取消变更</PermissionButton><PermissionButton permission="update" primary onClick={() => void saveUser()} disabled={!activeUserId || !userModel} loading={saving}><SaveOutlined />保存</PermissionButton></div> : mode === 'role' ? <div className="permission-v4-heading-actions"><PermissionButton permission="create" onClick={createRole}><PlusOutlined />新增角色</PermissionButton>{activeRole && !activeRole.builtin && <PermissionButton permission="update" onClick={renameRole}><EditOutlined />重命名</PermissionButton>}<PermissionButton permission="delete" danger onClick={deleteRole} disabled={!activeRole || activeRole.builtin}><DeleteOutlined />删除角色</PermissionButton><PermissionButton permission="update" onClick={resetRole} disabled={activeRole?.code === 'SYSTEM_ADMIN'}><ReloadOutlined />{activeRole?.builtin ? '恢复默认' : '清空菜单'}</PermissionButton><PermissionButton permission="update" primary onClick={() => void saveRole()} disabled={!activeRoleId || activeRole?.code === 'SYSTEM_ADMIN'} loading={saving}><SaveOutlined />保存</PermissionButton></div> : <div className="permission-v4-heading-actions"><PermissionButton permission="create" onClick={createLevel}><PlusOutlined />新增等级</PermissionButton>{activeLevel && !activeLevel.builtin && <PermissionButton permission="update" onClick={renameLevel}><EditOutlined />重命名</PermissionButton>}<PermissionButton permission="delete" danger onClick={deleteLevel} disabled={!activeLevel || activeLevel.builtin}><DeleteOutlined />删除等级</PermissionButton><PermissionButton permission="update" onClick={resetLevel}><ReloadOutlined />{activeLevel?.builtin ? '恢复默认' : '清空权限'}</PermissionButton><PermissionButton permission="update" primary onClick={() => void saveLevel()} disabled={!activeLevelId || activeLevel?.code === 'L3_ADMIN'} loading={saving}><SaveOutlined />保存</PermissionButton></div>}</div>
+    <div className="page-heading">
+      <div><Typography.Title level={2}>用户权限配置</Typography.Title><Typography.Text type="secondary">业务角色决定一级/二级功能入口；权限等级决定操作权限和数据范围；个人权限可继承、覆盖或完全独立配置。</Typography.Text></div>
+      {mode === 'user' ? <div className="permission-v4-heading-actions">
+        <PermissionButton permission="update" onClick={resetUserOverrides} disabled={!activeUserId || editingSelf || saving}><ReloadOutlined />恢复默认</PermissionButton>
+        <PermissionButton permission="update" onClick={() => void cancelUserChanges()} disabled={!activeUserId || saving}>取消变更</PermissionButton>
+        <PermissionButton permission="update" primary onClick={() => void saveUser()} disabled={!activeUserId || !userModel || editingSelf} loading={saving}><SaveOutlined />保存</PermissionButton>
+      </div> : mode === 'role' ? <div className="permission-v4-heading-actions">
+        <PermissionButton permission="create" onClick={createRole}><PlusOutlined />新增角色</PermissionButton>
+        {activeRole && !activeRole.builtin && <PermissionButton permission="update" onClick={renameRole} disabled={editingOwnRole}><EditOutlined />重命名</PermissionButton>}
+        <PermissionButton permission="delete" danger onClick={deleteRole} disabled={!activeRole || activeRole.builtin || editingOwnRole}><DeleteOutlined />删除角色</PermissionButton>
+        <PermissionButton permission="update" onClick={resetRole} disabled={activeRole?.code === 'SYSTEM_ADMIN' || editingOwnRole}><ReloadOutlined />{activeRole?.builtin ? '恢复默认' : '清空菜单'}</PermissionButton>
+        <PermissionButton permission="update" primary onClick={() => void saveRole()} disabled={!activeRoleId || activeRole?.code === 'SYSTEM_ADMIN' || editingOwnRole} loading={saving}><SaveOutlined />保存</PermissionButton>
+      </div> : <div className="permission-v4-heading-actions">
+        <PermissionButton permission="create" onClick={createLevel}><PlusOutlined />新增等级</PermissionButton>
+        {activeLevel && !activeLevel.builtin && <PermissionButton permission="update" onClick={renameLevel} disabled={editingOwnLevel}><EditOutlined />重命名</PermissionButton>}
+        <PermissionButton permission="delete" danger onClick={deleteLevel} disabled={!activeLevel || activeLevel.builtin || editingOwnLevel}><DeleteOutlined />删除等级</PermissionButton>
+        <PermissionButton permission="update" onClick={resetLevel} disabled={editingOwnLevel}><ReloadOutlined />{activeLevel?.builtin ? '恢复默认' : '清空权限'}</PermissionButton>
+        <PermissionButton permission="update" primary onClick={() => void saveLevel()} disabled={!activeLevelId || activeLevel?.code === 'L3_ADMIN' || editingOwnLevel} loading={saving}><SaveOutlined />保存</PermissionButton>
+      </div>}
+    </div>
     <div className="permission-v4-mode-tabs"><button type="button" className={mode === 'user' ? 'active' : ''} onClick={() => setMode('user')}>个人权限</button><button type="button" className={mode === 'role' ? 'active' : ''} onClick={() => setMode('role')}>业务角色</button><button type="button" className={mode === 'level' ? 'active' : ''} onClick={() => setMode('level')}>权限等级</button></div>
     {mode === 'user' ? renderPersonal() : mode === 'role' ? renderRole() : renderLevel()}
   </div>;

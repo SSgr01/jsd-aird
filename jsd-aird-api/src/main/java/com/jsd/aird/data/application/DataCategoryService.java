@@ -4,10 +4,14 @@ import java.util.List;
 import java.util.UUID;
 
 import com.jsd.aird.data.application.port.DataCategoryRepository;
+import com.jsd.aird.iam.api.AuthorizationService;
+import com.jsd.aird.iam.api.PermissionCheck;
+import com.jsd.aird.iam.api.RecordDataScope;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -15,17 +19,31 @@ import org.springframework.util.StringUtils;
 public class DataCategoryService {
 
     private final DataCategoryRepository repository;
+    private AuthorizationService authorization;
+
+    @Autowired
+    public void setAuthorization(AuthorizationService authorization) { this.authorization = authorization; }
 
     public DataCategoryService(DataCategoryRepository repository) {
         this.repository = repository;
     }
 
     public List<DataCategoryRepository.Category> list() {
-        return repository.list(ActorContext.required().organizationId());
+        var actor = ActorContext.required();
+        return repository.list(actor.organizationId(), viewDataScope(actor));
     }
 
     public DataCategoryRepository.DataSourceFacets facets() {
-        return repository.facets(ActorContext.required().organizationId());
+        var actor = ActorContext.required();
+        return repository.facets(actor.organizationId(), viewDataScope(actor));
+    }
+
+    private RecordDataScope viewDataScope(com.jsd.aird.shared.security.Actor actor) {
+        if (authorization == null) return RecordDataScope.all();
+        var resolved = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
+                "data.view", "DATA", null, "READ"));
+        if (!resolved.allowed()) throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有数据中心查看权限");
+        return new RecordDataScope(resolved.scopeType(), actor.userId(), resolved.targetIds());
     }
 
     @Transactional

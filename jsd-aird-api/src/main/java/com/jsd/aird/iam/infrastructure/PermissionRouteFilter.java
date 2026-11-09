@@ -364,10 +364,20 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             return permission(categoryCode, "CATEGORY", read ? "READ" : "WRITE");
         }
 
-        if (method.equals("PUT") && path.matches("/api/v1/business-partners/[0-9a-f-]{36}")) {
-            return permission("customer.list.update", "CUSTOMER", "WRITE");
+        if (path.startsWith("/api/v1/business-partners")) {
+            var prefix = path.contains("/contacts") ? "customer.overview" : "customer.list";
+            return action(method, prefix + ".view", prefix + ".create", prefix + ".update",
+                    prefix + ".delete", "CUSTOMER");
         }
-        if (path.startsWith("/api/v1/partners") || path.startsWith("/api/v1/crm") || path.startsWith("/api/v1/business-partners")) {
+        if (path.startsWith("/api/v1/crm/requirements")) {
+            return action(method, "customer.needs.view", "customer.needs.create", "customer.needs.update",
+                    "customer.needs.delete", "CUSTOMER");
+        }
+        if (path.startsWith("/api/v1/crm/communications")) {
+            return action(method, "customer.followup.view", "customer.followup.create", "customer.followup.update",
+                    "customer.followup.delete", "CUSTOMER");
+        }
+        if (path.startsWith("/api/v1/partners") || path.startsWith("/api/v1/crm")) {
             return action(method, "customer.view", "customer.create", "customer.update", "customer.delete", "CUSTOMER");
         }
 
@@ -779,6 +789,9 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         // record: the category id in the path must not be resolved as a data
         // scope target.
         if (categoryModule(path) != null) return null;
+        if (path.startsWith("/api/v1/crm/")) return null;
+        var customerMatcher = java.util.regex.Pattern.compile("/api/v1/business-partners/([0-9a-fA-F-]{36})(?:/|$)").matcher(path);
+        if (customerMatcher.find()) return UUID.fromString(customerMatcher.group(1));
         var dataSourceMatcher = java.util.regex.Pattern.compile("/api/v1/data/sources/([0-9a-fA-F-]{36})(?:/|$)").matcher(path);
         if (dataSourceMatcher.find()) return UUID.fromString(dataSourceMatcher.group(1));
         if (path.startsWith("/api/v1/project-resource-links") || path.startsWith("/api/v1/project-references")) {
@@ -794,6 +807,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         if (projectMatcher.find()) {
             try { return UUID.fromString(projectMatcher.group(1)); } catch (Exception ignored) { return null; }
         }
+        if (path.startsWith("/api/v1/stages/") || path.startsWith("/api/v1/tasks/")
+                || path.startsWith("/api/v1/meetings/")) return null;
         var segments = path.split("/");
         for (var index = segments.length - 1; index >= 0; index--) {
             try { return UUID.fromString(segments[index]); } catch (Exception ignored) { }

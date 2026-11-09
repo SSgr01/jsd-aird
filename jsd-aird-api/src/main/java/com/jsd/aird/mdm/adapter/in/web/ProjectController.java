@@ -163,7 +163,7 @@ public class ProjectController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         service.get(id);
-        return ok(customerRequirementService.requirements(null, id, status, page, size));
+        return ok(customerRequirementService.projectRequirements(id, status, page, size));
     }
 
     @GetMapping("/{id:[0-9a-fA-F-]+}/requirements/{requirementId:[0-9a-fA-F-]+}")

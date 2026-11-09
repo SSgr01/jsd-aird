@@ -80,7 +80,7 @@ public class JdbcAuthorizationService implements AuthorizationService {
         if (definition == null) return PermissionDecision.denied(check.permissionCode());
 
         var selection = binding(check, user);
-        Binding binding = selection.binding();
+        Binding binding = projectListTargets(check, user, selection.binding());
         var source = selection.source();
         if (binding == null || "DENY".equals(binding.effect())) {
             return new PermissionDecision(false, check.permissionCode(), binding == null ? "DENY" : binding.effect(),
@@ -105,11 +105,53 @@ public class JdbcAuthorizationService implements AuthorizationService {
             return DataScopeResolver.ResolvedDataScope.deny(
                     selection.binding() == null ? "" : selection.binding().scopeType(), "PERMISSION_DENIED");
         }
-        return dataScopeResolver.resolve(check, selection.binding());
+        return dataScopeResolver.resolve(check, projectListTargets(check, user, selection.binding()));
+    }
+
+    private Binding projectListTargets(PermissionCheck check, User user, Binding binding) {
+        if (binding == null || !"SELECTED".equals(binding.scopeType())
+                || java.util.stream.Stream.of("eln.view.", "research-test.report.view.",
+                        "quality.view.", "production.view.").noneMatch(binding.permissionCode()::startsWith)) return binding;
+        var projectCheck = new PermissionCheck(check.organizationId(), check.userId(), "project.list.view",
+                "PROJECT", null, "READ", "project.list");
+        var projectBinding = binding(projectCheck, user).binding();
+        var targets = projectBinding != null && "ALLOW".equals(projectBinding.effect())
+                && java.util.Set.of("SELECTED", "PROJECT").contains(projectBinding.scopeType())
+                ? projectBinding.targetIds() : List.<java.util.UUID>of();
+        return new Binding(binding.permissionCode(), binding.effect(), "SELECTED", targets);
     }
 
     private BindingSelection binding(PermissionCheck check, User user) {
+        var roles = safeRoles(check.organizationId(), check.userId());
+        if ("SYSTEM_ADMIN".equals(user.roleCode())
+                || roles.stream().anyMatch(role -> "SYSTEM_ADMIN".equals(role.code()) && role.enabled())) {
+            return new BindingSelection(new Binding(check.permissionCode(), "ALLOW", "ALL", List.of()),
+                    "SYSTEM_ADMIN", true);
+        }
         var v2 = v2Binding(check, user);
+        var scopedViewCode = switch (check.permissionCode()) {
+            case "experiment.view" -> "eln.view.view";
+            case "quality.view" -> "quality.view.view";
+            case "research-test.report.view" -> "research-test.report.view.view";
+            case "production.view" -> "production.view.view";
+            case "spectrum.view" -> "spectrum.view.view";
+            case "knowledge.view" -> "knowledge.view.view";
+            case "data.view" -> "data.view.view";
+            default -> null;
+        };
+        if (scopedViewCode != null && (v2.binding() == null || !"DENY".equals(v2.binding().effect()))) {
+            var pageCheck = new PermissionCheck(check.organizationId(), check.userId(), scopedViewCode,
+                    check.resourceType(), check.resourceId(), check.operation(), check.menuKey());
+            var pageBinding = v2Binding(pageCheck, user);
+            if (pageBinding.binding() != null) return pageBinding;
+        }
+        if ("PROJECT".equals(check.resourceType()) && "project.view".equals(check.permissionCode())
+                && (v2.binding() == null || !"DENY".equals(v2.binding().effect()))) {
+            var listCheck = new PermissionCheck(check.organizationId(), check.userId(), "project.list.view",
+                    check.resourceType(), check.resourceId(), check.operation(), "project.list");
+            var listBinding = v2Binding(listCheck, user);
+            if (listBinding.binding() != null) return listBinding;
+        }
         if (v2.binding() == null && v2.v2Active()) {
             for (var pageCode : alternateCodes(check.permissionCode())) {
                 var pageCheck = new PermissionCheck(check.organizationId(), check.userId(), pageCode,
@@ -266,11 +308,6 @@ public class JdbcAuthorizationService implements AuthorizationService {
                 || !scopeOverrides.isEmpty() || (menuOverrides != null && !menuOverrides.isEmpty());
         if (!v2Active) return new BindingSelection(null, "DEFAULT_DENY", false);
 
-        if (roles.stream().anyMatch(role -> "SYSTEM_ADMIN".equals(role.code())) || "SYSTEM_ADMIN".equals(user.roleCode())) {
-            return new BindingSelection(new Binding(check.permissionCode(), "ALLOW", "ORG", List.of()),
-                    "SYSTEM_ADMIN", true);
-        }
-
         var override = operationOverrides.stream()
                 .filter(item -> item.permissionCode().equals(check.permissionCode()))
                 .filter(item -> check.menuKey() == null || check.menuKey().equals(item.menuKey()))
@@ -302,7 +339,8 @@ public class JdbcAuthorizationService implements AuthorizationService {
             else menuKeys.remove(item.menuKey());
         });
         var menuView = MenuViewPermissions.impliedBy(menuKeys).contains(check.permissionCode());
-        if (menuView) binding = new Binding(check.permissionCode(), "ALLOW", "ALL", List.of());
+        if (menuView && binding == null)
+            binding = new Binding(check.permissionCode(), "ALLOW", "ALL", List.of());
         var scope = scopeOverrides.stream()
                 .filter(item -> item.permissionCode().equals(check.permissionCode()))
                 .filter(item -> check.menuKey() == null || check.menuKey().equals(item.menuKey()))
@@ -320,7 +358,7 @@ public class JdbcAuthorizationService implements AuthorizationService {
         }
         if (override != null) {
             if ("DENY".equals(override.effect())) return new BindingSelection(override, "USER_OPERATION_OVERRIDE", true);
-            binding = binding == null ? new Binding(override.permissionCode(), "ALLOW", "ORG", List.of())
+            binding = binding == null ? new Binding(override.permissionCode(), "ALLOW", "ALL", List.of())
                     : new Binding(binding.permissionCode(), "ALLOW", binding.scopeType(), binding.targetIds());
             return new BindingSelection(binding, "USER_OPERATION_OVERRIDE", true);
         }
@@ -333,6 +371,7 @@ public class JdbcAuthorizationService implements AuthorizationService {
         if (scopeType == null) return 0;
         return switch (scopeType) {
             case "ALL", "ORG" -> 100;
+            case "DEPARTMENT" -> 70;
             case "SELF", "CREATOR", "ASSIGNED", "OWNER", "MANAGER", "PARTICIPANT", "PROJECT_GROUP" -> 60;
             case "PROJECT", "CATEGORY", "SELECTED" -> 20;
             default -> 0;

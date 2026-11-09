@@ -67,7 +67,7 @@ public class JdbcTemplateRepository implements TemplateRepository {
                        retired.version_no AS retired_version_no,
                        draft.id AS draft_version_id,
                        draft.version_no AS draft_version_no,
-                       t.created_by, au.display_name AS created_by_name, t.created_at
+                       t.created_by, t.department_id, au.display_name AS created_by_name, t.created_at
                 FROM tpl.template t
                 LEFT JOIN tpl.template_category tc ON tc.id = t.category_id
                 LEFT JOIN iam.app_user au ON au.id = t.created_by
@@ -262,6 +262,12 @@ public class JdbcTemplateRepository implements TemplateRepository {
             case "SELF", "CREATOR" -> {
                 sql.append(" AND lt.created_by = :scopeActorId\n");
                 parameters.addValue("scopeActorId", scope.actorId());
+            }
+            case "DEPARTMENT" -> {
+                sql.append(" AND lt.department_id IS NOT NULL AND lt.department_id = " +
+                        "(SELECT u.department_id FROM iam.app_user u WHERE u.id = :scopeActorId AND u.organization_id = :scopeOrganizationId)\n");
+                parameters.addValue("scopeActorId", scope.actorId());
+                parameters.addValue("scopeOrganizationId", parameters.getValue("organizationId"));
             }
             case "SELECTED" -> {
                 if (scope.targetIds().isEmpty()) sql.append(" AND 1 = 0\n");

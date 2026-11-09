@@ -54,7 +54,8 @@ class ProjectConsistencyPostgresTest {
         var config=new Configuration(new Environment("isolated",new SpringManagedTransactionFactory(),dataSource));
         config.setArgNameBasedConstructorAutoMapping(true); config.getTypeHandlerRegistry().register(UUID.class,UuidTypeHandler.class);config.addMapper(ProjectMapper.class);
         var session=new SqlSessionTemplate(new SqlSessionFactoryBuilder().build(config));
-        repository=new MyBatisProjectRepository(session.getMapper(ProjectMapper.class));service=new ProjectService(repository, org.mockito.Mockito.mock(com.jsd.aird.iam.api.AuthorizationService.class));reviews=new JdbcTemplateVersionReviewRepository(jdbc);
+        repository=new MyBatisProjectRepository(session.getMapper(ProjectMapper.class));service=new ProjectService(repository,
+            check -> new com.jsd.aird.iam.api.PermissionDecision(true,check.permissionCode(),"ALLOW","ALL","TEST"));reviews=new JdbcTemplateVersionReviewRepository(jdbc);
     }
     @AfterAll static void cleanup(){
         if(jdbc!=null&&SCHEMA.matches("consistency_test_[a-f0-9]{32}"))jdbc.execute("DROP SCHEMA IF EXISTS "+SCHEMA+" CASCADE");
@@ -87,7 +88,8 @@ class ProjectConsistencyPostgresTest {
         var own=insert("P-1",ProjectStatus.IN_PROGRESS);
         ActorContext.set(new Actor(OTHER_ORG,USER,"other")); var other=insert("P-2",ProjectStatus.IN_PROGRESS);
         ActorContext.set(new Actor(ORG,USER,"qa"));
-        var query=new ProjectQuery(null,null,null,null,null,null,null,1,20);
+        var query=new ProjectQuery(null,null,null,null,null,null,null,1,20)
+            .withDataScope(ORG,"ALL",USER,Set.of());
         assertThat(repository.count(query)).isEqualTo(1);assertThat(repository.findPage(query)).extracting(Project::id).containsExactly(own);
         assertThat(repository.findById(other)).isEmpty();assertThat(repository.findAllByIds(List.of(other))).isEmpty();
         assertThat(repository.softDelete(other,0,"qa")).isFalse();assertCode(()->service.update(other,command("x",0)),ApiErrorCode.NOT_FOUND);
@@ -163,7 +165,7 @@ class ProjectConsistencyPostgresTest {
         catch(ApiException conflict){assertThat(conflict.errorCode()).isEqualTo(ApiErrorCode.REVIEW_STATE_CONFLICT);return "conflict";}
     }
     private UUID insert(String code,ProjectStatus status){
-        var id=UUID.randomUUID(); repository.insert(new Project(id,code,"original",null,null,"qa",null,null,ProjectPriority.MEDIUM,status,1,null,null,null,0,Instant.now(),Instant.now()),ORG,"qa");return id;
+        var id=UUID.randomUUID(); repository.insert(new Project(id,code,"original",null,null,"qa",null,null,ProjectPriority.MEDIUM,status,1,null,null,null,0,Instant.now(),Instant.now()),ActorContext.required().organizationId(),"qa");return id;
     }
     private ProjectCommands.SaveProject command(String name,long version){return new ProjectCommands.SaveProject("P-1",name,null,null,"qa",null,null,ProjectPriority.MEDIUM,ProjectStatus.IN_PROGRESS,1,null,null,null,version);}
     private void assertCode(org.assertj.core.api.ThrowableAssert.ThrowingCallable action,ApiErrorCode code){assertThatThrownBy(action).isInstanceOfSatisfying(ApiException.class,error->assertThat(error.errorCode()).isEqualTo(code));}

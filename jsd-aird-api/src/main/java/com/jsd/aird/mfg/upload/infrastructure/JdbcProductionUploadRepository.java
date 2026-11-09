@@ -231,9 +231,35 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
     @Override
     public PageResult<UploadView> list(UUID organizationId, String keyword, String status, String format, UUID projectId,
                                       boolean viewableOnly, int page, int size) {
+        return list(organizationId, keyword, status, format, projectId, viewableOnly, page, size,
+                com.jsd.aird.iam.api.RecordDataScope.all());
+    }
+
+    @Override
+    public PageResult<UploadView> list(UUID organizationId, String keyword, String status, String format, UUID projectId,
+                                      boolean viewableOnly, int page, int size,
+                                      com.jsd.aird.iam.api.RecordDataScope scope) {
         var where = new StringBuilder(" WHERE pu.organization_id = ? ");
         var args = new ArrayList<Object>();
         args.add(organizationId);
+        switch (scope.type()) {
+            case "ALL", "ORG" -> { }
+            case "SELF", "CREATOR" -> { where.append(" AND pu.created_by = ?"); args.add(scope.actorId()); }
+            case "DEPARTMENT" -> {
+                where.append(" AND pu.department_id = (SELECT department_id FROM iam.app_user WHERE id = ? AND organization_id = pu.organization_id)");
+                args.add(scope.actorId());
+            }
+            case "SELECTED", "PROJECT" -> {
+                if (scope.targetIds().isEmpty()) where.append(" AND false");
+                else {
+                    where.append(" AND pu.project_id IN (")
+                            .append(String.join(",", scope.targetIds().stream().map(id -> "?").toList()))
+                            .append(")");
+                    args.addAll(scope.targetIds());
+                }
+            }
+            default -> where.append(" AND false");
+        }
         if (projectId != null) {
             where.append(" AND pu.project_id = ?");
             args.add(projectId);

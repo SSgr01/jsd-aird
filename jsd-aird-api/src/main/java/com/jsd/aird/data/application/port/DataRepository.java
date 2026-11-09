@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.jsd.aird.core.api.ProjectResourceFacade.RelatedProjectView;
 import com.jsd.aird.shared.api.PageResponse;
+import com.jsd.aird.iam.api.RecordDataScope;
 
 public interface DataRepository {
 
@@ -33,6 +34,13 @@ public interface DataRepository {
                                                      int page, int size) {
         if (uncategorized) return new PageResponse<>(List.of(), Math.max(1, page), Math.max(1, size), 0, 0);
         return listSourceFiles(organizationId, categoryId, status, keyword, allowedImportJobIds, page, size);
+    }
+
+    default PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, boolean uncategorized,
+                                                     String status, String keyword, Set<UUID> allowedImportJobIds,
+                                                     int page, int size, RecordDataScope dataScope) {
+        return listSourceFiles(organizationId, categoryId, uncategorized, status, keyword,
+                allowedImportJobIds, page, size);
     }
 
     default PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, String status,

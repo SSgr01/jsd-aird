@@ -52,7 +52,7 @@ public class QualityDataService {
     }
 
     public List<QualityDataDefinitions.Type> definitions() { return QualityDataDefinitions.TYPES; }
-    public List<QualityDataStore.Category> categories(String type) { var a=ActorContext.required(); requireType(type); repository.ensureUncategorizedCategory(a.organizationId(),type,a.userId()); return repository.categories(a.organizationId(),type); }
+    public List<QualityDataStore.Category> categories(String type) { var a=ActorContext.required(); requireType(type); repository.ensureUncategorizedCategory(a.organizationId(),type,a.userId()); var scope=authorization.resolveScope(new com.jsd.aird.iam.api.PermissionCheck(a.organizationId(),a.userId(),"quality.view.view","QUALITY",null,"READ")); var filter=scope.allowed() ? new QualityDataStore.DataScopeFilter(scope.scopeType(),a.userId(),scope.targetIds()) : new QualityDataStore.DataScopeFilter("SELECTED",a.userId(),Set.of()); return repository.categories(a.organizationId(),a.role(),type,filter); }
     public QualityDataStore.Category createCategory(String type,String name,String description) { var a=ActorContext.required(); requireType(type); var result=repository.createCategory(a.organizationId(),a.userId(),type,name.trim(),description==null?"":description.trim()); audit(a,"QUALITY_CATEGORY_CREATED","QUALITY_CATEGORY",result.id(),result.name()); return result; }
     @Transactional public QualityDataStore.Category updateCategory(UUID id,String name,String description,String revision) { var a=ActorContext.required(); repository.lockCategory(a.organizationId(),id); var current=repository.category(a.organizationId(),id);com.jsd.aird.shared.json.RevisionToken.require(revision,current.getRevision()); if(current.systemDefault())throw new ApiException(ApiErrorCode.BAD_REQUEST,"未分类不可修改"); var result=repository.updateCategory(a.organizationId(),id,name.trim(),description==null?"":description.trim()); audit(a,"QUALITY_CATEGORY_UPDATED","QUALITY_CATEGORY",id,result.name()); return result; }
     @Transactional public void deleteCategory(UUID id,String revision,UUID replacementCategoryId) {
@@ -67,9 +67,10 @@ public class QualityDataService {
     }
     public PageResponse<QualityDataStore.RecordView> records(String type,UUID categoryId,String keyword,UUID projectId,int page,int size) { return records(type,categoryId,keyword,projectId,null,page,size); }
     public PageResponse<QualityDataStore.RecordView> records(String type,UUID categoryId,String keyword,UUID projectId,String status,int page,int size) { return records(type,categoryId,keyword,projectId,status,null,page,size); }
-    public PageResponse<QualityDataStore.RecordView> records(String type,UUID categoryId,String keyword,UUID projectId,String status,String format,int page,int size) { var a=ActorContext.required(); requireType(type); if(status!=null&&!status.isBlank()&&!"coa".equals(type))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"仅 COA 支持状态筛选"); return repository.records(a.organizationId(),a.role(),type,categoryId,keyword,projectId,status==null||status.isBlank()?null:status,format,Math.max(1,page),Math.min(100,Math.max(1,size))); }
-    public QualityDataStore.RecordView recordByBusinessNo(String type,String businessNo) { var a=ActorContext.required(); requireType(type); return repository.recordByBusinessNo(a.organizationId(),a.role(),type,businessNo).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"品管数据不存在或不可见")); }
-    public QualityDataStore.RecordView record(UUID id) { var a=ActorContext.required(); return repository.record(a.organizationId(), a.role(), id); }
+    public PageResponse<QualityDataStore.RecordView> records(String type,UUID categoryId,String keyword,UUID projectId,String status,String format,int page,int size) { var a=ActorContext.required(); requireType(type); if(status!=null&&!status.isBlank()&&!"coa".equals(type))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"仅 COA 支持状态筛选"); var scope=authorization.resolveScope(new com.jsd.aird.iam.api.PermissionCheck(a.organizationId(),a.userId(),"quality.view.view","QUALITY",null,"READ")); if(!scope.allowed())throw new ApiException(ApiErrorCode.PERMISSION_DENIED,"当前用户没有品管数据查看权限"); return repository.records(a.organizationId(),a.role(),type,categoryId,keyword,projectId,status==null||status.isBlank()?null:status,format,Math.max(1,page),Math.min(100,Math.max(1,size)),new QualityDataStore.DataScopeFilter(scope.scopeType(),a.userId(),scope.targetIds())); }
+    public QualityDataStore.RecordView recordByBusinessNo(String type,String businessNo) { var a=ActorContext.required(); requireType(type); var item=repository.recordByBusinessNo(a.organizationId(),a.role(),type,businessNo).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"品管数据不存在或不可见")); requireView(item.id()); return item; }
+    public QualityDataStore.RecordView record(UUID id) { var a=ActorContext.required(); requireView(id); return repository.record(a.organizationId(), a.role(), id); }
+    private void requireView(UUID id) { var a=ActorContext.required(); authorization.require(new com.jsd.aird.iam.api.PermissionCheck(a.organizationId(),a.userId(),"quality.view.view","QUALITY",id,"READ")); }
     @Transactional public QualityDataStore.RecordView rename(UUID id, RenameCommand command) {
         var actor = ActorContext.required();
         if (command.displayName() == null || command.displayName().isBlank())
@@ -82,7 +83,7 @@ public class QualityDataService {
         audit(actor, "QUALITY_RECORD_RENAMED", "QUALITY_RECORD", id, result.businessNo());
         return result;
     }
-    public List<QualityDataStore.VersionView> versions(UUID id) { var a=ActorContext.required(); repository.record(a.organizationId(), a.role(), id); return repository.versions(a.organizationId(), id); }
+    public List<QualityDataStore.VersionView> versions(UUID id) { var a=ActorContext.required(); record(id); return repository.versions(a.organizationId(), id); }
     @Transactional public QualityDataStore.VersionView publishRecord(UUID id, long expectedVersion) {
         var actor = ActorContext.required();
         var current = lockVersion(id,expectedVersion);
@@ -442,6 +443,7 @@ public class QualityDataService {
     }
     private QualityDataStore.RecordView lockVersion(UUID id,long expected){
         var actor=ActorContext.required();
+        requireView(id);
         if(expected<0)throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"数据版本不能为空或负数");
         repository.lockRecord(actor.organizationId(),id);
         var current=repository.record(actor.organizationId(),actor.role(),id);

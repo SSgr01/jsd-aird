@@ -186,7 +186,7 @@ public class IamAuthService {
         if (v2Roles != null && v2Roles.stream().anyMatch(role -> "SYSTEM_ADMIN".equals(role.code()))) {
             menuKeys.addAll(PermissionModelCatalog.allMenuKeys());
             store.permissionDefinitions().forEach(definition -> bindings.put(definition.code(),
-                    new Binding(definition.code(), "ALLOW", "ORG", List.of())));
+                    new Binding(definition.code(), "ALLOW", "ALL", List.of())));
         }
         // DevelopmentIdentityFilter/JdbcAuthorizationService intentionally allow
         // every permission in local development mode. Return the same effective

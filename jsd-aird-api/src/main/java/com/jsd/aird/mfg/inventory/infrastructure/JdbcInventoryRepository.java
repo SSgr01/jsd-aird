@@ -1,5 +1,6 @@
 package com.jsd.aird.mfg.inventory.infrastructure;
 
+import com.jsd.aird.iam.api.RecordDataScope;
 import com.jsd.aird.mfg.inventory.domain.InventoryModels.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -28,15 +29,24 @@ public class JdbcInventoryRepository implements InventoryRepository {
         return jdbc.queryForObject("SELECT count(*) FROM mfg.inventory_product WHERE organization_id=? AND id=? AND inventory_scope=? AND status='ACTIVE'", Integer.class, org, productId, scope.name()) > 0;
     }
 
-    public List<ProductOption> productOptions(UUID org,Scope scope,String keyword){var sql=new StringBuilder("SELECT id,code,name,category,status FROM mfg.inventory_product WHERE organization_id=? AND status='ACTIVE'");var args=new ArrayList<Object>();args.add(org);if(scope!=null){sql.append(" AND inventory_scope=?");args.add(scope.name());}if(keyword!=null&&!keyword.isBlank()){sql.append(" AND (lower(code) LIKE ? OR lower(name) LIKE ? OR lower(category) LIKE ?)");var q="%"+keyword.trim().toLowerCase()+"%";args.add(q);args.add(q);args.add(q);}sql.append(" ORDER BY name LIMIT 500");return jdbc.query(sql.toString(),(rs,n)->new ProductOption(rs.getObject("id",UUID.class),rs.getString("code"),rs.getString("name"),rs.getString("category"),rs.getString("status")),args.toArray());}
+    public List<ProductOption> productOptions(UUID org,Scope scope,String keyword,RecordDataScope dataScope){var sql=new StringBuilder("SELECT p.id,p.code,p.name,p.category,p.status FROM mfg.inventory_product p WHERE p.organization_id=? AND p.status='ACTIVE'");var args=new ArrayList<Object>();args.add(org);if(scope!=null){sql.append(" AND p.inventory_scope=?");args.add(scope.name());}if(dataScope!=null){sql.append(dataScope.sqlCondition("p",args));}if(keyword!=null&&!keyword.isBlank()){sql.append(" AND (lower(p.code) LIKE ? OR lower(p.name) LIKE ? OR lower(p.category) LIKE ?)");var q="%"+keyword.trim().toLowerCase()+"%";args.add(q);args.add(q);args.add(q);}sql.append(" ORDER BY p.name LIMIT 500");return jdbc.query(sql.toString(),(rs,n)->new ProductOption(rs.getObject("id",UUID.class),rs.getString("code"),rs.getString("name"),rs.getString("category"),rs.getString("status")),args.toArray());}
+
+    @Override
+    public java.util.Set<UUID> productIdsForTransactions(UUID org,Scope scope,java.util.Set<UUID> transactionIds){
+        if(transactionIds.isEmpty())return java.util.Set.of();
+        var args=new ArrayList<Object>();args.add(org);args.add(scope.name());args.addAll(transactionIds);
+        return new java.util.HashSet<>(jdbc.queryForList("SELECT DISTINCT product_id FROM mfg.inventory_transaction WHERE organization_id=? AND inventory_scope=? AND id IN ("+
+                String.join(",",transactionIds.stream().map(id->"?").toList())+")",UUID.class,args.toArray()));
+    }
 
     public ProductOption createProduct(UUID org,String name,Scope scope,UUID actor){var id=UUID.randomUUID();var code=(scope==Scope.RND?"RD":"PD")+"-"+id.toString().substring(0,8).toUpperCase();var category=scope==Scope.RND?"研发产品":"生产产品";jdbc.update("INSERT INTO mfg.inventory_product(organization_id,id,code,name,category,inventory_scope,created_by) VALUES(?,?,?,?,?,?,?)",org,id,code,name,category,scope.name(),actor);return new ProductOption(id,code,name,category,"ACTIVE");}
     public List<ProductOption> productOptionsExact(UUID org,Scope scope,String name){return jdbc.query("SELECT id,code,name,category,status FROM mfg.inventory_product WHERE organization_id=? AND inventory_scope=? AND status='ACTIVE' AND (name=? OR code=?)",(rs,n)->new ProductOption(rs.getObject("id",UUID.class),rs.getString("code"),rs.getString("name"),rs.getString("category"),rs.getString("status")),org,scope.name(),name,name);}
 
-    public BalancePage balances(UUID org, String keyword, Scope scope, AlertStatus alert, int page, int size, String sort) {
+    public BalancePage balances(UUID org, String keyword, Scope scope, AlertStatus alert, int page, int size, String sort, RecordDataScope dataScope) {
         var where = new StringBuilder(" WHERE p.organization_id=? AND p.status='ACTIVE'"); var args = new ArrayList<Object>(); args.add(org);
         if (keyword != null && !keyword.isBlank()) { where.append(" AND (lower(p.name) LIKE ? OR lower(p.code) LIKE ? OR lower(p.category) LIKE ?)"); var q="%"+keyword.trim().toLowerCase()+"%"; args.add(q);args.add(q);args.add(q); }
         if (scope != null) { where.append(" AND p.inventory_scope = ?"); args.add(scope.name()); }
+        if (dataScope != null) { where.append(dataScope.sqlCondition("p", args)); }
         var base = """
             FROM mfg.inventory_product p
             LEFT JOIN mfg.inventory_stock_balance b ON b.organization_id=p.organization_id AND b.product_id=p.id AND b.inventory_scope=p.inventory_scope
@@ -60,14 +70,14 @@ public class JdbcInventoryRepository implements InventoryRepository {
         var pageArgs = new ArrayList<>(allArgs); pageArgs.add(size); pageArgs.add((page-1)*size);
         var items = jdbc.query("SELECT p.id,p.code,p.name,p.category,p.inventory_scope scope,coalesce(b.quantity_kg,0) quantity_kg,ip.package_kg,coalesce(ip.low_stock_kg,0) low_stock_kg,"+alertSql+" alert_status,coalesce(b.version,0) version,coalesce(b.updated_at,p.updated_at) updated_at "+base+where+" ORDER BY "+orderBy+" LIMIT ? OFFSET ?",
                 (rs,n)->new Balance(rs.getObject("id",UUID.class),rs.getString("code"),rs.getString("name"),rs.getString("category"),Scope.valueOf(rs.getString("scope")),rs.getBigDecimal("quantity_kg"),rs.getBigDecimal("package_kg"),rs.getBigDecimal("low_stock_kg"),AlertStatus.valueOf(rs.getString("alert_status")),rs.getLong("version"),instant(rs.getTimestamp("updated_at"))), pageArgs.toArray());
-        var summaryWhere=new StringBuilder(" WHERE p.organization_id=? AND p.status='ACTIVE'");var summaryArgs=new ArrayList<Object>();summaryArgs.add(org);if(scope!=null){summaryWhere.append(" AND p.inventory_scope=?");summaryArgs.add(scope.name());}
+        var summaryWhere=new StringBuilder(" WHERE p.organization_id=? AND p.status='ACTIVE'");var summaryArgs=new ArrayList<Object>();summaryArgs.add(org);if(scope!=null){summaryWhere.append(" AND p.inventory_scope=?");summaryArgs.add(scope.name());}if(dataScope!=null){summaryWhere.append(dataScope.sqlCondition("p",summaryArgs));}
         var summary = jdbc.queryForObject("SELECT coalesce(sum(coalesce(b.quantity_kg,0)),0) total, count(*) product_count, count(*) FILTER(WHERE coalesce(b.quantity_kg,0)>0 AND coalesce(b.quantity_kg,0)<coalesce(ip.low_stock_kg,0)) low_count, count(*) FILTER(WHERE coalesce(b.quantity_kg,0)=0) zero_count "+base+summaryWhere,
                 (rs,n)->new Summary(rs.getBigDecimal("total"),rs.getLong("product_count"),rs.getLong("low_count"),rs.getLong("zero_count")),summaryArgs.toArray());
         return new BalancePage(items,page,size,total,(total+size-1)/size,summary);
     }
 
     public Optional<Balance> balance(UUID org, UUID productId, Scope scope) {
-        var result=balances(org,null,scope,null,1,10000,null).items().stream().filter(x->x.productId().equals(productId)).findFirst(); return result;
+        var result=balances(org,null,scope,null,1,10000,null,RecordDataScope.all()).items().stream().filter(x->x.productId().equals(productId)).findFirst(); return result;
     }
 
     public void upsertPolicy(UUID org,UUID productId,Scope scope,BigDecimal packageKg,BigDecimal lowStockKg,UUID actor){jdbc.update("""
@@ -95,9 +105,11 @@ public class JdbcInventoryRepository implements InventoryRepository {
         return jdbc.update("UPDATE mfg.inventory_transaction SET business_date=?,document_no=?,reason=?,note=?,actor_name=? WHERE organization_id=? AND id=?",businessDate,documentNo,reason,note,actorName,org,id);
     }
 
-    public List<String> transactionReasons(UUID org,Scope scope){
-        if(scope==null)return jdbc.queryForList("SELECT reason FROM mfg.inventory_transaction WHERE organization_id=? GROUP BY reason ORDER BY max(created_at) DESC",String.class,org);
-        return jdbc.queryForList("SELECT reason FROM mfg.inventory_transaction WHERE organization_id=? AND inventory_scope=? GROUP BY reason ORDER BY max(created_at) DESC",String.class,org,scope.name());
+    public List<String> transactionReasons(UUID org,Scope scope,RecordDataScope dataScope){
+        var where=new StringBuilder(" WHERE t.organization_id=?");var args=new ArrayList<Object>();args.add(org);
+        if(scope!=null){where.append(" AND t.inventory_scope=?");args.add(scope.name());}
+        if(dataScope!=null){where.append(selectedOrProductScope(dataScope,"t","p",args));}
+        return jdbc.queryForList("SELECT t.reason FROM mfg.inventory_transaction t JOIN mfg.inventory_product p ON p.organization_id=t.organization_id AND p.id=t.product_id"+where+" GROUP BY t.reason ORDER BY max(t.created_at) DESC",String.class,args.toArray());
     }
 
     public Optional<Transaction> findTransaction(UUID org, UUID id) {
@@ -110,10 +122,11 @@ public class JdbcInventoryRepository implements InventoryRepository {
         if(documentNo==null||documentNo.isBlank()||businessType==null||businessType.isBlank()) return Optional.empty();
         return jdbc.query(txSelect()+" WHERE t.organization_id=? AND t.document_no=? AND t.business_type=?",this::mapTx,org,documentNo,businessType).stream().findFirst();
     }
-    public Page<Transaction> transactions(UUID org, Scope scope, String keyword, String direction, String reason, int page, int size) {
+    public Page<Transaction> transactions(UUID org, Scope scope, String keyword, String direction, String reason, int page, int size, RecordDataScope dataScope) {
         var where=new StringBuilder(" WHERE t.organization_id=?");var args=new ArrayList<Object>();args.add(org);
         if(scope!=null){where.append(" AND t.inventory_scope=?");args.add(scope.name());} if(direction!=null&&!direction.isBlank()){where.append(" AND t.direction=?");args.add(direction);}
         if(reason!=null&&!reason.isBlank()){where.append(" AND t.reason=?");args.add(reason);} if(keyword!=null&&!keyword.isBlank()){where.append(" AND (lower(t.document_no) LIKE ? OR lower(p.name) LIKE ? OR lower(coalesce(t.note,'')) LIKE ?)");var q="%"+keyword.toLowerCase()+"%";args.add(q);args.add(q);args.add(q);}
+        if(dataScope!=null){where.append(selectedOrProductScope(dataScope,"t","p",args));}
         long total=jdbc.queryForObject("SELECT count(*) FROM mfg.inventory_transaction t JOIN mfg.inventory_product p ON p.organization_id=t.organization_id AND p.id=t.product_id"+where,Long.class,args.toArray());
         var pa=new ArrayList<>(args);pa.add(size);pa.add((page-1)*size);var items=jdbc.query(txSelect()+where+" ORDER BY t.business_date DESC,t.created_at DESC LIMIT ? OFFSET ?",this::mapTx,pa.toArray());
         return new Page<>(items,page,size,total,(total+size-1)/size);
@@ -125,7 +138,7 @@ public class JdbcInventoryRepository implements InventoryRepository {
     public Optional<RecipientPreference> recipientPreference(UUID customerId){return jdbc.query("SELECT recipient_name,recipient_phone,sample_address FROM mfg.sample_recipient_preference WHERE customer_id=?",(rs,n)->new RecipientPreference(rs.getString(1),rs.getString(2),rs.getString(3)),customerId).stream().findFirst();}
     public Optional<RecipientPreference> latestSampleRecipient(UUID customerId){return jdbc.query("SELECT recipient_name,recipient_phone,sample_address FROM mfg.inventory_sample_dispatch WHERE customer_id=? AND recipient_name IS NOT NULL AND recipient_phone IS NOT NULL AND sample_address IS NOT NULL AND btrim(sample_address)<>'' ORDER BY created_at DESC,id DESC LIMIT 1",(rs,n)->new RecipientPreference(rs.getString(1),rs.getString(2),rs.getString(3)),customerId).stream().findFirst();}
     public void upsertRecipientPreference(UUID customerId,String recipientName,String recipientPhone,String sampleAddress){jdbc.update("INSERT INTO mfg.sample_recipient_preference(customer_id,recipient_name,recipient_phone,sample_address) VALUES(?,?,?,?) ON CONFLICT(customer_id) DO UPDATE SET recipient_name=excluded.recipient_name,recipient_phone=excluded.recipient_phone,sample_address=excluded.sample_address,updated_at=now()",customerId,recipientName,recipientPhone,sampleAddress);}
-    public Page<Sample> samples(UUID org,String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size){
+    public Page<Sample> samples(UUID org,String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size,RecordDataScope dataScope){
         var from=" FROM mfg.inventory_sample_dispatch s JOIN mfg.inventory_product p ON p.organization_id=s.organization_id AND p.id=s.product_id JOIN iam.app_user u ON u.id=s.actor_id";
         var where=new StringBuilder(" WHERE s.organization_id=?");var args=new ArrayList<Object>();args.add(org);
         if(keyword!=null&&!keyword.isBlank()){
@@ -135,33 +148,38 @@ public class JdbcInventoryRepository implements InventoryRepository {
         if(status!=null&&!status.isBlank()){where.append(" AND s.status=?");args.add(status);}
         if(startDate!=null){where.append(" AND s.business_date>=?");args.add(startDate);}
         if(endDate!=null){where.append(" AND s.business_date<=?");args.add(endDate);}
+        if(dataScope!=null){where.append(selectedOrProductScope(dataScope,"s","p",args));}
         long total=jdbc.queryForObject("SELECT count(*)"+from+where,Long.class,args.toArray());
         var pageArgs=new ArrayList<>(args);pageArgs.add(size);pageArgs.add((page-1)*size);
         var list=jdbc.query("SELECT s.*,p.name product_name,u.display_name operator"+from+where+" ORDER BY s.business_date DESC,s.created_at DESC LIMIT ? OFFSET ?",this::mapSample,pageArgs.toArray());
         return new Page<>(list,page,size,total,(total+size-1)/size);
     }
-    public Page<Shipment> shipments(UUID org,String keyword,int page,int size){
+    public Page<Shipment> shipments(UUID org,String keyword,int page,int size,RecordDataScope dataScope){
         var from=" FROM mfg.inventory_shipment s JOIN mfg.inventory_shipment_header h ON h.organization_id=s.organization_id AND h.shipment_no=s.shipment_no JOIN mfg.inventory_product p ON p.organization_id=s.organization_id AND p.id=s.product_id JOIN iam.app_user u ON u.id=s.actor_id";
         var where=new StringBuilder(" WHERE s.organization_id=?");var args=new ArrayList<Object>();args.add(org);
         if(keyword!=null&&!keyword.isBlank()){
             where.append(" AND (lower(s.shipment_no) LIKE ? OR lower(p.code) LIKE ? OR lower(p.name) LIKE ? OR lower(coalesce(s.customer_name,'')) LIKE ? OR lower(coalesce(s.sender_name,'')) LIKE ? OR lower(coalesce(s.batch_no,'')) LIKE ? OR lower(coalesce(s.recipient_name,'')) LIKE ? OR lower(coalesce(s.courier_company,'')) LIKE ? OR lower(coalesce(s.note,'')) LIKE ?)");
             var q="%"+keyword.trim().toLowerCase()+"%";for(int i=0;i<9;i++)args.add(q);
         }
+        if(dataScope!=null){where.append(selectedOrProductScope(dataScope,"h","p",args));}
         long total=jdbc.queryForObject("SELECT count(*)"+from+where,Long.class,args.toArray());
         var pageArgs=new ArrayList<>(args);pageArgs.add(size);pageArgs.add((page-1)*size);
         var list=jdbc.query("SELECT s.*,h.business_date header_business_date,p.name product_name,u.display_name operator"+from+where+" ORDER BY h.business_date DESC,s.created_at DESC LIMIT ? OFFSET ?",this::mapShipment,pageArgs.toArray());
         return new Page<>(list,page,size,total,(total+size-1)/size);
     }
-    public Page<Shipment> shipmentDetails(UUID org,String shipmentNo,int page,int size){
-        var from=" FROM mfg.inventory_shipment s JOIN mfg.inventory_shipment_header h ON h.organization_id=s.organization_id AND h.shipment_no=s.shipment_no JOIN mfg.inventory_product p ON p.organization_id=s.organization_id AND p.id=s.product_id JOIN iam.app_user u ON u.id=s.actor_id WHERE s.organization_id=? AND s.shipment_no=?";
-        long total=jdbc.queryForObject("SELECT count(*)"+from,Long.class,org,shipmentNo);
-        var items=jdbc.query("SELECT s.*,h.business_date header_business_date,p.name product_name,u.display_name operator"+from+" ORDER BY s.created_at,s.id LIMIT ? OFFSET ?",this::mapShipment,org,shipmentNo,size,(page-1)*size);
+    public Page<Shipment> shipmentDetails(UUID org,String shipmentNo,int page,int size,RecordDataScope dataScope){
+        var from=" FROM mfg.inventory_shipment s JOIN mfg.inventory_shipment_header h ON h.organization_id=s.organization_id AND h.shipment_no=s.shipment_no JOIN mfg.inventory_product p ON p.organization_id=s.organization_id AND p.id=s.product_id JOIN iam.app_user u ON u.id=s.actor_id";
+        var where=new StringBuilder(" WHERE s.organization_id=? AND s.shipment_no=?");var args=new ArrayList<Object>();args.add(org);args.add(shipmentNo);
+        if(dataScope!=null){where.append(selectedOrProductScope(dataScope,"h","p",args));}
+        long total=jdbc.queryForObject("SELECT count(*)"+from+where,Long.class,args.toArray());
+        var pageArgs=new ArrayList<>(args);pageArgs.add(size);pageArgs.add((page-1)*size);
+        var items=jdbc.query("SELECT s.*,h.business_date header_business_date,p.name product_name,u.display_name operator"+from+where+" ORDER BY s.created_at,s.id LIMIT ? OFFSET ?",this::mapShipment,pageArgs.toArray());
         return new Page<>(items,page,size,total,(total+size-1)/size);
     }
     public java.util.List<UUID> pendingShipmentIds(UUID org,String shipmentNo){return jdbc.queryForList(
             "SELECT id FROM mfg.inventory_shipment WHERE organization_id=? AND shipment_no=? AND status='PENDING' ORDER BY id",
             UUID.class,org,shipmentNo);}
-    public Page<ShipmentHeader> shipmentHeaders(UUID org,String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size){
+    public Page<ShipmentHeader> shipmentHeaders(UUID org,String keyword,String status,LocalDate startDate,LocalDate endDate,int page,int size,RecordDataScope dataScope){
         var where=new StringBuilder(" WHERE h.organization_id=?");var args=new ArrayList<Object>();args.add(org);
         if(keyword!=null&&!keyword.isBlank()){where.append(" AND lower(h.shipment_no) LIKE ?");args.add("%"+keyword.trim().toLowerCase()+"%");}
         if("COMPLETED".equals(status)){
@@ -173,6 +191,13 @@ public class JdbcInventoryRepository implements InventoryRepository {
         }
         if(startDate!=null){where.append(" AND h.business_date>=?");args.add(startDate);}
         if(endDate!=null){where.append(" AND h.business_date<=?");args.add(endDate);}
+        if(dataScope!=null&&"SELECTED".equals(dataScope.type())){
+            where.append(selectedRecordCondition("h",dataScope,args));
+        }else if(dataScope!=null&&!"ALL".equals(dataScope.type())&&!"ORG".equals(dataScope.type())){
+            where.append(" AND EXISTS (SELECT 1 FROM mfg.inventory_shipment sx JOIN mfg.inventory_product px ON px.organization_id=sx.organization_id AND px.id=sx.product_id WHERE sx.organization_id=h.organization_id AND sx.shipment_no=h.shipment_no");
+            where.append(dataScope.sqlCondition("px",args));
+            where.append(")");
+        }
         long total=jdbc.queryForObject("SELECT count(*) FROM mfg.inventory_shipment_header h"+where,Long.class,args.toArray());
         var pageArgs=new ArrayList<>(args);pageArgs.add(size);pageArgs.add((page-1)*size);
         var items=jdbc.query("SELECT h.id,h.shipment_no,h.business_date,h.note,count(s.id) detail_count,"+
@@ -182,6 +207,16 @@ public class JdbcInventoryRepository implements InventoryRepository {
                 where+" GROUP BY h.id,h.shipment_no,h.business_date,h.note,h.created_at ORDER BY h.created_at DESC,h.id DESC LIMIT ? OFFSET ?",
                 this::mapShipmentHeader,pageArgs.toArray());
         return new Page<>(items,page,size,total,(total+size-1)/size);
+    }
+    private String selectedOrProductScope(RecordDataScope scope,String recordAlias,String productAlias,List<Object> args){
+        return "SELECTED".equals(scope.type())
+                ? selectedRecordCondition(recordAlias,scope,args)
+                : scope.sqlCondition(productAlias,args);
+    }
+    private String selectedRecordCondition(String alias,RecordDataScope scope,List<Object> args){
+        if(scope.targetIds().isEmpty())return " AND false";
+        args.addAll(scope.targetIds());
+        return " AND "+alias+".id IN ("+String.join(",",scope.targetIds().stream().map(id->"?").toList())+")";
     }
     public Optional<ShipmentHeader> shipmentHeader(UUID org,String shipmentNo){return jdbc.query(
             "SELECT h.id,h.shipment_no,h.business_date,h.note,count(s.id) detail_count,"+

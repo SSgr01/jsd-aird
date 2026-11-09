@@ -27,6 +27,7 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         if(q.projectId()!=null){where.append(" AND e.project_id=?");args.add(q.projectId());} if(q.stageId()!=null){where.append(" AND e.stage_id=?");args.add(q.stageId());} if(q.taskId()!=null){where.append(" AND e.task_id=?");args.add(q.taskId());} if(q.categoryId()!=null){where.append(" AND e.category_id=?");args.add(q.categoryId());}
         if(text(q.ownerName())){where.append(" AND lower(e.owner_name)=lower(?)");args.add(q.ownerName().trim());} if(q.dateFrom()!=null){where.append(" AND e.experiment_date>=?");args.add(q.dateFrom());} if(q.dateTo()!=null){where.append(" AND e.experiment_date<=?");args.add(q.dateTo());}
         if(text(q.format())){where.append(" AND ").append(DOCUMENT_FORMAT).append("=?");args.add(q.format());}
+        appendScope(where, args, q.scope(), org);
         args.add(q.size()); args.add(Math.max(0,q.page()-1)*q.size());
         return jdbc.query(BASE+where+" ORDER BY e.updated_at DESC LIMIT ? OFFSET ?", this::summary, args.toArray());
     }
@@ -37,6 +38,7 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         if(q.projectId()!=null){where.append(" AND e.project_id=?");args.add(q.projectId());}if(q.stageId()!=null){where.append(" AND e.stage_id=?");args.add(q.stageId());}if(q.taskId()!=null){where.append(" AND e.task_id=?");args.add(q.taskId());}if(q.categoryId()!=null){where.append(" AND e.category_id=?");args.add(q.categoryId());}
         if(text(q.ownerName())){where.append(" AND lower(e.owner_name)=lower(?)");args.add(q.ownerName().trim());}if(q.dateFrom()!=null){where.append(" AND e.experiment_date>=?");args.add(q.dateFrom());}if(q.dateTo()!=null){where.append(" AND e.experiment_date<=?");args.add(q.dateTo());}
         if(text(q.format())){where.append(" AND ").append(DOCUMENT_FORMAT).append("=?");args.add(q.format());}
+        appendScope(where, args, q.scope(), org);
         return Optional.ofNullable(jdbc.queryForObject("SELECT count(*) FROM rnd.experiment e JOIN rnd.experiment_version v ON v.id=e.current_version_id"+where,Long.class,args.toArray())).orElse(0L);
     }
     @Override public Optional<Detail> detail(UUID org,UUID id){return jdbc.query(BASE+" WHERE e.organization_id=? AND e.id=? AND e.deleted=false",(rs,n)->detailRow(rs),org,id).stream().findFirst();}
@@ -221,11 +223,14 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         if (q.categoryId() != null) { where.append(" AND e.category_id=?"); args.add(q.categoryId()); }
         var scope = q.scope();
         switch (scope.type()) {
-            case "ALL" -> { }
-            case "SELF" -> {
-                where.append(" AND (e.created_by=? OR e.owner_id=?)");
+            case "ALL", "ORG" -> { }
+            case "SELF", "CREATOR" -> {
+                where.append(" AND e.created_by=?");
                 args.add(scope.actorId());
-                args.add(scope.actorId());
+            }
+            case "DEPARTMENT" -> {
+                where.append(" AND e.department_id IS NOT NULL AND e.department_id=(SELECT u.department_id FROM iam.app_user u WHERE u.id=? AND u.organization_id=?)");
+                args.add(scope.actorId()); args.add(org);
             }
             case "ASSIGNED" -> {
                 where.append(" AND e.owner_id=?");
@@ -233,7 +238,7 @@ public class JdbcExperimentRepository implements ExperimentRepository {
             }
             case "PROJECT" -> appendIn(where, args, "e.project_id", scope.targetIds());
             case "CATEGORY" -> appendIn(where, args, "e.category_id", scope.targetIds());
-            case "SELECTED" -> appendIn(where, args, "e.id", scope.targetIds());
+            case "SELECTED" -> appendIn(where, args, "e.project_id", scope.targetIds());
             default -> where.append(" AND 1=0");
         }
         return new CompletedQuery(where.toString(), List.copyOf(args));
@@ -247,6 +252,19 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         where.append(" AND ").append(column).append(" IN (")
                 .append(String.join(",", ids.stream().map(ignored -> "?").toList())).append(')');
         args.addAll(ids);
+    }
+
+    private void appendScope(StringBuilder where, List<Object> args, DataScopeFilter scope, UUID organizationId) {
+        switch (scope.type()) {
+            case "ALL", "ORG" -> { }
+            case "SELF", "CREATOR" -> { where.append(" AND e.created_by=?"); args.add(scope.actorId()); }
+            case "DEPARTMENT" -> {
+                where.append(" AND e.department_id IS NOT NULL AND e.department_id=(SELECT u.department_id FROM iam.app_user u WHERE u.id=? AND u.organization_id=?)");
+                args.add(scope.actorId()); args.add(organizationId);
+            }
+            case "SELECTED" -> appendIn(where, args, "e.project_id", scope.targetIds());
+            default -> where.append(" AND 1=0");
+        }
     }
 
     private record CompletedQuery(String where, List<Object> args) {}

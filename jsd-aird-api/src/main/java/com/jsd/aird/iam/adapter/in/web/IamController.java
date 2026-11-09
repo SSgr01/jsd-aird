@@ -42,8 +42,9 @@ public class IamController {
     public ApiResponse<PageResponse<IamAdminService.UserView>> users(
             @RequestParam(required = false) String keyword,
             @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "20") int size) {
-        return success(service.users(ActorContext.required(), keyword, page, size));
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String permissionView) {
+        return success(service.users(ActorContext.required(), keyword, page, size, permissionView));
     }
 
     @PostMapping("/users")

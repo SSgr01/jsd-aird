@@ -3,24 +3,31 @@ package com.jsd.aird.iam.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
 import com.jsd.aird.iam.api.AuthorizationService;
+import com.jsd.aird.iam.api.DataScopeResolver;
+import com.jsd.aird.iam.api.PermissionCheck;
 import com.jsd.aird.iam.api.PermissionDecision;
 import com.jsd.aird.iam.api.PermissionDefinitionContributor;
+import com.jsd.aird.iam.api.RecordDataScope;
 import com.jsd.aird.iam.application.port.IamStore;
 import com.jsd.aird.iam.application.port.IamStore.Binding;
 import com.jsd.aird.iam.application.port.IamStore.Role;
@@ -32,6 +39,7 @@ import com.jsd.aird.shared.security.Actor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
+import org.mockito.ArgumentCaptor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 class IamAdminServiceTest {
@@ -51,6 +59,216 @@ class IamAdminServiceTest {
     @BeforeEach
     void setUp() {
         service = new IamAdminService(store, authorization, passwordEncoder, audit, auditPresentation);
+        when(store.userInScope(eq(ORGANIZATION_ID), any(), any())).thenReturn(true);
+    }
+
+    @Test
+    void hidesUserDetailOutsideCreatorScope() {
+        var userId = UUID.randomUUID();
+        when(store.userInScope(eq(ORGANIZATION_ID), eq(userId), any())).thenReturn(false);
+        assertApiError(() -> service.user(actor, userId), ApiErrorCode.NOT_FOUND);
+    }
+
+    @Test
+    void permissionMatrixOnlyShowsOperatorsOwnMenusAndOperations() {
+        var resolver = mock(EffectivePermissionResolver.class);
+        when(resolver.resolve(ORGANIZATION_ID, ACTOR_ID)).thenReturn(
+                new EffectivePermissionResolver.EffectivePermissions(Set.of("system.permissions"),
+                        Map.of("system.permissions.view", new Binding("system.permissions.view", "ALLOW", "CREATOR", List.of())), false));
+        when(store.permissionDefinitions()).thenReturn(List.of(
+                permission("system.permissions.view"), permission("system.permissions.update")));
+        when(store.permissionLevels(ORGANIZATION_ID)).thenReturn(List.of());
+        var scoped = new IamAdminService(store, authorization, passwordEncoder, audit, auditPresentation, resolver);
+
+        var model = scoped.permissionModel(actor);
+
+        assertThat(model.menus()).extracting(IamAdminService.MenuView::key).containsExactly("system.permissions");
+        assertThat(model.operations()).extracting(PermissionDefinitionContributor.PermissionDefinition::code)
+                .containsExactly("system.permissions.view");
+        assertThat(model.delegableScopes().get("system.permissions.view").scopeType()).isEqualTo("CREATOR");
+        assertThat(model.unrestricted()).isFalse();
+    }
+
+    @Test
+    void restrictedPermissionModelShowsRoleAndLevelTabsWithOwnedPermissionsOnly() {
+        var resolver = mock(EffectivePermissionResolver.class);
+        when(resolver.resolve(ORGANIZATION_ID, ACTOR_ID)).thenReturn(
+                new EffectivePermissionResolver.EffectivePermissions(Set.of("system.permissions"), Map.of(), false));
+        var ownRole = role(UUID.randomUUID(), "RND_ENGINEER", false, 0);
+        var otherRole = role(UUID.randomUUID(), "OTHER", false, 0);
+        var ownLevel = new IamStore.PermissionLevel(UUID.randomUUID(), ORGANIZATION_ID, "OWN", "自己的等级", null, false, true, 1, 0);
+        var otherLevel = new IamStore.PermissionLevel(UUID.randomUUID(), ORGANIZATION_ID, "OTHER", "其他等级", null, false, true, 1, 0);
+        when(store.userRoles(ORGANIZATION_ID, ACTOR_ID)).thenReturn(List.of(ownRole));
+        when(store.userPermissionLevel(ORGANIZATION_ID, ACTOR_ID)).thenReturn(Optional.of(ownLevel.id()));
+        when(store.permissionLevels(ORGANIZATION_ID)).thenReturn(List.of(ownLevel, otherLevel));
+        when(store.role(ORGANIZATION_ID, ownRole.id())).thenReturn(Optional.of(ownRole));
+        when(store.role(ORGANIZATION_ID, otherRole.id())).thenReturn(Optional.of(otherRole));
+        when(store.roleMenus(ORGANIZATION_ID, ownRole.id())).thenReturn(List.of());
+        var scoped = new IamAdminService(store, authorization, passwordEncoder, audit, auditPresentation, resolver);
+
+        var model = scoped.permissionModel(actor);
+
+        assertThat(model.levels()).extracting(IamAdminService.PermissionLevelView::id)
+                .containsExactly(ownLevel.id(), otherLevel.id());
+        assertThat(scoped.roleMenus(actor, ownRole.id()).menuKeys()).isEmpty();
+    }
+
+    @Test
+    void restrictedOperatorCanEditOwnedRoleMenuWithoutRemovingHiddenMenus() {
+        var resolver = mock(EffectivePermissionResolver.class);
+        when(resolver.resolve(ORGANIZATION_ID, ACTOR_ID)).thenReturn(
+                new EffectivePermissionResolver.EffectivePermissions(Set.of("system.permissions"), Map.of(), false));
+        var targetRole = role(UUID.randomUUID(), "CUSTOM_ROLE", false, 0);
+        when(store.role(ORGANIZATION_ID, targetRole.id())).thenReturn(Optional.of(targetRole));
+        when(store.roleMenus(ORGANIZATION_ID, targetRole.id())).thenReturn(List.of("customer.list"));
+        var scoped = new IamAdminService(store, authorization, passwordEncoder, audit, auditPresentation, resolver);
+
+        scoped.saveRoleMenus(actor, targetRole.id(), 0, List.of("system.permissions"));
+
+        verify(store).replaceRoleMenus(ORGANIZATION_ID, targetRole.id(), 0,
+                List.of("system.permissions", "customer.list"));
+        assertApiError(() -> scoped.saveRoleMenus(actor, targetRole.id(), 0, List.of("project.list")),
+                ApiErrorCode.OPERATION_FORBIDDEN);
+    }
+
+    @Test
+    void restrictedOperatorCanEditOwnedLevelBindingWithoutRemovingHiddenBindings() {
+        var resolver = mock(EffectivePermissionResolver.class);
+        when(resolver.resolve(ORGANIZATION_ID, ACTOR_ID)).thenReturn(
+                new EffectivePermissionResolver.EffectivePermissions(Set.of("system.permissions"),
+                        Map.of("system.permissions.view", new Binding("system.permissions.view", "ALLOW", "CREATOR", List.of())), false));
+        var level = new IamStore.PermissionLevel(UUID.randomUUID(), ORGANIZATION_ID, "CUSTOM", "自定义", null, false, true, 1, 0);
+        when(store.permissionLevel(ORGANIZATION_ID, level.id())).thenReturn(Optional.of(level));
+        when(store.permissionDefinitions()).thenReturn(List.of(permission("system.permissions.view")));
+        var hidden = new IamStore.PermissionLevelBinding("project.list", "project.list.view", "ALLOW", "ALL", List.of());
+        when(store.permissionLevelBindings(ORGANIZATION_ID, level.id())).thenReturn(List.of(hidden));
+        var scoped = new IamAdminService(store, authorization, passwordEncoder, audit, auditPresentation, resolver);
+        var owned = new IamStore.PermissionLevelBinding("system.permissions", "system.permissions.view", "ALLOW", "CREATOR", List.of());
+
+        scoped.savePermissionLevelBindings(actor, level.id(), 0, List.of(owned));
+
+        verify(store).replacePermissionLevelBindings(ORGANIZATION_ID, level.id(), 0, List.of(owned, hidden));
+        var excessive = new IamStore.PermissionLevelBinding("system.permissions", "system.permissions.view", "ALLOW", "ALL", List.of());
+        assertApiError(() -> scoped.savePermissionLevelBindings(actor, level.id(), 0, List.of(excessive)),
+                ApiErrorCode.OPERATION_FORBIDDEN);
+    }
+
+    @Test
+    void standardMethodAllowsSelectedTestStandardFiles() {
+        var level = new IamStore.PermissionLevel(UUID.randomUUID(), ORGANIZATION_ID, "CUSTOM", "自定义", null, false, true, 1, 0);
+        var methodId = UUID.randomUUID();
+        var oldBinding = new IamStore.PermissionLevelBinding("research-test.standard", "research-test.standard.view",
+                "ALLOW", "SELECTED", List.of(methodId));
+        when(store.permissionLevel(ORGANIZATION_ID, level.id())).thenReturn(Optional.of(level));
+        when(store.permissionDefinitions()).thenReturn(List.of(permission("research-test.standard.view")));
+        when(store.permissionLevelBindings(ORGANIZATION_ID, level.id())).thenReturn(List.of(oldBinding));
+
+        service.savePermissionLevelBindings(actor, level.id(), 0, List.of(oldBinding));
+        verify(store).replacePermissionLevelBindings(ORGANIZATION_ID, level.id(), 0, List.of(oldBinding));
+
+        var newBinding = new IamStore.PermissionLevelBinding("research-test.standard", "research-test.standard.view",
+                "ALLOW", "SELECTED", List.of(UUID.randomUUID()));
+        service.savePermissionLevelBindings(actor, level.id(), 0, List.of(newBinding));
+        verify(store).replacePermissionLevelBindings(ORGANIZATION_ID, level.id(), 0, List.of(newBinding));
+    }
+
+    @Test
+    void cannotChangeOwnPersonalPermissions() {
+        when(store.user(ACTOR_ID)).thenReturn(Optional.of(user(ACTOR_ID, ORGANIZATION_ID, "RND_ENGINEER", "ACTIVE")));
+        assertApiError(() -> service.saveUserModel(actor, ACTOR_ID,
+                new IamAdminService.SaveUserModelCommand(List.of(), null, null, List.of(), List.of(), List.of(), 0)),
+                ApiErrorCode.OPERATION_FORBIDDEN);
+        assertApiError(() -> service.saveUserPermissions(actor, ACTOR_ID, 0, List.of()),
+                ApiErrorCode.OPERATION_FORBIDDEN);
+        assertApiError(() -> service.deleteUserOverride(actor, ACTOR_ID, "customer.view", 0),
+                ApiErrorCode.OPERATION_FORBIDDEN);
+        assertApiError(() -> service.update(actor, ACTOR_ID,
+                new IamAdminService.UpdateUserCommand(0, "自己", null, null, null, UUID.randomUUID())),
+                ApiErrorCode.OPERATION_FORBIDDEN);
+    }
+
+    @Test
+    void cannotChangeRoleOrLevelAssignedToSelf() {
+        var ownRole = role(UUID.randomUUID(), "RND_ENGINEER", false, 0);
+        var ownLevel = new IamStore.PermissionLevel(UUID.randomUUID(), ORGANIZATION_ID, "OWN", "自己的等级", null, false, true, 1, 0);
+        when(store.userRoles(ORGANIZATION_ID, ACTOR_ID)).thenReturn(List.of(ownRole));
+        when(store.userPermissionLevel(ORGANIZATION_ID, ACTOR_ID)).thenReturn(Optional.of(ownLevel.id()));
+        when(store.role(ORGANIZATION_ID, ownRole.id())).thenReturn(Optional.of(ownRole));
+
+        assertApiError(() -> service.saveRoleMenus(actor, ownRole.id(), 0, List.of()),
+                ApiErrorCode.OPERATION_FORBIDDEN);
+        assertApiError(() -> service.deleteRole(actor, ownRole.id(), 0),
+                ApiErrorCode.OPERATION_FORBIDDEN);
+        assertApiError(() -> service.savePermissionLevelBindings(actor, ownLevel.id(), 0, List.of()),
+                ApiErrorCode.OPERATION_FORBIDDEN);
+        assertApiError(() -> service.deletePermissionLevel(actor, ownLevel.id()),
+                ApiErrorCode.OPERATION_FORBIDDEN);
+    }
+
+    @Test
+    void rejectsDelegatingAnOperationOrScopeNotOwnedByOperator() {
+        var resolver = mock(EffectivePermissionResolver.class);
+        when(resolver.resolve(ORGANIZATION_ID, ACTOR_ID)).thenReturn(
+                new EffectivePermissionResolver.EffectivePermissions(Set.of("system.permissions"),
+                        Map.of("system.permissions.view", new Binding("system.permissions.view", "ALLOW", "CREATOR", List.of())), false));
+        var target = UUID.randomUUID();
+        when(store.user(target)).thenReturn(Optional.of(user(target, ORGANIZATION_ID, "RND_ENGINEER", "ACTIVE")));
+        when(store.userRoles(ORGANIZATION_ID, target)).thenReturn(List.of());
+        when(store.userPermissionLevel(ORGANIZATION_ID, target)).thenReturn(Optional.empty());
+        when(store.permissionDefinitions()).thenReturn(List.of(permission("system.permissions.view"),
+                permission("system.permissions.update")));
+        var scoped = new IamAdminService(store, authorization, passwordEncoder, audit, auditPresentation, resolver);
+        var roleIds = List.of(store.user(target).orElseThrow().roleId());
+        when(store.role(ORGANIZATION_ID, roleIds.get(0)))
+                .thenReturn(Optional.of(role(roleIds.get(0), "RND_ENGINEER", false, 0)));
+
+        assertApiError(() -> scoped.saveUserModel(actor, target,
+                new IamAdminService.SaveUserModelCommand(roleIds, roleIds.get(0), null, List.of(),
+                        List.of(new Binding("system.permissions.update", "ALLOW", "CREATOR", List.of())), List.of(), 0)),
+                ApiErrorCode.OPERATION_FORBIDDEN);
+        assertApiError(() -> scoped.saveUserModel(actor, target,
+                new IamAdminService.SaveUserModelCommand(roleIds, roleIds.get(0), null, List.of(), List.of(),
+                        List.of(new Binding("system.permissions.view", "ALLOW", "ALL", List.of())), 0)),
+                ApiErrorCode.OPERATION_FORBIDDEN);
+    }
+
+    @Test
+    void restrictedSavePreservesOverridesOutsideOperatorsView() {
+        var resolver = mock(EffectivePermissionResolver.class);
+        when(resolver.resolve(ORGANIZATION_ID, ACTOR_ID)).thenReturn(
+                new EffectivePermissionResolver.EffectivePermissions(Set.of("system.permissions"),
+                        Map.of("system.permissions.view", new Binding("system.permissions.view", "ALLOW", "CREATOR", List.of())), false));
+        var target = UUID.randomUUID();
+        var targetUser = user(target, ORGANIZATION_ID, "RND_ENGINEER", "ACTIVE");
+        when(store.user(target)).thenReturn(Optional.of(targetUser));
+        when(store.userRoles(ORGANIZATION_ID, target)).thenReturn(List.of());
+        when(store.userPermissionLevel(ORGANIZATION_ID, target)).thenReturn(Optional.empty());
+        when(store.role(ORGANIZATION_ID, targetUser.roleId()))
+                .thenReturn(Optional.of(role(targetUser.roleId(), "RND_ENGINEER", false, 0)));
+        when(store.permissionDefinitions()).thenReturn(List.of(permission("system.permissions.view")));
+        var hidden = new Binding("project.list", "project.list.view", "ALLOW", "ALL", List.of());
+        when(store.userOperationOverrides(ORGANIZATION_ID, target)).thenReturn(List.of(hidden));
+        var scoped = new IamAdminService(store, authorization, passwordEncoder, audit, auditPresentation, resolver);
+
+        scoped.saveUserModel(actor, target, new IamAdminService.SaveUserModelCommand(
+                List.of(targetUser.roleId()), targetUser.roleId(), null, List.of(), List.of(), List.of(), 0));
+
+        verify(store).replaceUserModelOverrides(eq(ORGANIZATION_ID), eq(target), eq(List.of()),
+                eq(List.of(hidden)), eq(List.of()));
+    }
+
+    @Test
+    void preservesOrgScopeWhenSavingUserModel() {
+        var targetId = UUID.randomUUID();
+        when(store.user(targetId)).thenReturn(Optional.of(user(targetId, ORGANIZATION_ID, "RND_ENGINEER", "ACTIVE")));
+        when(store.permissionDefinitions()).thenReturn(List.of(permission("customer.create")));
+        var command = new IamAdminService.SaveUserModelCommand(List.of(), null, null, List.of(), List.of(),
+                List.of(new Binding("customer.list", "customer.create", "ALLOW", "ORG", List.of())), 0);
+
+        service.saveUserModel(actor, targetId, command);
+
+        verify(store).replaceUserModelOverrides(eq(ORGANIZATION_ID), eq(targetId), eq(List.of()), eq(List.of()),
+                eq(List.of(new Binding("customer.list", "customer.create", "ALLOW", "ORG", List.of()))));
     }
 
     @Test
@@ -220,6 +438,30 @@ class IamAdminServiceTest {
 
     private static User user(UUID id, UUID organizationId, String roleCode, String status) {
         return userWithVersion(id, organizationId, roleCode, status, 0);
+    }
+
+    @Test
+    void appliesUserScopeByPermissionView() {
+        var targetId = UUID.randomUUID();
+        var scopedAuthorization = mock(AuthorizationService.class);
+        when(scopedAuthorization.check(any())).thenReturn(
+                new PermissionDecision(true, "system.user.view", "ALLOW", "SELECTED", "TEST"));
+        when(scopedAuthorization.resolveScope(any())).thenReturn(
+                DataScopeResolver.ResolvedDataScope.allow("SELECTED", Set.of(targetId)));
+        when(store.users(any(), any(), anyInt(), anyInt(), any())).thenReturn(List.of());
+        when(store.countUsers(any(), any(), any())).thenReturn(0L);
+        var scopedService = new IamAdminService(store, scopedAuthorization, passwordEncoder, audit, auditPresentation);
+        var expectedScope = new RecordDataScope("SELECTED", ACTOR_ID, Set.of(targetId));
+
+        scopedService.users(actor, null, 1, 20, "permissions");
+        scopedService.users(actor, null, 1, 20);
+
+        verify(store, times(2)).users(eq(ORGANIZATION_ID), isNull(), eq(1), eq(20), eq(expectedScope));
+        verify(store, times(2)).countUsers(eq(ORGANIZATION_ID), isNull(), eq(expectedScope));
+        var captor = ArgumentCaptor.forClass(PermissionCheck.class);
+        verify(scopedAuthorization, times(2)).resolveScope(captor.capture());
+        assertThat(captor.getAllValues()).extracting(PermissionCheck::permissionCode)
+                .containsExactly("system.permissions.view", "system.users.view");
     }
 
     private static User userWithVersion(UUID id, UUID organizationId, String roleCode, String status, long version) {

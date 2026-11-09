@@ -79,7 +79,6 @@ export function PartnerListPage() {
     customerLevel: level || undefined,
     cooperationStatus: cooperation || undefined,
     owner: owner || undefined,
-    status: 'ACTIVE',
   }), [keyword, industry, level, cooperation, owner]);
   const beginListRequest = useRequestGuard(JSON.stringify([query,page,pageSize]));
   const load = useCallback(async () => {
@@ -112,7 +111,7 @@ export function PartnerListPage() {
   );
   const loadFilterOptions = useCallback(async () => {
     try {
-      const result = await getPartners({ status: 'ACTIVE', page: 1, size: 100 });
+      const result = await getPartners({ page: 1, size: 100 });
       setFilterOptions({
         industries: uniqueText(result.items.map((x) => x.industry)),
         customerLevels: uniqueText([

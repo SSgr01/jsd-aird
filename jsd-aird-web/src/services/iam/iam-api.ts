@@ -22,7 +22,7 @@ export interface PermissionBinding { menuKey?: string; permissionCode: string; e
 export interface PermissionLevelBinding { menuKey?: string | null; permissionCode: string; effect: 'ALLOW'; scopeType: string; targetIds: string[]; }
 export interface PermissionMenu { key: string; label: string; parent?: string; route?: string; }
 export interface PermissionLevel { id: string; code: string; name: string; description?: string; builtin: boolean; enabled: boolean; tier: number; policyVersion: number; }
-export interface PermissionModel { menus: PermissionMenu[]; levels: PermissionLevel[]; operations: PermissionDefinition[]; }
+export interface PermissionModel { menus: PermissionMenu[]; levels: PermissionLevel[]; operations: PermissionDefinition[]; delegableScopes: Record<string, { scopeType: string; targetIds: string[] }>; unrestricted: boolean; ownRoleIds: string[]; ownLevelId?: string; }
 export interface MenuOverride { menuKey: string; effect: 'ALLOW' | 'DENY'; }
 export interface UserPermissionModel {
   userId: string;
@@ -68,7 +68,7 @@ export interface AuditLogQuery {
 const responseData = async <T>(request: Promise<{ data: ApiResponse<T> }>) => (await request).data.data;
 
 export const iamApi = {
-  users: (params?: { keyword?: string; page?: number; size?: number }, signal?: AbortSignal) => responseData<PageResponse<IamUser>>(httpClient.get('/api/v1/iam/users', { params, signal })),
+  users: (params?: { keyword?: string; page?: number; size?: number; permissionView?: 'users' | 'permissions' }, signal?: AbortSignal) => responseData<PageResponse<IamUser>>(httpClient.get('/api/v1/iam/users', { params, signal })),
   createUser: (payload: { username: string; displayName: string; email?: string; phone?: string; departmentName?: string; roleId: string; password: string }) => responseData<{ user: IamUser }>(httpClient.post('/api/v1/iam/users', payload)),
   updateUser: (id: string, payload: { expectedVersion: number; displayName: string; email?: string; phone?: string; departmentName?: string; roleId: string }) => responseData<IamUser>(httpClient.patch(`/api/v1/iam/users/${id}`, payload)),
   enableUser: (id: string, expectedVersion: number) => responseData<void>(httpClient.post(`/api/v1/iam/users/${id}/enable`, { expectedVersion })),

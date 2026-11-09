@@ -18,6 +18,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
+import com.jsd.aird.iam.api.AuthorizationService;
+import com.jsd.aird.iam.api.PermissionCheck;
+import com.jsd.aird.iam.api.RecordDataScope;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.spc.application.port.SpectrumRepository;
 import com.jsd.aird.shared.api.PageResponse;
@@ -48,18 +51,25 @@ public class SpectrumService {
     private final FileStorageFacade storage;
     private final ObjectMapper objectMapper;
     private final AuditLogFacade audit;
+    private final AuthorizationService authorization;
 
     public SpectrumService(SpectrumRepository repository, FileStorageFacade storage, ObjectMapper objectMapper) {
-        this(repository, storage, objectMapper, null);
+        this(repository, storage, objectMapper, null, null);
+    }
+
+    public SpectrumService(SpectrumRepository repository, FileStorageFacade storage, ObjectMapper objectMapper,
+                           AuditLogFacade audit) {
+        this(repository, storage, objectMapper, audit, null);
     }
 
     @Autowired
     public SpectrumService(SpectrumRepository repository, FileStorageFacade storage, ObjectMapper objectMapper,
-                           AuditLogFacade audit) {
+                           AuditLogFacade audit, AuthorizationService authorization) {
         this.repository = repository;
         this.storage = storage;
         this.objectMapper = objectMapper;
         this.audit = audit;
+        this.authorization = authorization;
     }
 
     @Transactional
@@ -178,18 +188,24 @@ public class SpectrumService {
         var actor = ActorContext.required();
         var safePage = Math.max(1, page);
         var safeSize = Math.min(100, Math.max(1, size));
+        var scope = RecordDataScope.all();
+        if (authorization != null) {
+            var resolved = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
+                    "spectrum.view", "SPECTRUM", null, "READ"));
+            if (!resolved.allowed()) throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有图谱查看权限");
+            scope = new RecordDataScope(resolved.scopeType(), actor.userId(), resolved.targetIds());
+        }
         var rows = repository.listCharts(actor.organizationId(), keyword, categoryId,
-                StringUtils.hasText(status) ? status : "READY", safePage, safeSize);
+                StringUtils.hasText(status) ? status : "READY", safePage, safeSize, scope);
         var total = repository.countCharts(actor.organizationId(), keyword, categoryId,
-                StringUtils.hasText(status) ? status : "READY");
+                StringUtils.hasText(status) ? status : "READY", scope);
         return new PageResponse<>(rows.stream().map(this::chartView).toList(), safePage, safeSize, total,
                 (total + safeSize - 1) / safeSize);
     }
 
     public ChartView chart(UUID chartId) {
         var actor = ActorContext.required();
-        return chartView(repository.findChart(actor.organizationId(), chartId)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "图谱不存在")));
+        return chartView(requireChart(actor.organizationId(), chartId));
     }
 
     @Transactional
@@ -392,6 +408,11 @@ public class SpectrumService {
     }
 
     public SpectrumRepository.ChartRow requireChart(UUID organizationId, UUID chartId) {
+        if (authorization != null) {
+            var actor = ActorContext.required();
+            authorization.require(new PermissionCheck(organizationId, actor.userId(),
+                    "spectrum.view", "SPECTRUM", chartId, "READ"));
+        }
         return repository.findChart(organizationId, chartId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "图谱不存在"));
     }

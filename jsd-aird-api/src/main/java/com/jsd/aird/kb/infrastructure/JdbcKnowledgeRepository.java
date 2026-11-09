@@ -68,10 +68,25 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     public List<DocumentRow> listDocuments(UUID organizationId, String keyword, String status,
                                            String scope, UUID categoryId, String lifecycleStatus, String reviewStatus,
                                            java.util.Set<UUID> allowedDocumentIds, int page, int size) {
+        return listDocuments(organizationId, keyword, status, scope, categoryId, lifecycleStatus, reviewStatus,
+                allowedDocumentIds, page, size, com.jsd.aird.iam.api.RecordDataScope.all());
+    }
+
+    @Override
+    public List<DocumentRow> listDocuments(UUID organizationId, String keyword, String status,
+                                           String scope, UUID categoryId, String lifecycleStatus, String reviewStatus,
+                                           java.util.Set<UUID> allowedDocumentIds, int page, int size,
+                                           com.jsd.aird.iam.api.RecordDataScope dataScope) {
         if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
         var normalizedKeyword = blankToNull(keyword);
         var normalizedStatus = blankToNull(status);
         var projectClause = documentIdClause(allowedDocumentIds);
+        var args = new java.util.ArrayList<Object>(java.util.Arrays.asList(organizationId, normalizedKeyword, normalizedKeyword,
+                normalizedKeyword, normalizedStatus, normalizedStatus,
+                blankToNull(scope), blankToNull(scope), categoryId, categoryId,
+                blankToNull(lifecycleStatus), blankToNull(lifecycleStatus),
+                blankToNull(reviewStatus), blankToNull(reviewStatus)));
+        var dataScopeClause = dataScope.sqlCondition("d", args);
         var sql = documentQuery("""
                 WHERE d.organization_id = ?
                   AND (CAST(? AS text) IS NULL OR d.title ILIKE '%' || ? || '%' OR v.original_name ILIKE '%' || ? || '%')
@@ -80,15 +95,10 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                   AND (CAST(? AS uuid) IS NULL OR d.category_id = ?)
                   AND (CAST(? AS text) IS NULL OR d.lifecycle_status = ?)
                   AND (CAST(? AS text) IS NULL OR v.review_status = ?)
-                """ + projectClause + """
+                """ + dataScopeClause + "\n" + projectClause + """
                 ORDER BY d.updated_at DESC
                 LIMIT ? OFFSET ?
                 """);
-        var args = new java.util.ArrayList<Object>(java.util.Arrays.asList(organizationId, normalizedKeyword, normalizedKeyword,
-                normalizedKeyword, normalizedStatus, normalizedStatus,
-                blankToNull(scope), blankToNull(scope), categoryId, categoryId,
-                blankToNull(lifecycleStatus), blankToNull(lifecycleStatus),
-                blankToNull(reviewStatus), blankToNull(reviewStatus)));
         if (allowedDocumentIds != null) args.addAll(allowedDocumentIds);
         args.add(size);
         args.add(Math.max(0, page - 1) * size);
@@ -106,6 +116,15 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     public long countDocuments(UUID organizationId, String keyword, String status,
                                String scope, UUID categoryId, String lifecycleStatus, String reviewStatus,
                                java.util.Set<UUID> allowedDocumentIds) {
+        return countDocuments(organizationId, keyword, status, scope, categoryId, lifecycleStatus, reviewStatus,
+                allowedDocumentIds, com.jsd.aird.iam.api.RecordDataScope.all());
+    }
+
+    @Override
+    public long countDocuments(UUID organizationId, String keyword, String status,
+                               String scope, UUID categoryId, String lifecycleStatus, String reviewStatus,
+                               java.util.Set<UUID> allowedDocumentIds,
+                               com.jsd.aird.iam.api.RecordDataScope dataScope) {
         if (allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return 0;
         var normalizedKeyword = blankToNull(keyword);
         var normalizedStatus = blankToNull(status);
@@ -114,6 +133,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 blankToNull(scope), blankToNull(scope), categoryId, categoryId,
                 blankToNull(lifecycleStatus), blankToNull(lifecycleStatus),
                 blankToNull(reviewStatus), blankToNull(reviewStatus)));
+        var dataScopeClause = dataScope.sqlCondition("d", args);
         if (allowedDocumentIds != null) args.addAll(allowedDocumentIds);
         return jdbc.queryForObject("""
                 SELECT count(*) FROM kb.document d
@@ -125,7 +145,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                   AND (CAST(? AS uuid) IS NULL OR d.category_id = ?)
                   AND (CAST(? AS text) IS NULL OR d.lifecycle_status = ?)
                   AND (CAST(? AS text) IS NULL OR v.review_status = ?)
-                """ + documentIdClause(allowedDocumentIds), Long.class, args.toArray());
+                """ + dataScopeClause + "\n" + documentIdClause(allowedDocumentIds), Long.class, args.toArray());
     }
 
     private String documentIdClause(java.util.Set<UUID> allowedDocumentIds) {
@@ -135,18 +155,28 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
 
     @Override
     public List<CategoryRow> listCategories(UUID organizationId, String scope) {
+        return listCategories(organizationId, scope, com.jsd.aird.iam.api.RecordDataScope.all());
+    }
+
+    @Override
+    public List<CategoryRow> listCategories(UUID organizationId, String scope,
+                                            com.jsd.aird.iam.api.RecordDataScope dataScope) {
         var normalizedScope = blankToNull(scope);
+        var args = new java.util.ArrayList<Object>();
+        var scopeClause = dataScope.sqlCondition("d", args);
+        args.add(organizationId); args.add(normalizedScope); args.add(normalizedScope);
         return jdbc.query("""
                 SELECT c.id, c.scope, c.name, c.description, c.sort_order, count(d.id) AS document_count
                 FROM kb.document_category c
                 LEFT JOIN kb.document d ON d.category_id = c.id
                     AND d.organization_id = c.organization_id
+                """ + scopeClause + "\n" + """
                 WHERE c.organization_id = ? AND (CAST(? AS text) IS NULL OR c.scope = ?)
                 GROUP BY c.id, c.scope, c.name, c.description, c.sort_order, c.created_at
                 ORDER BY c.sort_order, c.created_at
                 """, (rs, n) -> new CategoryRow(rs.getObject("id", UUID.class), rs.getString("scope"),
                         rs.getString("name"), rs.getString("description"), rs.getInt("sort_order"), rs.getLong("document_count")),
-                organizationId, normalizedScope, normalizedScope);
+                args.toArray());
     }
 
     @Override

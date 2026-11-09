@@ -27,15 +27,18 @@ describe('personal permission row scopes', () => {
   const definitions = [create, view];
 
   it('stores the row scope against every operation of the row, regardless of what is selected', () => {
-    const result = updateUserRowScopeOverrides({}, {}, 'project.list', definitions, 'ORG');
+    const result = updateUserRowScopeOverrides({}, {}, 'project.list', definitions, 'DEPARTMENT');
 
-    expect(result[levelBindingKey('project.list', create.code)]?.scopeType).toBe('ORG');
-    expect(result[levelBindingKey('project.list', view.code)]?.scopeType).toBe('ORG');
+    expect(result[levelBindingKey('project.list', create.code)]?.scopeType).toBe('DEPARTMENT');
+    expect(result[levelBindingKey('project.list', view.code)]?.scopeType).toBe('DEPARTMENT');
   });
 
   it('folds legacy scopes and object scopes onto the four standard options', () => {
     const legacy = updateUserRowScopeOverrides({}, {}, 'project.list', definitions, 'OWNER');
     expect(legacy[levelBindingKey('project.list', view.code)]?.scopeType).toBe('CREATOR');
+    const legacyOrg = updateUserRowScopeOverrides({}, {}, 'project.list', definitions, 'ORG');
+    expect(legacyOrg[levelBindingKey('project.list', create.code)]?.scopeType).toBe('ALL');
+    expect(legacyOrg[levelBindingKey('project.list', view.code)]).toBeUndefined();
 
     const selected = updateUserRowScopeOverrides({}, {}, 'project.list', definitions, 'CATEGORY', ['c1']);
     expect(selected[levelBindingKey('project.list', view.code)]?.scopeType).toBe('SELECTED');

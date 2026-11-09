@@ -6,6 +6,7 @@ import com.jsd.aird.mdm.infrastructure.model.ProjectTaskSummaryRow;
 import com.jsd.aird.mdm.infrastructure.persistence.ProjectWorkMapper;
 import com.jsd.aird.shared.error.*;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.*;
 import java.util.*;
@@ -13,24 +14,29 @@ import java.util.*;
 @Service
 public class ProjectWorkService {
  private final ProjectWorkMapper mapper;
- public ProjectWorkService(ProjectWorkMapper mapper){this.mapper=mapper;}
- public List<ProjectTask> tasks(UUID stageId){return mapper.tasks(stageId);}
+ private final ProjectService projectAccess;
+ @Autowired
+ public ProjectWorkService(ProjectWorkMapper mapper, ProjectService projectAccess){this.mapper=mapper;this.projectAccess=projectAccess;}
+ public ProjectWorkService(ProjectWorkMapper mapper){this(mapper,null);}
+ public List<ProjectTask> tasks(UUID stageId){if(projectAccess!=null)requireProject(mapper.stageProjectId(stageId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"阶段不存在")));return mapper.tasks(stageId);}
  @Transactional
  public ProjectTask createTask(UUID projectId,TaskInput input){
+  requireAction(projectId,"project.task.create");
   if(!mapper.stageBelongs(input.stageId(),projectId)) throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"所选阶段不属于当前项目");
   String name=required(input.name(),"任务名称不能为空"); Instant now=Instant.now();
   var task=new ProjectTask(UUID.randomUUID(),code("TASK"),projectId,input.stageId(),name,clean(input.owner()),input.priority()==null?ProjectPriority.MEDIUM:input.priority(),input.plannedDate(),input.status()==null?"PENDING":input.status(),0,0,now,now);
-  mapper.insertTask(task); return task;
+  mapper.insertTask(task, com.jsd.aird.shared.security.ActorContext.required().userId().toString()); return task;
  }
- public ProjectTask getTask(UUID id){return mapper.task(id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"任务不存在"));}
+ public ProjectTask getTask(UUID id){var task=mapper.task(id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"任务不存在"));requireProject(task.projectId());return task;}
  @Transactional
  public ProjectTask updateTask(UUID id,TaskInput input){
   if(input.version()==null||input.version()<0) throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"必须提交读取时的任务版本");
   ProjectTask existing=mapper.task(id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"任务不存在"));
+  requireAction(existing.projectId(),"project.task.update");
   if(!mapper.stageBelongs(input.stageId(),existing.projectId())) throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"所选阶段不属于当前项目");
   long version=input.version();
   var task=new ProjectTask(id,existing.taskCode(),existing.projectId(),input.stageId(),required(input.name(),"任务名称不能为空"),clean(input.owner()),input.priority()==null?existing.priority():input.priority(),input.plannedDate(),input.status()==null?"PENDING":input.status(),existing.experimentCount(),version,existing.createdAt(),existing.updatedAt());
-  int rows=mapper.updateTask(task);
+  int rows=mapper.updateTask(task, com.jsd.aird.shared.security.ActorContext.required().userId().toString());
   if(rows==0) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"任务已被他人修改，请刷新后重试");
   if(!Objects.equals(existing.stageId(),input.stageId())) moveTaskChildren(id,input.stageId());
   return getTask(id);
@@ -55,12 +61,14 @@ public class ProjectWorkService {
  public void deleteTask(UUID id,long version){
   if(version<0) throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"任务版本不能为负数");
   ProjectTask existing=mapper.task(id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"任务不存在"));
+  requireAction(existing.projectId(),"project.task.delete");
   if (existing.experimentCount() > 0) throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"任务下存在实验，不能删除");
-  int rows=mapper.deleteTask(id,version);
+  int rows=mapper.deleteTask(id,version,com.jsd.aird.shared.security.ActorContext.required().userId().toString());
   if(rows==0) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"任务已被他人修改，请刷新后重试");
  }
 
  public List<ProjectTaskSummary> searchTasks(ProjectTaskQuery query) {
+  query=scoped(query);
   int page = query.page() == null || query.page() < 1 ? 1 : query.page();
   int size = query.size() == null || query.size() < 1 ? 20 : query.size();
   long offset = (long) (page - 1) * size;
@@ -74,12 +82,21 @@ public class ProjectWorkService {
  }
 
  public long countTasks(ProjectTaskQuery query) {
-  return mapper.countTasks(query);
+  return mapper.countTasks(scoped(query));
  }
 
  public List<String> taskOwners() {
-  return mapper.findTaskOwners();
+  return mapper.findTaskOwners(scoped(new ProjectTaskQuery(null,null,null,null,null,null,1,1)));
  }
+
+ private ProjectTaskQuery scoped(ProjectTaskQuery query) {
+  if(projectAccess==null)return query;
+  var actor=com.jsd.aird.shared.security.ActorContext.required();
+  var scope=projectAccess.scope();
+  return query.withDataScope(actor.organizationId(),scope.scopeType(),actor.userId(),scope.targetIds());
+ }
+ private void requireProject(UUID projectId){if(projectAccess!=null)projectAccess.get(projectId);}
+ private void requireAction(UUID projectId,String permissionCode){if(projectAccess!=null)projectAccess.requireAccess(projectId,permissionCode);}
 
 private static String code(String prefix){return prefix+"-"+LocalDate.now().toString().replace("-","")+"-"+UUID.randomUUID().toString().substring(0,5).toUpperCase();}
  private static String clean(String v){return v==null||v.isBlank()?null:v.trim();}

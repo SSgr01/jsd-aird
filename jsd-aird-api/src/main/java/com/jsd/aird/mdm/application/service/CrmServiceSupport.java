@@ -10,7 +10,9 @@ import java.util.Locale;
 import java.util.UUID;
 
 final class CrmServiceSupport {
-    static final String OPERATOR = "system";
+    static String operator() {
+        return com.jsd.aird.shared.security.ActorContext.required().userId().toString();
+    }
 
     private CrmServiceSupport() {
     }

@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import com.jsd.aird.iam.api.RecordDataScope;
 
 public interface SpectrumRepository {
     void lockCategory(UUID organizationId, UUID categoryId);
@@ -27,6 +28,14 @@ public interface SpectrumRepository {
     void lockChartRequest(UUID organizationId, UUID requestId);
     List<ChartRow> listCharts(UUID organizationId, String keyword, UUID categoryId, String status, int page, int size);
     long countCharts(UUID organizationId, String keyword, UUID categoryId, String status);
+    default List<ChartRow> listCharts(UUID organizationId, String keyword, UUID categoryId, String status,
+                                     int page, int size, RecordDataScope scope) {
+        return listCharts(organizationId, keyword, categoryId, status, page, size);
+    }
+    default long countCharts(UUID organizationId, String keyword, UUID categoryId, String status,
+                             RecordDataScope scope) {
+        return countCharts(organizationId, keyword, categoryId, status);
+    }
     ChartRow insertChart(NewChart command);
     void updateChart(UUID organizationId, UUID chartId, String title, String sampleName, String batchNo,
                      String testConditions, String metadataJson);

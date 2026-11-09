@@ -486,6 +486,10 @@ public class ProjectResourceService implements ProjectResourceFacade {
 
     private void requireProject(Actor actor, String permission, UUID projectId, String operation) {
         if (projectId == null) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "项目不能为空");
+        if (!"project.view".equals(permission)) {
+            authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "project.view",
+                    "PROJECT", projectId, "READ"));
+        }
         authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), permission,
                 "PROJECT", projectId, operation));
     }
@@ -497,6 +501,7 @@ public class ProjectResourceService implements ProjectResourceFacade {
      */
     private void requireLinkPermission(Actor actor, ResourceType resourceType, UUID resourceId, UUID projectId) {
         if (projectId == null) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "项目不能为空");
+        requireProject(actor, "project.view", projectId, "READ");
         var projectCheck = new PermissionCheck(actor.organizationId(), actor.userId(), "project.assign",
                 "PROJECT", projectId, "WRITE");
         if (authorization.check(projectCheck).allowed()) return;

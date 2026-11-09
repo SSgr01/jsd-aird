@@ -5,6 +5,7 @@ import java.security.MessageDigest;
 import java.sql.ResultSet;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
@@ -21,6 +22,7 @@ import com.jsd.aird.iam.application.port.IamStore.Session;
 import com.jsd.aird.iam.application.port.IamStore.SessionSummary;
 import com.jsd.aird.iam.application.port.IamStore.User;
 import com.jsd.aird.iam.api.PermissionDefinitionContributor.PermissionDefinition;
+import com.jsd.aird.iam.api.RecordDataScope;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -65,21 +67,58 @@ public class JdbcIamStore implements IamStore {
                 .stream().findFirst();
     }
 
-    public List<User> users(UUID organizationId, String keyword, int page, int size) {
+    private static final String USER_KEYWORD_WHERE =
+            "u.organization_id = ? AND (CAST(? AS text) IS NULL OR u.username ILIKE ? OR u.display_name ILIKE ? OR COALESCE(u.department_name, '') ILIKE ?)";
+
+    public List<User> users(UUID organizationId, String keyword, int page, int size, RecordDataScope dataScope) {
         var like = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
         var offset = Math.max(0, (page - 1) * size);
-        return jdbc.query(userSql("u.organization_id = ? AND (CAST(? AS text) IS NULL OR u.username ILIKE ? OR u.display_name ILIKE ? OR COALESCE(u.department_name, '') ILIKE ?)")
-                        + " ORDER BY u.created_at DESC LIMIT ? OFFSET ?", (rs, row) -> user(rs, row),
-                organizationId, like, like, like, like, size, offset);
+        var args = new ArrayList<Object>();
+        args.add(organizationId); args.add(like); args.add(like); args.add(like); args.add(like);
+        var where = USER_KEYWORD_WHERE + userScopeCondition(dataScope, args);
+        args.add(size); args.add(offset);
+        return jdbc.query(userSql(where) + " ORDER BY u.created_at DESC LIMIT ? OFFSET ?",
+                (rs, row) -> user(rs, row), args.toArray());
     }
 
-    public long countUsers(UUID organizationId, String keyword) {
+    public long countUsers(UUID organizationId, String keyword, RecordDataScope dataScope) {
         var like = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
-        return jdbc.queryForObject("""
-                SELECT count(*) FROM iam.app_user u
-                WHERE u.organization_id = ?
-                  AND (CAST(? AS text) IS NULL OR u.username ILIKE ? OR u.display_name ILIKE ? OR COALESCE(u.department_name, '') ILIKE ?)
-                """, Long.class, organizationId, like, like, like, like);
+        var args = new ArrayList<Object>();
+        args.add(organizationId); args.add(like); args.add(like); args.add(like); args.add(like);
+        return jdbc.queryForObject("SELECT count(*) FROM iam.app_user u WHERE "
+                + USER_KEYWORD_WHERE + userScopeCondition(dataScope, args), Long.class, args.toArray());
+    }
+
+    public boolean userInScope(UUID organizationId, UUID userId, RecordDataScope dataScope) {
+        var args = new ArrayList<Object>();
+        args.add(organizationId); args.add(userId);
+        return jdbc.queryForObject("SELECT count(*) FROM iam.app_user u WHERE u.organization_id = ? AND u.id = ?"
+                + userScopeCondition(dataScope, args), Long.class, args.toArray()) > 0;
+    }
+
+    /**
+     * 用户数据范围：本部门按 department_id 限制，指定按用户 id 限制。
+     * 历史记录只有明确的创建人审计记录才会回填 created_by。
+     */
+    private String userScopeCondition(RecordDataScope scope, List<Object> args) {
+        if (scope == null) return "";
+        return switch (scope.type()) {
+            case "ALL", "ORG" -> "";
+            case "SELF", "CREATOR" -> {
+                args.add(scope.actorId());
+                yield " AND u.created_by = ?";
+            }
+            case "DEPARTMENT" -> {
+                args.add(scope.actorId());
+                yield " AND u.department_id = (SELECT me.department_id FROM iam.app_user me WHERE me.id = ? AND me.organization_id = u.organization_id)";
+            }
+            case "SELECTED", "PROJECT", "CATEGORY" -> {
+                if (scope.targetIds().isEmpty()) yield " AND false";
+                args.addAll(scope.targetIds());
+                yield " AND u.id IN (" + String.join(",", scope.targetIds().stream().map(id -> "?").toList()) + ")";
+            }
+            default -> " AND false";
+        };
     }
 
     public long countUsersByStatus(UUID organizationId, String status) {
@@ -89,11 +128,16 @@ public class JdbcIamStore implements IamStore {
 
     public void insertUser(UUID id, UUID organizationId, String username, String displayName, String email,
                            String phone, String department, UUID roleId, String passwordHash) {
+        insertUser(id, organizationId, username, displayName, email, phone, department, roleId, passwordHash, null);
+    }
+
+    public void insertUser(UUID id, UUID organizationId, String username, String displayName, String email,
+                           String phone, String department, UUID roleId, String passwordHash, UUID createdBy) {
         jdbc.update("""
                 INSERT INTO iam.app_user (id, organization_id, username, display_name, email, phone,
-                    department_name, role_id, password_hash)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, id, organizationId, username, displayName, email, phone, department, roleId, passwordHash);
+                    department_name, role_id, password_hash, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, id, organizationId, username, displayName, email, phone, department, roleId, passwordHash, createdBy);
     }
 
     public void updateUser(UUID organizationId, UUID userId, String displayName, String email, String phone,

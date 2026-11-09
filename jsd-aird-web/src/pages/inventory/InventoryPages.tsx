@@ -160,7 +160,7 @@ export function InventoryQueryPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setData(await inventoryApi.balances(filters));
+      setData(await inventoryApi.balances({ ...filters, view: 'QUERY' }));
     } catch (e) {
       message.error(e instanceof Error ? e.message : '库存加载失败');
     } finally {

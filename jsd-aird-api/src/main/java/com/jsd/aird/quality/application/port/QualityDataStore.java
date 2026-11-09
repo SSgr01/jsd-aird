@@ -12,6 +12,13 @@ import java.util.UUID;
 
 /** Persistence boundary for the quality data application service. */
 public interface QualityDataStore {
+    record DataScopeFilter(String type, UUID actorId, java.util.Set<UUID> targetIds) {
+        public DataScopeFilter {
+            type = type == null ? "ALL" : type;
+            targetIds = targetIds == null ? java.util.Set.of() : java.util.Set.copyOf(targetIds);
+        }
+        public static DataScopeFilter all() { return new DataScopeFilter("ALL", null, java.util.Set.of()); }
+    }
     void lockCategory(UUID organizationId,UUID categoryId);
 
     record Category(UUID id, String businessType, String name, String description,
@@ -64,12 +71,20 @@ public interface QualityDataStore {
     }
 
     List<Category> categories(UUID organizationId, String type);
+    default List<Category> categories(UUID organizationId, String role, String type, DataScopeFilter scope) {
+        return categories(organizationId, type);
+    }
     UUID ensureUncategorizedCategory(UUID organizationId, String type, UUID createdBy);
     Category category(UUID organizationId, UUID categoryId);
     Category createCategory(UUID organizationId, UUID userId, String type, String name, String description);
     Category updateCategory(UUID organizationId, UUID categoryId, String name, String description);
     void deleteCategory(UUID organizationId, UUID categoryId, UUID replacementCategoryId);
     PageResponse<RecordView> records(UUID organizationId, String role, String type, UUID categoryId, String keyword, UUID projectId, String status, String format, int page, int size);
+    default PageResponse<RecordView> records(UUID organizationId, String role, String type, UUID categoryId, String keyword,
+                                             UUID projectId, String status, String format, int page, int size,
+                                             DataScopeFilter scope) {
+        return records(organizationId, role, type, categoryId, keyword, projectId, status, format, page, size);
+    }
     default PageResponse<RecordView> records(UUID organizationId, String role, String type, UUID categoryId, String keyword, UUID projectId, String status, int page, int size) {
         return records(organizationId, role, type, categoryId, keyword, projectId, status, null, page, size);
     }

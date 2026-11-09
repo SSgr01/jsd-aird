@@ -97,8 +97,33 @@ public class ProjectService {
     }
 
     public Project get(UUID id) {
-        return repository.findById(id)
+        var project = repository.findById(id)
             .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "项目不存在"));
+        authorize(id, "project.list.view");
+        return project;
+    }
+
+    public void requireAccess(UUID id, String permissionCode) {
+        if (repository.findById(id).isEmpty())
+            throw new ApiException(ApiErrorCode.NOT_FOUND, "项目不存在");
+        authorize(id, permissionCode);
+    }
+
+    private void authorize(UUID id, String permissionCode) {
+        var actor = ActorContext.required();
+        var menuKey = permissionCode.equals("project.list.view") ||
+                List.of("project.update", "project.delete", "project.copy").contains(permissionCode)
+                ? "project.list" : null;
+        authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), permissionCode,
+            "PROJECT", id, permissionCode.endsWith(".view") ? "READ" : "WRITE", menuKey));
+    }
+
+    public com.jsd.aird.iam.api.DataScopeResolver.ResolvedDataScope scope() {
+        var actor = ActorContext.required();
+        var scope = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
+            "project.list.view", "PROJECT", null, "READ", "project.list"));
+        if (!scope.allowed()) throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有项目查看权限");
+        return scope;
     }
 
     @Transactional
@@ -125,6 +150,7 @@ public class ProjectService {
         if (command.projectCode() == null || command.projectCode().isBlank())
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "项目编号不能为空");
         var current = get(id);
+        authorize(id, "project.update");
         var code = command.projectCode().trim();
         if (repository.existsByProjectCode(code, id)) throw duplicateProjectCode(code);
 
@@ -148,6 +174,7 @@ public class ProjectService {
     public void delete(UUID id, long expectedVersion) {
         requireVersion(expectedVersion);
         var current = get(id);
+        authorize(id, "project.delete");
         if (current.version() != expectedVersion) conflict();
         if (current.status() == ProjectStatus.COMPLETED) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "已完成项目不可直接删除");
@@ -172,8 +199,9 @@ public class ProjectService {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "请选择需要复制的项目");
 
         var sources = repository.findAllByIds(ids);
-        if (sources.isEmpty())
+        if (sources.size() != ids.stream().distinct().count())
             throw new ApiException(ApiErrorCode.NOT_FOUND, "项目不存在");
+        for (var id : ids) requireAccess(id, "project.copy");
 
         var year = LocalDate.now().getYear();
         var now = Instant.now();
@@ -213,11 +241,7 @@ public class ProjectService {
 
     private ProjectQuery scoped(ProjectQuery query) {
         var actor = ActorContext.required();
-        var scope = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
-            "project.list.view", "PROJECT", null, "READ", "project.list"));
-        if (!scope.allowed()) {
-            throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有项目查看权限");
-        }
+        var scope = scope();
         return query.withDataScope(actor.organizationId(), scope.scopeType(), actor.userId(), scope.targetIds());
     }
 

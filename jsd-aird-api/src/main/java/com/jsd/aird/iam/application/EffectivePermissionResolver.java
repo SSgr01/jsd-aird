@@ -120,7 +120,7 @@ public class EffectivePermissionResolver {
 
     private void grantEverything(Map<String, Binding> bindings) {
         store.permissionDefinitions().forEach(definition -> bindings.put(definition.code(),
-                new Binding(definition.code(), "ALLOW", "ORG", List.of())));
+                new Binding(definition.code(), "ALLOW", "ALL", List.of())));
     }
 
     private List<String> menusOf(UUID organizationId, UUID roleId) {

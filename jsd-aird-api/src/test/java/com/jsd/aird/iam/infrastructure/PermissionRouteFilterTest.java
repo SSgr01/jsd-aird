@@ -7,6 +7,69 @@ import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 
 class PermissionRouteFilterTest {
+    @Test
+    void projectChildIdsAreResolvedByTheirServices() throws Exception {
+        var filter = new PermissionRouteFilter(check ->
+                new com.jsd.aird.iam.api.PermissionDecision(true, check.permissionCode(), "ALLOW", "ALL", "TEST"),
+                new ObjectMapper(), false);
+        var method = PermissionRouteFilter.class.getDeclaredMethod("resourceId", jakarta.servlet.http.HttpServletRequest.class);
+        method.setAccessible(true);
+        var projectId = java.util.UUID.randomUUID();
+        var childId = java.util.UUID.randomUUID();
+
+        assertThat(method.invoke(filter, new MockHttpServletRequest("GET",
+                "/api/v1/projects/" + projectId + "/tasks/" + childId))).isEqualTo(projectId);
+        for (var path : java.util.List.of("/api/v1/tasks/", "/api/v1/stages/", "/api/v1/meetings/")) {
+            assertThat(method.invoke(filter, new MockHttpServletRequest("GET", path + childId))).isNull();
+        }
+    }
+
+    @Test
+    void customerChildPathUsesParentIdAndCrmRecordUsesServiceLookup() throws Exception {
+        var filter = new PermissionRouteFilter(check ->
+                new com.jsd.aird.iam.api.PermissionDecision(true, check.permissionCode(), "ALLOW", "ALL", "TEST"),
+                new ObjectMapper(), false);
+        var method = PermissionRouteFilter.class.getDeclaredMethod("resourceId", jakarta.servlet.http.HttpServletRequest.class);
+        method.setAccessible(true);
+        var customerId = java.util.UUID.randomUUID();
+        var childId = java.util.UUID.randomUUID();
+
+        assertThat(method.invoke(filter, new MockHttpServletRequest("GET",
+                "/api/v1/business-partners/" + customerId + "/contacts/" + childId))).isEqualTo(customerId);
+        assertThat(method.invoke(filter, new MockHttpServletRequest("GET",
+                "/api/v1/crm/requirements/" + childId))).isNull();
+    }
+
+    @Test
+    void customerRoutesUseConfiguredPageOperations() throws Exception {
+        var actor = new com.jsd.aird.shared.security.Actor(java.util.UUID.randomUUID(),
+                java.util.UUID.randomUUID(), "alice", "USER");
+        var codes = new java.util.ArrayList<String>();
+        com.jsd.aird.shared.security.ActorContext.set(actor);
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+                org.springframework.security.authentication.UsernamePasswordAuthenticationToken.authenticated(
+                        actor, null, java.util.List.of()));
+        try {
+            var filter = new PermissionRouteFilter(check -> {
+                codes.add(check.permissionCode());
+                return new com.jsd.aird.iam.api.PermissionDecision(true, check.permissionCode(), "ALLOW", "CREATOR", "TEST");
+            }, new ObjectMapper(), false);
+            for (var request : java.util.List.of(
+                    new MockHttpServletRequest("GET", "/api/v1/business-partners"),
+                    new MockHttpServletRequest("GET", "/api/v1/business-partners/00000000-0000-0000-0000-000000000101/contacts"),
+                    new MockHttpServletRequest("GET", "/api/v1/crm/requirements"),
+                    new MockHttpServletRequest("GET", "/api/v1/crm/communications"))) {
+                filter.doFilter(request, new org.springframework.mock.web.MockHttpServletResponse(),
+                        (servletRequest, servletResponse) -> { });
+            }
+            assertThat(codes).containsExactly("customer.list.view", "customer.overview.view",
+                    "customer.needs.view", "customer.followup.view");
+        } finally {
+            com.jsd.aird.shared.security.ActorContext.clear();
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
+    }
+
 
     @Test
     void mapsReportCreationAndTemplateReadsToPageOperations() {

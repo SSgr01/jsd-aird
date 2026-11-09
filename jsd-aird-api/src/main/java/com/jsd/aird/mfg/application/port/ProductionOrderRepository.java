@@ -9,10 +9,15 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.shared.api.AllowedActions;
+import com.jsd.aird.iam.api.RecordDataScope;
 
 public interface ProductionOrderRepository {
 
     PageResult<ProductionOrderListItem> list(UUID organizationId, ListQuery query);
+
+    default PageResult<ProductionOrderListItem> list(UUID organizationId, ListQuery query, RecordDataScope scope) {
+        return list(organizationId, query);
+    }
 
     List<LookupOption> listProductOptions();
 

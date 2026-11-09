@@ -65,6 +65,12 @@ public interface ProductionUploadRepository {
     PageResult<UploadView> list(UUID organizationId, String keyword, String status, String format, UUID projectId,
                                 boolean viewableOnly, int page, int size);
 
+    default PageResult<UploadView> list(UUID organizationId, String keyword, String status, String format,
+                                        UUID projectId, boolean viewableOnly, int page, int size,
+                                        com.jsd.aird.iam.api.RecordDataScope scope) {
+        return list(organizationId, keyword, status, format, projectId, viewableOnly, page, size);
+    }
+
     int delete(UUID organizationId, UUID uploadId);
 
     Optional<UploadView> saveDraft(UUID organizationId, UUID actorId, UUID uploadId,

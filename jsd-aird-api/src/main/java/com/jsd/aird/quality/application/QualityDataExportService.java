@@ -9,6 +9,7 @@ import com.jsd.aird.shared.security.ActorContext;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.ByteArrayOutputStream;
 import java.util.Locale;
@@ -22,15 +23,24 @@ public class QualityDataExportService {
 
     private final QualityDataStore repository;
     private final SnapshotWorkbookExporter workbookExporter;
+    private final QualityDataService qualityDataService;
 
     public QualityDataExportService(QualityDataStore repository, SnapshotWorkbookExporter workbookExporter) {
+        this(repository, workbookExporter, null);
+    }
+
+    @Autowired
+    public QualityDataExportService(QualityDataStore repository, SnapshotWorkbookExporter workbookExporter,
+                                    QualityDataService qualityDataService) {
         this.repository = repository;
         this.workbookExporter = workbookExporter;
+        this.qualityDataService = qualityDataService;
     }
 
     public Download export(UUID id) {
         var actor = ActorContext.required();
-        var record = repository.record(actor.organizationId(), actor.role(), id);
+        var record = qualityDataService == null ? repository.record(actor.organizationId(), actor.role(), id)
+                : qualityDataService.record(id);
         var snapshot = record.workbookSnapshot();
         byte[] content;
         if (snapshot != null && snapshot.isObject() && !snapshot.isEmpty()) {

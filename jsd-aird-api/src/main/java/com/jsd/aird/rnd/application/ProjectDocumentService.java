@@ -87,7 +87,7 @@ public class ProjectDocumentService {
                 templateVersionId,
                 fileObjectId,
                 ProjectDocumentStatus.DRAFT,
-                actor.username()
+                actor.userId().toString()
         );
         var id = repository.create(cmd);
         if (fileObjectId != null) {
@@ -101,7 +101,7 @@ public class ProjectDocumentService {
         var actor = ActorContext.required();
         var detail = repository.findById(id)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "项目文档不存在"));
-        repository.delete(detail.id(), actor.username());
+        repository.delete(detail.id(), actor.userId().toString());
     }
 
     @Transactional
@@ -116,10 +116,10 @@ public class ProjectDocumentService {
         try (var stored = fileStorageFacade.open(actor.organizationId(), fileObjectId)) {
             var parsed = parser.parse(stored.stream());
             var id = repository.create(new Create(projectId, title, format, ProjectDocumentSource.IMPORT,
-                    null, null, fileObjectId, ProjectDocumentStatus.DRAFT, actor.username()));
+                    null, null, fileObjectId, ProjectDocumentStatus.DRAFT, actor.userId().toString()));
             repository.saveContent(id, parsed.initialEditorSnapshot(), objectMapper.createObjectNode(),
                     objectMapper.createArrayNode(), objectMapper.createObjectNode(),
-                    objectMapper.createObjectNode(), actor.username());
+                    objectMapper.createObjectNode(), actor.userId().toString());
             fileStorageFacade.activate(fileObjectId);
             return id;
         } catch (ApiException exception) {
@@ -152,7 +152,7 @@ public class ProjectDocumentService {
             resolvedMapping = result.mapping();
         }
         // 仅保存草稿内容，不记录版本（对齐实验记事本 saveDraft）。
-        repository.saveContent(id, snapshot, resolvedSchema, resolvedMapping, data, recognition, actor.username());
+        repository.saveContent(id, snapshot, resolvedSchema, resolvedMapping, data, recognition, actor.userId().toString());
         var saved = repository.findById(id)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "项目文档不存在"));
         var mergedSnapshot = mergeContentSnapshot(saved);
@@ -180,7 +180,7 @@ public class ProjectDocumentService {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "请先保存当前内容并重新提交审核");
         }
         var mergedSnapshot = mergeContentSnapshot(detail);
-        var versionId = repository.publish(id, mergedSnapshot, "文档发布", detail.templateVersionId(), actor.username());
+        var versionId = repository.publish(id, mergedSnapshot, "文档发布", detail.templateVersionId(), actor.userId().toString());
         repository.appendReview(id, versionId, "PUBLISHED", null, actor.userId(), actor.username());
         repository.appendAudit(id, versionId, "PUBLISHED", null, mergedSnapshot, actor.userId(), actor.username());
         return repository.findById(id)

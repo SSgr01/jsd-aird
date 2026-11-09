@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 
 import java.util.List;
 import java.util.UUID;
@@ -13,6 +14,7 @@ import java.util.UUID;
 import com.jsd.aird.iam.api.PermissionCheck;
 import com.jsd.aird.iam.application.port.IamStore.Binding;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 class JdbcDataScopeResolverTest {
@@ -36,7 +38,23 @@ class JdbcDataScopeResolverTest {
         var result = resolver.resolve(check("PROJECT"), new Binding("project.view", "ALLOW", "ORG", List.of()));
 
         assertThat(result.allowed()).isTrue();
-        assertThat(result.scopeType()).isEqualTo("ORG");
+        assertThat(result.scopeType()).isEqualTo("ALL");
+    }
+
+    @Test
+    void customerCreatorAndDepartmentRequireMatchingStoredOwnership() {
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(false);
+
+        assertThat(resolver.resolve(check("CUSTOMER"),
+                new Binding("customer.view", "ALLOW", "CREATOR", List.of())).allowed()).isFalse();
+        assertThat(resolver.resolve(check("CUSTOMER"),
+                new Binding("customer.view", "ALLOW", "DEPARTMENT", List.of())).allowed()).isFalse();
+
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+        assertThat(resolver.resolve(check("CUSTOMER"),
+                new Binding("customer.view", "ALLOW", "CREATOR", List.of())).allowed()).isTrue();
+        assertThat(resolver.resolve(check("CUSTOMER"),
+                new Binding("customer.view", "ALLOW", "DEPARTMENT", List.of())).allowed()).isTrue();
     }
 
     @Test
@@ -59,6 +77,59 @@ class JdbcDataScopeResolverTest {
     }
 
     @Test
+    void selectedExperimentChecksItsProjectRelation() {
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+        var projectId = UUID.randomUUID();
+        var result = resolver.resolve(check("EXPERIMENT"),
+                new Binding("eln.view.view", "ALLOW", "SELECTED", List.of(projectId)));
+
+        assertThat(result.allowed()).isTrue();
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).queryForObject(sql.capture(), eq(Boolean.class), any(Object[].class));
+        assertThat(sql.getValue()).contains("rnd.experiment", "project_id IN (?)", "deleted = false");
+    }
+
+    @Test
+    void selectedProductionOrderChecksItsProjectRelation() {
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+        var projectId = UUID.randomUUID();
+        var result = resolver.resolve(check("PRODUCTION"),
+                new Binding("production.view.view", "ALLOW", "SELECTED", List.of(projectId)));
+
+        assertThat(result.allowed()).isTrue();
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).queryForObject(sql.capture(), eq(Boolean.class), any(Object[].class));
+        assertThat(sql.getValue()).contains("mfg.production_order", "project_id IN (?)");
+    }
+
+    @Test
+    void selectedProductionUploadChecksProjectRelation() {
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+        var projectId = UUID.randomUUID();
+        var result = resolver.resolve(check("PRODUCTION_UPLOAD"),
+                new Binding("production.view.view", "ALLOW", "SELECTED", List.of(projectId)));
+
+        assertThat(result.allowed()).isTrue();
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).queryForObject(sql.capture(), eq(Boolean.class), any(Object[].class));
+        assertThat(sql.getValue()).contains("mfg.production_upload", "project_id IN (?)", "status <> 'DELETED'");
+    }
+
+    @Test
+    void selectedStandardChecksTheMethodId() {
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+        var binding = new Binding("research-test.standard.view", "ALLOW", "SELECTED", List.of(resourceId));
+        var check = new PermissionCheck(organizationId, userId, "research-test.standard.view",
+                "RESEARCH_TEST", resourceId, "READ");
+        assertThat(resolver.resolve(check, binding).allowed()).isTrue();
+
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).queryForObject(sql.capture(), eq(Boolean.class), any(Object[].class));
+        // The resource ID is checked against the method itself, not its project.
+        assertThat(sql.getValue()).contains("record_type = 'STANDARD'").doesNotContain("project_id IN");
+    }
+
+    @Test
     void selfScopeUsesDatabaseOwnershipAndDoesNotDefaultToAll() {
         when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
         var result = resolver.resolve(check("KNOWLEDGE"), new Binding("knowledge.manage", "ALLOW", "SELF", List.of()));
@@ -76,6 +147,17 @@ class JdbcDataScopeResolverTest {
 
         assertThat(result.allowed()).isTrue();
         assertThat(result.scopeType()).isEqualTo("SELF");
+    }
+
+    @Test
+    void departmentScopeChecksTheProjectsStoredDepartment() {
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(false);
+        assertThat(resolver.resolve(check("PROJECT"),
+                new Binding("project.view", "ALLOW", "DEPARTMENT", List.of())).allowed()).isFalse();
+
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+        assertThat(resolver.resolve(check("PROJECT"),
+                new Binding("project.view", "ALLOW", "DEPARTMENT", List.of())).allowed()).isTrue();
     }
 
     @Test

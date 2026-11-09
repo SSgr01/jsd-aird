@@ -92,7 +92,7 @@ public class MaterialService {
                 now,
                 false
         );
-        repository.insert(value, CrmServiceSupport.OPERATOR);
+        repository.insert(value, CrmServiceSupport.operator());
         return value.id();
     }
 
@@ -115,7 +115,7 @@ public class MaterialService {
                 Instant.now(),
                 false
         );
-        if (!repository.update(value, input.version(), CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
+        if (!repository.update(value, input.version(), CrmServiceSupport.operator())) CrmServiceSupport.conflict();
     }
 
     @Transactional

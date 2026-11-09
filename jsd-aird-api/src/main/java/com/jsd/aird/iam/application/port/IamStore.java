@@ -6,6 +6,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import com.jsd.aird.iam.api.PermissionDefinitionContributor.PermissionDefinition;
+import com.jsd.aird.iam.api.RecordDataScope;
 
 /**
  * Application port for IAM persistence.  The JDBC implementation stays behind
@@ -29,14 +30,21 @@ public interface IamStore {
 
     Optional<User> user(UUID organizationId, String username);
 
-    List<User> users(UUID organizationId, String keyword, int page, int size);
+    List<User> users(UUID organizationId, String keyword, int page, int size, RecordDataScope dataScope);
 
-    long countUsers(UUID organizationId, String keyword);
+    long countUsers(UUID organizationId, String keyword, RecordDataScope dataScope);
 
     long countUsersByStatus(UUID organizationId, String status);
 
     void insertUser(UUID id, UUID organizationId, String username, String displayName, String email,
                     String phone, String department, UUID roleId, String passwordHash);
+
+    default void insertUser(UUID id, UUID organizationId, String username, String displayName, String email,
+                            String phone, String department, UUID roleId, String passwordHash, UUID createdBy) {
+        insertUser(id, organizationId, username, displayName, email, phone, department, roleId, passwordHash);
+    }
+
+    boolean userInScope(UUID organizationId, UUID userId, RecordDataScope dataScope);
 
     void updateUser(UUID organizationId, UUID userId, String displayName, String email, String phone,
                     String department, UUID roleId);

@@ -32,12 +32,14 @@ public class MyBatisProjectStageRepository implements ProjectStageRepository {
 
     @Override
     public List<ProjectStage> findPage(ProjectStageQuery q) {
-        return mapper.findPage(q.keyword(), q.projectId(), name(q.status()), q.owner(), q.plannedFrom(), q.plannedTo(), q.offset(), q.size()).stream().map(MyBatisProjectStageRepository::map).toList();
+        return mapper.findPage(q.keyword(), q.projectId(), name(q.status()), q.owner(), q.plannedFrom(), q.plannedTo(), q.offset(), q.size(),
+                q.organizationId(), q.scopeType(), q.scopeUserId(), q.scopeTargetIds()).stream().map(MyBatisProjectStageRepository::map).toList();
     }
 
     @Override
     public long count(ProjectStageQuery q) {
-        return mapper.count(q.keyword(), q.projectId(), name(q.status()), q.owner(), q.plannedFrom(), q.plannedTo());
+        return mapper.count(q.keyword(), q.projectId(), name(q.status()), q.owner(), q.plannedFrom(), q.plannedTo(),
+                q.organizationId(), q.scopeType(), q.scopeUserId(), q.scopeTargetIds());
     }
 
     @Override

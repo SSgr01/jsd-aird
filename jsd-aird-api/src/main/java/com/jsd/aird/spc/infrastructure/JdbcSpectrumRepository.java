@@ -4,10 +4,12 @@ import java.sql.ResultSet;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Optional;
 import java.util.UUID;
 
 import com.jsd.aird.spc.application.port.SpectrumRepository;
+import com.jsd.aird.iam.api.RecordDataScope;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -198,8 +200,20 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
     @Override
     public List<ChartRow> listCharts(UUID organizationId, String keyword, UUID categoryId, String status,
                                     int page, int size) {
+        return listCharts(organizationId, keyword, categoryId, status, page, size, RecordDataScope.all());
+    }
+
+    @Override
+    public List<ChartRow> listCharts(UUID organizationId, String keyword, UUID categoryId, String status,
+                                    int page, int size, RecordDataScope scope) {
         var normalized = blank(keyword);
         var normalizedStatus = blank(status);
+        var args = new ArrayList<Object>();
+        args.add(organizationId);
+        args.add(normalized); args.add(normalized); args.add(normalized); args.add(normalized); args.add(normalized);
+        args.add(categoryId); args.add(categoryId); args.add(normalizedStatus); args.add(normalizedStatus);
+        var scopeSql = chartScope(scope, args);
+        args.add(size); args.add(Math.max(0, page - 1) * size);
         return jdbc.query(chartQuery("""
                 WHERE a.organization_id = ?
                   AND (CAST(? AS text) IS NULL OR a.title ILIKE '%' || ? || '%'
@@ -207,17 +221,26 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
                        OR coalesce(a.batch_no, '') ILIKE '%' || ? || '%')
                   AND (CAST(? AS uuid) IS NULL OR a.category_id = ?)
                   AND (CAST(? AS text) IS NULL OR a.status = ?)
+                """ + scopeSql + "\n" + """
                 ORDER BY a.updated_at DESC
                 LIMIT ? OFFSET ?
-                """), this::mapChart, organizationId, normalized, normalized, normalized, normalized, normalized,
-                categoryId, categoryId, normalizedStatus, normalizedStatus, size,
-                Math.max(0, page - 1) * size);
+                """), this::mapChart, args.toArray());
     }
 
     @Override
     public long countCharts(UUID organizationId, String keyword, UUID categoryId, String status) {
+        return countCharts(organizationId, keyword, categoryId, status, RecordDataScope.all());
+    }
+
+    @Override
+    public long countCharts(UUID organizationId, String keyword, UUID categoryId, String status, RecordDataScope scope) {
         var normalized = blank(keyword);
         var normalizedStatus = blank(status);
+        var args = new ArrayList<Object>();
+        args.add(organizationId); args.add(normalized); args.add(normalized); args.add(normalized);
+        args.add(normalized); args.add(normalized); args.add(categoryId); args.add(categoryId);
+        args.add(normalizedStatus); args.add(normalizedStatus);
+        var scopeSql = chartScope(scope, args);
         return jdbc.queryForObject("""
                 SELECT count(*) FROM spc.chart_asset a
                 WHERE a.organization_id = ?
@@ -226,8 +249,24 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
                        OR coalesce(a.batch_no, '') ILIKE '%' || ? || '%')
                   AND (CAST(? AS uuid) IS NULL OR a.category_id = ?)
                   AND (CAST(? AS text) IS NULL OR a.status = ?)
-                """, Long.class, organizationId, normalized, normalized, normalized, normalized, normalized,
-                categoryId, categoryId, normalizedStatus, normalizedStatus);
+                """ + scopeSql, Long.class, args.toArray());
+    }
+
+    private String chartScope(RecordDataScope scope, List<Object> args) {
+        return switch (scope.type()) {
+            case "ALL", "ORG" -> "";
+            case "SELF", "CREATOR" -> { args.add(scope.actorId()); yield " AND a.created_by = ?"; }
+            case "DEPARTMENT" -> {
+                args.add(scope.actorId());
+                yield " AND a.department_id = (SELECT department_id FROM iam.app_user WHERE id = ? AND organization_id = a.organization_id)";
+            }
+            case "SELECTED" -> {
+                if (scope.targetIds().isEmpty()) yield " AND false";
+                args.addAll(scope.targetIds());
+                yield " AND a.id IN (" + String.join(",", scope.targetIds().stream().map(id -> "?").toList()) + ")";
+            }
+            default -> " AND false";
+        };
     }
 
     @Override

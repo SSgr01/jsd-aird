@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
+import com.jsd.aird.iam.api.RecordDataScope;
 import com.jsd.aird.iam.application.port.IamStore;
 import com.jsd.aird.iam.application.port.IamStore.Binding;
 import com.jsd.aird.iam.application.port.IamStore.PermissionLevelBinding;
@@ -187,7 +188,7 @@ public class IamBootstrapService {
             }
             migratedRoleLevels.put(role.id(), generated);
         });
-        store.users(organizationId, null, 1, 10000).forEach(user -> {
+        store.users(organizationId, null, 1, 10000, RecordDataScope.all()).forEach(user -> {
             var assignedRoles = store.userRoles(organizationId, user.id());
             if ((assignedRoles == null || assignedRoles.isEmpty()) && user.roleId() != null) {
                 try { store.replaceUserRoles(organizationId, user.id(), List.of(user.roleId()), user.roleId()); }
@@ -210,7 +211,7 @@ public class IamBootstrapService {
             if (!legacyOverrides.isEmpty() && (operationOverrides == null || operationOverrides.isEmpty())
                     && (scopeOverrides == null || scopeOverrides.isEmpty())) {
                 var operations = legacyOverrides.stream()
-                        .map(binding -> new Binding(binding.permissionCode(), binding.effect(), "ORG", List.of())).toList();
+                        .map(binding -> new Binding(binding.permissionCode(), binding.effect(), "ALL", List.of())).toList();
                 var scopes = legacyOverrides.stream().filter(binding -> "ALLOW".equals(binding.effect()))
                         .map(this::legacyLevelBinding).toList();
                 try { store.replaceUserModelOverrides(organizationId, user.id(), List.of(), operations, scopes); }
@@ -221,7 +222,7 @@ public class IamBootstrapService {
 
     private Binding legacyLevelBinding(Binding binding) {
         var scope = switch (binding.scopeType()) {
-            case "ALL" -> "ORG";
+            case "ALL", "ORG" -> "ALL";
             case "SELF" -> "CREATOR";
             case "PROJECT" -> binding.targetIds() == null || binding.targetIds().isEmpty() ? "PROJECT_GROUP" : "PROJECT";
             default -> binding.scopeType();

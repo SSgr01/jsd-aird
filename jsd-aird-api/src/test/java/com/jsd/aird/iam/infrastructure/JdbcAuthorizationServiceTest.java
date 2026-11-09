@@ -3,6 +3,7 @@ package com.jsd.aird.iam.infrastructure;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
 
 import java.time.Instant;
 import java.util.List;
@@ -10,6 +11,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import com.jsd.aird.iam.api.PermissionCheck;
+import com.jsd.aird.iam.api.DataScopeResolver;
 import com.jsd.aird.iam.api.PermissionDefinitionContributor.PermissionDefinition;
 import com.jsd.aird.iam.application.IamPermissionCatalog;
 import com.jsd.aird.iam.application.port.IamStore;
@@ -41,6 +43,110 @@ class JdbcAuthorizationServiceTest {
                 new PermissionDefinition("template.publish", "template", "发布模板", "HIGH", "ALL"),
                 new PermissionDefinition("template.delete", "template", "删除模板", "CRITICAL", "ALL")));
         when(store.role(organizationId, roleId)).thenReturn(Optional.of(role));
+    }
+
+    @Test
+    void systemAdminHasAllCustomerDataWithoutV2Bindings() {
+        var admin = new User(userId, organizationId, "admin", "系统管理员", null, null, null,
+                roleId, "SYSTEM_ADMIN", "系统管理员", "ACTIVE", false, "hash", 0, Instant.now(), 0, null);
+        when(store.user(userId)).thenReturn(Optional.of(admin));
+        when(store.userRoles(organizationId, userId)).thenReturn(List.of());
+        when(store.permissionDefinitions()).thenReturn(IamPermissionCatalog.definitions());
+        var list = new PermissionCheck(organizationId, userId, "customer.list.view", "CUSTOMER", null, "READ");
+        var detail = new PermissionCheck(organizationId, userId, "customer.view", "CUSTOMER", UUID.randomUUID(), "READ");
+
+        assertThat(authorization.resolveScope(list).scopeType()).isEqualTo("ALL");
+        assertThat(authorization.check(detail).allowed()).isTrue();
+        assertThat(authorization.check(detail).source()).isEqualTo("SYSTEM_ADMIN");
+    }
+
+    @Test
+    void menuViewDoesNotBroadenSelectedExperimentScope() {
+        var selected = UUID.randomUUID();
+        var oldExperimentTarget = UUID.randomUUID();
+        var resolver = mock(DataScopeResolver.class);
+        authorization = new JdbcAuthorizationService(store, resolver, false);
+        when(resolver.resolve(any(), any())).thenAnswer(call -> {
+            Binding binding = call.getArgument(1);
+            return DataScopeResolver.ResolvedDataScope.allow(binding.scopeType(),
+                    new java.util.HashSet<>(binding.targetIds()));
+        });
+        var levelId = UUID.randomUUID();
+        var level = new IamStore.PermissionLevel(levelId, organizationId, "L1_OPERATOR", "L1", "", true, true, 1, 3);
+        when(store.permissionDefinitions()).thenReturn(IamPermissionCatalog.definitions());
+        when(store.userRoles(organizationId, userId)).thenReturn(List.of(role));
+        when(store.roleMenus(organizationId, roleId)).thenReturn(List.of("eln.view", "project.list"));
+        when(store.userPermissionLevel(organizationId, userId)).thenReturn(Optional.of(levelId));
+        when(store.permissionLevel(organizationId, levelId)).thenReturn(Optional.of(level));
+        when(store.permissionLevelBindings(organizationId, levelId)).thenReturn(List.of(
+                new IamStore.PermissionLevelBinding("eln.view", "eln.view.view", "ALLOW", "SELECTED", List.of(oldExperimentTarget)),
+                new IamStore.PermissionLevelBinding("project.list", "project.list.view", "ALLOW", "SELECTED", List.of(selected))));
+
+        var scope = authorization.resolveScope(new PermissionCheck(organizationId, userId,
+                "eln.view.view", "EXPERIMENT", null, "READ"));
+        assertThat(scope.scopeType()).isEqualTo("SELECTED");
+        assertThat(scope.targetIds()).containsExactly(selected);
+        var legacyScope = authorization.resolveScope(new PermissionCheck(organizationId, userId,
+                "experiment.view", "EXPERIMENT", null, "READ"));
+        assertThat(legacyScope.scopeType()).isEqualTo("SELECTED");
+        assertThat(legacyScope.targetIds()).containsExactly(selected);
+    }
+
+    @Test
+    void projectBasedViewHasNoTargetsWithoutSelectedProjectList() {
+        var resolver = mock(DataScopeResolver.class);
+        authorization = new JdbcAuthorizationService(store, resolver, false);
+        when(resolver.resolve(any(), any())).thenAnswer(call -> {
+            Binding binding = call.getArgument(1);
+            return binding.targetIds().isEmpty()
+                    ? DataScopeResolver.ResolvedDataScope.deny(binding.scopeType(), "EMPTY_SCOPE")
+                    : DataScopeResolver.ResolvedDataScope.allow(binding.scopeType(),
+                            new java.util.HashSet<>(binding.targetIds()));
+        });
+        when(store.userRoles(organizationId, userId)).thenReturn(List.of(role));
+        when(store.roleMenus(organizationId, roleId)).thenReturn(List.of("quality.view"));
+        when(store.userScopeOverrides(organizationId, userId)).thenReturn(List.of(
+                new Binding("quality.view", "quality.view.view", "ALLOW", "SELECTED", List.of(UUID.randomUUID()))));
+        when(store.permissionDefinitions()).thenReturn(IamPermissionCatalog.definitions());
+
+        var scope = authorization.resolveScope(new PermissionCheck(organizationId, userId,
+                "quality.view.view", "QUALITY", null, "READ"));
+        assertThat(scope.allowed()).isFalse();
+        assertThat(scope.reason()).isEqualTo("EMPTY_SCOPE");
+    }
+
+    @Test
+    void pageCreatorScopeOverridesLegacyAllForBusinessLists() {
+        var resolver = mock(DataScopeResolver.class);
+        authorization = new JdbcAuthorizationService(store, resolver, false);
+        when(resolver.resolve(any(), any())).thenAnswer(call -> {
+            Binding binding = call.getArgument(1);
+            return DataScopeResolver.ResolvedDataScope.allow(binding.scopeType());
+        });
+        var levelId = UUID.randomUUID();
+        var level = new IamStore.PermissionLevel(levelId, organizationId, "L1", "L1", "", true, true, 1, 3);
+        when(store.userRoles(organizationId, userId)).thenReturn(List.of(role));
+        when(store.roleMenus(organizationId, roleId)).thenReturn(List.of(
+                "production.view", "spectrum.view", "knowledge.view", "data.view"));
+        when(store.userPermissionLevel(organizationId, userId)).thenReturn(Optional.of(levelId));
+        when(store.permissionLevel(organizationId, levelId)).thenReturn(Optional.of(level));
+        when(store.permissionLevelBindings(organizationId, levelId)).thenReturn(List.of(
+                new IamStore.PermissionLevelBinding("", "production.view", "ALLOW", "ALL", List.of()),
+                new IamStore.PermissionLevelBinding("", "spectrum.view", "ALLOW", "ALL", List.of()),
+                new IamStore.PermissionLevelBinding("", "knowledge.view", "ALLOW", "ALL", List.of()),
+                new IamStore.PermissionLevelBinding("", "data.view", "ALLOW", "ALL", List.of())));
+        when(store.userScopeOverrides(organizationId, userId)).thenReturn(List.of(
+                new Binding("production.view", "production.view.view", "ALLOW", "CREATOR", List.of()),
+                new Binding("spectrum.view", "spectrum.view.view", "ALLOW", "CREATOR", List.of()),
+                new Binding("knowledge.view", "knowledge.view.view", "ALLOW", "CREATOR", List.of()),
+                new Binding("data.view", "data.view.view", "ALLOW", "CREATOR", List.of())));
+
+        for (var code : List.of("production.view", "spectrum.view", "knowledge.view", "data.view")) {
+            var resourceType = code.substring(0, code.indexOf('.')).toUpperCase();
+            var scope = authorization.resolveScope(new PermissionCheck(organizationId, userId,
+                    code, resourceType, null, "READ"));
+            assertThat(scope.scopeType()).isEqualTo("CREATOR");
+        }
     }
 
     @Test
@@ -94,6 +200,92 @@ class JdbcAuthorizationServiceTest {
         when(store.userMenuOverrides(organizationId, userId)).thenReturn(List.of(
                 new IamStore.MenuOverride("customer.list", "DENY")));
         assertThat(authorization.check(check).allowed()).isFalse();
+    }
+
+    @Test
+    void customerListCodeRetainsConfiguredCreatorScope() {
+        var levelId = UUID.randomUUID();
+        when(store.permissionDefinitions()).thenReturn(IamPermissionCatalog.definitions());
+        when(store.userRoles(organizationId, userId)).thenReturn(List.of(role));
+        when(store.roleMenus(organizationId, roleId)).thenReturn(List.of("customer.list"));
+        when(store.userPermissionLevel(organizationId, userId)).thenReturn(Optional.of(levelId));
+        when(store.permissionLevel(organizationId, levelId)).thenReturn(Optional.of(
+                new IamStore.PermissionLevel(levelId, organizationId, "TEST", "Test", "", false, true, 1, 0)));
+        when(store.permissionLevelBindings(organizationId, levelId)).thenReturn(List.of(
+                new IamStore.PermissionLevelBinding("customer.list", "customer.list.view", "ALLOW", "CREATOR", List.of())));
+
+        var scopedAuthorization = new JdbcAuthorizationService(store,
+                new JdbcDataScopeResolver(mock(org.springframework.jdbc.core.JdbcTemplate.class)), false);
+        var scope = scopedAuthorization.resolveScope(new PermissionCheck(organizationId, userId,
+                "customer.list.view", "CUSTOMER", null, "READ", "customer.list"));
+
+        assertThat(scope.allowed()).isTrue();
+        assertThat(scope.scopeType()).isEqualTo("CREATOR");
+    }
+
+    @Test
+    void projectReadAliasesUseTheConfiguredListScope() {
+        var levelId = UUID.randomUUID();
+        when(store.permissionDefinitions()).thenReturn(IamPermissionCatalog.definitions());
+        when(store.userRoles(organizationId, userId)).thenReturn(List.of(role));
+        when(store.roleMenus(organizationId, roleId)).thenReturn(List.of("project.list"));
+        when(store.userPermissionLevel(organizationId, userId)).thenReturn(Optional.of(levelId));
+        when(store.permissionLevel(organizationId, levelId)).thenReturn(Optional.of(
+                new IamStore.PermissionLevel(levelId, organizationId, "TEST", "Test", "", false, true, 1, 0)));
+        when(store.permissionLevelBindings(organizationId, levelId)).thenReturn(List.of(
+                new IamStore.PermissionLevelBinding("project.list", "project.list.view", "ALLOW", "CREATOR", List.of())));
+
+        var scoped = new JdbcAuthorizationService(store,
+                new JdbcDataScopeResolver(mock(org.springframework.jdbc.core.JdbcTemplate.class)), false);
+        for (var code : List.of("project.list.view", "project.view")) {
+            var result = scoped.resolveScope(new PermissionCheck(organizationId, userId,
+                    code, "PROJECT", null, "READ"));
+            assertThat(result.allowed()).isTrue();
+            assertThat(result.scopeType()).isEqualTo("CREATOR");
+        }
+    }
+
+    @Test
+    void projectStageOperationUsesItsOwnMenuScope() {
+        var levelId = UUID.randomUUID();
+        var projectId = UUID.randomUUID();
+        when(store.permissionDefinitions()).thenReturn(IamPermissionCatalog.definitions());
+        when(store.userRoles(organizationId, userId)).thenReturn(List.of(role));
+        when(store.userPermissionLevel(organizationId, userId)).thenReturn(Optional.of(levelId));
+        when(store.permissionLevel(organizationId, levelId)).thenReturn(Optional.of(
+                new IamStore.PermissionLevel(levelId, organizationId, "TEST", "Test", "", false, true, 1, 0)));
+        when(store.permissionLevelBindings(organizationId, levelId)).thenReturn(List.of(
+                new IamStore.PermissionLevelBinding("project.stage", "project.stage.create", "ALLOW", "SELECTED", List.of(projectId))));
+
+        var scoped = new JdbcAuthorizationService(store,
+                new JdbcDataScopeResolver(mock(org.springframework.jdbc.core.JdbcTemplate.class)), false);
+        assertThat(scoped.check(new PermissionCheck(organizationId, userId,
+                "project.stage.create", "PROJECT", projectId, "WRITE")).allowed()).isTrue();
+        assertThat(scoped.check(new PermissionCheck(organizationId, userId,
+                "project.stage.create", "PROJECT", UUID.randomUUID(), "WRITE")).allowed()).isFalse();
+    }
+
+    @Test
+    void personalCustomerListScopeOverridesBroadLegacyCustomerView() {
+        var levelId = UUID.randomUUID();
+        when(store.permissionDefinitions()).thenReturn(IamPermissionCatalog.definitions());
+        when(store.userRoles(organizationId, userId)).thenReturn(List.of(role));
+        when(store.roleMenus(organizationId, roleId)).thenReturn(List.of("customer.list"));
+        when(store.userPermissionLevel(organizationId, userId)).thenReturn(Optional.of(levelId));
+        when(store.permissionLevel(organizationId, levelId)).thenReturn(Optional.of(
+                new IamStore.PermissionLevel(levelId, organizationId, "TEST", "Test", "", false, true, 1, 0)));
+        when(store.permissionLevelBindings(organizationId, levelId)).thenReturn(List.of(
+                new IamStore.PermissionLevelBinding(null, "customer.view", "ALLOW", "ALL", List.of())));
+        when(store.userScopeOverrides(organizationId, userId)).thenReturn(List.of(
+                new Binding("customer.list", "customer.list.view", "ALLOW", "CREATOR", List.of())));
+        var scopedAuthorization = new JdbcAuthorizationService(store,
+                new JdbcDataScopeResolver(mock(org.springframework.jdbc.core.JdbcTemplate.class)), false);
+
+        var scope = scopedAuthorization.resolveScope(new PermissionCheck(organizationId, userId,
+                "customer.list.view", "CUSTOMER", null, "READ", "customer.list"));
+
+        assertThat(scope.allowed()).isTrue();
+        assertThat(scope.scopeType()).isEqualTo("CREATOR");
     }
 
     @Test

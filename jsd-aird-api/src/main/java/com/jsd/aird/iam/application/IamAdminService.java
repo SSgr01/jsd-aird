@@ -4,10 +4,14 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.Objects;
+import java.util.Map;
+import java.util.Set;
+import java.util.ArrayList;
 
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.jsd.aird.iam.api.AuthorizationService;
 import com.jsd.aird.iam.api.PermissionCheck;
+import com.jsd.aird.iam.api.RecordDataScope;
 import com.jsd.aird.iam.api.PermissionDefinitionContributor.PermissionDefinition;
 import com.jsd.aird.iam.application.port.IamStore;
 import com.jsd.aird.iam.application.port.IamStore.Binding;
@@ -19,6 +23,7 @@ import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.Actor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -29,29 +34,66 @@ public class IamAdminService {
     private final PasswordEncoder passwordEncoder;
     private final AuditLogFacade audit;
     private final AuditLogPresentationService auditPresentation;
+    private final EffectivePermissionResolver effectivePermissions;
 
     public IamAdminService(IamStore store, AuthorizationService authorization, PasswordEncoder passwordEncoder,
                            AuditLogFacade audit, AuditLogPresentationService auditPresentation) {
+        this(store, authorization, passwordEncoder, audit, auditPresentation, null);
+    }
+
+    @Autowired
+    public IamAdminService(IamStore store, AuthorizationService authorization, PasswordEncoder passwordEncoder,
+                           AuditLogFacade audit, AuditLogPresentationService auditPresentation,
+                           EffectivePermissionResolver effectivePermissions) {
         this.store = store;
         this.authorization = authorization;
         this.passwordEncoder = passwordEncoder;
         this.audit = audit;
         this.auditPresentation = auditPresentation;
+        this.effectivePermissions = effectivePermissions;
     }
 
     public PageResponse<UserView> users(Actor actor, String keyword, int page, int size) {
+        return users(actor, keyword, page, size, null);
+    }
+
+    /**
+     * 用户管理 / 用户权限配置的数据范围按「用户」维度限制。permissionView 区分两个页面，
+     * 避免其中一行的配置意外收窄另一行的用户列表。
+     */
+    public PageResponse<UserView> users(Actor actor, String keyword, int page, int size, String permissionView) {
         requireAny(actor, "system.user.view", "system.permissions.view");
         var safePage = Math.max(1, page);
         var safeSize = Math.min(100, Math.max(1, size));
-        var items = store.users(actor.organizationId(), keyword, safePage, safeSize).stream().map(this::userView).toList();
-        var total = store.countUsers(actor.organizationId(), keyword);
+        var code = "permissions".equalsIgnoreCase(permissionView) ? "system.permissions.view" : "system.users.view";
+        var dataScope = userDataScope(actor, code);
+        var items = store.users(actor.organizationId(), keyword, safePage, safeSize, dataScope).stream().map(this::userView).toList();
+        var total = store.countUsers(actor.organizationId(), keyword, dataScope);
         return new PageResponse<>(items, safePage, safeSize, total, (total + safeSize - 1) / safeSize);
+    }
+
+    private RecordDataScope userDataScope(Actor actor, String permissionCode) {
+        var resolved = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
+                permissionCode, "USER", null, "READ"));
+        if (!resolved.allowed()) {
+            // 未配置 v2 权限（旧角色）时保持原有全量口径；空「指定」则返回空数据集。
+            return "PERMISSION_DENIED".equals(resolved.reason())
+                    ? RecordDataScope.all()
+                    : new RecordDataScope(resolved.scopeType(), actor.userId(), java.util.Set.of());
+        }
+        return new RecordDataScope(resolved.scopeType(), actor.userId(), resolved.targetIds());
     }
 
     public UserView user(Actor actor, UUID userId) {
         require(actor, "system.user.view");
+        requireUserInScope(actor, userId, "system.users.view");
         return store.user(userId).filter(user -> actor.organizationId().equals(user.organizationId()))
                 .map(this::userView).orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "用户不存在"));
+    }
+
+    private void requireUserInScope(Actor actor, UUID userId, String permissionCode) {
+        if (!store.userInScope(actor.organizationId(), userId, userDataScope(actor, permissionCode)))
+            throw new ApiException(ApiErrorCode.NOT_FOUND, "用户不存在");
     }
 
     @Transactional
@@ -65,7 +107,7 @@ public class IamAdminService {
         var role = role(actor, command.roleId());
         var id = UUID.randomUUID();
         store.insertUser(id, actor.organizationId(), command.username(), command.displayName(), command.email(), command.phone(),
-                command.departmentName(), role.id(), passwordEncoder.encode(command.password()));
+                command.departmentName(), role.id(), passwordEncoder.encode(command.password()), actor.userId());
         audit(actor, "IAM_USER_CREATED", "USER", id);
         return new CreateUserResult(user(actor, id));
     }
@@ -75,7 +117,10 @@ public class IamAdminService {
         store.lockAdministration(actor.organizationId());
         requireUserVersion(actor,userId,command.expectedVersion());
         requireAny(actor, "system.users.update", "system.user.manage");
+        requireUserInScope(actor, userId, "system.users.view");
         var existing = requireUser(actor, userId);
+        if (actor.userId().equals(userId) && !Objects.equals(existing.roleId(), command.roleId()))
+            throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "不能修改自己的业务角色");
         var targetRole=role(actor, command.roleId());
         if("SYSTEM_ADMIN".equals(existing.roleCode()) && "ACTIVE".equals(existing.status()) && !"SYSTEM_ADMIN".equals(targetRole.code()) && store.activeSystemAdmins(actor.organizationId())<=1)
             throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN,"不能移除最后一个系统管理员");
@@ -90,6 +135,7 @@ public class IamAdminService {
         store.lockAdministration(actor.organizationId());
         requireUserVersion(actor,userId,expectedVersion);
         requireAny(actor, "system.users.status", "system.user.manage");
+        requireUserInScope(actor, userId, "system.users.view");
         var existing = requireUser(actor, userId);
         if (!enabled && "SYSTEM_ADMIN".equals(existing.roleCode()) && store.activeSystemAdmins(actor.organizationId()) <= 1) {
             throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "不能停用最后一个系统管理员");
@@ -106,6 +152,7 @@ public class IamAdminService {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "密码长度为 6-200 位");
         }
         requireAny(actor, "system.users.reset", "system.user.manage");
+        requireUserInScope(actor, userId, "system.users.view");
         requireUser(actor, userId);
         store.resetPassword(actor.organizationId(), userId, passwordEncoder.encode(password));
         audit(actor, "IAM_PASSWORD_RESET", "USER", userId);
@@ -116,6 +163,7 @@ public class IamAdminService {
         store.lockAdministration(actor.organizationId());
         requireUserVersion(actor,userId,expectedVersion);
         requireAny(actor, "system.users.logout", "system.user.manage");
+        requireUserInScope(actor, userId, "system.users.view");
         requireUser(actor, userId);
         store.bumpUserVersion(actor.organizationId(),userId);
         store.revokeUserSessions(actor.organizationId(), userId);
@@ -130,21 +178,50 @@ public class IamAdminService {
 
     public PermissionModelView permissionModel(Actor actor) {
         requireAny(actor, "system.permissions.view", "system.permission.manage");
+        var effective = effective(actor);
+        var assignedRoles = store.userRoles(actor.organizationId(), actor.userId());
+        var ownRoleIds = assignedRoles == null || assignedRoles.isEmpty()
+                ? store.user(actor.userId()).map(IamStore.User::roleId).stream().filter(Objects::nonNull).toList()
+                : assignedRoles.stream().map(IamStore.Role::id).toList();
+        var assignedLevel = store.userPermissionLevel(actor.organizationId(), actor.userId());
+        var ownLevelId = assignedLevel == null ? null : assignedLevel.orElse(null);
         var menus = PermissionModelCatalog.menus().stream()
+                .filter(menu -> effective == null || effective.unrestricted() || effective.menuKeys().contains(menu.key()))
                 .map(menu -> new MenuView(menu.key(), menu.label(), menu.parent(), menu.route())).toList();
         var levels = store.permissionLevels(actor.organizationId()).stream().map(this::levelView).toList();
-        return new PermissionModelView(menus, levels, store.permissionDefinitions());
+        var definitions = store.permissionDefinitions().stream()
+                .filter(definition -> effective == null || effective.unrestricted()
+                        || permitted(effective, definition.code()))
+                .toList();
+        var scopes = effective == null ? Map.<String, DelegableScope>of() : effective.bindings().entrySet().stream()
+                .filter(entry -> "ALLOW".equals(entry.getValue().effect()))
+                .collect(java.util.stream.Collectors.toMap(Map.Entry::getKey,
+                        entry -> new DelegableScope(entry.getValue().scopeType(), entry.getValue().targetIds())));
+        return new PermissionModelView(menus, levels, definitions, scopes,
+                effective == null || effective.unrestricted(), ownRoleIds, ownLevelId);
+    }
+
+    private EffectivePermissionResolver.EffectivePermissions effective(Actor actor) {
+        return effectivePermissions == null ? null : effectivePermissions.resolve(actor.organizationId(), actor.userId());
+    }
+
+    private boolean permitted(EffectivePermissionResolver.EffectivePermissions effective, String code) {
+        var binding = effective.bindings().get(code);
+        return binding != null && "ALLOW".equals(binding.effect());
     }
 
     public MenuPermissionsView roleMenus(Actor actor, UUID roleId) {
         requireAny(actor, "system.permissions.view", "system.permission.manage");
+        var effective = effective(actor);
         var role = role(actor, roleId);
-        return new MenuPermissionsView(role.policyVersion(), store.roleMenus(actor.organizationId(), roleId));
+        return new MenuPermissionsView(role.policyVersion(), store.roleMenus(actor.organizationId(), roleId).stream()
+                .filter(key -> effective == null || effective.unrestricted() || effective.menuKeys().contains(key)).toList());
     }
 
     @Transactional
     public long saveRoleMenus(Actor actor, UUID roleId, long expectedVersion, List<String> menuKeys) {
         requireAny(actor, "system.permissions.update", "system.permission.manage");
+        requireNotOwnRole(actor, roleId);
         var role = role(actor, roleId);
         if (role.builtin() && "SYSTEM_ADMIN".equals(role.code())) {
             throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "系统管理员菜单不可修改");
@@ -152,6 +229,15 @@ public class IamAdminService {
         var valid = PermissionModelCatalog.allMenuKeys();
         if (menuKeys == null || menuKeys.stream().anyMatch(key -> key == null || !valid.contains(key))) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "包含未知菜单权限");
+        }
+        var effective = effective(actor);
+        if (effective != null && !effective.unrestricted()) {
+            if (!effective.menuKeys().containsAll(menuKeys))
+                throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "不能分配自己未拥有的功能权限");
+            var merged = new ArrayList<>(menuKeys);
+            store.roleMenus(actor.organizationId(), roleId).stream()
+                    .filter(key -> !effective.menuKeys().contains(key)).forEach(merged::add);
+            menuKeys = merged;
         }
         try { store.replaceRoleMenus(actor.organizationId(), roleId, expectedVersion, menuKeys); }
         catch (IamStore.PolicyVersionConflict conflict) { throw new ApiException(ApiErrorCode.POLICY_VERSION_CONFLICT); }
@@ -181,6 +267,7 @@ public class IamAdminService {
     @Transactional
     public void renamePermissionLevel(Actor actor, UUID levelId, String name, String description) {
         requireAny(actor, "system.permissions.update", "system.permission.manage");
+        requireNotOwnLevel(actor, levelId);
         var level = store.permissionLevel(actor.organizationId(), levelId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "权限等级不存在"));
         if (level.builtin()) throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "内置权限等级不可重命名");
@@ -191,6 +278,7 @@ public class IamAdminService {
     @Transactional
     public void deletePermissionLevel(Actor actor, UUID levelId) {
         requireAny(actor, "system.permissions.delete", "system.permission.manage");
+        requireNotOwnLevel(actor, levelId);
         var level = store.permissionLevel(actor.organizationId(), levelId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "权限等级不存在"));
         if (level.builtin()) throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "内置权限等级不可删除");
@@ -207,20 +295,42 @@ public class IamAdminService {
 
     public PermissionLevelPayload permissionLevelBindings(Actor actor, UUID levelId) {
         requireAny(actor, "system.permissions.view", "system.permission.manage");
+        var effective = effective(actor);
         var level = store.permissionLevel(actor.organizationId(), levelId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "权限等级不存在"));
-        return new PermissionLevelPayload(level.policyVersion(), store.permissionLevelBindings(actor.organizationId(), levelId));
+        return new PermissionLevelPayload(level.policyVersion(), store.permissionLevelBindings(actor.organizationId(), levelId).stream()
+                .filter(binding -> effective == null || effective.unrestricted() || permitted(effective, binding.permissionCode()))
+                .map(binding -> {
+                    if (effective == null || effective.unrestricted()) return binding;
+                    var limited = limitScope(effective.bindings().get(binding.permissionCode()), binding.scopeType(), binding.targetIds());
+                    return new PermissionLevelBinding(binding.menuKey(), binding.permissionCode(), binding.effect(), limited.scopeType(), limited.targetIds());
+                })
+                .toList());
     }
 
     @Transactional
     public long savePermissionLevelBindings(Actor actor, UUID levelId, long expectedVersion, List<PermissionLevelBinding> bindings) {
         requireAny(actor, "system.permissions.update", "system.permission.manage");
+        requireNotOwnLevel(actor, levelId);
         var level = store.permissionLevel(actor.organizationId(), levelId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "权限等级不存在"));
         if (level.builtin() && "L3_ADMIN".equals(level.code())) {
             throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "L3 管理级不可直接修改");
         }
         validateLevelBindings(bindings);
+        var effective = effective(actor);
+        if (effective != null && !effective.unrestricted()) {
+            for (var binding : bindings) {
+                var owned = effective.bindings().get(binding.permissionCode());
+                if (owned == null || !"ALLOW".equals(owned.effect())
+                        || !withinScope(owned, new Binding(binding.permissionCode(), "ALLOW", binding.scopeType(), binding.targetIds())))
+                    throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "不能分配超出自身权限的操作或数据范围");
+            }
+            var merged = new ArrayList<>(bindings);
+            store.permissionLevelBindings(actor.organizationId(), levelId).stream()
+                    .filter(item -> !permitted(effective, item.permissionCode())).forEach(merged::add);
+            bindings = merged;
+        }
         try { store.replacePermissionLevelBindings(actor.organizationId(), levelId, expectedVersion, bindings); }
         catch (IamStore.PolicyVersionConflict conflict) { throw new ApiException(ApiErrorCode.POLICY_VERSION_CONFLICT); }
         audit(actor, "IAM_PERMISSION_LEVEL_UPDATED", "PERMISSION_LEVEL", levelId);
@@ -229,6 +339,7 @@ public class IamAdminService {
 
     public UserModelView userModel(Actor actor, UUID userId) {
         requireAny(actor, "system.permissions.view", "system.permission.manage");
+        requireUserInScope(actor, userId, "system.permissions.view");
         var user = requireUser(actor, userId);
         var roles = store.userRoles(actor.organizationId(), userId);
         if ((roles == null || roles.isEmpty()) && user.roleId() != null) {
@@ -237,15 +348,24 @@ public class IamAdminService {
         var levelRef = store.userPermissionLevel(actor.organizationId(), userId);
         var levelId = levelRef == null ? null : levelRef.orElse(null);
         var level = levelId == null ? null : store.permissionLevel(actor.organizationId(), levelId).orElse(null);
+        var effective = effective(actor);
         return new UserModelView(user.id(), roles == null ? List.of() : roles.stream().map(this::roleView).toList(),
-                level == null ? null : levelView(level), store.userMenuOverrides(actor.organizationId(), userId),
-                store.userOperationOverrides(actor.organizationId(), userId), store.userScopeOverrides(actor.organizationId(), userId),
+                level == null ? null : levelView(level), store.userMenuOverrides(actor.organizationId(), userId).stream()
+                    .filter(item -> effective == null || effective.unrestricted() || effective.menuKeys().contains(item.menuKey())).toList(),
+                store.userOperationOverrides(actor.organizationId(), userId).stream()
+                    .filter(item -> effective == null || effective.unrestricted() || permitted(effective, item.permissionCode()))
+                    .map(item -> limitBinding(effective, item)).toList(),
+                store.userScopeOverrides(actor.organizationId(), userId).stream()
+                    .filter(item -> effective == null || effective.unrestricted() || permitted(effective, item.permissionCode()))
+                    .map(item -> limitBinding(effective, item)).toList(),
                 user.authVersion());
     }
 
     @Transactional
     public long saveUserModel(Actor actor, UUID userId, SaveUserModelCommand command) {
         requireAny(actor, "system.permissions.update", "system.permission.manage");
+        requireNotSelf(actor, userId);
+        requireUserInScope(actor, userId, "system.permissions.view");
         var user = requireUser(actor, userId);
         if (command.expectedVersion() != user.authVersion()) {
             throw new ApiException(ApiErrorCode.POLICY_VERSION_CONFLICT);
@@ -267,6 +387,32 @@ public class IamAdminService {
                     command.operations(), command.scopes(), command.expectedVersion());
         }
         validateModelOverrides(command.menus(), command.operations(), command.scopes());
+        var effective = effective(actor);
+        if (effective != null && !effective.unrestricted()) {
+            var assignedRoles = store.userRoles(actor.organizationId(), userId);
+            var currentRoles = (assignedRoles == null ? List.<IamStore.Role>of() : assignedRoles).stream()
+                    .map(IamStore.Role::id).collect(java.util.stream.Collectors.toSet());
+            if (currentRoles.isEmpty() && user.roleId() != null) currentRoles = Set.of(user.roleId());
+            var levelRef = store.userPermissionLevel(actor.organizationId(), userId);
+            var currentLevel = levelRef == null ? null : levelRef.orElse(null);
+            for (var roleId : roleIds) {
+                if (!currentRoles.contains(roleId)) validateAssignableRole(actor, effective, roleId);
+            }
+            if (command.permissionLevelId() != null && !Objects.equals(currentLevel, command.permissionLevelId()))
+                validateAssignableLevel(actor, effective, command.permissionLevelId());
+            validateDelegatedModel(effective, command);
+            var visibleMenus = new ArrayList<>(command.menus() == null ? List.<IamStore.MenuOverride>of() : command.menus());
+            store.userMenuOverrides(actor.organizationId(), userId).stream()
+                    .filter(item -> !effective.menuKeys().contains(item.menuKey())).forEach(visibleMenus::add);
+            var visibleOperations = new ArrayList<>(command.operations() == null ? List.<Binding>of() : command.operations());
+            store.userOperationOverrides(actor.organizationId(), userId).stream()
+                    .filter(item -> !permitted(effective, item.permissionCode())).forEach(visibleOperations::add);
+            var visibleScopes = new ArrayList<>(command.scopes() == null ? List.<Binding>of() : command.scopes());
+            store.userScopeOverrides(actor.organizationId(), userId).stream()
+                    .filter(item -> !permitted(effective, item.permissionCode())).forEach(visibleScopes::add);
+            command = new SaveUserModelCommand(roleIds, command.primaryRoleId(), command.permissionLevelId(),
+                    visibleMenus, visibleOperations, visibleScopes, command.expectedVersion());
+        }
         try {
             store.saveUserPermissionLevel(actor.organizationId(), userId, user.authVersion(), command.permissionLevelId());
             store.replaceUserRoles(actor.organizationId(), userId, roleIds, command.primaryRoleId());
@@ -276,6 +422,73 @@ public class IamAdminService {
         }
         audit(actor, "IAM_USER_PERMISSION_MODEL_UPDATED", "USER", userId);
         return store.user(userId).orElseThrow().authVersion();
+    }
+
+    private void validateAssignableRole(Actor actor, EffectivePermissionResolver.EffectivePermissions effective, UUID roleId) {
+        var selectedRole = role(actor, roleId);
+        if ("SYSTEM_ADMIN".equals(selectedRole.code())
+                || !effective.menuKeys().containsAll(store.roleMenus(actor.organizationId(), roleId)))
+            throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "不能分配超出自身权限的业务角色");
+        for (var binding : store.roleBindings(actor.organizationId(), roleId))
+            if ("ALLOW".equals(binding.effect())) validateDelegatedBinding(effective, binding);
+    }
+
+    private void validateAssignableLevel(Actor actor, EffectivePermissionResolver.EffectivePermissions effective, UUID levelId) {
+        for (var binding : store.permissionLevelBindings(actor.organizationId(), levelId))
+            validateDelegatedBinding(effective, new Binding(binding.permissionCode(), binding.effect(),
+                    binding.scopeType(), binding.targetIds()));
+    }
+
+    private void validateDelegatedBinding(EffectivePermissionResolver.EffectivePermissions effective, Binding binding) {
+        var owned = effective.bindings().get(binding.permissionCode());
+        if (owned == null || !"ALLOW".equals(owned.effect()) || !withinScope(owned, binding))
+            throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "不能分配超出自身权限的操作或数据范围");
+    }
+
+    private void validateDelegatedModel(EffectivePermissionResolver.EffectivePermissions effective,
+                                        SaveUserModelCommand command) {
+        for (var menu : command.menus() == null ? List.<IamStore.MenuOverride>of() : command.menus()) {
+            if (!effective.menuKeys().contains(menu.menuKey()))
+                throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "不能分配自己未拥有的功能权限");
+        }
+        for (var operation : command.operations() == null ? List.<Binding>of() : command.operations()) {
+            if (!permitted(effective, operation.permissionCode()))
+                throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "不能分配自己未拥有的操作权限");
+            if ("ALLOW".equals(operation.effect())
+                    && !withinScope(effective.bindings().get(operation.permissionCode()), operation))
+                throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "不能分配超出自身权限的数据范围");
+        }
+        for (var scope : command.scopes() == null ? List.<Binding>of() : command.scopes()) {
+            var owned = effective.bindings().get(scope.permissionCode());
+            if (owned == null || !"ALLOW".equals(owned.effect()) || !withinScope(owned, scope))
+                throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "不能分配超出自身权限的数据范围");
+        }
+    }
+
+    private Binding limitBinding(EffectivePermissionResolver.EffectivePermissions effective, Binding item) {
+        if (effective == null || effective.unrestricted()) return item;
+        var limited = limitScope(effective.bindings().get(item.permissionCode()), item.scopeType(), item.targetIds());
+        return new Binding(item.menuKey(), item.permissionCode(), item.effect(), limited.scopeType(), limited.targetIds());
+    }
+
+    private DelegableScope limitScope(Binding owned, String scopeType, List<UUID> targetIds) {
+        var requested = new Binding("", "ALLOW", scopeType, targetIds == null ? List.of() : targetIds);
+        if (withinScope(owned, requested)) return new DelegableScope(scopeType, requested.targetIds());
+        if ("SELECTED".equals(owned.scopeType()) && "SELECTED".equals(scopeType))
+            return new DelegableScope("SELECTED", requested.targetIds().stream()
+                    .filter(owned.targetIds()::contains).toList());
+        return new DelegableScope(owned.scopeType(), owned.targetIds());
+    }
+
+    private boolean withinScope(Binding owned, Binding requested) {
+        var ownerType = owned.scopeType();
+        var requestedType = requested.scopeType();
+        if (Set.of("ALL", "ORG").contains(ownerType)) return true;
+        if (Set.of("SELF", "CREATOR").contains(ownerType))
+            return Set.of("SELF", "CREATOR").contains(requestedType);
+        if ("SELECTED".equals(ownerType) && "SELECTED".equals(requestedType))
+            return owned.targetIds().containsAll(requested.targetIds());
+        return ownerType.equals(requestedType);
     }
 
     @Transactional
@@ -296,6 +509,7 @@ public class IamAdminService {
         store.lockAdministration(actor.organizationId());
         requireRoleVersion(actor,roleId,expectedVersion);
         requireAny(actor, "system.permissions.update", "system.role.manage");
+        requireNotOwnRole(actor, roleId);
         var role = role(actor, roleId);
         if (role.builtin()) throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "内置角色不可重命名");
         store.renameRole(actor.organizationId(), roleId, name);
@@ -307,6 +521,7 @@ public class IamAdminService {
         store.lockAdministration(actor.organizationId());
         requireRoleVersion(actor,roleId,expectedVersion);
         requireAny(actor, "system.permissions.delete", "system.role.manage");
+        requireNotOwnRole(actor, roleId);
         role(actor, roleId);
         try { store.deleteRole(actor.organizationId(), roleId); }
         catch (IllegalArgumentException exception) { throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, exception.getMessage()); }
@@ -316,7 +531,10 @@ public class IamAdminService {
     public List<Binding> rolePermissions(Actor actor, UUID roleId) {
         requireAny(actor, "system.permissions.view", "system.permission.manage");
         role(actor, roleId);
-        return store.roleBindings(actor.organizationId(), roleId);
+        var effective = effective(actor);
+        return store.roleBindings(actor.organizationId(), roleId).stream()
+                .filter(item -> effective == null || effective.unrestricted() || permitted(effective, item.permissionCode()))
+                .map(item -> limitBinding(effective, item)).toList();
     }
 
     @Transactional
@@ -324,8 +542,18 @@ public class IamAdminService {
         store.lockAdministration(actor.organizationId());
         requireRoleVersion(actor,roleId,expectedVersion);
         requireAny(actor, "system.permissions.update", "system.permission.manage");
+        requireNotOwnRole(actor, roleId);
         var role = role(actor, roleId);
         validateBindings(bindings);
+        var effective = effective(actor);
+        if (effective != null && !effective.unrestricted()) {
+            for (var binding : bindings)
+                if ("ALLOW".equals(binding.effect())) validateDelegatedBinding(effective, binding);
+            var merged = new ArrayList<>(bindings);
+            store.roleBindings(actor.organizationId(), roleId).stream()
+                    .filter(item -> !permitted(effective, item.permissionCode())).forEach(merged::add);
+            bindings = merged;
+        }
         try { store.replaceRoleBindings(actor.organizationId(), roleId, expectedVersion, bindings); }
         catch (IamStore.PolicyVersionConflict conflict) { throw new ApiException(ApiErrorCode.POLICY_VERSION_CONFLICT); }
         audit(actor, "IAM_ROLE_PERMISSIONS_UPDATED", "ROLE", roleId);
@@ -334,8 +562,12 @@ public class IamAdminService {
 
     public PermissionOverrides userPermissions(Actor actor, UUID userId) {
         requireAny(actor, "system.permissions.view", "system.permission.manage");
+        requireUserInScope(actor, userId, "system.permissions.view");
         var user = requireUser(actor, userId);
-        return new PermissionOverrides(user.authVersion(), store.userOverrides(actor.organizationId(), userId));
+        var effective = effective(actor);
+        return new PermissionOverrides(user.authVersion(), store.userOverrides(actor.organizationId(), userId).stream()
+                .filter(item -> effective == null || effective.unrestricted() || permitted(effective, item.permissionCode()))
+                .map(item -> limitBinding(effective, item)).toList());
     }
 
     @Transactional
@@ -343,8 +575,19 @@ public class IamAdminService {
         store.lockAdministration(actor.organizationId());
         requireUserVersion(actor,userId,expectedVersion);
         requireAny(actor, "system.permissions.update", "system.permission.manage");
+        requireNotSelf(actor, userId);
+        requireUserInScope(actor, userId, "system.permissions.view");
         requireUser(actor, userId);
         validateBindings(bindings);
+        var effective = effective(actor);
+        if (effective != null && !effective.unrestricted()) {
+            for (var binding : bindings)
+                if ("ALLOW".equals(binding.effect())) validateDelegatedBinding(effective, binding);
+            var merged = new ArrayList<>(bindings);
+            store.userOverrides(actor.organizationId(), userId).stream()
+                    .filter(item -> !permitted(effective, item.permissionCode())).forEach(merged::add);
+            bindings = merged;
+        }
         try { store.replaceUserOverrides(actor.organizationId(), userId, expectedVersion, bindings); }
         catch (IamStore.PolicyVersionConflict conflict) { throw new ApiException(ApiErrorCode.POLICY_VERSION_CONFLICT); }
         audit(actor, "IAM_USER_PERMISSIONS_UPDATED", "USER", userId);
@@ -356,6 +599,11 @@ public class IamAdminService {
         store.lockAdministration(actor.organizationId());
         requireUserVersion(actor,userId,expectedVersion);
         requireAny(actor, "system.permissions.update", "system.permission.manage");
+        requireNotSelf(actor, userId);
+        requireUserInScope(actor, userId, "system.permissions.view");
+        var effective = effective(actor);
+        if (effective != null && !effective.unrestricted() && !permitted(effective, permissionCode))
+            throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "不能删除自己未拥有的权限配置");
         requireUser(actor, userId);
         store.deleteUserOverride(actor.organizationId(), userId, permissionCode);
         audit(actor, "IAM_USER_PERMISSION_RESTORED", "USER", userId);
@@ -363,7 +611,9 @@ public class IamAdminService {
 
     public List<PermissionDefinition> permissionDefinitions(Actor actor) {
         requireAny(actor, "system.permissions.view", "system.permission.manage");
-        return store.permissionDefinitions();
+        var effective = effective(actor);
+        return store.permissionDefinitions().stream()
+                .filter(item -> effective == null || effective.unrestricted() || permitted(effective, item.code())).toList();
     }
 
     public PageResponse<AuditLogPresentationService.AuditLogView> presentedAuditLogs(
@@ -386,6 +636,26 @@ public class IamAdminService {
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "用户不存在"));
     }
 
+    private void requireNotSelf(Actor actor, UUID userId) {
+        if (actor.userId().equals(userId))
+            throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "不能修改自己的权限");
+    }
+
+    private void requireNotOwnRole(Actor actor, UUID roleId) {
+        var assigned = store.userRoles(actor.organizationId(), actor.userId());
+        if (assigned != null && assigned.stream().anyMatch(role -> role.id().equals(roleId)))
+            throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "不能修改自己使用的业务角色");
+        if ((assigned == null || assigned.isEmpty()) && store.user(actor.userId())
+                .map(IamStore.User::roleId).filter(roleId::equals).isPresent())
+            throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "不能修改自己使用的业务角色");
+    }
+
+    private void requireNotOwnLevel(Actor actor, UUID levelId) {
+        var assigned = store.userPermissionLevel(actor.organizationId(), actor.userId());
+        if (assigned != null && assigned.filter(levelId::equals).isPresent())
+            throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "不能修改自己使用的权限等级");
+    }
+
     private IamStore.Role role(Actor actor, UUID roleId) {
         return store.role(actor.organizationId(), roleId).orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "角色不存在"));
     }
@@ -395,7 +665,7 @@ public class IamAdminService {
         for (var binding : bindings) {
             if (!known.contains(binding.permissionCode())) throw new ApiException(ApiErrorCode.BAD_REQUEST, "未知权限编码：" + binding.permissionCode());
             if (!List.of("ALLOW", "DENY").contains(binding.effect())) throw new ApiException(ApiErrorCode.BAD_REQUEST, "权限效果无效");
-            if (!List.of("ALL", "SELF", "ASSIGNED", "PROJECT", "CATEGORY", "SELECTED").contains(binding.scopeType())) {
+            if (!List.of("ALL", "ORG", "SELF", "DEPARTMENT", "ASSIGNED", "PROJECT", "CATEGORY", "SELECTED").contains(binding.scopeType())) {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "数据范围无效");
             }
             if ("DENY".equals(binding.effect()) && binding.targetIds() != null && !binding.targetIds().isEmpty()) {
@@ -403,7 +673,8 @@ public class IamAdminService {
             }
             if ("ALLOW".equals(binding.effect())
                     && List.of("SELECTED", "PROJECT", "CATEGORY").contains(binding.scopeType())
-                    && (binding.targetIds() == null || binding.targetIds().isEmpty())) {
+                    && (binding.targetIds() == null || binding.targetIds().isEmpty())
+                    && !usesProjectListTargets(binding.permissionCode())) {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, binding.scopeType() + " 范围必须选择目标");
             }
         }
@@ -418,7 +689,8 @@ public class IamAdminService {
             if (!"ALLOW".equals(binding.effect())) throw new ApiException(ApiErrorCode.BAD_REQUEST, "权限等级不支持拒绝规则");
             if (binding.scopeType() == null || binding.scopeType().isBlank()) throw new ApiException(ApiErrorCode.BAD_REQUEST, "数据范围不能为空");
             if (List.of("SELECTED", "PROJECT", "CATEGORY").contains(binding.scopeType())
-                    && (binding.targetIds() == null || binding.targetIds().isEmpty())) {
+                    && (binding.targetIds() == null || binding.targetIds().isEmpty())
+                    && !usesProjectListTargets(binding.permissionCode())) {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "指定范围必须选择目标");
             }
         }
@@ -439,9 +711,15 @@ public class IamAdminService {
             if (!known.contains(binding.permissionCode()) || !"ALLOW".equals(binding.effect())
                     || binding.scopeType() == null || binding.scopeType().isBlank())
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "个人数据范围覆盖无效");
-            if ("SELECTED".equals(binding.scopeType()) && (binding.targetIds() == null || binding.targetIds().isEmpty()))
+            if ("SELECTED".equals(binding.scopeType()) && (binding.targetIds() == null || binding.targetIds().isEmpty())
+                    && !usesProjectListTargets(binding.permissionCode()))
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "指定对象范围必须选择目标");
         }
+    }
+
+    private boolean usesProjectListTargets(String permissionCode) {
+        return java.util.stream.Stream.of("eln.view.", "research-test.report.view.",
+                "quality.view.", "production.view.").anyMatch(permissionCode::startsWith);
     }
 
     private RoleView roleView(IamStore.Role role) {
@@ -483,8 +761,11 @@ public class IamAdminService {
     public record PermissionPayload(long version, List<Binding> bindings) { }
     public record PermissionLevelPayload(long version, List<PermissionLevelBinding> bindings) { }
     public record MenuView(String key, String label, String parent, String route) { }
+    public record DelegableScope(String scopeType, List<UUID> targetIds) { }
     public record PermissionModelView(List<MenuView> menus, List<PermissionLevelView> levels,
-                                      List<PermissionDefinition> operations) { }
+                                      List<PermissionDefinition> operations,
+                                      Map<String, DelegableScope> delegableScopes, boolean unrestricted,
+                                      List<UUID> ownRoleIds, UUID ownLevelId) { }
     public record MenuPermissionsView(long version, List<String> menuKeys) { }
     public record PermissionLevelView(UUID id, String code, String name, String description, boolean builtin,
                                       boolean enabled, int tier, long policyVersion) { }

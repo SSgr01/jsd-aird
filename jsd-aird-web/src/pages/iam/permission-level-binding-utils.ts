@@ -5,7 +5,8 @@ import type { PermissionBinding, PermissionDefinition, PermissionLevelBinding } 
 const normalizedScope = (value: string) => {
   if (['SELF', 'CREATOR', 'ASSIGNED', 'OWNER', 'MANAGER', 'PARTICIPANT', 'PROJECT_GROUP'].includes(value)) return 'CREATOR';
   if (['PROJECT', 'CATEGORY', 'SELECTED'].includes(value)) return 'SELECTED';
-  return value || 'ORG';
+  if (value === 'ORG') return 'ALL';
+  return value || 'ALL';
 };
 
 export const levelBindingKey = (menuKey: string, permissionCode: string) => `${menuKey}::${permissionCode}`;

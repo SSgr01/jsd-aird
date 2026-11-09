@@ -16,16 +16,20 @@ public interface CommunicationRecordMapper {
         "FROM mdm.communication_record cr ";
 
     @Select("<script>" + COLS +
-        "WHERE cr.deleted = false <if test='partnerId != null'> AND cr.partner_id=#{partnerId}</if>" +
+        "WHERE cr.deleted = false AND EXISTS (SELECT 1 FROM mdm.business_partner p WHERE p.id=cr.partner_id AND p.deleted=false " + BusinessPartnerMapper.SCOPE_CLAUSE + ") <if test='partnerId != null'> AND cr.partner_id=#{partnerId}</if>" +
         "<if test='status != null'> AND cr.status=#{status}</if> " +
         "ORDER BY cr.communicated_at DESC LIMIT #{size} OFFSET #{offset}</script>")
     List<CommunicationRow> findPage(@Param("partnerId") UUID partnerId, @Param("status") String status,
-                                    @Param("offset") int offset, @Param("size") int size);
+                                    @Param("offset") int offset, @Param("size") int size,
+                                    @Param("organizationId") UUID organizationId, @Param("userId") UUID userId,
+                                    @Param("scopeType") String scopeType, @Param("targetIds") List<UUID> targetIds);
 
-    @Select("<script>SELECT count(*) FROM mdm.communication_record cr WHERE cr.deleted = false " +
+    @Select("<script>SELECT count(*) FROM mdm.communication_record cr WHERE cr.deleted = false AND EXISTS (SELECT 1 FROM mdm.business_partner p WHERE p.id=cr.partner_id AND p.deleted=false " + BusinessPartnerMapper.SCOPE_CLAUSE + ") " +
         "<if test='partnerId != null'> AND cr.partner_id=#{partnerId}</if>" +
         "<if test='status != null'> AND cr.status=#{status}</if></script>")
-    long count(@Param("partnerId") UUID partnerId, @Param("status") String status);
+    long count(@Param("partnerId") UUID partnerId, @Param("status") String status,
+               @Param("organizationId") UUID organizationId, @Param("userId") UUID userId,
+               @Param("scopeType") String scopeType, @Param("targetIds") List<UUID> targetIds);
 
     @Select(COLS + "WHERE cr.id=#{id} AND cr.deleted = false")
     Optional<CommunicationRow> findById(@Param("id") UUID id);

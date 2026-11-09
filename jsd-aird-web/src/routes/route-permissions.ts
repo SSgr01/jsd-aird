@@ -155,6 +155,8 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   if (path.startsWith('/system/users')) return 'system.user.view';
   if (path.startsWith('/system/roles') || path.startsWith('/system/user-permissions')) return 'system.permission.manage';
   if (path.startsWith('/system/audit-logs')) return 'system.audit.view';
+  if (path.startsWith('/system/dictionary')) return 'system.dictionary.manage';
+  if (path.startsWith('/system/parameters')) return 'system.parameter.manage';
   if (path.startsWith('/partners')) return 'customer.view';
   if (path.startsWith('/projects')) return 'project.view';
   if (path === '/experiments/upload' || path === '/experiments/new') return 'experiment.create';
@@ -299,6 +301,19 @@ export function firstAccessiblePath(permissions: string[], menuKeys: string[] = 
     ['/system/users', 'system.user.view'],
   ] as const;
   return candidates.find(([path, permission]) => canViewPathWithMenus(path, permissions, menuKeys) && hasPermission(permission, permissions))?.[0] ?? null;
+}
+
+const systemMenuPaths = [
+  '/system/users',
+  '/system/user-permissions',
+  '/system/dictionary',
+  '/system/audit-logs',
+  '/system/parameters',
+];
+
+/** Returns the first system-settings page the user may open, or undefined to hide the entry. */
+export function firstAccessibleSystemPath(permissions: string[], menuKeys: string[] = []): string | undefined {
+  return systemMenuPaths.find((path) => canViewPathWithMenus(path, permissions, menuKeys));
 }
 
 type MenuRoute = {

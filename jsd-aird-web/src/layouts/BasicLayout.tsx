@@ -28,7 +28,7 @@ import {
   AimOutlined,
 } from '@ant-design/icons';
 import { ProLayout, type MenuDataItem } from '@ant-design/pro-components';
-import { App, Avatar, Button, Dropdown, Input, Modal, Result, Tooltip, Typography, type InputRef } from 'antd';
+import { App, Avatar, Button, Dropdown, Input, Modal, Result, Tooltip, Typography, type InputRef, type MenuProps } from 'antd';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -41,7 +41,7 @@ import { useAppStore } from '@/stores/app-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { ChangePasswordForm, type PasswordValues } from '@/pages/auth/ChangePasswordForm';
 import { HttpError } from '@/services/http/errors';
-import { canViewPathWithMenus, filterMenuRoute, firstAccessiblePath, requiredPermissionForPath } from '@/routes/route-permissions';
+import { canViewPathWithMenus, filterMenuRoute, firstAccessiblePath, firstAccessibleSystemPath, requiredPermissionForPath } from '@/routes/route-permissions';
 
 const route = {
   path: '/',
@@ -213,16 +213,19 @@ function UserMenu() {
   };
   if (!user) return null;
   const initial = (user.displayName || user.username || '用').slice(0, 1);
-  const items = [
+  const systemSettingsPath = firstAccessibleSystemPath(user.permissions ?? [], user.menuKeys ?? []);
+  const items: MenuProps['items'] = [
     { key: 'workbench', icon: <HomeOutlined />, label: '工作台' },
+    ...(systemSettingsPath ? [{ key: 'system-settings', icon: <SettingOutlined />, label: '系统设置' }] : []),
     { key: 'change-password', icon: <LockOutlined />, label: '修改密码' },
-    { type: 'divider' as const },
+    { type: 'divider' },
     { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true },
   ];
   return <><Dropdown
     trigger={['click']}
     menu={{ items, onClick: ({ key }: { key: string }) => {
       if (key === 'workbench') navigate('/dashboard');
+      if (key === 'system-settings' && systemSettingsPath) navigate(systemSettingsPath);
       if (key === 'change-password') setPasswordOpen(true);
       if (key === 'logout') void logout();
     } }}
@@ -238,7 +241,7 @@ function UserMenu() {
     </Modal></>;
 }
 
-function AppHeaderTools({ permissions, menuKeys }: { permissions: string[]; menuKeys: string[] }) {
+function AppHeaderTools() {
   const navigate = useNavigate();
   const searchRef = useRef<InputRef>(null);
 
@@ -271,17 +274,7 @@ function AppHeaderTools({ permissions, menuKeys }: { permissions: string[]; menu
         suffix={<kbd>Ctrl K</kbd>}
         onPressEnter={(event) => search(event.currentTarget.value)}
       />
-      {canViewPathWithMenus('/system/users', permissions, menuKeys) && (
-        <Tooltip title="系统设置">
-          <Button
-            type="text"
-            className="app-header-icon-button"
-            icon={<SettingOutlined />}
-            aria-label="打开系统设置"
-            onClick={() => navigate('/system/users')}
-          />
-        </Tooltip>
-      )}
+      {appEnv.version && <span className="app-version" title="系统版本" aria-label={`系统版本 ${appEnv.version}`}>{appEnv.version}</span>}
       <UserMenu />
     </div>
   );
@@ -321,7 +314,7 @@ export function BasicLayout() {
     <AuthGate>
       <div className={`app-shell${layoutCollapsed ? ' app-shell-sidebar-collapsed' : ''}${isAssistant ? ' app-shell-assistant' : ''}${isPermissionManagement ? ' permission-management-shell' : ''}`}>
       <div className="app-topbar" aria-label="全局工具区">
-        <AppHeaderTools permissions={permissions} menuKeys={menuKeys} />
+        <AppHeaderTools />
       </div>
       <ProLayout
         title={appEnv.title}

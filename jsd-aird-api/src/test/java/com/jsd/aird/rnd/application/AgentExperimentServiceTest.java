@@ -43,11 +43,52 @@ class AgentExperimentServiceTest {
         return args;
     }
 
+    @Test void sampleHeadersUseRecordedNumbersAndPreserveCompositeIdentity() {
+        var model = json.createObjectNode();
+        var samples = model.putArray("sampleGroups");
+        samples.addObject().put("sampleKey", "one").put("sourceIdentity", "");
+        samples.addObject().put("sampleKey", "two").put("sourceIdentity", "原有编号");
+        samples.addObject().put("sampleKey", "three");
+        var steps = model.putArray("processSteps");
+        steps.addObject().put("sampleKey", "one").put("fieldCode", "sample.number").put("value", "RD-E-2611-08-1");
+        steps.addObject().put("sampleKey", "two").put("fieldCode", "sample.number").put("value", "备用编号");
+        var projection = new AgentExperimentProjection(json);
+        var record = projection.page(experiment, version(model), json.createObjectNode().put("section", "record"));
+        var columns = record.path("overview").path("sample_columns");
+        assertThat(columns.get(0).path("label").asText()).isEqualTo("RD-E-2611-08-1");
+        assertThat(columns.get(1).path("label").asText()).isEqualTo("原有编号");
+        assertThat(columns.get(2).path("label").asText()).isEqualTo("样品 3");
+        assertThat(columns.get(0).path("identity").path("sample_key").asText()).isEqualTo("one");
+        assertThat(projection.modelText(record)).contains("RD-E-2611-08-1", "原有编号", "样品 3");
+    }
+
+    @Test void completeRecordReusesAllVersionedPagesWithoutLosingZeroMissingOrNewFields() {
+        var model = json.createObjectNode().put("purpose", "比较固化能量与附着表现");
+        model.putArray("sampleGroups").addObject().put("sampleKey", "sample-A").put("sourceIdentity", "样品A");
+        var results = model.putArray("testResults");
+        for (int i=0;i<73;i++) results.addObject().put("fieldCode", "LOCAL_metric_"+i).put("testItem", "扩展指标"+i)
+            .put("sampleKey", "sample-A").put("value", i).put("unit", "MPa").put("valueStatus", "RECORDED");
+        results.addObject().put("fieldCode", "LOCAL_missing").put("testItem", "湿热后附着")
+            .put("sampleKey", "sample-A").put("valueStatus", "NOT_MEASURED");
+        var projection = new AgentExperimentProjection(json);
+        var record = projection.page(experiment, version(model), json.createObjectNode().put("section", "record"));
+        assertThat(record.path("complete").asBoolean()).isTrue();
+        assertThat(record.path("section_counts").path("testResults").asInt()).isEqualTo(74);
+        int rows=0; for (var page:record.path("sections").path("testResults"))rows+=page.path("records").size();
+        assertThat(rows).isEqualTo(74);
+        assertThat(projection.modelText(record)).contains("扩展指标0", "扩展指标72", "湿热后附着", "MPa", "0");
+        assertThatThrownBy(()->projection.page(experiment,version(model),json.createObjectNode()
+            .put("section","record").put("sample_key","sample-A"))).isInstanceOf(ApiException.class);
+    }
+
     @Test void readsCurrentDraftByItsExactOwnedVersionWithoutUsingPublishedHistory() {
         var detail = mock(ExperimentModels.Detail.class);
         var summary = mock(ExperimentModels.Summary.class);
         when(detail.summary()).thenReturn(summary);
         when(summary.title()).thenReturn("Synthetic draft");
+        var project = UUID.randomUUID();
+        when(summary.projectId()).thenReturn(project);
+        when(summary.projectName()).thenReturn("UV 胶固化窗口优化");
         when(detail.currentVersionId()).thenReturn(version);
         when(repository.detail(ActorContext.required().organizationId(), experiment)).thenReturn(Optional.of(detail));
         when(repository.version(ActorContext.required().organizationId(), experiment, version))
@@ -55,9 +96,68 @@ class AgentExperimentServiceTest {
         var args = json.createObjectNode().put("experiment_id", experiment.toString()).put("version_id", version.toString());
         var result = service.read("get_experiment_record", args);
         assertThat(result.path("candidates").path(0).path("source").path("version_id").asText()).isEqualTo(version.toString());
+        assertThat(result.path("candidates").path(0).path("source").path("project_id").asText()).isEqualTo(project.toString());
+        assertThat(result.path("candidates").path(0).path("model_text").asText())
+            .contains("UV 胶固化窗口优化", "当前记录关系，不代表历史版本归属");
         verify(repository, never()).versions(any(), any());
         assertThatThrownBy(() -> service.read("get_experiment_record", args.put("version_id", UUID.randomUUID().toString())))
             .isInstanceOf(ApiException.class).hasMessageContaining("版本不属于");
+    }
+
+    @Test void multiSampleOverviewAndPaginationCountRowsSeparatelyFromCells() {
+        var model = json.createObjectNode();
+        var samples = model.putArray("sampleGroups");
+        samples.addObject().put("sampleKey", "A");
+        samples.addObject().put("sampleKey", "B");
+        for (String section : List.of("formulaItems", "processSteps", "testResults")) {
+            var cells = model.putArray(section);
+            for (int field = 0; field < 3; field++) for (String sample : List.of("A", "B"))
+                cells.addObject().put("fieldCode", "field-" + field).put("sampleKey", sample).put("value", field);
+        }
+        var projection = new AgentExperimentProjection(json);
+        var record = projection.page(experiment, version(model), json.createObjectNode().put("section", "record"));
+        for (String section : List.of("formulaItems", "processSteps", "testResults")) {
+            assertThat(record.path("section_counts").path(section).asInt()).isEqualTo(3);
+            assertThat(record.path("section_cell_counts").path(section).asInt()).isEqualTo(6);
+            var first = projection.page(experiment, version(model), json.createObjectNode().put("section", section).put("limit", 2));
+            var last = projection.page(experiment, version(model), json.createObjectNode().put("section", section).put("offset", 2));
+            assertThat(first.path("total").asInt()).isEqualTo(3);
+            assertThat(first.path("next_offset").asInt()).isEqualTo(2);
+            assertThat(first.path("records").size() + last.path("records").size()).isEqualTo(3);
+            assertThat(last.has("next_offset")).isFalse();
+        }
+        assertThat(projection.modelText(record)).contains("结果：3 行；样品数据单元格 6 个（含未记录项）");
+    }
+
+    @Test void observationsKeepSampleMethodConditionAndUnitInTheSameRow() {
+        var model = json.createObjectNode();
+        var samples = model.putArray("sampleGroups");
+        samples.addObject().put("sampleKey", "A").put("sourceIdentity", "薄膜批次");
+        samples.addObject().put("sampleKey", "B").put("sourceIdentity", "厚膜批次");
+        var cells = model.putArray("testResults");
+        for (String sample : List.of("A", "B")) {
+            for (String energy : List.of("600 mJ/cm²", "800 mJ/cm²"))
+                cells.addObject().put("fieldCode", "adhesion").put("testItem", "附着表现").put("sampleKey", sample)
+                    .put("testMethod", "划格法").put("testCondition", energy).put("unit", "级").put("value", 0).put("valueStatus", "VALID");
+            cells.addObject().put("fieldCode", "adhesion").put("testItem", "附着表现").put("sampleKey", sample)
+                .put("testMethod", "拉开法").put("testCondition", "800 mJ/cm²").put("unit", "MPa").putNull("value").put("valueStatus", "NOT_MEASURED");
+        }
+        var projection = new AgentExperimentProjection(json);
+        var overview = projection.page(experiment, version(model), json.createObjectNode());
+        var page = projection.page(experiment, version(model), json.createObjectNode().put("section", "testResults"));
+        assertThat(overview.path("section_counts").path("testResults").asInt()).isEqualTo(3);
+        assertThat(page.path("total").asInt()).isEqualTo(3);
+        assertThat(overview.path("available_metrics")).hasSize(2);
+        assertThat(overview.path("unmeasured_metric_count").asInt()).isEqualTo(1);
+        assertThat(overview.path("unmeasured_metrics").get(0).path("testMethod").asText()).isEqualTo("拉开法");
+        String text = projection.modelText(page);
+        for (String sample : List.of("薄膜批次", "厚膜批次")) {
+            for (String energy : List.of("600 mJ/cm²", "800 mJ/cm²"))
+                assertThat(text.lines().filter(line -> line.startsWith("|" + sample + "|") && line.contains(energy) && line.contains("划格法")).toList())
+                    .singleElement().asString().contains("划格法", "|级|", "|0|已记录|");
+            assertThat(text.lines().filter(line -> line.startsWith("|" + sample + "|") && line.contains("拉开法")).toList())
+                .singleElement().asString().contains("800 mJ/cm²", "MPa", "未记录");
+        }
     }
 
     @Test void projectsBusinessDataWithoutEditorCachesAndPagesWithCompositeSampleIdentity() {
@@ -78,6 +178,7 @@ class AgentExperimentServiceTest {
         assertThat(summary.path("version_id").asText()).isEqualTo(version.toString());
         var page = projection.page(experiment, version(model), json.createObjectNode().put("section", "testResults").put("limit", 2));
         assertThat(page.path("next_offset").asInt()).isEqualTo(2);
+        assertThat(projection.modelText(page)).contains("下一页偏移量：2");
         assertThat(page.path("version_id").asText()).isEqualTo(version.toString());
         assertThat(page.path("records").get(0).path("values").get(0).path("value").asDouble()).isEqualTo(356.9);
         assertThat(page.path("records").get(0).path("testMethod").asText()).isEqualTo("method A");
@@ -92,6 +193,27 @@ class AgentExperimentServiceTest {
         assertThat(receipt.path("status").asText()).isEqualTo("FAILED");
         assertThat(receipt.path("result").path("error").asText()).isEqualTo("EXPERIMENT_DRAFT_VALIDATION_FAILED");
         verifyNoInteractions(drafts);
+    }
+
+    @Test void zeroSampleDraftStillShowsItsFullBackgroundFormulaAndHistoricalAnchor() {
+        var model = json.createObjectNode().put("dataNature", "SYNTHETIC");
+        var fields = model.putObject("templateInstance").putObject("definition").putObject("fields");
+        fields.putObject("basic.background").put("label", "实验背景").put("scope", "EXPERIMENT");
+        fields.putObject("basic.temperature").put("label", "环境温度").put("scope", "EXPERIMENT");
+        String background = "引用历史实验与固定版本：" + experiment + " / " + version
+            + "；样品 WB-C-0005-1；配方 WB-ACR-001 166.8 g、WB-ACR-002 139.0 g、WB-ADD-001 9.0 g，合计 314.8 g。\n"
+            + "上述为历史配方，本次仅拟复测，尚无实测数据。";
+        model.putObject("dynamicValues").putObject("fields").put("basic.background", background).putNull("basic.temperature");
+        var projection = new AgentExperimentProjection(json);
+        var overview = projection.page(experiment, version(model), json.createObjectNode());
+        String readable = projection.modelText(overview);
+        assertThat(overview.path("section_counts").path("samples").asInt()).isZero();
+        assertThat(readable).contains("实验背景", "166.8 g", "139.0 g", "9.0 g", "314.8 g", version.toString(),
+            "本次仅拟复测", "不包含上面的背景", "未记录").doesNotContain("sample_count", "valueStatus", "NOT_MEASURED");
+        var summary = projection.page(experiment, version(model), json.createObjectNode().put("section", "summary"));
+        assertThat(projection.modelText(summary)).contains("正文尚未读取", "样品数不包括背景");
+        // The display projection must not replace the original evidence.
+        assertThat(projection.text(overview)).contains("basic.background", "166.8 g", "NOT_MEASURED");
     }
 
     @Test void newTemplateFieldsKeepLabelsConditionsUnitsAndZeroVersusUnmeasured() {
@@ -111,6 +233,8 @@ class AgentExperimentServiceTest {
             json.createObjectNode().put("section", "testResults"));
         var row = result.path("records").get(0);
         var text = new AgentExperimentProjection(json).text(result);
+        assertThat(new AgentExperimentProjection(json).modelText(result)).contains("新增剪切强度", "样品A", "未记录", "本页未返回")
+            .doesNotContain("NOT_MEASURED", "valueStatus", "source_refs");
         assertThat(text).contains("新增剪切强度", "23 °C / 50% RH", "MPa", "\"value\":0",
             "NOT_MEASURED", "MISSING", "样品A = A", "样品B = B", experiment.toString(), version.toString());
         assertThat(row.path("label").asText()).isEqualTo("新增剪切强度");
@@ -169,14 +293,17 @@ class AgentExperimentServiceTest {
                 template.payload().path("snapshot"), "projection-test");
             var model = com.jsd.aird.shared.lab.LabWorkbook.extract(json, workbook, json.createObjectNode(), "projection-test");
             var projection = new AgentExperimentProjection(json);
-            assertThat(projection.page(experiment, version(model), json.createObjectNode()).toString())
+            var overview = projection.page(experiment, version(model), json.createObjectNode());
+            assertThat(overview.toString())
                 .hasSizeLessThan(15000).doesNotContain("documentSnapshot", "templateInstance", "instanceFields");
             for (var section : List.of("formulaItems", "processSteps", "testResults")) {
-                int offset = 0, cells = 0;
+                int offset = 0, cells = 0, rows = 0;
                 do {
                     var page = projection.page(experiment, version(model), json.createObjectNode().put("section", section).put("offset", offset));
                     assertThat(projection.text(page)).hasSizeLessThan(10000);
                     assertThat(page.toString()).hasSizeLessThan(80000);
+                    assertThat(page.path("total").asInt()).isEqualTo(overview.path("section_counts").path(section).asInt());
+                    rows += page.path("records").size();
                     for (var row : page.path("records")) for (var value : row.path("values")) {
                         cells++;
                         assertThat(value.path("source_refs")).isNotEmpty();
@@ -187,6 +314,8 @@ class AgentExperimentServiceTest {
                     offset = next;
                 } while (offset >= 0);
                 assertThat(cells).as(kind + ":" + section).isEqualTo(model.path(section).size());
+                assertThat(rows).isEqualTo(overview.path("section_counts").path(section).asInt());
+                assertThat(cells).isEqualTo(overview.path("section_cell_counts").path(section).asInt());
             }
         }
     }

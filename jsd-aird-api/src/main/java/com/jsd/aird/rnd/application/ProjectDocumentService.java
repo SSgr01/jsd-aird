@@ -25,10 +25,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.jsd.aird.tpl.application.RuleBasedRecognitionEngine;
-import com.jsd.aird.tpl.application.port.OfficeStructureParser;
-import com.jsd.aird.tpl.application.port.WorkbookSnapshotStructureParser;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.RuleRecognition;
+import com.jsd.aird.tpl.api.OfficeStructureParser;
+import com.jsd.aird.tpl.api.WorkbookSnapshotStructureParser;
+import com.jsd.aird.tpl.api.TemplateFormat;
 
 @Service
 public class ProjectDocumentService {
@@ -37,7 +37,7 @@ public class ProjectDocumentService {
     private final FileStorageFacade fileStorageFacade;
     private final List<OfficeStructureParser> officeParsers;
     private final WorkbookSnapshotStructureParser snapshotStructureParser;
-    private final RuleBasedRecognitionEngine ruleRecognitionEngine;
+    private final RuleRecognition ruleRecognitionEngine;
     private final ObjectMapper objectMapper;
 
     public ProjectDocumentService(
@@ -45,7 +45,7 @@ public class ProjectDocumentService {
             FileStorageFacade fileStorageFacade,
             List<OfficeStructureParser> officeParsers,
             WorkbookSnapshotStructureParser snapshotStructureParser,
-            RuleBasedRecognitionEngine ruleRecognitionEngine,
+            RuleRecognition ruleRecognitionEngine,
             ObjectMapper objectMapper
     ) {
         this.repository = repository;
@@ -220,7 +220,7 @@ public class ProjectDocumentService {
     }
 
     /**
-     * 复刻模板解析链路（OfficeStructureParser + RuleBasedRecognitionEngine），但产物
+     * 复刻模板解析链路（OfficeStructureParser + RuleRecognition），但产物
      * 完全独立于模板中心，仅服务于当前项目文档。
      */
     private RecognitionResult recognizeSnapshot(JsonNode snapshot, TemplateFormat format, String sourceFileName) {

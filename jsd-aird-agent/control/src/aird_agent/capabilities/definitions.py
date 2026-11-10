@@ -8,7 +8,7 @@ TOOLS = [
     tool("tool_search", "按关键词发现可用工具；返回工具说明并启用相关能力。", {"query": STRING}, ["query"]),
     tool(
         "knowledge_search",
-        "默认检索当前权限知识库；用户明确只看某些文献时用documents传固定发布版本，仅本次查询生效。服务端本轮限制不可扩大。最多8个有效词、256字符；用match_mode=any/all/phrase，不支持OR/AND语法。next_offset翻排序结果，next_cursor翻库窗口，node_offset用于阅读。",
+        "默认按当前权限搜索知识库候选，支持256字符内的完整标题和自然语言，match_mode默认auto。已定位文献后用documents固定版本缩小查询，any/all/phrase用于定向匹配；限制仅本次生效，不能扩大本轮限制。不解析OR/AND语法。next_offset翻结果，next_cursor翻库窗口；空候选不代表全文没有内容。",
         {
             "query": {"type": "string", "maxLength": 256},
             "match_mode": {"type": "string", "enum": ["auto", "phrase", "all", "any"]},
@@ -30,14 +30,21 @@ TOOLS = [
     ),
     tool(
         "document_read",
-        "按文档读取目录、原文节点和相邻上下文；全文总结必须分页覆盖。",
+        "读取固定版本的原文节点和相邻上下文，每次最多20个节点；按目录定位相关方法、结果及条件，next_offset续读。已返回的节点只回句柄，refresh=true重新显示。独立范围可在同一步并列调用。用户要求通读时分页覆盖。",
         {
             "document_id": STRING,
             "publication_id": STRING,
             "offset": INTEGER,
             "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+            "refresh": {"type": "boolean"},
         },
         ["document_id", "publication_id"],
+    ),
+    tool(
+        "evidence_image_read",
+        "读取已检索证据对应的原图，缺少独立原图时取该证据的PDF页面。返回会话图片文件后必须调用原生read_image查看，URL或文本不代表已看图。view=page用于页面概览；细小结构、公式或表格看不清时用view=detail读取高清PDF页。大原图自动生成受预算约束的预览，尺寸和降采样信息见image字段。不将视觉推断当作已验证SMILES。",
+        {"evidence_id": EVIDENCE_ID, "view": {"type": "string", "enum": ["auto", "page", "detail"]}},
+        ["evidence_id"],
     ),
     tool(
         "table_read",
@@ -60,7 +67,7 @@ TOOLS = [
     tool(
         "evidence_read",
         "回读固定原文跨度及quote_id；用返回的evidence_id+quote_id保存卡和证据矩阵，无须抄写数字公式。table_context附同一原表的真实表头，按列位置核对对象、指标和单位，不混用同一行左右样品。按next_quote_offset翻页。仍缺表头、其他行或试验条件时用evidence_context，重复读取同一跨度不会补出上下文；new_quote_count=0时复用已有引文，不连续重读。句柄不代表事实已核对。",
-        {"evidence_id": EVIDENCE_ID, "quote_offset": INTEGER},
+        {"evidence_id": EVIDENCE_ID, "quote_offset": INTEGER, "refresh": {"type": "boolean"}},
         ["evidence_id"],
     ),
     tool(

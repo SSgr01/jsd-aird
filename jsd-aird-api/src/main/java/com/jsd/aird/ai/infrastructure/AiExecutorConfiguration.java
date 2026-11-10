@@ -34,7 +34,7 @@ public class AiExecutorConfiguration {
         return new ThreadPoolExecutor(size, size, 30, TimeUnit.SECONDS,
                 new ArrayBlockingQueue<>(Math.max(8, Math.min(1024, queueCapacity))),
                 Thread.ofPlatform().name("rag-retrieval-", 0).factory(),
-                new ThreadPoolExecutor.CallerRunsPolicy());
+                new ThreadPoolExecutor.AbortPolicy());
     }
 
     @Bean(name = "dataSearchExecutor", destroyMethod = "shutdown")
@@ -45,7 +45,7 @@ public class AiExecutorConfiguration {
         return new ThreadPoolExecutor(size, size, 30, TimeUnit.SECONDS,
                 new ArrayBlockingQueue<>(Math.max(4, Math.min(256, queueCapacity))),
                 Thread.ofPlatform().name("data-search-", 0).factory(),
-                new ThreadPoolExecutor.CallerRunsPolicy());
+                new ThreadPoolExecutor.AbortPolicy());
     }
 
     @Bean(name = "webSearchExecutor", destroyMethod = "shutdown")

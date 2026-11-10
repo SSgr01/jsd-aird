@@ -11,7 +11,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 
-import com.jsd.aird.kb.domain.DocumentParser;
+import com.jsd.aird.kb.api.DocumentParser;
 import org.springframework.stereotype.Component;
 
 /** Deterministic text/Markdown reader. These formats never enter the OCR route. */

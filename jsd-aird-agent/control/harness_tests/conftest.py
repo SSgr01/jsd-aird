@@ -32,6 +32,7 @@ def settings(tmp_path):
         # This shared test database retains earlier synthetic runs as evidence;
         # admission capacity is tested with an explicit limit in its own tests.
         "max_running_runs": 100000,
+        "max_running_runs_per_user": 100000,
     })
 
 

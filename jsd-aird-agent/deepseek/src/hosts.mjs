@@ -32,16 +32,16 @@ async function exchangeCookie(port, token, authority) {
 export class Hosts {
   instances = new Map();
   constructor(config) { this.config = config; }
-  async ensure(identity) {
+  async ensure(identity, {background=false}={}) {
     const key = ownerKey(identity);
     let pending = this.instances.get(key);
     if (pending) {
       const host = await pending;
       // Another request may already be replacing this completed instance.
-      if (this.instances.get(key) !== pending) return this.ensure(identity);
+      if (this.instances.get(key) !== pending) return this.ensure(identity,{background});
       if (sameOwner(host.identity, identity) && host.child.exitCode === null) {
-        if (host.identity.expires_at < Date.now() / 1000 + 300) {
-          await this.call(host, 'identity', { ticket: identity.ticket });
+        if (!background && (host.identity.automation_grant_id || host.identity.expires_at < Date.now() / 1000 + 300)) {
+          await this.call(host, 'identity', { identity });
           host.identity = identity;
         }
         return host;
@@ -60,11 +60,36 @@ export class Hosts {
     this.instances.set(key, replacement);
     return replacement;
   }
+  async ensureBackground(identity) {
+    const host=await this.ensure(identity,{background:true});
+    if(!host.backgroundIdentity || host.backgroundIdentity.expires_at < Date.now()/1000+120) {
+      await this.call(host,'background-identity',{identity});
+      host.backgroundIdentity=identity;
+    }
+    return host;
+  }
+  async suspendBackground(grantId) {
+    for(const pending of this.instances.values()) {
+      const host=await pending.catch(()=>null);
+      if(host?.backgroundIdentity?.automation_grant_id!==grantId)continue;
+      await this.call(host,'background-revoke').catch(()=>{});
+      host.backgroundIdentity=undefined;
+      if(host.identity.automation_grant_id) {
+        this.instances.delete(ownerKey(host.identity));await this.stop(host);
+      }
+    }
+  }
+  async expireBackground(eligible) {
+    for(const pending of [...this.instances.values()]) {
+      const host=await pending.catch(()=>null), id=host?.backgroundIdentity?.automation_grant_id;
+      if(id && !eligible.has(id))await this.suspendBackground(id);
+    }
+  }
   async start(identity) {
     const config = this.config;
     const home = resolve(config.root, ownerKey(identity));
     const executionRoot = resolve(config.executionRoot, ownerKey(identity));
-    await mkdir(executionRoot, { recursive: true });
+    await mkdir(resolve(executionRoot, 'default'), { recursive: true });
     await writeFile(resolve(executionRoot, '.dsh-workspace-root'), '');
     await mkdir(resolve(home, 'attachments'), { recursive: true });
     const patch = await prepareProfile(config, home, executionRoot);
@@ -82,6 +107,7 @@ export class Hosts {
       JSD_DSH_IDENTITY: JSON.stringify(identity),
       JSD_DSH_INTERNAL_KEY: internalKey, JSD_DSH_CONTROL_URL: config.controlUrl,
       JSD_DSH_RUNTIME_SECRET: config.secret, JSD_DSH_EXECUTION_ROOT: executionRoot,
+      JSD_DSH_STAGE_TIMING: process.env.JSD_AIRD_HARNESS_STAGE_TIMING || 'false',
       JSD_DSH_OFFICE_SKILLS: resolve(config.upstream, 'packages/skill/skill-office/assets'),
     };
     // Invoke the supported upstream launcher; no fork of the execution loop.
@@ -89,7 +115,7 @@ export class Hosts {
     if (!existsSync(bin)) throw new Error('DEEPSEEK_BUILD_REQUIRED');
     const child = spawn(config.node, [bin, '--profile', 'web', '--patch', patch, '--no-open', '--host', '127.0.0.1',
       '--port', String(port), '--public-url', config.origin + path, '--trusted-host', new URL(config.origin).host,
-      ], { cwd: executionRoot, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+      ], { cwd: resolve(executionRoot, 'default'), env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
     const log = createWriteStream(resolve(home, 'host.log'), { flags: 'a' });
     let startup = '';
     let launchToken;

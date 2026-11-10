@@ -2,7 +2,10 @@ import type { ThemeConfig } from 'antd';
 
 export const appTheme: ThemeConfig = {
   token: {
-    colorPrimary: '#766381',
+    colorPrimary: '#29282d',
+    colorLink: '#29282d',
+    colorLinkHover: '#45424a',
+    colorLinkActive: '#201f24',
     colorInfo: '#766381',
     colorSuccess: '#347552',
     colorWarning: '#92671f',
@@ -18,11 +21,11 @@ export const appTheme: ThemeConfig = {
     colorBgLayout: '#faf9f8',
     colorBgElevated: '#ffffff',
     borderRadius: 8,
-    controlOutline: 'rgba(155, 133, 169, 0.14)',
-    colorPrimaryBg: '#f2edf5',
-    colorPrimaryBgHover: '#e9e1ee',
-    colorPrimaryHover: '#60506a',
-    colorPrimaryActive: '#51435a',
+    controlOutline: 'rgba(41, 40, 45, 0.14)',
+    colorPrimaryBg: '#f7f5f4',
+    colorPrimaryBgHover: '#eeebed',
+    colorPrimaryHover: '#45424a',
+    colorPrimaryActive: '#201f24',
     colorSuccessBg: '#f0f8f3',
     colorSuccessText: '#347552',
     colorWarningBg: '#fcf7ec',

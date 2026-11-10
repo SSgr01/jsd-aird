@@ -21,7 +21,7 @@ import org.springframework.stereotype.Component;
 /** Wakes API SSE streams when the worker commits a durable analysis event. */
 @Component
 @Profile("!worker")
-public class SpectrumAnalysisEventNotifier {
+public class SpectrumAnalysisEventNotifier implements com.jsd.aird.spc.application.port.SpectrumAnalysisEvents {
 
     private static final Logger log = LoggerFactory.getLogger(SpectrumAnalysisEventNotifier.class);
     private static final String CHANNEL = "spectrum_analysis_events";
@@ -106,7 +106,7 @@ public class SpectrumAnalysisEventNotifier {
         private int subscribers;
     }
 
-    public final class Subscription implements AutoCloseable {
+    public final class Subscription implements com.jsd.aird.spc.application.port.SpectrumAnalysisEvents.Subscription {
         private final UUID analysisRunId;
         private final Signal signal;
         private boolean closed;

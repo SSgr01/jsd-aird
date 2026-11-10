@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.mfg.inventory.domain.InventoryModels.*;
 import com.jsd.aird.mfg.inventory.application.port.InventoryRepository;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
-import com.jsd.aird.quality.application.port.QualityDataStore;
+import com.jsd.aird.quality.api.QualityRecordLookup;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
@@ -21,8 +21,8 @@ import java.util.UUID;
 public class InventoryService {
     private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(InventoryService.class);
     private static final java.util.regex.Pattern CONSTRAINT_PATTERN=java.util.regex.Pattern.compile("constraint\\s+\"([^\"]+)\"");
-    private final InventoryRepository repository; private final AuditLogFacade audit; private final ObjectMapper mapper; private final QualityDataStore qualityData;
-    public InventoryService(InventoryRepository repository, AuditLogFacade audit, ObjectMapper mapper, QualityDataStore qualityData){this.repository=repository;this.audit=audit;this.mapper=mapper;this.qualityData=qualityData;}
+    private final InventoryRepository repository; private final AuditLogFacade audit; private final ObjectMapper mapper; private final QualityRecordLookup qualityData;
+    public InventoryService(InventoryRepository repository, AuditLogFacade audit, ObjectMapper mapper, QualityRecordLookup qualityData){this.repository=repository;this.audit=audit;this.mapper=mapper;this.qualityData=qualityData;}
     public BalancePage balances(String keyword,Scope scope,AlertStatus alert,int page,int size,String sort){return repository.balances(actor().organizationId(),keyword,scope,alert,Math.max(page,1),Math.min(Math.max(size,1),100),sort);}
     public java.util.List<ProductOption> productOptions(Scope scope,String keyword){return repository.productOptions(actor().organizationId(),scope,keyword);}
     @Transactional public ProductOption createProduct(ProductInput input){if(input==null||input.scope()==null)throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"库存域不能为空");var a=actor();var name=required(input.name(),"产品名称");var product=repository.createProduct(a.organizationId(),name,input.scope(),a.userId());audit.append(a.organizationId(),a.userId(),"INVENTORY_PRODUCT_CREATED","INVENTORY_PRODUCT",product.id(),mapper.valueToTree(input));return product;}

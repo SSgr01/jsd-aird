@@ -64,7 +64,9 @@ root=pathlib.Path("/work/scratch/native")
 count=total=0
 with zipfile.ZipFile("/work/output/native-files.zip","w",compression=zipfile.ZIP_DEFLATED) as archive:
     for parent, directories, names in os.walk(root,followlinks=False):
-        directories[:]=[name for name in directories if not pathlib.Path(parent,name).is_symlink()]
+        # Native process logs are already persisted by the subprocess provider.
+        # They may be read as inputs, but are never redelivered as business files.
+        directories[:]=[name for name in directories if name!='.dsh-process-output' and not pathlib.Path(parent,name).is_symlink()]
         for name in names:
             path=pathlib.Path(parent,name)
             if path.is_symlink() or not stat.S_ISREG(path.stat().st_mode): continue
@@ -89,14 +91,19 @@ async def native_execute(service, principal, run, args, call_id):
     cwd = args.get("cwd", "")
     if cwd:
         cwd = relative_file(cwd)
-    script = "import pathlib,shutil,subprocess,sys\n"
+    script = "import os,pathlib,shutil,subprocess,sys\n"
     script += "root=pathlib.Path('/work/scratch/native');root.mkdir(parents=True,exist_ok=True)\n"
     script += "shutil.copytree(" + repr("/work/" + prefix.rstrip('/')) + ",root,dirs_exist_ok=True)\n" if selected else ""
-    script += "code=subprocess.call(['/bin/bash','-c'," + repr(command) + "],cwd=root/" + repr(cwd) + ")\n"
+    script += "env=os.environ.copy()\n"
+    script += "overrides=" + repr(args.get("env", {})) + "\n"
+    script += "for key,value in overrides.items():\n if value is None: env.pop(key,None)\n else: env[key]=value\n"
+    script += "code=subprocess.run(['/bin/bash','-c'," + repr(command) + "],cwd=root/" + repr(cwd) + ",env=env"
+    script += (",input=" + repr(args["stdin"]) + ",text=True" if "stdin" in args else "") + ").returncode\n"
     script += EXPORT_SCRIPT + "\nsys.exit(code)\n"
     if len(script) > 65536:
         raise HTTPException(422, "SANDBOX_SCRIPT_TOO_LARGE: write the program with native write/apply_patch, then run it with a short bash command")
-    result = await service.bindings.sandbox.execute(workspace, script, "python", digest([run["id"], run["epoch"], call_id])[:32], selected)
+    result = await service.bindings.sandbox.execute(workspace, script, "python", digest([run["id"], run["epoch"], call_id])[:32], selected,
+        **({"timeout_ms": args["timeout_ms"]} if "timeout_ms" in args else {}))
     if "error" in result and result.get("exit_code") is None:
         return result
     return accept_native_result(workspace, result)
@@ -141,6 +148,30 @@ async def reconcile_native(service, principal, run, operation):
     return authority
 
 
+async def native_output(service, principal, body):
+    """Read only the execution admitted for this owner, session, turn and tool call."""
+    run = await service.session_run(principal, body)
+    await service.authorized_topic(principal, run, execution=False)
+    call_id = body.get("call_id")
+    if not isinstance(call_id, str) or not 1 <= len(call_id) <= 200:
+        raise HTTPException(422, "INVALID_CALL_ID")
+    offsets = [body.get("stdout_offset", 0), body.get("stderr_offset", 0)]
+    if any(type(value) is not int or value < 0 for value in offsets):
+        raise HTTPException(422, "INVALID_OUTPUT_CURSOR")
+    async with service.store.pool.connection() as conn:
+        operation = await (await conn.execute(
+            "SELECT tool_name,execution_epoch FROM agent_runtime.harness_calls WHERE run_id=%s AND call_id=%s",
+            (run["id"], call_id))).fetchone()
+    if operation is None:
+        if run["status"] in {"RUNNING", "WAITING_APPROVAL"}:
+            return {"status": "QUEUED", "streams": {}, "pending_registration": True}
+        raise HTTPException(404, "OPERATION_NOT_FOUND")
+    if operation["tool_name"] != "dsh_execute":
+        raise HTTPException(403, "NATIVE_EXECUTION_REQUIRED")
+    execution_id = digest([run["id"], operation["execution_epoch"], call_id])[:32]
+    return await service.bindings.sandbox.output(execution_id, *offsets)
+
+
 async def native_artifact(service, principal, run, args, call_id):
     name = relative_file(args["path"])
     content = base64.b64decode(args["base64"], validate=True)
@@ -157,7 +188,11 @@ def native_spec(name):
     from aird_agent.capabilities.schema import STRING, tool
     if name == "dsh_execute":
         # Native bash carries scripts, rather than short business text fields.
-        return tool(name, "Internal native shell transport", {"command": {"type": "string", "maxLength": 128 * 1024}, "cwd": STRING, "files": {"type": "array", "maxItems": 50}}, ["command", "files"])
+        return tool(name, "Internal native shell transport", {"command": {"type": "string", "maxLength": 128 * 1024}, "cwd": STRING,
+            "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 600000},
+            "env": {"type": "object", "maxProperties": 128, "additionalProperties": {"type": ["string", "null"], "maxLength": 8192}},
+            "stdin": {"type": "string", "maxLength": 65536},
+            "files": {"type": "array", "maxItems": 50}}, ["command", "files"])
     if name == "artifact_save":
         encoded_file = {"type": "string", "maxLength": 4 * ((MAX_BYTES + 2) // 3)}
         return tool(name, "Internal native artifact transport", {"path": STRING, "base64": encoded_file, "sha256": STRING, "source_quotes": {"type": "array", "maxItems": 50}}, ["path", "base64", "sha256"])

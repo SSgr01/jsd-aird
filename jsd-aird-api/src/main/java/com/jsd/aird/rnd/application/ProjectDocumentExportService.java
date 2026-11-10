@@ -13,8 +13,8 @@ import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.office.SnapshotWorkbookExporter;
 import com.jsd.aird.shared.security.ActorContext;
-import com.jsd.aird.tpl.application.port.TemplateRepository;
-import com.jsd.aird.tpl.application.port.WordOoxmlPatcher;
+import com.jsd.aird.tpl.api.TemplateWordSource;
+import com.jsd.aird.tpl.api.WordOoxmlPatcher;
 import org.springframework.stereotype.Service;
 
 /** Exports the current project-document working copy, rather than the template's last saved copy. */
@@ -28,7 +28,7 @@ public class ProjectDocumentExportService {
 
     private final ProjectDocumentRepository repository;
     private final FileStorageFacade fileStorage;
-    private final TemplateRepository templateRepository;
+    private final TemplateWordSource templateRepository;
     private final ObjectMapper objectMapper;
     private final SnapshotWorkbookExporter workbookExporter;
     private final WordOoxmlPatcher wordOoxmlPatcher;
@@ -36,7 +36,7 @@ public class ProjectDocumentExportService {
     public ProjectDocumentExportService(
             ProjectDocumentRepository repository,
             FileStorageFacade fileStorage,
-            TemplateRepository templateRepository,
+            TemplateWordSource templateRepository,
             ObjectMapper objectMapper,
             SnapshotWorkbookExporter workbookExporter,
             WordOoxmlPatcher wordOoxmlPatcher
@@ -101,8 +101,7 @@ public class ProjectDocumentExportService {
         var sourceId = document.fileObjectId();
         JsonNode templateWord = null;
         if (sourceId == null && document.templateVersionId() != null) {
-            templateWord = templateRepository.findWorkspace(organizationId, document.templateVersionId())
-                    .map(TemplateRepository.TemplateWorkspace::wordDocument)
+            templateWord = templateRepository.wordDocumentSource(organizationId, document.templateVersionId())
                     .orElse(null);
             sourceId = wordFileId(templateWord);
         }
@@ -127,7 +126,7 @@ public class ProjectDocumentExportService {
         if (document.contentSnapshot() != null && document.contentSnapshot().isObject()
                 && !document.contentSnapshot().isEmpty()) return document.contentSnapshot();
         if (document.templateVersionId() == null) return null;
-        var workspace = templateRepository.findWorkspace(organizationId, document.templateVersionId()).orElse(null);
+        var workspace = templateRepository.snapshotSource(organizationId, document.templateVersionId()).orElse(null);
         if (workspace == null) return null;
         if (workspace.inlineSnapshot() != null && workspace.inlineSnapshot().isObject()
                 && !workspace.inlineSnapshot().isEmpty()) return workspace.inlineSnapshot();

@@ -399,6 +399,5 @@ public class FormulaDesignService {
     private boolean finite(JsonNode value){return value!=null&&value.isNumber()&&Double.isFinite(value.asDouble());}
     private UUID uuid(JsonNode n,String name){try{return UUID.fromString(n.path(name).asText());}catch(Exception e){throw new ApiException(ApiErrorCode.GOAL_VALUE_INVALID,"目标ID无效");}}
     private UUID uuidNullable(ArrayNode goals,UUID id){for(var g:goals)if(id.toString().equals(g.path("targetId").asText())&&g.hasNonNull("expectedModelVersionId"))try{return UUID.fromString(g.path("expectedModelVersionId").asText());}catch(Exception ignored){}return null;}
-    private UUID findCreator(UUID org,UUID id){return repository.jdbc().queryForObject("SELECT created_by FROM ai.research_run_v2 WHERE organization_id=? AND id=?",UUID.class,org,id);}
     private Actor actor(){return ActorContext.required();} private void requireKey(String k){if(k==null||k.isBlank())throw validation("必须提供幂等键");} private ApiException validation(String m){return new ApiException(ApiErrorCode.VALIDATION_ERROR,m);} private long longSeed(String h){return java.nio.ByteBuffer.wrap(java.util.HexFormat.of().parseHex(h.substring(0,16))).getLong();}
 }

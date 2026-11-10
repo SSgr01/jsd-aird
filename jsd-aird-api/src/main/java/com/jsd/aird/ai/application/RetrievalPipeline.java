@@ -16,6 +16,7 @@ import java.util.HashMap;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import com.jsd.aird.shared.resource.BudgetedTask;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -118,16 +119,13 @@ public class RetrievalPipeline {
         var dataFilters = dataCategoryIds == null ? List.<UUID>of() : dataCategoryIds;
         var dataQueries = searchData ? rag.dataQueries(question, plan.plan()) : List.<String>of();
         var dataDetailQuery = rag.dataDetailQuery(plan.plan());
-        CompletableFuture<DataChannelResult> dataFuture;
+        BudgetedTask<DataChannelResult> dataFuture = null;
         try {
-            dataFuture = CompletableFuture.supplyAsync(
+            dataFuture = BudgetedTask.submit(rag.retrievalExecutor, 20000,
                     () -> rag.searchDataChannel(organizationId, question, dataQueries, dataDetailQuery,
-                            dataFilters, accessScope, searchData, legacyFacadeCalls),
-                    rag.retrievalExecutor);
+                            dataFilters, accessScope, searchData, legacyFacadeCalls));
         } catch (RejectedExecutionException exception) {
-            dataFuture = CompletableFuture.completedFuture(new DataChannelResult(List.of(), dataQueries.size(),
-                    dataQueries.size(), 0, searchData ? "FAILED" : "SKIPPED",
-                    DataSourceFileSearchFacade.DataDetailResult.empty(dataDetailQuery.mode())));
+            // The result below records a rejected channel; never run it inline.
         }
         var internalFallbacks = new ArrayList<String>();
         var knowledgeChannelStatus = searchKnowledge ? "SUCCEEDED" : "SKIPPED";
@@ -160,7 +158,8 @@ public class RetrievalPipeline {
         // gets a chance to match experiment/project metadata and row values.
         DataChannelResult dataResult;
         try {
-            dataResult = dataFuture.join();
+            if (dataFuture == null) throw new RejectedExecutionException();
+            dataResult = dataFuture.await();
         } catch (RuntimeException exception) {
             dataResult = new DataChannelResult(List.of(), dataQueries.size(), dataQueries.size(), 0,
                     searchData ? "FAILED" : "SKIPPED",
@@ -343,7 +342,7 @@ public class RetrievalPipeline {
     public com.fasterxml.jackson.databind.node.ObjectNode research(com.fasterxml.jackson.databind.node.ObjectNode scope,
             com.fasterxml.jackson.databind.node.ObjectNode args,boolean privateMode) {
         var started=System.nanoTime();
-        var original=args.path("query").asText();var mode=args.path("match_mode").asText("auto");
+        var original=args.path("query").asText().strip().replaceAll("\\s+", " ");var mode=args.path("match_mode").asText("auto");
         com.jsd.aird.kb.api.ResearchTextMatch.terms(original);
         if(!Set.of("auto","phrase","all","any").contains(mode))throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.BAD_REQUEST);
         int offset=args.path("offset").asInt();if(offset<0||offset>100000)throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.BAD_REQUEST);
@@ -434,6 +433,11 @@ public class RetrievalPipeline {
                 Math.min(policy.parentBudget,Math.min(18000,Math.max(0,args.path("context_character_budget").asInt(12000)))/3))
             : new com.jsd.aird.kb.api.ResearchKnowledgeFacade.Result(List.of(),Map.of("parent_status",privateMode?"NOT_APPLICABLE":"SKIPPED_CONFIG"),null);
         trace.putAll(parents.trace());trace.put("candidate_count",total);result.set("trace",mapper.valueToTree(trace));result.set("context_candidates",mapper.valueToTree(parents.context_candidates()));
+        var failures = String.valueOf(trace.getOrDefault("fallbacks", List.of()));
+        if (failures.matches("(?s).*(TIMEOUT|DEADLINE|_ERROR|REJECTED).*")) {
+            result.put("retrieval_status", "PARTIAL");
+            result.put("retrieval_notice", "部分检索未完成，覆盖不完整。");
+        }
         if (!privateMode) {
             var metadataSources = new ArrayList<com.jsd.aird.kb.api.ResearchKnowledgeFacade.SourceRef>();
             ordered.forEach(c -> metadataSources.add(c.source()));

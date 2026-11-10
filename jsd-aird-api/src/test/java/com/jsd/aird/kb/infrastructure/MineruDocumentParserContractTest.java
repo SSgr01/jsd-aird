@@ -16,8 +16,8 @@ import java.util.zip.ZipOutputStream;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.kb.application.SystemParsingPolicy;
-import com.jsd.aird.kb.domain.DocumentParser;
-import com.jsd.aird.kb.domain.OcrMode;
+import com.jsd.aird.kb.api.DocumentParser;
+import com.jsd.aird.kb.api.OcrMode;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;

@@ -9,10 +9,10 @@
 }
 
 :root {
-  /* SETO reference: warm whites, graphite actions, quiet lavender feedback. */
-  --color-blue-600: #766381;
-  --color-blue-700: #60506a;
-  --color-blue-50: #f2edf5;
+  /* SETO reference: warm whites and consistent graphite actions. */
+  --color-blue-600: #29282d;
+  --color-blue-700: #45424a;
+  --color-blue-50: #f7f5f4;
   --color-grey-50: #faf9f8;
   --color-grey-100: #f7f5f4;
   --color-grey-200: #eeebed;
@@ -57,8 +57,8 @@
   --app-border-strong: #dcd5dc;
   --app-row-rule: #f2edef;
   --app-scrollbar: #ded7df;
-  --app-focus-border: #9b85a9;
-  --app-focus-ring: 0 0 0 3px rgb(155 133 169 / 14%);
+  --app-focus-border: #45424a;
+  --app-focus-ring: 0 0 0 3px rgb(41 40 45 / 14%);
   --app-danger: var(--color-red-600);
   --app-warning: var(--color-amber-600);
   --app-success: var(--color-green-600);

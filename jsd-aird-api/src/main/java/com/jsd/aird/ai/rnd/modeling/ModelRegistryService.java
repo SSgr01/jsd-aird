@@ -25,8 +25,9 @@ public class ModelRegistryService {
     private final ObjectMapper json;
     private final AuditLogFacade audit;
     private final FormulaModelArtifactStore artifacts;
-    @org.springframework.beans.factory.annotation.Autowired
     private com.jsd.aird.iam.api.AuthorizationService authorization;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setAuthorization(com.jsd.aird.iam.api.AuthorizationService authorization) { this.authorization = authorization; }
     private org.springframework.transaction.support.TransactionTemplate writeTransaction;
     private record PreparedArtifact(String key,String sha,String media) { }
     @org.springframework.beans.factory.annotation.Autowired

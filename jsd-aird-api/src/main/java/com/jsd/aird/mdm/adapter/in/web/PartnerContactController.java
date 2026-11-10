@@ -1,10 +1,10 @@
 package com.jsd.aird.mdm.adapter.in.web;
 
-import com.jsd.aird.mdm.application.command.PartnerCommands;
+import com.jsd.aird.mdm.api.PartnerCommands;
 import com.jsd.aird.mdm.application.port.ContactProjectVector;
 import com.jsd.aird.mdm.application.service.PartnerContactService;
-import com.jsd.aird.mdm.domain.model.PartnerContact;
-import com.jsd.aird.mdm.domain.model.PartnerStatus;
+import com.jsd.aird.mdm.api.PartnerContact;
+import com.jsd.aird.mdm.api.PartnerStatus;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.shared.api.ApiResponse;

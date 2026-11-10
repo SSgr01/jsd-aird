@@ -90,6 +90,9 @@ class RuntimeBindings:
             raise HTTPException(413, "TOOL_OUTPUT_TOO_LARGE")
         return result
 
+    def delivery_result(self, run, name, arguments, result):
+        return result, False
+
     async def remember_sources(self, principal, run, result):
         return result
 
@@ -129,6 +132,15 @@ class RuntimeBindings:
 
     def validate_output(self, run, text):
         return text, isinstance(text, str)
+
+    def output_diagnostics(self, run, text):
+        return {}
+
+    def prepare_output_repair(self, run):
+        raise HTTPException(409, "OUTPUT_REPAIR_UNAVAILABLE")
+
+    def authorize_repair_tool(self, run, name, arguments):
+        raise HTTPException(409, "OUTPUT_REPAIR_UNAVAILABLE")
 
     def default_completion(self, run):
         return {

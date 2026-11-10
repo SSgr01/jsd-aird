@@ -2,13 +2,16 @@ import { executionDirectory } from './paths.mjs';
 import { profileForPreset } from './session-policy.mjs';
 import { checkScheduleRequest, scheduleMethods } from './schedule-policy.mjs';
 
-const sessionMethods = new Set(['list', 'search', 'create', 'prompt', 'updateQueue', 'cancel', 'rename',
+const sessionMethods = new Set(['list', 'search', 'create', 'fork', 'prompt', 'updateQueue', 'cancel', 'rename',
   'state', 'wait', 'follow', 'page', 'projections', 'attachment', 'observeEvent', 'observeEvents', 'observe',
   'history', 'models', 'modelCatalog', 'selectModel', 'listSkills', 'skillCatalog']);
 const readNamespaces = new Set(['remoteAccess', 'sessionStats', 'sessionTitles', 'sessionTurnOutline',
   'agentPresets', 'permissionPresets', 'planMode', 'userQuestions', 'approvals', 'messageFeedback']);
 const workspaceMethods = new Set(['baseline', 'initializeDefault', 'create', 'rename', 'delete', 'insertBefore',
   'insertSessionBefore', 'archiveSession', 'unarchiveSession', 'pinSession', 'unpinSession']);
+const archiveMethods = new Set(['deleteSession','deleteArchivedSessions','unarchiveSession','archivedSessionMetadata',
+  'favoriteSessions','setSessionFavorite','searchSessionContent','searchArchivedContent','previewArchivedSession',
+  'diagnoseSessionCaches','rebuildSessionCaches','diagnoseOrphanSubagents']);
 function deny(message = 'RPC_DENIED') { throw Object.assign(new Error(message), { status: 403 }); }
 
 const preferenceFields = {
@@ -30,6 +33,11 @@ const preferenceFields = {
   },
   'ui-settings-general': { welcomeNoticeVersion: value => typeof value === 'string' && value.length <= 80 },
   'ui-settings': { enabled: value => typeof value === 'boolean' },
+  'dsh-rewind-plugin': {
+    fileCheckpointingEnabled: value => typeof value === 'boolean',
+    autoCleanupEnabled: value => typeof value === 'boolean',
+    autoCleanupMaxAgeDays: value => Number.isInteger(value) && value >= 1 && value <= 3650,
+  },
 };
 function checkPreferences(method, args) {
   const fields = preferenceFields[args.ns];
@@ -48,8 +56,19 @@ export async function checkRpc(endpoint, envelope, { executionRoot, identity }) 
   const [namespace, method] = parts;
   const args = envelope.payload?.args;
   const request = args?.request;
+  if (namespace === 'workspaceRegistry' && archiveMethods.has(method)) {
+    const input = ['setSessionFavorite','previewArchivedSession'].includes(method) ? args?.input : args;
+    if (method === 'setSessionFavorite' && typeof input?.favorite !== 'boolean') deny('FAVORITE_REQUIRED');
+    if (['deleteSession','unarchiveSession','setSessionFavorite','previewArchivedSession'].includes(method)
+      && (typeof input?.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(input.sessionId))) deny('SESSION_REQUIRED');
+    return;
+  }
   if (namespace === 'schedule' && scheduleMethods.has(method)) {
     await checkScheduleRequest(method, request, executionRoot);
+    return;
+  }
+  if(namespace==='job' && ['list','follow','kill'].includes(method)) {
+    nativeFileSession(endpoint,envelope);
     return;
   }
   if (namespace === 'session') {
@@ -62,7 +81,7 @@ export async function checkRpc(endpoint, envelope, { executionRoot, identity }) 
       if (request.workspaceId !== undefined) {
         if (typeof request.workspaceId !== 'string' || !request.workspaceId) deny('WORKSPACE_REQUIRED');
         // Preserve native membership. The owner-scoped native registry resolves the ID.
-      } else request.cwd = await executionDirectory(executionRoot, request.cwd ?? executionRoot);
+      } else request.cwd = await executionDirectory(executionRoot, request.cwd ?? '/workspaces/default');
     }
     if (method === 'prompt' && request?.content?.some(part => !['text','image','file'].includes(part.type) || (part.type === 'file' && (typeof part.receiptId !== 'string' || 'attachment' in part)))) deny('NATIVE_UPLOAD_RECEIPT_REQUIRED');
     return;
@@ -118,17 +137,18 @@ export async function checkRpc(endpoint, envelope, { executionRoot, identity }) 
   throw Object.assign(new Error('RPC_DENIED'), { status: 403 });
 }
 
-/** All native byte reads and Office rendering pass through the same ownership gate. */
+/** Native file and job controls pass through the same enterprise session ownership gate. */
 export function nativeFileSession(endpoint, envelope) {
-  if (!endpoint.startsWith('workspaceFiles/') && endpoint !== 'officeToPdf/render') return;
-  const sessionId = envelope.payload?.args?.workspaceFileScopeId;
+  if (!endpoint.startsWith('workspaceFiles/') && endpoint !== 'officeToPdf/render' && !endpoint.startsWith('job/')) return;
+  const sessionId = endpoint.startsWith('job/') ? envelope.payload?.args?.request?.sessionId : envelope.payload?.args?.workspaceFileScopeId;
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(sessionId)) deny('SESSION_REQUIRED');
   return sessionId;
 }
 
 const streams = new Set(['$events','session/follow','session/control','remoteAccess/follow','workspace/follow',
   'sessionTitles/follow','sessionStats/follow','sessionTurnOutline/follow','agentPresets/follow',
-  'workspaceFiles/changes','permissionPresets/follow','approvals/follow','userQuestions/follow','planMode/follow']);
+  'workspaceFiles/changes','permissionPresets/follow','approvals/follow','userQuestions/follow','planMode/follow',
+  'job/list','job/follow']);
 export function checkStream(frame) {
   if (!['open','item','end','cancel'].includes(frame?.type)) throw new Error('STREAM_DENIED');
   if (frame.type === 'open' && !streams.has(frame.endpoint)) throw new Error('STREAM_DENIED');

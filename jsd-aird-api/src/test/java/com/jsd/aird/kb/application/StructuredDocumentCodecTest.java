@@ -9,7 +9,7 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.kb.application.StructuredDocumentCodec;
-import com.jsd.aird.kb.domain.DocumentParser;
+import com.jsd.aird.kb.api.DocumentParser;
 import com.jsd.aird.kb.infrastructure.QwenDocumentParsingConverter;
 import com.jsd.aird.shared.error.ApiException;
 import org.junit.jupiter.api.Test;

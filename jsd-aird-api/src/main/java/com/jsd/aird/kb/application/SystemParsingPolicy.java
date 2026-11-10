@@ -2,7 +2,7 @@ package com.jsd.aird.kb.application;
 
 import java.util.Locale;
 
-import com.jsd.aird.kb.domain.OcrMode;
+import com.jsd.aird.kb.api.OcrMode;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 

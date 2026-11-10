@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import { gzipSync } from 'node:zlib';
 import { runInNewContext } from 'node:vm';
-import { brandScript, brandStaticResponse, productName, staticBrandingTarget } from '../src/branding.mjs';
+import { readFileSync } from 'node:fs';
+import { brandIcon, brandScript, brandStaticResponse, productName, staticBrandingTarget } from '../src/branding.mjs';
 
 const response = body => Object.assign(Readable.from([Buffer.from(body)]),{statusCode:200});
 
@@ -29,11 +30,28 @@ test('native locale adaptation preserves executable code, model names and protoc
   assert.equal(actual.model,'DeepSeek-V4.1-Flash');
   for (const key of ['sectionIntro','error.sessionInUse','unavailable','guide','keyHelp'])
     assert.doesNotMatch(actual[key],/DSH|DeepSeek Harness|\bdsh (?:web|plugin)\b/);
+
+  const module = id => `window.__ModuleLoader__.load({id:"${id}",factory:()=>({
+    "trigger": "设置",
+    "title": "Settings",
+    "shortcut.open": "打开设置",
+    "connection.error": "连接异常",
+    "versionDetail": "{label}\\xA0: {version}",
+  })});`;
+  const entries = [];
+  runInNewContext(brandScript(module('@deepseek-ai/dsh-client-ui-settings-general')+module('other-plugin')),
+    {window:{__ModuleLoader__:{load:entry=>entries.push(entry.factory())}}});
+  assert.equal(entries[0].trigger,'工作台设置');
+  assert.equal(entries[0].title,'Workbench settings');
+  assert.equal(entries[0]['shortcut.open'],'打开工作台设置');
+  assert.equal(entries[0]['connection.error'],'连接异常');
+  assert.equal(entries[1].trigger,'设置');
+  assert.equal(entries[1].title,'Settings');
 });
 
 test('only static UI resources are adapted; API, files, sources and source maps keep their bytes', async () => {
   for (const target of ['/api/session/page','/api/workspaceFiles/readBytes','/business/resource',
-    '/plugins/native.js.map','/uploads/document.js','/api/v1/agents/artifacts/file']) {
+    '/plugins/native.js.map','/assets/index-native.js.map','/assets/other.js','/uploads/document.js','/api/v1/agents/artifacts/file']) {
     assert.equal(staticBrandingTarget(target),false);
     const upstream = response(Buffer.from('user data: DSH'));
     assert.equal(await brandStaticResponse(target,upstream,{'content-type':'application/javascript'}),undefined);
@@ -50,13 +68,22 @@ test('only static UI resources are adapted; API, files, sources and source maps 
   assert.equal(Number(headers['content-length']),bytes.length);
   const javascript = 'const dictionary = {\n "brand.localBuild": "DSH Local Build"\n};';
   const script = await brandStaticResponse('/plugins/combo.js?rev=abc',response(javascript),{'content-type':'text/javascript'});
-  assert.match(script.toString(),/JSD R&D Workspace/);
+  assert.match(script.toString(),/AI Workbench · JSD/);
   const combined = '/plugins/??@deepseek-ai/dsh-client-ui-layout/client.js,@deepseek-ai/dsh-client-ui-session/client.js&rev=abc';
   assert.equal(staticBrandingTarget(combined),true);
   const combinedScript = await brandStaticResponse(combined,response(javascript),{'content-type':'text/javascript'});
-  assert.match(combinedScript.toString(),/JSD R&D Workspace/);
+  assert.match(combinedScript.toString(),/AI Workbench · JSD/);
   assert.equal(staticBrandingTarget('/plugins/??@deepseek-ai/dsh-client-ui-layout/client.js.map&rev=abc'),false);
+  const boot = await brandStaticResponse('/assets/index-CnyQSzND.js',response('const copy = ["HARNESS", "Loading plugins…", "dsh-resource://file"]; copy'),{'content-type':'text/javascript'});
+  const bootCopy = runInNewContext(boot.toString());
+  assert.equal(bootCopy[0],'AI工作台');
+  assert.equal(bootCopy[1],'正在打开工作台…');
+  assert.equal(bootCopy[2],'dsh-resource://file');
   const manifest = JSON.parse(await brandStaticResponse('/manifest.webmanifest',response('{"name":"DeepSeek Harness"}'),{}));
   assert.equal(manifest.name,productName);
+  assert.equal(manifest.short_name,'AI工作台');
   assert.equal(manifest.icons[0].src,'favicon.svg');
+  const icon = await brandStaticResponse('/favicon.svg',response('upstream icon'),{'content-type':'image/svg+xml'});
+  assert.equal(icon.toString(),brandIcon);
+  assert.equal(brandIcon,readFileSync(new URL('../../../jsd-aird-web/public/favicon.svg',import.meta.url),'utf8'));
 });

@@ -73,6 +73,30 @@ def test_selected_evidence_and_explicit_quotes_keep_source_identity():
         export_sources(run, [], {"quote_ids": ["q" + "9" * 24]}, [])
 
 
+def test_obsolete_quote_in_change_note_identifies_file_line_and_can_be_repaired():
+    item = candidate()
+    run = {"evidence": {item["evidence_id"]: item}}
+    obsolete = "q" + "9" * 24
+    old = f"# Correction\nOld citations `{obsolete}` cannot be verified.\n"
+    inputs = {"files": [{"path": "scratch/native/PET厚度.md"}]}
+    with pytest.raises(HTTPException) as error:
+        export_sources(run, [], inputs, [old.encode()])
+    assert "scratch/native/PET厚度.md:2 " + obsolete in error.value.detail
+    assert "change notes or code spans" in error.value.detail
+    # Retain the change note without embedding obsolete machine-readable handles.
+    fixed = f"# Correction\nOld citations replaced.\nWater content: 81 percent. [E:{item['evidence_id']}]"
+    resolved, refs = export_sources(run, [], inputs, [fixed.encode()])
+    assert resolved and refs == [item["source"]]
+
+
+def test_quote_failure_diagnostics_are_bounded():
+    obsolete = "q" + "9" * 24
+    with pytest.raises(HTTPException) as error:
+        export_sources({}, [], {"files": [{"path": "note.md"}]}, [(obsolete + "\n").encode() * 1000])
+    assert error.value.detail.count("note.md:") == 8
+    assert len(error.value.detail) < 1500
+
+
 @pytest.mark.parametrize("path,content", [
     ("output/a.csv", b"a,a\n1,2\n"),
     ("output/a.csv", b"a,b\na,b\n1,2\n"),

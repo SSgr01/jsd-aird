@@ -35,7 +35,13 @@ class FileTools:
         if PurePosixPath(args["path"]).suffix.lower() in {".docx", ".xlsx", ".pdf"} and not execution:
             raise HTTPException(422, "ARTIFACT_FORMAT_REQUIRES_SANDBOX: generate and validate documents in the sandbox")
         parsed = validate_format(args["path"], content)
-        provenance = self.source_policy(run, args, inputs, input_contents, parsed)
+        source_inputs = inputs
+        # Validate citations in the delivered text as well as the execution's
+        # original inputs. A native write may have no execution receipt at all.
+        if PurePosixPath(args["path"]).suffix.lower() in {".md", ".txt", ".csv", ".tsv", ".json", ".html"}:
+            input_contents = [*input_contents, content]
+            source_inputs = {**inputs, "files": [*inputs.get("files", []), {"path": args["path"]}]}
+        provenance = self.source_policy(run, args, source_inputs, input_contents, parsed)
         native_sources = await self.attachment_sources(principal, run, inputs)
         provenance["source_refs"] = list({digest(source): source for source in [
             *provenance.get("source_refs", []), *native_sources,

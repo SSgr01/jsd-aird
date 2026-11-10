@@ -1,6 +1,8 @@
 package com.jsd.aird.mdm.application.service;
+import com.jsd.aird.mdm.api.BusinessPartner;
+import com.jsd.aird.mdm.api.PartnerStatus;
 
-import com.jsd.aird.mdm.application.command.PartnerCommands;
+import com.jsd.aird.mdm.api.PartnerCommands;
 import com.jsd.aird.mdm.application.port.BusinessPartnerRepository;
 import com.jsd.aird.mdm.application.port.ProjectRepository;
 import com.jsd.aird.mdm.domain.model.*;
@@ -17,7 +19,7 @@ import java.time.Instant;
 import java.util.*;
 
 @Service
-public class BusinessPartnerService {
+public class BusinessPartnerService implements com.jsd.aird.mdm.api.BusinessPartners {
     static final String OPERATOR = "system";
     private final BusinessPartnerRepository repository;
     private final ProjectRepository projectRepository;

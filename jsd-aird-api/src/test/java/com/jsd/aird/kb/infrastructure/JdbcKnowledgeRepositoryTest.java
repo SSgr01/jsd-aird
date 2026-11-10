@@ -19,6 +19,24 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 class JdbcKnowledgeRepositoryTest {
+    @Test
+    void scopedVariantsAreBatchedWithDocumentFilterBeforeRanking() {
+        var jdbc=mock(JdbcTemplate.class);var repository=new JdbcKnowledgeRepository(jdbc);
+        var org=UUID.randomUUID();var document=UUID.randomUUID();var category=UUID.randomUUID();
+        repository.batchBm25Rank(org,List.of(new KnowledgeRepository.AnalyzedQuery(0,"resin",List.of(
+            new KnowledgeRepository.AnalyzedTerm("material-smartcn-v2","resin"))),
+            new KnowledgeRepository.AnalyzedQuery(1,"adhesive",List.of(new KnowledgeRepository.AnalyzedTerm("material-smartcn-v2","adhesive")))),
+            true,List.of(category),java.util.Set.of(document),48);
+        repository.batchVectorRank(org,List.of(new KnowledgeRepository.VectorQuery(0,"resin","[0.1,0.2]"),
+            new KnowledgeRepository.VectorQuery(1,"adhesive","[0.3,0.4]")),true,List.of(category),java.util.Set.of(document),48,2);
+        var sql=ArgumentCaptor.forClass(String.class);var args=ArgumentCaptor.forClass(Object[].class);
+        verify(jdbc,times(2)).query(sql.capture(),any(org.springframework.jdbc.core.RowMapper.class),args.capture());
+        assertThat(sql.getAllValues()).allSatisfy(value->assertThat(value).contains("d.id IN (", "p.status = 'CURRENT'", "kb.document_ai_grant"));
+        assertThat(sql.getAllValues().getFirst().indexOf("d.id IN (")).isLessThan(sql.getAllValues().getFirst().indexOf("), corpus AS"));
+        assertThat(sql.getAllValues().getLast().indexOf("d.id IN (")).isLessThan(sql.getAllValues().getLast().indexOf("ORDER BY c.embedding"));
+        assertThat(args.getAllValues().getFirst()).containsSubsequence(org,category,document,48,48);
+        assertThat(args.getAllValues().getLast()).containsSubsequence(org,category,document,2,48);
+    }
 
     @Test
     void attachingLegacyProcessingStepsSkipsStepsAlreadyCreatedForParseRun() {
@@ -171,7 +189,7 @@ class JdbcKnowledgeRepositoryTest {
                 any(Object[].class));
         assertThat(sql.getAllValues().get(0)).contains(
                 "unnest(?::int[], ?::int[], ?::text[], ?::text[])",
-                "family_matches", "count(DISTINCT chunk_id)",
+                "family_matches", "matching_terms AS MATERIALIZED", "count(*) OVER (",
                 "PARTITION BY query_ordinal, analyzer_version",
                 "PARTITION BY query_ordinal", "rank_no <= ?", "c.chunk_role = 'CHILD'");
         assertThat(sql.getAllValues().get(1)).contains(

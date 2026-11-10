@@ -1,0 +1,31 @@
+:root { color-scheme: light dark; --surface: #fff; --ink: #29282d; --muted: #716d76; --border: #e5dfe3; --soft: #f7f5f4; --success: #347552; --warn: #92671f; --error: #b84a55; }
+@media (prefers-color-scheme: dark) { :root { --surface: #242327; --ink: #efebf1; --muted: #b8b1bd; --border: #403b44; --soft: #2c2a2f; --success: #85cda5; --warn: #e0b96d; --error: #ee969f; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: transparent; color: var(--ink); font: 13px/1.6 'Microsoft YaHei UI', system-ui, sans-serif; }
+main { padding: 1px; }
+#status { margin: 12px; color: var(--muted); }
+#cards { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(220px,100%),1fr)); gap: 10px; }
+.card { min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--surface); }
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+h2 { font-size: 14px; font-weight: 500; margin: 0; overflow-wrap: anywhere; }
+.drawing { margin: 10px 0; min-height: 150px; padding: 12px; display: grid; place-items: center; border-radius: 6px; background: white; overflow: auto; }
+.drawing img { display: block; width: min(100%, var(--structure-width)); height: auto; max-height: 360px; object-fit: contain; }
+.card.wide, .card.expanded { grid-column: 1 / -1; }
+.card.expanded .drawing { display: block; max-height: 620px; }
+.card.expanded img { width: var(--structure-width); max-width: none; max-height: none; }
+p { margin: 6px 0 0; }
+a { color: inherit; }
+.actions { position: relative; }
+summary { list-style: none; cursor: pointer; width: 32px; height: 32px; display: grid; place-items: center; font: 20px/1 system-ui; border-radius: 6px; }
+summary::-webkit-details-marker { display: none; }
+summary:hover, button:hover, .menu a:hover { background: var(--soft); }
+summary:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.menu { position: absolute; z-index: 2; top: 36px; right: 0; width: 150px; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+button, .menu a { border: 0; border-radius: 4px; padding: 8px 10px; background: transparent; color: var(--ink); cursor: pointer; font: inherit; text-decoration: none; }
+.menu button, .menu a { display: block; width: 100%; text-align: left; }
+.source { margin-top: 10px; padding: 10px; border-radius: 6px; background: var(--soft); overflow-wrap: anywhere; }
+code { font: 12px/1.7 Consolas, monospace; }
+[hidden] { display: none !important; }
+@media (pointer: coarse) { summary { width: 44px; height: 44px; } .menu { top: 48px; } .menu button, .menu a { min-height: 44px; } }
+
+.drawing.unavailable { background: var(--soft); color: var(--muted); font-size: 12px; gap: 8px; text-align: center; }

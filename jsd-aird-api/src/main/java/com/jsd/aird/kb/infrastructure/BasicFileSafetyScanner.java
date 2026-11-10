@@ -7,7 +7,7 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.zip.ZipInputStream;
 
-import com.jsd.aird.kb.domain.FileSafetyScanner;
+import com.jsd.aird.kb.api.FileSafetyScanner;
 import org.springframework.stereotype.Component;
 
 @Component

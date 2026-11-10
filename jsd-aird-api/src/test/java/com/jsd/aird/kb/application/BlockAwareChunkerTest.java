@@ -18,6 +18,40 @@ class BlockAwareChunkerTest {
     private final BlockAwareChunker chunker = new BlockAwareChunker(mapper);
 
     @Test
+    void keepsExperimentalEvidenceSearchableInSupplementarySections() {
+        var evidence = source(8, List.of(0.1, 0.2, 0.8, 0.2, 0.8, 0.4, 0.1, 0.4));
+        var text = "The formulation contained 1 wt% catalyst and was cured at 80 °C. "
+                + "The product was characterized by 1H NMR spectroscopy.";
+        for (var section : List.of("实验方法", "Supporting Information", "SUPPORTING INFORMATION",
+                "Supplementary Information", "Supplementary Material", "Supplementary Materials", "补充材料")) {
+            var paragraph = node(text, "paragraph", List.of(section, "Synthesis and characterization"),
+                    evidence.sourceNodeKey(), Map.of());
+
+            var children = chunker.chunk("Research document", List.of(paragraph), List.of(evidence), List.of())
+                    .stream().filter(draft -> "CHILD".equals(draft.role())).toList();
+
+            assertThat(children).as("searchable experimental evidence under %s", section)
+                    .singleElement().satisfies(child -> {
+                        assertThat(child.content()).contains(text, "页码：8");
+                        assertThat(child.sourceNodeKeys()).containsExactly(evidence.sourceNodeKey());
+                        assertThat(child.anchors()).hasSize(1);
+                    });
+        }
+    }
+
+    @Test
+    void stillExcludesBibliographyAndAcknowledgementsWithinSupplementarySections() {
+        var evidence = source(8, List.of());
+        for (var section : List.of("References", "Bibliography", "Acknowledgements", "参考文献", "致谢")) {
+            var paragraph = node("Bibliographic entry or acknowledgement.", "paragraph",
+                    List.of("Supporting Information", section), evidence.sourceNodeKey(), Map.of());
+
+            assertThat(chunker.chunk("Research document", List.of(paragraph), List.of(evidence), List.of()))
+                    .as("existing exclusion for %s", section).isEmpty();
+        }
+    }
+
+    @Test
     void createsNonSearchableParentsAndChildrenWithAllEvidence() {
         var headingSource = source(1, List.of(0.05, 0.05, 0.40, 0.05, 0.40, 0.10, 0.05, 0.10));
         var textSource = source(1, List.of(0.05, 0.15, 0.80, 0.15, 0.80, 0.25, 0.05, 0.25));

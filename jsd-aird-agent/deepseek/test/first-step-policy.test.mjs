@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { Readable } from 'node:stream';
 import { apply } from '../../enterprise-plugin/src/index.mjs';
 import { LocalAttachmentStore } from '../../../vendor/deepseek-harness/packages/attachment/attachment-local/lib/index.js';
 const require = createRequire(new URL('../../../vendor/deepseek-harness/packages/attachment/attachment-local/package.json',import.meta.url));
@@ -19,31 +20,44 @@ test('native tool resolution binds the claimed batch before the first prompt and
   const attachments = new LocalAttachmentStore(attachmentContext,{dshHome:attachmentRoot});
   const attachment = await attachments.saveFile({name:'sample.txt',data:Buffer.from('native document')});
   Object.assign(process.env, {JSD_DSH_IDENTITY:JSON.stringify({ticket:'test'}),
-    JSD_DSH_CONTROL_URL:'http://control.invalid', JSD_DSH_RUNTIME_SECRET:'test', JSD_DSH_EXECUTION_ROOT:tmpdir()});
+    JSD_DSH_CONTROL_URL:'http://control.invalid', JSD_DSH_RUNTIME_SECRET:'test', JSD_DSH_INTERNAL_KEY:'internal', JSD_DSH_EXECUTION_ROOT:tmpdir()});
   t.after(()=>{for(const key of Object.keys(process.env))if(!Object.hasOwn(previous,key))delete process.env[key];Object.assign(process.env,previous);});
   t.mock.method(globalThis,'fetch',async(url,options)=>{
     const action=url.split('/').at(-1), body=JSON.parse(options.body); calls.push({action,body});
     return {ok:true,json:async()=>action==='catalog'
       ? {tools:['search_projects','search_experiments'].map(name=>({name,parameters:{type:'object'}})),instructions:'unbound fallback',max_output_tokens:1000}
       : action==='register' ? {id:body.session_id+'-'+body.turn,dsh_turn:body.turn,
+        binding_protocol:2,binding_etags:{tools:'tools-v1'},citation_links:{},citation_evidence_ids:[],
         pack_ids:['files'],
-        tools:[{name:'search_experiments'}], active_tools:['search_experiments'],
-        instructions:'authorized policy '+body.profile+' turn '+body.turn,
+        ...(body.binding_etags?.tools==='tools-v1' ? {} : {
+          tools:[{name:'search_experiments'}], active_tools:['search_experiments'],
+          instructions:'authorized policy '+body.profile+' turn '+body.turn}),
         context:JSON.stringify({task_state:{registered_outputs:body.request?[]:[{kind:'experiment_draft',id:'created-once'}]},
           ...(body.request?{authorized_context:{request:body.request}}:{})})}
+      : ['builtin-state','builtin-sync'].includes(action) ? {tasks:{}}
+      : action==='builtin-pending' ? {sessions:[]}
       : action==='complete' ? {status:'FAILED',completion:{gaps:['CITATION_INVALID']}}
+      : action==='output-repair' ? {repair:{max_model_calls:2,max_tool_calls:2,
+        diagnostics:{issues:[{code:'UNKNOWN_EVIDENCE_ID',citation:'[E:missing]',line:3}],
+          available_evidence:[{evidence_id:'actual',excerpt:'A measured fact'}]}}}
       : {allowed:true}};
   });
-  let section, context;
+  let section, context, enterpriseRoute;
   const ctx={tools:{register:(definition,options)=>{definitions.push({definition,options});return ()=>{};},guard:()=>()=>{}},
-    plugin:()=>{},web:{registerSearchProvider:()=>{}},fs:{exposeAttachment:async(...args)=>exposed.push(args)},agents:{},sessions:{},systemPrompt:{section:value=>{section=value;return ()=>{};},
+    plugin:()=>{},web:{registerSearchProvider:()=>{}},fs:{hostPath:path=>path,exposeAttachment:async(...args)=>exposed.push(args)},agents:{},sessions:{},systemPrompt:{section:value=>{if(value.name==='enterprise-policy')section=value;return ()=>{};},
       context:value=>{context=value;return ()=>{};}},llm:{},
     agentPresets:{presetForSession:()=> 'enterprise'},
     workingDirectory:{get:()=>tmpdir(),ensure:async()=>tmpdir()},workspaceRegistry:{},sessionController:{},
     attachments,
-    webServer:{register:()=>()=>{}},connection:{},logger:{warn:()=>{}},
+    schedule:{catalog:async()=>[]},
+    webServer:{register:route=>{if(route.path==='/enterprise')enterpriseRoute=route.handler;return ()=>{};}},connection:{},logger:{warn:()=>{}},
     effect:fn=>fn(),on:(name,fn)=>events.set(name,fn)};
   await apply(ctx);
+  const background=Readable.from([Buffer.from(JSON.stringify({identity:{ticket:'background',automation_grant_id:'grant',expires_at:Date.now()/1000+3600}}))]);
+  Object.assign(background,{url:'/enterprise/background-identity',headers:{authorization:'Bearer internal'}});
+  let status;
+  await enterpriseRoute(background,{writeHead:value=>{status=value;},end:()=>{}});
+  assert.equal(status,200);
   const signal=new AbortController().signal;
   for(const [id,turn,text] of [['research',1,'first request'],['research',2,'next task'],['qa',1,'fixed question'],['scheduled',1,'scheduled enterprise request']]) {
     const nativeEvents=[], steered=[];
@@ -74,6 +88,7 @@ test('native tool resolution binds the claimed batch before the first prompt and
     // confirmed outputs instead of restoring the entire stale snapshot.
     await definitions[0].options.when({agent,signal});
     const refreshed=JSON.parse(context.text({agent}));
+    assert.equal(calls.filter(c=>c.action==='register').at(-1).body.binding_etags.tools,'tools-v1');
     assert.equal(refreshed.authorized_context.request,text);
     assert.deepEqual(refreshed.task_state.registered_outputs,[{kind:'experiment_draft',id:'created-once'}]);
     await events.get('agent/pre-step')({agent,turn,step:2,messages:[],signal},async()=>({kind:'enter',messages:[]}));
@@ -83,9 +98,11 @@ test('native tool resolution binds the claimed batch before the first prompt and
       assert.equal(steered.length,1);
       assert.equal(steered[0].source.turn,turn);
       assert.match(steered[0].content[0].text,/\[E:/);
+      assert.match(steered[0].content[0].text,/UNKNOWN_EVIDENCE_ID/);
+      assert.match(steered[0].content[0].text,/最多 2 次模型请求、2 次定向补读/);
       assert.equal(calls.filter(c=>c.action==='complete').at(-1).body.check_only,true);
     }
-    // A second failure closes with its real diagnosis; correction is bounded to one generation.
+    // The native message is inserted once; the service separately bounds every repair request.
     await assert.rejects(stop(),/引用/);
     assert.equal(steered.length,1);
     assert.equal(calls.filter(c=>c.action==='complete').at(-1).body.check_only,undefined);

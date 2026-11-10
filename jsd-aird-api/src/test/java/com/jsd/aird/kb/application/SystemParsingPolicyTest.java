@@ -3,7 +3,7 @@ package com.jsd.aird.kb.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.jsd.aird.kb.domain.OcrMode;
+import com.jsd.aird.kb.api.OcrMode;
 import org.junit.jupiter.api.Test;
 
 class SystemParsingPolicyTest {

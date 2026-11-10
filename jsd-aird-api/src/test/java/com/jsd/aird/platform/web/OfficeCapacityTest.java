@@ -24,9 +24,9 @@ class OfficeCapacityTest {
         byte[] bytes;try(var workbook=new org.apache.poi.xssf.usermodel.XSSFWorkbook();var output=new ByteArrayOutputStream()){
             var sheet=workbook.createSheet("验证");sheet.createRow(0).createCell(0).setCellValue("编号");sheet.createRow(1).createCell(0).setCellValue("隔离样本");workbook.write(output);bytes=output.toByteArray();
         }
-        var parsed=tasks.execute("xlsx",new ByteArrayInputStream(bytes),null,com.jsd.aird.tpl.application.port.OfficeStructureParser.ParseResult.class);
+        var parsed=tasks.execute("xlsx",new ByteArrayInputStream(bytes),null,com.jsd.aird.tpl.api.OfficeStructureParser.ParseResult.class);
         assertThat(parsed.initialEditorSnapshot().toString()).contains("隔离样本");
-        var knowledge=tasks.execute("knowledge-office",new ByteArrayInputStream(bytes),json.getNodeFactory().textNode("fixture.xlsx"),com.jsd.aird.kb.domain.DocumentParser.ParsedDocument.class);
+        var knowledge=tasks.execute("knowledge-office",new ByteArrayInputStream(bytes),json.getNodeFactory().textNode("fixture.xlsx"),com.jsd.aird.kb.api.DocumentParser.ParsedDocument.class);
         assertThat(knowledge.toString()).contains("隔离样本");assertThat(space.reserved()).isZero();
     }
     @TempDir Path directory;

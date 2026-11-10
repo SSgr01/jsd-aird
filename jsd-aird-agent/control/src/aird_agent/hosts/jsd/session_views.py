@@ -8,14 +8,17 @@ from aird_agent.server.contracts import ContextRef
 
 class SessionViews:
     async def ensure_conversation(self, principal, sid, profile):
+        from aird_agent.core.session_deletion import require_session_available
         # Native IDs are opaque (the web client creates session-<uuid>).
         # Enterprise conversation UUIDs remain separate from this JSONB mapping.
         if not isinstance(sid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", sid):
             raise HTTPException(422, "INVALID_NATIVE_SESSION_ID")
+        await require_session_available(self.store, principal, sid)
         conversation = await self.session_conversation(principal, sid)
         if conversation is None:
             topic = await self.java(principal, "runtime_context", {"profile": profile, "context_refs": []})
             async with self.store.transaction(principal, "session:" + sid) as conn:
+                await require_session_available(self.store, principal, sid, conn)
                 row = await (await conn.execute(
                     "SELECT id FROM agent_runtime.harness_records WHERE kind='conversation' AND organization_id=%s "
                     "AND actor_id=%s AND payload->>'dsh_session_id'=%s", (*principal.key, sid))).fetchone()

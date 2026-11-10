@@ -2,7 +2,6 @@
 
 import asyncio
 import base64
-import contextlib
 import hashlib
 import json
 import time
@@ -13,6 +12,7 @@ from pydantic import Field
 
 from aird_agent.core.contracts import Contract, digest
 from aird_agent.core.workspace import Workspace, relative_path
+from aird_agent.sandbox.streams import ExecutionStreams
 
 
 class TransferFile(Contract):
@@ -53,7 +53,7 @@ class BrokerJobs:
         # A broker restart never silently re-executes work whose outcome is unknown.
         for path in root.glob("*/receipt.json"):
             record = json.loads(path.read_text(encoding="utf-8"))
-            if record["status"] in {"QUEUED", "RUNNING"}:
+            if record["status"] in {"QUEUED", "RUNNING", "CANCELLING"}:
                 record.update(status="UNKNOWN", error="BROKER_RESTART_REQUIRES_RECONCILIATION")
                 self.save(path.parent.name, record)
 
@@ -79,6 +79,16 @@ class BrokerJobs:
         if not path.is_file():
             raise HTTPException(404, "EXECUTION_NOT_FOUND")
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def output(self, execution_id, stdout_offset=0, stderr_offset=0):
+        record = self.get(execution_id)
+        if not record.get("organization_id") or not record.get("run_id"):
+            return {"status": record["status"], "streams": {}}
+        workspace = Workspace(self.path(execution_id), record["organization_id"], record["run_id"])
+        workspace.check_root()
+        streams = ExecutionStreams(workspace.root / ".streams")
+        return {"status": record["status"], "streams": {
+            "stdout": streams.read("stdout", stdout_offset), "stderr": streams.read("stderr", stderr_offset)}}
 
     async def submit(self, request, files):
         decoded = decode_files(files)
@@ -109,6 +119,7 @@ class BrokerJobs:
                     workspace.write_bytes(path, content)
             record = {
                 "execution_id": request.execution_id,
+                "organization_id": str(request.organization_id), "run_id": str(request.run_id),
                 "request_hash": signature,
                 "status": "QUEUED",
                 "inputs": [
@@ -119,13 +130,26 @@ class BrokerJobs:
                 "created_at": time.time(),
             }
             self.save(request.execution_id, record)
-            self.tasks[request.execution_id] = asyncio.create_task(self.execute(workspace, request))
+            task = asyncio.create_task(self.execute(workspace, request))
+            self.tasks[request.execution_id] = task
+            task.add_done_callback(lambda value: self.finished(request.execution_id, value))
             return record
+
+    def finished(self, execution_id, task):
+        self.tasks.pop(execution_id, None)
+        # Cancellation before the coroutine's first instruction skips its finally block.
+        if task.cancelled():
+            record = self.get(execution_id)
+            if record["status"] in {"QUEUED", "CANCELLING"}:
+                record.update(status="CANCELLED", finished_at=time.time())
+                self.save(execution_id, record)
 
     async def execute(self, workspace, request):
         record = self.get(request.execution_id)
         try:
             async with self.limit:
+                if self.get(request.execution_id).get("cancel_requested_at"):
+                    raise asyncio.CancelledError()
                 record.update(status="RUNNING", started_at=time.time())
                 self.save(request.execution_id, record)
                 result = await self.runner.execute(workspace, request)
@@ -150,12 +174,12 @@ class BrokerJobs:
             record.update(status="CANCELLED")
         except Exception as error:
             record.update(
-                status="FAILED", error=error.detail if isinstance(error, HTTPException) else "SANDBOX_FAILED"
+                status="UNKNOWN" if isinstance(error, HTTPException) and error.detail == "SANDBOX_CLEANUP_PENDING" else "FAILED",
+                error=error.detail if isinstance(error, HTTPException) else "SANDBOX_FAILED"
             )
         finally:
             record["finished_at"] = time.time()
             self.save(request.execution_id, record)
-            self.tasks.pop(request.execution_id, None)
 
     async def cancel(self, execution_id):
         async with self.lock:
@@ -171,12 +195,23 @@ class BrokerJobs:
                 self.save(execution_id, record)
                 return record
             task = self.tasks.get(execution_id)
-            if task:
+            if task and record["status"] not in {"SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN", "CANCELLING"}:
+                record.update(status="CANCELLING", cancel_requested_at=time.time())
+                self.save(execution_id, record)
                 task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+        # Never hold the submission lock while waiting for Docker to clean up.
+        if task:
+            await asyncio.wait({task}, timeout=0.1)
+            if task.done():
+                self.finished(execution_id, task)
+        return self.get(execution_id)
+
+    async def close(self):
+        tasks = list(self.tasks.values())
+        for execution_id, task in list(self.tasks.items()):
+            if self.get(execution_id)["status"] != "CANCELLING":
                 record = self.get(execution_id)
-                if record["status"] in {"QUEUED", "RUNNING"}:
-                    record.update(status="CANCELLED", finished_at=time.time())
-                    self.save(execution_id, record)
-            return self.get(execution_id) if task else record
+                record.update(status="CANCELLING", cancel_requested_at=time.time())
+                self.save(execution_id, record)
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)

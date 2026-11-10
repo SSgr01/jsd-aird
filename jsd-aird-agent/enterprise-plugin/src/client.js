@@ -2,6 +2,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
   const React = require('react'), h = React.createElement;
   const { useEffect, useState, useRef } = React;
   const enterpriseTheme = /* @enterprise-theme */ null;
+  const sourceLinks = /* @source-links */ null;
   const base = '/agent/';
   async function api(action, body, signal) {
     const response = await fetch(base + 'business/' + action, { method: 'POST',
@@ -10,23 +11,30 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
     return response.json();
   }
   const button = (label, onClick, more = {}) => h('button', { type: 'button', onClick, ...more }, label);
+  function returnDestination() {
+    try {
+      const value = sessionStorage.getItem('jsd.ai-workbench.return') || document.referrer;
+      if (value) {
+        const url = new URL(value, location.origin);
+        // Navigation only: resource access is still checked by the business page.
+        if (url.origin === location.origin && /^\/(?:dashboard|partners|templates|projects|experiments|research-test|quality|spectrum|production-orders|knowledge|data|inventory|system)(?:\/|$)/.test(url.pathname)) {
+          const record = /^\/(projects|experiments)\/[0-9a-f]{8}-[0-9a-f-]{27}(?:\/|$)/i.exec(url.pathname);
+          return {href:url.pathname+url.search+url.hash,label:record ? record[1] === 'projects' ? '返回项目' : '返回实验' : '返回系统'};
+        }
+      }
+    } catch { /* A missing or invalid source must not prevent returning to the system. */ }
+    return {href:'/dashboard',label:'返回系统'};
+  }
   function Navigation({ wide }) {
-    const links = [
-      ['/', '企业首页', 'M3 10 12 3l9 7M5 9v12h5v-7h4v7h5V9'],
-      ['/projects', '项目', 'M3 7h7l2 2h9v11H3zM3 7V4h7l2 3'],
-      ['/experiments', '实验', 'M9 3h6M10 3v7l-6 9q-1 2 2 2h12q3 0 2-2l-6-9V3M7 15h10'],
-      ['/knowledge/library', '知识库', 'M12 5q-5-3-10-1v15q5-2 10 1 5-3 10-1V4q-5-2-10 1v15'],
-    ];
-    return h('nav', { className: 'jsd-nav', 'data-wide':String(wide !== false), 'aria-label': '企业导航' },
-      links.map(([href,label,path]) => h('a',{key:href,href,title:label,'aria-label':label},
-        h('svg',{viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.5,
-          strokeLinecap:'round',strokeLinejoin:'round','aria-hidden':true},h('path',{d:path})),
-        wide !== false && h('span',null,label))));
+    const {IconChevronLeftOutlineRegular} = require('@deepseek-ai/dsh-client-ui-primitives');
+    const {href,label} = returnDestination();
+    return h('nav', { className: 'jsd-nav', 'data-wide':String(wide !== false), 'aria-label': '返回业务系统' },
+      h('a',{href,title:label,'aria-label':label},
+        h(IconChevronLeftOutlineRegular,{size:16}),wide !== false && h('span',null,label)));
   }
   function BrandMark({size,className = ''}) {
     return h('span',{className:'jsd-brand-mark '+className,'aria-hidden':true},
-      h('svg',{width:size,height:size,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.5},
-        [ [3,3], [14,3], [3,14], [14,14] ].map(([x,y])=>h('rect',{key:x+'-'+y,x,y,width:7,height:7,rx:1.5}))));
+      h('img',{src:base+'favicon.svg',width:size,height:size,alt:'',draggable:false}));
   }
   const HeroContext = React.createContext(false);
   function HeroFrame({hero,children}) {
@@ -145,6 +153,78 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
           scrollportRef:()=>{},addResource:()=>{},setResources:()=>{}},
           {entryKey:nativePdfKey,hookContext:useTabInfo}));
   }
+  function registerSourceMarkdown(scope) {
+    const sourceTitles=new Map();
+    // Separate seats retain the native child components without redeclaring
+    // slots owned by ui-chat. The wrapper only projects assistant text.
+    const seats = {
+      'conversation.chat.reasoning.body':'enterprise.source.reasoning',
+      'conversation.chat.message.images':'enterprise.source.images',
+    };
+    scope.slots.inject('conversation.chat.node', () => {
+      let current, dispose;
+      const sync = () => {
+        const entry = scope.slots.entries('conversation.chat.node').find(item =>
+          item.options.key === 'assistant-step' && (item.options.priority || 0) === 0);
+        if (!entry || entry === current) return;
+        current = entry; dispose?.();
+        function ReadableSources(props) {
+          const data=props.node.data;
+          const {blocks,sources}=React.useMemo(()=>sourceLinks.projectSourceBlocks(data.blocks,location.origin),[data.blocks]);
+          const renderSlot=React.useCallback((name,owner,options)=>
+            props.renderSlot(seats[name] || name,owner,options),[props.renderSlot]);
+          const native=h(entry.component,{...props,renderSlot,node:{...props.node,data:{...data,blocks}}});
+          if(!sources.length) return native;
+          const showSourceTitle=event=>{
+            const link=event.target.closest?.('a[data-jsd-citation]');
+            if(!link)return;
+            const item=sources.find(candidate=>candidate.locations.some(place=>place.url===link.href));
+            const id=new URL(link.href).pathname.match(/^\/api\/v1\/knowledge\/documents\/([a-f0-9-]{36})\/versions\//)?.[1];
+            if(!item||!id)return;
+            if(!sourceTitles.has(id)) sourceTitles.set(id,fetch('/api/v1/knowledge/documents/'+id,{credentials:'same-origin'})
+              .then(response=>response.ok ? response.json() : null)
+              .then(value=>String(value?.data?.title||'').replace(/\.pdf$/i,'').replace(/^(?:PMC\d+|W\d+)[_\s-]+/i,'').replace(/[_\s]+/g,' ').trim())
+              .catch(()=>''));
+            void sourceTitles.get(id).then(title=>{
+              if(!title||!link.isConnected)return;
+              const page=item.locations.find(place=>place.url===link.href)?.page;
+              link.title=title+(page ? ' · 第 '+page+' 页' : '');
+              link.setAttribute('aria-label','查看 '+link.textContent.trim()+'：'+link.title);
+            });
+          };
+          return h('div',{className:'jsd-cited-answer',ref:node=>{
+            node?.querySelectorAll('a[href]').forEach(link=>{
+              const item=sources.find(candidate=>candidate.locations.some(place=>place.url===link.href));
+              if(!item) return;
+              const place=item.locations.find(candidate=>candidate.url===link.href);
+              const title=item.title+(place.page ? ' · 第 '+place.page+' 页' : '');
+              link.title=title;link.setAttribute('aria-label','查看 '+link.textContent.trim()+'：'+title);
+              link.setAttribute('data-jsd-citation','');
+            });
+          },onPointerOverCapture:showSourceTitle,onFocusCapture:showSourceTitle},native);
+        }
+        dispose=scope.slots.register({name:'conversation.chat.node',key:'assistant-step',priority:-100,
+          children:Object.fromEntries(Object.values(seats).map(name=>[name,{kind:'single',scope:'session'}])),
+          inject:entry.inject,locale:entry.locale,store:entry.store},ReadableSources);
+      };
+      const unsubscribe=scope.slots.subscribe('conversation.chat.node',sync);
+      sync();return ()=>{unsubscribe();dispose?.();};
+    });
+    for (const [native,seat] of Object.entries(seats)) {
+      scope.slots.inject(seat, () => {
+        let current, dispose;
+        const sync=()=>{
+          const entry=scope.slots.entriesOfSlot(native)[0];
+          if(entry===current)return;
+          dispose?.();current=entry;
+          dispose=entry && scope.slots.register({name:seat,inject:entry.inject,
+            locale:entry.locale,store:entry.store},entry.component);
+        };
+        const unsubscribe=scope.slots.subscribe(native,sync);
+        sync();return ()=>{unsubscribe();dispose?.();};
+      });
+    }
+  }
   function registerOriginals(scope) {
     scope.effect(() => scope.sidebarRightTabs.register({id:'@jsd-aird/original',kind:'enterprise-original',
       patterns:['dsh-resource://enterprise-original/**'],title:()=> '原文'}));
@@ -262,7 +342,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
       get_experiment_record:'读取实验版本',create_experiment_draft:'创建实验草稿',
       report_check:'核查正式报告',report_save:'保存正式报告',artifact_save:'登记成果',
       evidence_score:'筛选证据',evidence_save:'保存证据',matrix_record:'整理研究依据',note_save:'保存研究笔记'};
-    function BusinessTool({block,toolName,phase,useDisclosure,inspect}) {
+    function BusinessTool({block,toolName,phase,useDisclosure}) {
       const {expanded,toggle} = useDisclosure();
       const meta = block.meta?.enterprise ? block.meta : {};
       let value;
@@ -270,67 +350,172 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
       catch {value = {};}
       const rows = value.candidates || value.hits || value.entries || [];
       const query = block.args?.text('query');
-      const summary = block.isError ? '操作未完成' : phase !== 'result' ? query || '处理中' :
+      const failed = block.isError || meta.failed || Boolean(value.error);
+      const summary = failed ? '操作未完成' : phase !== 'result' ? query || '处理中' :
         meta.count !== undefined ? meta.count+' 条结果' : meta.summary || '已完成';
       const content = rows.slice(0,8).map((row,index)=>h('section',{key:index},
         h('strong',null,row.title || row.name || row.source?.title || '结果 '+(index+1)),
         h('p',{style:{whiteSpace:'pre-wrap'}},String(row.text || row.snippet || row.quote?.text || '').slice(0,1800))));
-      return h(DisclosureRow,{title:titles[toolName] || '企业查询',icon:h(IconSearchOutlineRegular,{size:14}),
+      const errorText = String(meta.summary || value.error || '业务请求未完成，请稍后继续。')
+        .replace(/^[A-Z][A-Z_0-9]+:\s*/, '');
+      return h(DisclosureRow,{className:'jsd-business-tool',contentClassName:'jsd-tool-header',
+        contentLayoutClassName:'jsd-tool-header-content',
+        title:titles[toolName] || '企业查询',icon:h(IconSearchOutlineRegular,{size:14}),
         open:expanded,expandable:phase==='result',onToggle:toggle,expandOnRowClick:true,
-        running:phase!=='result',collapsedContent:h('span',null,' · '+summary)},
-        h('div',{style:{padding:'8px 24px',fontSize:13,lineHeight:1.65}},
-          block.isError ? h('p',{role:'status'},'操作未完成，可展开轨迹查看详情。') : content.length ? content : h('p',null,meta.summary || '业务结果已返回'),
-          (meta.sources || []).map((source,index)=>h('p',{key:'source-'+index},h('a',{href:source.url},source.label))),
-          inspect && button('查看轨迹',inspect)));
+        running:phase!=='result',collapsedContent:h('span',{className:'jsd-tool-summary',title:summary},' · '+summary)},
+        h('div',{className:'jsd-tool-content'},
+          failed ? h('p',{role:'status'},errorText) : content.length ? content : h('p',null,meta.summary || '业务结果已返回'),
+          (meta.sources || []).map((source,index)=>h('p',{key:'source-'+index},h('a',{href:source.url,className:'jsd-source-link',title:source.label},
+            sourceLinks.sourceLinkLabel(source.label,new URL(source.url,location.origin)))))));
     }
     scope.slots.inject('tool.call.toolview',function* () {
       for (const key of Object.keys(titles)) yield scope.slots.register({name:'tool.call.toolview',key},BusinessTool);
     });
   }
-  function registerInboxActions(scope) {
-    function InboxActions({useProjection,useInput,sessionId,putBack,notify}) {
-      const queue = useProjection('inbox')?.['next-turn'] || [];
-      const phase = useInput(value => value.phase);
-      const [selected,setSelected] = useState(''), [busy,setBusy] = useState(false);
-      const index = Math.max(0,queue.findIndex(item=>item.id===selected)), item = queue[index];
-      if (!item) return null;
-      const disabled = busy || phase !== 'plain';
-      async function act(kind,direction) {
+  function latestTurnBoundary(window) {
+    return window.entries.findLast(row=>row.type==='event' &&
+      (row.event.type==='turn/start' || row.event.type==='turn/end'))?.event;
+  }
+  function continuationLabel(boundary) {
+    if (boundary?.type!=='turn/end') return null;
+    const reason=boundary.data.reason;
+    if (reason.kind==='interrupted') return '任务已中断';
+    if (reason.kind==='max-tokens') return '回答已截断';
+    if (reason.kind==='aborted' && ['user','disposed','legacy'].includes(reason.reason.kind)) return '任务已暂停';
+    return null;
+  }
+  function idleSession(session) {
+    return session.openState==='open' && !session.running && !session.removed && !session.blank && session.subagent===null;
+  }
+  function registerDeletedSessionNavigation(scope) {
+    function DeletedSessionNavigation({useSession,next}) {
+      const removed=useSession(value=>value.removed), handled=useRef(false);
+      useEffect(()=>{
+        if (!removed) handled.current=false;
+        else if (!handled.current) {handled.current=true;next();}
+      },[removed,next]);
+      return null;
+    }
+    scope.slots.inject('conversation.input.right',()=>scope.slots.register({
+      name:'conversation.input.right',id:'enterprise-deleted-session-navigation',
+      inject:()=>({next:()=>scope.uiWorkspace.startSession()}),
+    },DeletedSessionNavigation));
+  }
+  function registerPluginMenuPolicy(scope) {
+    scope.effect(()=>{
+      let observer;
+      // The pinned addon's legacy menu has public data markers; its newer
+      // native menu omits them. Limit this presentation policy to an open
+      // workspace menu. The corresponding server operations stay denied.
+      const hideDesktopAction=()=>{
+        for (const item of document.querySelectorAll('[role="menuitem"]')) {
+          if (['打开目录','Open folder','Открыть папку'].includes(item.textContent.trim()))
+            (item.parentElement?.childElementCount===1 ? item.parentElement : item).style.display='none';
+        }
+      };
+      const update=()=>{
+        observer?.disconnect();observer=undefined;
+        if (scope.contextMenus.active.getSnapshot()?.kind!=='workspace') return;
+        hideDesktopAction();observer=new MutationObserver(hideDesktopAction);
+        observer.observe(document.body,{childList:true,subtree:true});
+      };
+      const unsubscribe=scope.contextMenus.active.subscribe(update);update();
+      return ()=>{unsubscribe();observer?.disconnect();};
+    });
+  }
+  function registerContinuation(scope) {
+    const pending=new Map();
+    const {IconTriangleRightFillRegular}=require('@deepseek-ai/dsh-client-ui-primitives');
+    function Continuation({useSession,useInput,useEvents,useComposerBlock,useAccess,resume}) {
+      const session=useSession(value=>value), input=useInput(value=>value);
+      const boundary=useEvents(latestTurnBoundary), block=useComposerBlock(value=>value);
+      const allowed=useAccess('session/prompt');
+      const [busy,setBusy]=useState(false), [accepted,setAccepted]=useState(null);
+      const label=continuationLabel(boundary);
+      if (!label || !idleSession(session) || allowed===false || input.draft.trim()!=='' || input.attachmentIds.length>0) return null;
+      const sending=busy || accepted===boundary.seq;
+      const disabled=sending || input.phase!=='plain' || block!==undefined || session.pendingSubmissions.length>0;
+      async function act() {
+        if (disabled) return;
         setBusy(true);
-        let retained = false;
-        try {
-          const text = kind==='take' ? item.content.map(block=>block.text).join('') : undefined;
-          // Keep the native draft before removing its durable queue occurrence.
-          // A lost response leaves a visible copy, never a silently lost message.
-          if (kind==='take') {putBack(text);retained=true;}
-          await api('inbox',{session_id:sessionId,item_id:item.id,kind,direction,expected_text:text,
-            expected_ids:queue.map(value=>value.id)});
-          if (kind!=='take') setSelected(item.id);
-        } catch {notify(retained ? '文字已保留在输入框，队列操作尚未确认；请核对后再发送。' :
-          '队列已变化或操作未完成，请核对当前消息后继续。');}
+        try {if (await resume(boundary.seq)) setAccepted(boundary.seq);}
         finally {setBusy(false);}
       }
-      return h('div',{className:'jsd-inbox-actions',role:'group','aria-label':'原生队列操作'},
-        h('select',{'aria-label':'选择排队消息',value:item.id,disabled,onChange:event=>setSelected(event.target.value)},
-          queue.map((row,position)=>h('option',{key:row.id,value:row.id},(position+1)+'. '+
-            (row.content.filter(block=>block.type==='text').map(block=>block.text).join('').slice(0,50)||'附件消息')))),
-        button('上移',()=>act('move',-1),{disabled:disabled||index===0}),
-        button('下移',()=>act('move',1),{disabled:disabled||index===queue.length-1}),
-        button('放回输入框',()=>act('take'),{disabled:disabled||!item.content.every(block=>block.type==='text'),
-          title:'保留现有输入；含附件的消息继续使用原生队列操作'}));
+      return button(sending ? h('svg',{className:'jsd-continue-spinner',viewBox:'0 0 16 16',width:16,height:16,'aria-hidden':true},
+        h('circle',{cx:8,cy:8,r:6,fill:'none',stroke:'currentColor',strokeOpacity:.35,strokeWidth:2}),
+        h('path',{d:'M8 2a6 6 0 0 1 6 6',fill:'none',stroke:'currentColor',strokeWidth:2,strokeLinecap:'round'})) :
+        h(IconTriangleRightFillRegular,{size:16,'aria-hidden':true}),act,
+        {className:'jsd-continue-action',disabled,'aria-label':'继续任务','aria-busy':sending,
+          title:sending ? '继续中…' : '继续任务',onMouseDown:event=>event.preventDefault()});
     }
-    scope.slots.inject('conversation.input.dock',()=>scope.slots.register({
-      name:'conversation.input.dock',id:'enterprise-inbox-actions',order:21,
+    scope.slots.inject('conversation.input.right',()=>scope.slots.register({
+      name:'conversation.input.right',id:'enterprise-continuation',
       inject:sessionId=>{
-        const actx=scope.sessions.scope(sessionId), input=scope.conversation.input.for(actx);
-        return {sessionId,notify:text=>input.notify('error',text),putBack:text=>{
-          const binding=scope.sessions.binding(sessionId);
-          if (!binding || scope.conversation.input.requestDraftInitialization(binding,
-            {prompt:text,whenDraftExists:'append'}) !== 'applied') throw new Error('INPUT_BUSY');
-          input.focus();
+        const binding=scope.sessions.binding(sessionId), input=scope.conversation.input.for(scope.sessions.scope(sessionId));
+        const block=scope.conversation.blocks.storeFor(sessionId);
+        return {hooks:{events:binding.eventSource,composerBlock:block},resume:async seq=>{
+          const current=scope.sessions.binding(sessionId);
+          if (current!==binding) return false;
+          const boundary=latestTurnBoundary(binding.eventSource.getSnapshot());
+          const session=binding.session.getSnapshot();
+          const draft=input.state.getSnapshot();
+          if (boundary?.seq!==seq || !continuationLabel(boundary) || !idleSession(session)
+            || session.pendingSubmissions.length>0 || draft.phase!=='plain' || draft.draft.trim()!=='' || draft.attachmentIds.length>0
+            || block.getSnapshot()!==undefined) return false;
+          const requestId='enterprise-continue-'+sessionId+'-'+seq;
+          if (pending.has(requestId)) return pending.get(requestId);
+          // One native request per stopped boundary, also across remounts and lost responses.
+          // Sending directly leaves the editor's draft, references and attachments intact.
+          const operation=(async()=>{
+            try {
+              const result=await binding.session.prompt([{type:'text',text:'继续'}],'queue',undefined,requestId);
+              return result.ok;
+            } catch {
+              input.notify('error','继续请求尚未确认，请检查连接后重试。');
+              return false;
+            }
+          })();
+          pending.set(requestId,operation);
+          try {return await operation;}
+          finally {pending.delete(requestId);}
         }};
       },
-    },InboxActions));
+    },Continuation));
+  }
+  function registerAdmissionLabel(scope) {
+    scope.effect(() => scope.resources.register({
+      protocol:'enterprise-run-state',
+      async *open(address,{signal}) {
+        const sessionId=decodeURIComponent(new URL(address).pathname.slice(1));
+        while(!signal.aborted) {
+          try {
+            const value=await api('run-state',{session_id:sessionId},signal);
+            if(signal.aborted)return;
+            yield {ok:true,value};
+          } catch {
+            if(signal.aborted)return;
+            yield {ok:false,error:{code:'RUN_STATE_UNAVAILABLE',message:'正在重新连接，原请求已保留'}};
+          }
+          await new Promise(resolve=>{
+            const done=()=>{clearTimeout(timer);signal.removeEventListener('abort',done);resolve();};
+            const timer=setTimeout(done,1500);
+            signal.addEventListener('abort',done,{once:true});
+            if(signal.aborted)done();
+          });
+        }
+      },
+    }));
+    function AdmissionLabel({sessionId,label,useResource}) {
+      const state=useResource('dsh-resource://enterprise-run-state/'+encodeURIComponent(sessionId));
+      const run=state.value?.run;
+      const text=run?.status==='QUEUED'
+        ? run.admission==='GRANTED' ? '正在准备任务…' : '当前任务较多，正在排队'
+        : label;
+      return h('span',{...(run?.status==='QUEUED' ? {role:'status','aria-live':'polite'}:{})},text);
+    }
+    scope.slots.inject('conversation.chat.running-label',()=>scope.slots.register({
+      name:'conversation.chat.running-label',priority:-100,
+    },AdmissionLabel));
   }
   return { inject: ['slots','theme'], apply(ctx) {
     ctx.effect(() => ctx.theme.overrideTokens('@jsd-aird/enterprise-plugin',enterpriseTheme.tokens));
@@ -346,15 +531,19 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
       };
     });
     ctx.slots.inject('sidebar.brand.mark',()=>ctx.slots.register({name:'sidebar.brand.mark'},BrandMark));
-    ctx.slots.inject('sidebar.brand.name',()=>ctx.slots.register({name:'sidebar.brand.name'},()=>h('span',{className:'jsd-brand-name'},'研发工作台')));
+    ctx.slots.inject('sidebar.brand.name',()=>ctx.slots.register({name:'sidebar.brand.name'},()=>h('span',{className:'jsd-brand-name'},'AI工作台')));
     ctx.slots.inject('conversation.hero.brand.mark',()=>ctx.slots.register({name:'conversation.hero.brand.mark'},BrandMark));
     ctx.slots.inject('conversation.header.leading',()=>ctx.slots.register({name:'conversation.header.leading',id:'enterprise-page-title',order:-10},
-      ()=>h('h1',{className:'jsd-page-title'},'AI 问答')));
+      ()=>h('h1',{className:'jsd-page-title'},'AI工作台')));
     ctx.slots.inject('sidebar.footer.action',()=>ctx.slots.register({name:'sidebar.footer.action',id:'enterprise-navigation'},Navigation));
     ctx.inject(['inputTriggers','uiConversation','sidebarRight','sidebarRightTabs'],registerInputs);
     ctx.inject(['sidebarRight','sidebarRightTabs'],registerOriginals);
-    ctx.inject(['conversation','sessions'],registerInboxActions);
+    ctx.inject(['resources'],registerAdmissionLabel);
+    ctx.inject(['conversation','sessions'],registerContinuation);
+    ctx.inject(['uiWorkspace'],registerDeletedSessionNavigation);
+    ctx.inject(['contextMenus'],registerPluginMenuPolicy);
     ctx.inject(['conversation','sessions'],registerWelcomeCards);
+    registerSourceMarkdown(ctx);
     registerBusinessToolViews(ctx);
   }};
 }});

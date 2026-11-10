@@ -8,7 +8,6 @@ from datetime import datetime
 from fastapi import HTTPException
 
 from aird_agent.capabilities.definitions import INITIAL_TOOLS, TOOLS
-from aird_agent.evidence.retrieval_context import qa_history
 from aird_agent.capabilities.files.handler import FILE_TOOL_NAMES, FileTools
 from aird_agent.capabilities.literature.export import validate_literature_export
 from aird_agent.capabilities.literature.handler import LiteratureTools
@@ -21,8 +20,9 @@ from aird_agent.evidence.citations import normalize_citations, validate_generate
 from aird_agent.evidence.exports import LITERATURE_KINDS, export_sources
 from aird_agent.evidence.metadata import merge_metadata, metadata_preview
 from aird_agent.evidence.navigation import quote_window
-from aird_agent.evidence.presentation import model_candidate, model_result
+from aird_agent.evidence.presentation import model_candidate, source_label
 from aird_agent.evidence.registry import register_candidates
+from aird_agent.evidence.retrieval_context import qa_history
 from aird_agent.hosts.jsd.task_state import (
     ACTIVITIES,
     check_delivery,
@@ -30,7 +30,6 @@ from aird_agent.hosts.jsd.task_state import (
     scope_digest,
     selected_evidence,
     selected_sources,
-    source_catalog,
 )
 from aird_agent.sandbox.client import Sandbox
 
@@ -93,7 +92,7 @@ class JsdBindings(RuntimeBindings):
             await self.java(
                 principal,
                 "authorize_sources",
-                {"sources": self.authorization_sources(run.get("source_refs", []))},
+                await self.source_authorization(principal, run, historical=not execution),
                 run.get("id"),
             )
         else:
@@ -120,6 +119,12 @@ class JsdBindings(RuntimeBindings):
                         current.pop(key, None)
                     await self.store.update(principal, "run", current, conn)
         return topic
+
+    async def source_authorization(self, principal, run, *, historical=False):
+        request = {"sources": self.authorization_sources(run.get("source_refs", []))}
+        if historical and await self.runtime.briefings.historical_run(principal, run):
+            request["purpose"] = "briefing-history"
+        return request
 
     @staticmethod
     def authorization_sources(sources):
@@ -158,6 +163,15 @@ class JsdBindings(RuntimeBindings):
         tools = self.packs.tools(run["pack_ids"]) if run.get("pack_versions") else TOOLS
         # The native catalog must already contain readers before an approved acquisition
         # adds its first source. Initial activation is still limited; readers enforce membership.
+        if "business-data" in run.get("pack_ids", []):
+            tools = [item for item in tools if item["name"] not in {
+                "search_projects", "get_project_snapshot", "list_project_stages", "list_project_tasks",
+                "get_task_detail", "get_project_records", "search_experiments", "get_experiment_record",
+                "query_structured_data",
+            }]
+        if run.get("automation"):
+            from aird_agent.hosts.jsd.briefings import READ_TOOLS
+            tools = [item for item in tools if item["name"] in READ_TOOLS]
         return tools
 
     def mutation_tools(self, run):
@@ -189,7 +203,7 @@ class JsdBindings(RuntimeBindings):
         ):
             from aird_agent.evidence.navigation import search_preview
 
-            return search_preview(result, self.tool_character_budget)
+            return search_preview(result, self.tool_character_budget, delivered=run)
         if result.get("file_id") and result.get("id"):
             return {
                 key: result[key]
@@ -207,6 +221,11 @@ class JsdBindings(RuntimeBindings):
         # readers paginate at their source; never point native tools at a
         # Python-only workspace or truncate an authoritative business record.
         return result
+
+    def delivery_result(self, run, name, arguments, result):
+        from aird_agent.evidence.delivery import delivery_result
+
+        return delivery_result(run, name, arguments, result)
 
     async def remember_sources(self, principal, run, result):
         groups = [(name, result.get(name, [])) for name in ("candidates", "context_candidates")]
@@ -335,7 +354,7 @@ class JsdBindings(RuntimeBindings):
                 await self.java(
                     principal,
                     "authorize_sources",
-                    {"sources": self.authorization_sources(previous["source_refs"])},
+                    await self.source_authorization(principal, previous, historical=True),
                     rid,
                 )
         return snapshots
@@ -486,7 +505,12 @@ class JsdBindings(RuntimeBindings):
         return registered_output
 
     def error_info(self, exc):
+        from aird_agent.hosts.jsd.host import HostToolError
+
+        diagnosis = exc.tool_error if isinstance(exc, HostToolError) else {}
         detail = exc.detail if isinstance(exc, HTTPException) else ""
+        if isinstance(exc, HTTPException) and exc.status_code in {401, 403}:
+            return {**diagnosis, "access_denied": True}
         if (
             isinstance(exc, HTTPException)
             and exc.status_code == 422
@@ -496,28 +520,28 @@ class JsdBindings(RuntimeBindings):
                 "correctable": True,
                 "hint": "No card was saved. Read the original evidence and correct the fields, then submit a new tool call; do not replay the unchanged invalid arguments.",
             }
-        return {}
+        return diagnosis
 
     def gate_state(self, run):
-        return {
-            "sources": [{"title": item.get("title"), "reading_handles": item["reading_handles"]} for item in source_catalog(run)],
-            **{
-                key: read_progress(run.get(key, {}))
-                if key == "read_coverage"
-                else matrix_summary(run)
-                if key == "research_matrix"
-                else run.get(key)
-                for key in (
-                    "report_review_failure",
-                    "research_requirements",
-                    "research_matrix",
-                    "read_coverage",
-                    "registered_outputs",
-                    "business_context_updates",
-                    "required_artifacts",
-                )
-            },
-        }
+        # Native messages already contain source handles and reading results.
+        # Repeating their growing catalog on every step appends another context
+        # snapshot without adding evidence. Keep that detail in the ledger.
+        state = {key: run[key] for key in (
+            "report_review_failure", "research_requirements", "registered_outputs",
+            "business_context_updates", "required_artifacts",
+        ) if run.get(key)}
+        if run.get("research_matrix"):
+            state["research_matrix"] = matrix_summary(run)
+        if (run.get("research_requirements") or {}).get("fulltext_documents"):
+            state["read_coverage"] = read_progress(run.get("read_coverage", {}))
+        if run.get("output_repair"):
+            repair = run["output_repair"]
+            state["citation_repair"] = {
+                "remaining_model_calls": repair["max_model_calls"] - repair["model_calls"],
+                "remaining_reads": repair["max_tool_calls"] - repair["tool_calls"],
+                "instruction": "仅修复当前回答的引用，使用已读证据。最后一次模型请求必须直接完成答复；不得继续调用读取工具或扩展检索。",
+            }
+        return state
 
     def evidence_summaries(self, run):
         return [
@@ -526,7 +550,7 @@ class JsdBindings(RuntimeBindings):
                 "question": item["question"],
                 "summary": item["summary"],
                 "score": item["score"],
-                "source": model_result({"source": run.get("evidence", {}).get(item["evidence_id"], {}).get("source", {})})["source"],
+                "source": source_label(run.get("evidence", {}).get(item["evidence_id"], {}).get("source", {})),
                 "source_quotes": quote_window(
                     run["evidence"][item["evidence_id"]], item["question"]
                 )[2] if item["evidence_id"] in run.get("evidence", {}) else [],
@@ -569,19 +593,47 @@ class JsdBindings(RuntimeBindings):
 
     def initial_tools(self, run):
         names = self.packs.initial_tools(run["pack_ids"]) if run.get("pack_versions") else INITIAL_TOOLS
+        available = {item["name"] for item in self.tools_for(run)}
         return [
             name
             for name in names
-            if run.get("private_source_ids")
+            if name in available and (run.get("private_source_ids")
             or any(item.get("source", {}).get("kind") in {"RUN_UPLOAD", "EXTERNAL_FULLTEXT"}
                    for item in run.get("evidence", {}).values())
-            or not name.startswith("private_document_")
+            or not name.startswith("private_document_"))
         ]
 
     def normalize_output(self, text, evidence):
         return normalize_citations(text, evidence)
 
     def validate_output(self, run, text):
+        checked, valid, _ = self._check_output(run, text)
+        return checked, valid
+
+    def output_diagnostics(self, run, text):
+        from aird_agent.evidence.citation_repair import diagnostics
+
+        checked, valid, reason = self._check_output(run, text)
+        return {} if valid else diagnostics(run, checked, reason)
+
+    def prepare_output_repair(self, run):
+        diagnostics = self.output_diagnostics(run, run.get("last_text", ""))
+        if not diagnostics:
+            raise HTTPException(409, "OUTPUT_REPAIR_NOT_REQUIRED")
+        evidence = run.get("evidence", {})
+        delivered = set(run.get("evidence_delivery", {})) | set(run.get("turn_evidence_ids", []))
+        return {"turn": run["dsh_turn"], "model_calls": 0, "tool_calls": 0,
+                "max_model_calls": self.settings.citation_repair_model_calls,
+                "max_tool_calls": self.settings.citation_repair_tool_calls,
+                "allowed_evidence_ids": sorted(set(evidence) & delivered or set(evidence)),
+                "diagnostics": diagnostics}
+
+    def authorize_repair_tool(self, run, name, arguments):
+        from aird_agent.evidence.citation_repair import authorize_read
+
+        authorize_read(run, name, arguments)
+
+    def _check_output(self, run, text):
         from aird_agent.evidence.links import canonical_links, citation_links
         text = canonical_links(text, citation_links(run.get("evidence", {}), self.settings.public_url if hasattr(self, "settings") else "http://localhost:5173"))
         text = normalize_citations(text, run["evidence"])
@@ -613,9 +665,9 @@ class JsdBindings(RuntimeBindings):
                 raise HTTPException(422, "SELECTED_SOURCE_CITATIONS_REQUIRED")
             if uses_sources and run.get("evidence") and not cited:
                 raise HTTPException(422, "SOURCE_CITATIONS_REQUIRED")
-            return text, True
-        except HTTPException:
-            return text, False
+            return text, True, None
+        except HTTPException as error:
+            return text, False, str(error.detail)
 
     async def validate_delivery(self, principal, run, conn):
         # File registration checks the exact producing execution and byte hash.

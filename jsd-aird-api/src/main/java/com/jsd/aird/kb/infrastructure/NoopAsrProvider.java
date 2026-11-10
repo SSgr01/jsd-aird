@@ -2,8 +2,8 @@ package com.jsd.aird.kb.infrastructure;
 
 import java.io.InputStream;
 
-import com.jsd.aird.kb.domain.DocumentParser;
-import com.jsd.aird.kb.domain.MediaExtractionProvider;
+import com.jsd.aird.kb.api.DocumentParser;
+import com.jsd.aird.kb.api.MediaExtractionProvider;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;

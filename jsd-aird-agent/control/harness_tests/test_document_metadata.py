@@ -6,15 +6,14 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
-from pydantic import ValidationError
 from test_retrieval_snapshots import runtime_for
 
-from aird_agent.evidence.retrieval_context import answer_context
 from aird_agent.capabilities.registry import ANSWER_INSTRUCTIONS, default_registry
 from aird_agent.core.capabilities import CapabilityPack, CapabilityRegistry
 from aird_agent.evidence.citations import normalize_citations, validate_report
 from aird_agent.evidence.metadata import merge_metadata
 from aird_agent.evidence.navigation import cached_host, search_preview
+from aird_agent.evidence.presentation import model_result
 from aird_agent.hosts.jsd.bindings import JsdBindings
 from aird_agent.hosts.jsd.task_state import bound_document_page
 
@@ -29,20 +28,18 @@ def document():
     return candidate, metadata
 
 
-def test_bibliography_survives_search_read_and_qa_projection_without_consuming_evidence_budget():
+def test_bibliography_survives_search_and_read_without_consuming_evidence_budget():
     candidate, metadata = document()
     page = {"candidates": [candidate], "document_metadata": [metadata, copy.deepcopy(metadata)],
             "trace": {"total_nodes": 1, "candidate_count": 1}}
     preview = search_preview(page, 2400)
     assert preview["hits"][0]["quote"]["text"] == candidate["text"]
-    assert len(json.dumps(preview, ensure_ascii=False)) <= 2400
+    assert len(json.dumps(model_result(preview), ensure_ascii=False)) <= 2400
     assert len(preview["document_metadata"]) == 1
     assert preview["document_metadata"][0]["abstract_truncated"]
     read = bound_document_page(page, {}, 2400)
     assert read["candidates"][0]["text"] == candidate["text"]
     assert read["document_metadata"][0]["bibliography_revision"] == 2
-    context = answer_context({**page, "context": "Raw evidence", "candidates": []}, 2000)
-    assert "Raw evidence" in context and '"authors"' in context and len(context) <= 2000
     changed = {**metadata, "bibliography_revision": 3}
     assert len(merge_metadata([metadata], [metadata, changed])) == 2
 

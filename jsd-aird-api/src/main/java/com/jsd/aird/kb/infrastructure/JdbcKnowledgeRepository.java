@@ -944,6 +944,13 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     @Override
     public List<RankedChunk> batchBm25Rank(UUID organizationId, List<AnalyzedQuery> queries,
                                            boolean aiOnly, List<UUID> categoryIds, int limit) {
+        return batchBm25Rank(organizationId, queries, aiOnly, categoryIds, null, limit);
+    }
+
+    @Override
+    public List<RankedChunk> batchBm25Rank(UUID organizationId, List<AnalyzedQuery> queries,
+            boolean aiOnly, List<UUID> categoryIds, java.util.Set<UUID> documentIds, int limit) {
+        if (documentIds != null && documentIds.isEmpty()) return List.of();
         var safeQueries = queries == null ? List.<AnalyzedQuery>of() : queries.stream()
                 .filter(query -> query != null && query.terms() != null && !query.terms().isEmpty()).toList();
         if (safeQueries.isEmpty()) return List.of();
@@ -967,7 +974,10 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 WITH query_terms AS (
                     SELECT DISTINCT * FROM unnest(?::int[], ?::int[], ?::text[], ?::text[])
                         AS q(query_ordinal, family_ordinal, analyzer_version, term)
-                ), eligible_chunks AS (
+                ), matching_terms AS MATERIALIZED (
+                    SELECT q.*, t.chunk_id, t.term_frequency
+                    FROM query_terms q JOIN kb.chunk_term t ON t.term = q.term
+                ), eligible_chunks AS MATERIALIZED (
                     SELECT c.id, c.analyzer_version, c.token_length
                     FROM kb.document_chunk c
                     JOIN kb.document d ON d.id = c.document_id
@@ -978,35 +988,34 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                         AND p.document_version_id = c.document_version_id
                         AND p.review_revision_id = c.review_revision_id AND p.status = 'CURRENT'
                     WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE' AND c.chunk_role = 'CHILD'
-                """ + aiClause + categoryClause(categoryIds) + """
+                """ + aiClause + categoryClause(categoryIds) + documentClause(documentIds) + """
                 ), corpus AS (
                     SELECT analyzer_version, count(*)::double precision AS document_count,
                            avg(token_length)::double precision AS average_document_length
                     FROM eligible_chunks GROUP BY analyzer_version
                 ), family_matches AS (
                     SELECT q.query_ordinal, q.family_ordinal, q.analyzer_version, c.id AS chunk_id,
-                           sum(t.term_frequency)::double precision AS family_tf
+                           sum(q.term_frequency)::double precision AS family_tf,
+                           max(c.token_length) AS token_length
                     FROM eligible_chunks c
-                    JOIN kb.chunk_term t ON t.chunk_id = c.id
-                    JOIN query_terms q ON q.term = t.term AND q.analyzer_version = c.analyzer_version
+                    JOIN matching_terms q ON q.chunk_id = c.id AND q.analyzer_version = c.analyzer_version
                     GROUP BY q.query_ordinal, q.family_ordinal, q.analyzer_version, c.id
                 ), family_stats AS (
-                    SELECT query_ordinal, family_ordinal, analyzer_version,
-                           count(DISTINCT chunk_id)::double precision AS document_frequency
-                    FROM family_matches GROUP BY query_ordinal, family_ordinal, analyzer_version
+                    SELECT *, count(*) OVER (
+                        PARTITION BY query_ordinal, family_ordinal, analyzer_version
+                    )::double precision AS document_frequency
+                    FROM family_matches
                 ), version_scores AS (
                     SELECT m.query_ordinal, m.analyzer_version, m.chunk_id,
                            sum(
-                               ln(((c.document_count - s.document_frequency + 0.5) /
-                                  (s.document_frequency + 0.5)) + 1)
+                               ln(((c.document_count - m.document_frequency + 0.5) /
+                                  (m.document_frequency + 0.5)) + 1)
                                * ((m.family_tf * 2.2) /
-                                  (m.family_tf + 1.2 * (1 - 0.75 + 0.75 * e.token_length /
+                                  (m.family_tf + 1.2 * (1 - 0.75 + 0.75 * m.token_length /
                                   nullif(c.average_document_length, 0))))
                            ) AS score
-                    FROM family_matches m
-                    JOIN family_stats s USING (query_ordinal, family_ordinal, analyzer_version)
+                    FROM family_stats m
                     JOIN corpus c USING (analyzer_version)
-                    JOIN eligible_chunks e ON e.id = m.chunk_id
                     GROUP BY m.query_ordinal, m.analyzer_version, m.chunk_id
                 ), version_ranked AS (
                     SELECT query_ordinal, analyzer_version, chunk_id, score,
@@ -1031,6 +1040,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         args.add(terms.toArray(String[]::new));
         args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
+        if (documentIds != null) args.addAll(documentIds);
         args.add(limit);
         args.add(limit);
         return jdbc.query(sql, (rs, ignored) -> new RankedChunk(rs.getInt("query_ordinal"),
@@ -1040,6 +1050,13 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     @Override
     public List<RankedChunk> batchVectorRank(UUID organizationId, List<VectorQuery> queries,
                                             boolean aiOnly, List<UUID> categoryIds, int limit, int dimension) {
+        return batchVectorRank(organizationId, queries, aiOnly, categoryIds, null, limit, dimension);
+    }
+
+    @Override
+    public List<RankedChunk> batchVectorRank(UUID organizationId, List<VectorQuery> queries,
+            boolean aiOnly, List<UUID> categoryIds, java.util.Set<UUID> documentIds, int limit, int dimension) {
+        if (documentIds != null && documentIds.isEmpty()) return List.of();
         var safeQueries = queries == null ? List.<VectorQuery>of() : queries.stream()
                 .filter(query -> query != null && org.springframework.util.StringUtils.hasText(query.vector())).toList();
         if (safeQueries.isEmpty()) return List.of();
@@ -1048,7 +1065,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 : "";
         var dimensionClause = dimension > 0 ? " AND vector_dims(c.embedding) = ?\n" : "";
         var sql = """
-                WITH query_vectors AS (
+                WITH query_vectors AS MATERIALIZED (
                     SELECT query_ordinal, CAST(vector_text AS vector) AS embedding
                     FROM unnest(?::int[], ?::text[]) AS q(query_ordinal, vector_text)
                 ), scored AS (
@@ -1065,7 +1082,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                             AND p.document_version_id = c.document_version_id
                             AND p.review_revision_id = c.review_revision_id AND p.status = 'CURRENT'
                         WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
-                """ + aiClause + categoryClause(categoryIds)
+                """ + aiClause + categoryClause(categoryIds) + documentClause(documentIds)
                 + " AND c.chunk_role = 'CHILD' AND c.embedding IS NOT NULL\n" + dimensionClause + """
                         ORDER BY c.embedding <=> q.embedding, c.id
                         LIMIT ?
@@ -1083,6 +1100,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         args.add(safeQueries.stream().map(VectorQuery::vector).toArray(String[]::new));
         args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
+        if (documentIds != null) args.addAll(documentIds);
         if (dimension > 0) args.add(dimension);
         args.add(limit);
         return jdbc.query(sql, (rs, ignored) -> new RankedChunk(rs.getInt("query_ordinal"),

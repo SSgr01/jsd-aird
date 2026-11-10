@@ -24,6 +24,8 @@ class Principal(Contract):
     auth_version: int
     username: str
     role: str
+    automation_grant_id: str | None = None
+    scope: str | None = None
 
     @property
     def key(self) -> tuple[str, str]:

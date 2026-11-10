@@ -301,7 +301,7 @@
     },
     {
       "id": "research-qa",
-      "title": "AI研发问答",
+      "title": "AI工作台",
       "path": "/assistant",
       "permissions": [
         "ai.use"
@@ -1034,7 +1034,7 @@
     },
     {
       "id": "research-qa",
-      "title": "使用 AI 研发问答",
+      "title": "使用 AI工作台",
       "pageIds": [
         "research-qa"
       ],
@@ -1042,6 +1042,7 @@
         "ai.use"
       ],
       "keywords": [
+        "AI工作台",
         "AI问答",
         "研发问答",
         "知识问答",

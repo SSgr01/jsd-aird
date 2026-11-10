@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.List;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jsd.aird.tpl.application.port.RecognitionModelClient;
+import com.jsd.aird.tpl.api.RecognitionModelClient;
 import org.junit.jupiter.api.Test;
 
 class TemplateQualityIssueAggregationTest {

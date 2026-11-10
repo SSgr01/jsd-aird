@@ -19,7 +19,7 @@ import com.jsd.aird.tpl.application.TemplateRecognitionReviewService;
 import com.jsd.aird.tpl.application.TemplateOfficeExportService;
 import com.jsd.aird.tpl.application.TemplateVersionReviewService;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import com.jsd.aird.tpl.domain.TemplateStatus;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;

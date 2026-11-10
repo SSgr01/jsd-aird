@@ -5,6 +5,7 @@ import com.jsd.aird.core.api.ProjectResourceFacade;
 import com.jsd.aird.kb.application.*;
 import com.jsd.aird.kb.application.port.*;
 import com.jsd.aird.kb.domain.*;
+import com.jsd.aird.kb.api.FileSafetyScanner;
 import com.jsd.aird.kb.infrastructure.*;
 import com.jsd.aird.ops.application.port.*;
 import com.jsd.aird.shared.error.*;

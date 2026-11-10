@@ -1,11 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { relative, sep, isAbsolute } from 'node:path';
-import { unlink } from 'node:fs/promises';
+import { relative, sep } from 'node:path';
 import { createHash } from 'node:crypto';
-import { ShellExecutor } from '../../../vendor/deepseek-harness/packages/shell/shell/lib/index.js';
+import { LocalBashExecutor } from '../../../vendor/deepseek-harness/packages/shell/bash-local/lib/index.js';
 import { LocalSubprocessRuntime } from '../../../vendor/deepseek-harness/packages/subprocess/subprocess-local/lib/index.js';
-import { worldRoot, sha256 } from './filesystem.mjs';
+import { sha256 } from './filesystem.mjs';
 import { scheduleTools } from './scheduling.mjs';
+import { SandboxProcess } from './sandbox-process.mjs';
 
 export const nativeTools = new Set(['read','read_image','write','edit','apply_patch','bash','present','todo_write',
   'glob','grep','skill','ask_user_question','web_search','web_fetch','working_directory',
@@ -23,8 +23,26 @@ export function installNativeRuntime(ctx, {business,runs,profileOf,searchAvailab
   const register = async(exec,path,index=0,source_quotes=[])=> {
     const cwd=await ctx.workingDirectory.ensure(exec.agent,exec.signal), target=await ctx.fs.resolve(path,{cwd,signal:exec.signal});
     const content=await ctx.fs.readBytes(target,exec.signal,10*1024*1024);
-    const value=await business('native-tool',bodyFor(exec,{name:'artifact_save',call_id:exec.callId+'/file-'+index,
+    const save = suffix => business('native-tool',bodyFor(exec,{name:'artifact_save',call_id:exec.callId+'/file-'+index+suffix,
       arguments:{path:pathOf(target),base64:Buffer.from(content).toString('base64'),sha256:sha256(content),source_quotes}}),exec.signal);
+    let value=await save('');
+    if(value.error?.startsWith('ARTIFACT_EXECUTION_HASH_MISMATCH:')) {
+      // Native write/edit can follow bash. Freeze the current workspace through
+      // the same broker, rather than requiring the model to invent a shell retry.
+      // This creates a real receipt; unknown outcomes are never replayed here.
+      const bound=bodyFor(exec,{call_id:exec.callId+'/checkpoint-'+index});
+      await business('gate',{...bound,kind:'tool',native_name:'bash'},exec.signal);
+      const checkpoint=new SandboxProcess(ctx,{
+        argv:['bash','-c',':'],cwd:ctx.fs.processPath(await ctx.fs.resolve(cwd)),env:{},signal:exec.signal,
+        stdio:{stdout:{maxBytes:4096},stderr:{maxBytes:4096}},
+      },{business,payload:bound,agent:exec.agent});
+      const result=await checkpoint.done;
+      if(result.exitCode!==0)throw new Error('ARTIFACT_CHECKPOINT_FAILED: file was not registered');
+      exec.signal?.throwIfAborted();
+      const currentContent=await ctx.fs.readBytes(target,exec.signal,10*1024*1024);
+      if(sha256(currentContent)!==sha256(content))throw new Error('WORKSPACE_CHANGED_DURING_REGISTRATION');
+      value=await save('-checkpointed');
+    }
     if(value.error)throw new Error(value.error);
     return value;
   };
@@ -35,7 +53,7 @@ export function installNativeRuntime(ctx, {business,runs,profileOf,searchAvailab
     if (['glob','grep'].includes(exec.name)) {
       await ctx.fs.resolve(exec.arguments.path || '.', {cwd:await ctx.workingDirectory.ensure(exec.agent,exec.signal),signal:exec.signal});
     }
-    await business('gate',{run_id:bound.id,session_id:exec.agent.id,turn:bound.dsh_turn,kind:['bash','present','web_search'].includes(exec.name)?'tool':'native-tool',call_id:exec.callId},exec.signal);
+    await business('gate',{run_id:bound.id,session_id:exec.agent.id,turn:bound.dsh_turn,kind:['bash','present','web_search'].includes(exec.name)?'tool':'native-tool',native_name:exec.name,call_id:exec.callId},exec.signal);
     return current.run(exec,async()=>{
       if(exec.name==='present')for(const [index,file] of exec.arguments.files.entries())await register(exec,file.path,index);
       return next();
@@ -58,9 +76,28 @@ export function installNativeRuntime(ctx, {business,runs,profileOf,searchAvailab
   // Native glob/grep own their argv and parsers. Only map their verified file
   // target into the managed filesystem; never expose a generic host spawn.
   class EnterpriseSubprocess extends LocalSubprocessRuntime {
+    constructor(scope) {
+      super(scope);
+      this.remote=new Set();
+      scope.effect(()=>async()=>{
+        const handles=[...this.remote];
+        for(const handle of handles)handle.terminate();
+        const results=await Promise.allSettled(handles.map(async handle=>{
+          if(!await handle.waitForExit(AbortSignal.timeout(12000)))throw new Error('SANDBOX_CLEANUP_PENDING');
+        }));
+        const failures=results.filter(value=>value.status==='rejected').map(value=>value.reason);
+        if(failures.length)throw new AggregateError(failures,'Sandbox disposal requires receipt reconciliation');
+      });
+    }
     spawn(spec) {
       const exec = current.getStore();
       if (!exec) return super.spawn(spec);
+      if(exec.name==='bash' && spec.argv.length===3 && spec.argv[0]==='bash' && spec.argv[1]==='-c') {
+        const handle=new SandboxProcess(this.ctx,spec,{business,payload:bodyFor(exec),agent:exec.agent});
+        this.remote.add(handle);
+        void handle.done.finally(()=>{if(handle.quiescent)this.remote.delete(handle);}).catch(()=>{});
+        return handle;
+      }
       if (!['glob','grep'].includes(exec.name) || !/[\\/]rg(?:\.exe)?$/.test(spec.argv[0]))
         throw new Error('ENTERPRISE_HOST_PROCESS_DENIED');
       const argv = [...spec.argv], separator = argv.indexOf('--');
@@ -70,56 +107,18 @@ export function installNativeRuntime(ctx, {business,runs,profileOf,searchAvailab
     async spawnTerminal() {throw new Error('ENTERPRISE_HOST_TERMINAL_DENIED');}
   }
   ctx.plugin(EnterpriseSubprocess);
-  class EnterpriseShell extends ShellExecutor {
-    constructor(scope) {super(scope);this.pending=new Set();scope.effect(()=>()=>{for(const stop of this.pending)stop();});}
+  class EnterpriseShell extends LocalBashExecutor {
     get sandboxMode(){return 'workspace-write';}
     resolve(request) {
       if(request.sandboxPolicy?.mode==='danger-full-access'||request.sandboxPolicy?.mode==='read-only')throw new Error('ENTERPRISE_SHELL_POLICY_DENIED');
-      return {...request,workdir:request.workdir||ctx.fs.root,timeoutMs:Math.min(request.timeoutMs||120000,120000),onExpiry:'kill',stdoutMaxBytes:12000};
+      const exec=current.getStore();
+      const spec=super.resolve({...request,workdir:request.workdir||(exec?ctx.workingDirectory.get(exec.agent.session):ctx.fs.processPath({targetKey:ctx.fs.root}))});
+      return {...spec,timeoutMs:Math.min(spec.timeoutMs,600000)};
     }
     async execute(spec) {
-      const exec=current.getStore();if(!exec)throw new Error('ENTERPRISE_SHELL_REQUIRES_TOOL');
-      const payload=bodyFor(exec), stopSignal=new AbortController();let aborted=false,timedOut=false,cursor=0,failure;
-      const handle={status:'running',exitCode:null,signal:null,sandbox:{mode:'workspace-write',denied:false,enforcement:'full'},
-        readOutput(){const delta=(handle.stdout||'').slice(cursor);cursor=(handle.stdout||'').length;return {delta,lossy:false};},
-        observed:{stdout:{readFrom(offset){const text=handle.stdout||'';return {text:text.slice(offset),nextOffset:text.length,lossy:false};}},stderr:{readFrom(){return {text:'',nextOffset:0,lossy:false};}}},
-        kill(){if(handle.status!=='running'||stopSignal.signal.aborted)return false;aborted=true;stopSignal.abort();return true;}};
-      const cancel=()=>{void business('native-cancel',payload).catch(error=>ctx.logger.warn('Sandbox cancellation pending: %s',error.message));};
-      stopSignal.signal.addEventListener('abort',cancel,{once:true});
-      const abort=()=>handle.kill();spec.signal?.addEventListener('abort',abort,{once:true});
-      if(spec.signal?.aborted)abort();
-      const timer=setTimeout(()=>{if(!aborted){timedOut=true;stopSignal.abort();}},spec.timeoutMs);
-      this.pending.add(abort);
-      const done=(async()=>{
-        try {
-          stopSignal.signal.throwIfAborted();
-          const base=await ctx.workingDirectory.ensure(exec.agent,stopSignal.signal), prefix=pathOf(await ctx.fs.resolve(base));
-          const work=await ctx.fs.resolve(spec.workdir), within=relative(base,String(work.targetKey));
-          if(within==='..'||within.startsWith('..'+sep)||isAbsolute(within))throw new Error('SHELL_WORKDIR_OUTSIDE_SESSION');
-          const before=(await ctx.fs.snapshot(base,stopSignal.signal)).map(file=>({...file,path:[prefix,file.path].filter(Boolean).join('/')}));
-          stopSignal.signal.throwIfAborted();
-          const response=await business('native-tool',{...payload,name:'dsh_execute',arguments:{command:spec.command,cwd:pathOf(work),files:before}},stopSignal.signal);
-          if(response.error && !response.files)throw new Error(response.error);
-          // Validate the entire transfer and the original snapshot before publishing any mutation.
-          const incoming=new Map();let size=0;
-          for(const file of response.files||[]) {
-            if(prefix && !file.path.startsWith(prefix+'/'))throw new Error('SANDBOX_OUTPUT_OUTSIDE_SESSION');
-            const target=await ctx.fs.resolve(worldRoot+'/'+file.path), bytes=Buffer.from(file.base64,'base64');size+=bytes.length;
-            if(incoming.has(file.path)||incoming.size>=50||size>10*1024*1024||sha256(bytes)!==file.sha256)throw new Error('SANDBOX_OUTPUT_INVALID');
-            incoming.set(file.path,{target,bytes});
-          }
-          const now=(await ctx.fs.snapshot(base,stopSignal.signal)).map(file=>({...file,path:[prefix,file.path].filter(Boolean).join('/')}));
-          if(JSON.stringify(now)!==JSON.stringify(before))throw new Error('WORKSPACE_CHANGED_DURING_EXECUTION');
-          stopSignal.signal.throwIfAborted();
-          for(const {target,bytes} of incoming.values())await ctx.fs.publish(String(target.targetKey),bytes);
-          for(const file of before)if(!incoming.has(file.path))await unlink(await ctx.fs.checked(worldRoot+'/'+file.path));
-          handle.stdout=response.output||'';handle.exitCode=response.exit_code;handle.status='completed';
-        } catch(error) {handle.status='killed';handle.signal=aborted||timedOut?'SIGTERM':null;failure=aborted||timedOut?undefined:error;handle.stdout=error.message;}
-        finally {clearTimeout(timer);spec.signal?.removeEventListener('abort',abort);this.pending.delete(abort);}
-      })();
-      handle.done=done;
-      handle.result=async()=>{await done;if(failure)throw failure;return {exitCode:handle.exitCode,signal:handle.signal,aborted,timedOut,timeoutMs:spec.timeoutMs,
-        stdout:{text:handle.stdout||'',truncated:false},stderr:{text:'',truncated:false},sandbox:handle.sandbox};};
+      if(!current.getStore())throw new Error('ENTERPRISE_SHELL_REQUIRES_TOOL');
+      const handle=await super.execute(spec), result=handle.result.bind(handle);
+      handle.result=async()=>({...await result(),sandbox:{mode:'workspace-write',denied:false,enforcement:'full'}});
       return handle;
     }
   }

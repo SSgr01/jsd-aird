@@ -21,6 +21,22 @@ public class AgentSourceAuthorization {
     private final DataSourceFileSearchFacade data;
     private final PrivateResearchSourceService privateSources;
     private com.jsd.aird.rnd.api.AgentExperimentFacade experiments;
+    private org.springframework.beans.factory.ObjectProvider<BusinessDataService> businessData;
+    private org.springframework.beans.factory.ObjectProvider<BusinessComputeService> businessCompute;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void businessServices(org.springframework.beans.factory.ObjectProvider<BusinessDataService> data,
+            org.springframework.beans.factory.ObjectProvider<BusinessComputeService> compute) {
+        this.businessData = data; this.businessCompute = compute;
+    }
+
+    private boolean businessSource(JsonNode source, String excerpt) {
+        if (!"BUSINESS_RECORD".equals(source.path("kind").asText())
+                || !"v1".equals(source.path("anchor").path("business_adapter").asText())) return false;
+        if (source.path("anchor").hasNonNull("compute_kind")) businessCompute.getObject().validateSource(source, excerpt);
+        else businessData.getObject().validateSource(source, excerpt);
+        return true;
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
     void experiments(com.jsd.aird.rnd.api.AgentExperimentFacade experiments) { this.experiments = experiments; }
@@ -43,7 +59,33 @@ public class AgentSourceAuthorization {
         if (!documents.isEmpty()) knowledge.authorize(List.copyOf(documents));
     }
 
+    /** Reauthorize old period visibility without treating old mutable facts as current evidence. */
+    public void authorizeBriefingHistory(JsonNode sources) {
+        if (!sources.isArray() || sources.size() > 500) throw new ApiException(ApiErrorCode.BAD_REQUEST);
+        var seen = new java.util.HashSet<String>();
+        for (var source : sources) {
+            String type = source.path("resource_type").asText();
+            if (!"BUSINESS_RECORD".equals(source.path("kind").asText())
+                    || !java.util.Set.of("PROJECT", "STAGE", "TASK", "REQUIREMENT", "MATERIAL", "EXPERIMENT").contains(type)) {
+                authorize(com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.arrayNode().add(source));
+                continue;
+            }
+            var ref = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                .put("type", type).put("id", source.path("resource_id").asText());
+            if (source.hasNonNull("project_id")) ref.set("project_id", source.get("project_id"));
+            // Experiment versions exist independently; a historical version must
+            // still belong to this experiment and remain currently readable.
+            if ("EXPERIMENT".equals(type)) ref.set("version_id", source.path("version_id"));
+            if (!seen.add(ref.toString())) continue;
+            var args = ref.objectNode(); args.set("ref", ref);
+            var result = businessData.getObject().invoke("business_read", args);
+            if (!result.path("candidates").isArray() || result.path("candidates").isEmpty())
+                throw new ApiException(ApiErrorCode.NOT_FOUND);
+        }
+    }
+
     public void one(JsonNode source) {
+        if (businessSource(source, null)) return;
         var actor = ActorContext.required();
         switch (source.path("kind").asText()) {
             case "KB_PUBLICATION" -> knowledge.authorize(List.of(new ResearchKnowledgeFacade.DocumentRef(
@@ -97,6 +139,7 @@ public class AgentSourceAuthorization {
     }
 
     public void validate(JsonNode source, String excerpt) {
+        if (businessSource(source, excerpt)) return;
         if ("BUSINESS_RECORD".equals(source.path("kind").asText()) && !"EXPERIMENT".equals(source.path("resource_type").asText())) {
             projects.validateSource(source, excerpt); return;
         }
@@ -137,7 +180,10 @@ public class AgentSourceAuthorization {
     public void requireExport(JsonNode sources) {
         authorize(sources);
         var actor = ActorContext.required();
+        for (var source : sources) if ("v1".equals(source.path("anchor").path("business_adapter").asText()))
+            businessData.getObject().requireExport(source);
         for (var source : sources) if ("BUSINESS_RECORD".equals(source.path("kind").asText())
+                && !"v1".equals(source.path("anchor").path("business_adapter").asText())
                 && !"EXPERIMENT".equals(source.path("resource_type").asText()))
             authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "project.export", "PROJECT",
                 UUID.fromString(source.path("project_id").asText()), "READ"));

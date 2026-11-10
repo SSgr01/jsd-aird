@@ -11,12 +11,17 @@ public final class ResearchTextMatch {
         return text.replaceAll("<[^>]+>", " ").replaceAll("(?i)\\b([a-z]{2,6})\\s+(\\d{1,4})\\b", "$1$2").toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").strip();
     }
     public static List<String> terms(String query) {
-        if (query == null || query.isBlank() || query.length()>256) throw new ApiException(ApiErrorCode.BAD_REQUEST);
+        if (query == null || query.isBlank()) throw invalidQuery("required");
+        if (query.length()>256) throw invalidQuery("maxLength");
         var matcher=Pattern.compile("[\\p{L}\\p{N}]+(?:[.-][\\p{L}\\p{N}]+)*").matcher(normalize(query));
         var result=new LinkedHashSet<String>();
         while(matcher.find()) result.add(matcher.group());
-        if(result.isEmpty() || result.size()>8) throw new ApiException(ApiErrorCode.BAD_REQUEST,"Use at most eight search terms");
+        if(result.isEmpty()) throw invalidQuery("searchable_terms");
         return List.copyOf(result);
+    }
+    private static ApiException invalidQuery(String rule) {
+        return new ApiException(ApiErrorCode.BAD_REQUEST, "查询须包含有效文字，且不超过256字符", Map.of(
+            "code", "INVALID_TOOL_ARGUMENTS", "path", List.of("query"), "rule", rule, "max_length", 256));
     }
     public static double score(String text,String query,String mode) {
         if(!Set.of("auto","phrase","all","any").contains(mode)) throw new ApiException(ApiErrorCode.BAD_REQUEST);

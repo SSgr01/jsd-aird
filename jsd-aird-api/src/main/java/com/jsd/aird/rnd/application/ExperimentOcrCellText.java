@@ -1,6 +1,6 @@
 package com.jsd.aird.rnd.application;
 
-import com.jsd.aird.kb.application.LatexEvidenceProjector;
+import com.jsd.aird.shared.text.LatexEvidenceProjector;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 

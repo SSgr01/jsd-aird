@@ -67,6 +67,8 @@ public interface ResearchKnowledgeFacade {
     Result context(SourceRef source, int before, int after, int cursor);
     Object table(DocumentRef document, UUID tableId, int offset);
     void validate(SourceRef source, String excerpt);
+    /** Authorized original figure or PDF page for a fixed evidence source. */
+    default JsonNode image(SourceRef source, String view) { throw new UnsupportedOperationException("Source images unavailable"); }
     record SourceExcerpt(SourceRef source, String excerpt) { }
     /** One request-local authority snapshot per publication; every excerpt still checks its own identity. */
     default void validateAll(List<SourceExcerpt> excerpts) {

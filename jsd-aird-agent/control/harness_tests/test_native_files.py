@@ -49,6 +49,9 @@ def test_native_shell_can_transport_an_office_script_larger_than_business_text_f
     assert len(command)>12000
     spec = native_spec('dsh_execute')['parameters']
     validate({'command':command, 'files':[]}, spec)
+    validate({'command':command, 'files':[], 'timeout_ms':300000}, spec)
+    with pytest.raises(ValidationError):
+        validate({'command':command, 'files':[], 'timeout_ms':600001}, spec)
     with pytest.raises(ValidationError):
         validate({'command':'x'*(128*1024+1), 'files':[]}, spec)
 

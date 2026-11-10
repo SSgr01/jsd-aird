@@ -1,6 +1,6 @@
 package com.jsd.aird.mdm.adapter.in.web;
 
-import com.jsd.aird.mdm.application.command.PartnerCommands;
+import com.jsd.aird.mdm.api.PartnerCommands;
 import com.jsd.aird.mdm.application.service.CommunicationRecordService;
 import com.jsd.aird.mdm.domain.model.*;
 import com.jsd.aird.platform.web.RequestIdHolder;

@@ -46,7 +46,7 @@ public class AgentIdentityController {
             actor = ActorContext.current();
             if (actor == null) throw new ApiException(ApiErrorCode.AUTH_REQUIRED);
         }
-        else actor = delegation.verify(ticket);
+        else { delegation.requireInteractive(ticket); actor = delegation.verify(ticket); }
         try {
             ActorContext.set(actor);
             authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "ai.use", "AI", null, "READ"));
@@ -58,4 +58,20 @@ public class AgentIdentityController {
                     "expires_at", claims.path("exp").asLong());
         } finally { ActorContext.clear(); }
     }
+    @PostMapping("/internal/v1/agent-identity/automation")
+    public Map<String, Object> automation(
+            @RequestHeader(value = "Authorization", defaultValue = "") String credential,
+            @org.springframework.web.bind.annotation.RequestBody Map<String, String> body) {
+        if (secret.length() < 32 || !MessageDigest.isEqual(("Bearer " + secret).getBytes(StandardCharsets.UTF_8),
+                credential.getBytes(StandardCharsets.UTF_8))) throw new ApiException(ApiErrorCode.AUTH_REQUIRED);
+        var identity = delegation.automationIdentity(body.get("proof"));
+        var actor = new Actor((java.util.UUID)identity.get("organization_id"), (java.util.UUID)identity.get("actor_id"),
+            (String)identity.get("username"), (String)identity.get("role"));
+        try {
+            ActorContext.set(actor);
+            authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "ai.use", "AI", null, "READ"));
+            return identity;
+        } finally { ActorContext.clear(); }
+    }
+
 }

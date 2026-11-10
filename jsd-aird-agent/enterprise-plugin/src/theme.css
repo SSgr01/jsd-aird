@@ -1,10 +1,15 @@
 /* Enterprise visual layer. Select native public data attributes and our own
    slots only; upstream CSS-module names and interaction state stay untouched. */
+/* The server does not expose desktop Explorer or physical transcript moves. */
+body[data-jsd-workbench] div:has(> [data-dsham-open-explorer="true"]),
+body[data-jsd-workbench] .dsham_moveSessionWrap {
+  display: none;
+}
 body[data-jsd-workbench] {
   --dsh-font-family-text-default: 'Noto Sans SC Variable', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif;
   --dsw-font-family-brand: var(--dsw-font-family);
   --dsw-radius-panel: 20px;
-  --jsd-focus: #9b85a9;
+  --jsd-focus: #45424a;
   --jsd-composer-shadow: rgb(76 48 65 / 5%);
   /* The wash follows the explicitly requested UI-opz / SETO brand reference. */
   --jsd-workspace-wash:
@@ -14,7 +19,7 @@ body[data-jsd-workbench] {
 }
 
 body[data-jsd-workbench][data-ds-dark-theme] {
-  --jsd-focus: #b9a3c9;
+  --jsd-focus: #d5cddc;
   --jsd-composer-shadow: rgb(0 0 0 / 18%);
   --jsd-workspace-wash:
     radial-gradient(ellipse 70% 68% at 54% 3%, rgb(128 100 148 / 10%), transparent 80%),
@@ -41,7 +46,29 @@ body[data-jsd-workbench] [data-composer-card]:focus-within {
   color: var(--dsw-alias-state-business-primary);
 }
 
-.jsd-brand-mark svg { display: block; }
+.jsd-brand-mark img { display: block; }
+.jsd-business-tool .jsd-tool-header {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(24px + var(--dsh-content-font-delta, 0px));
+}
+.jsd-business-tool .jsd-tool-header-content { min-width: 0; overflow: hidden; }
+.jsd-tool-summary {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.jsd-tool-content {
+  padding: 8px 24px;
+  font: var(--dsh-content-font-size, 14px)/1.75 var(--dsw-font-family);
+  overflow-wrap: anywhere;
+}
+.jsd-tool-content p { margin: 0 0 8px; }
 .jsd-brand-name { font-weight: 600; letter-spacing: -.02em; }
 .jsd-page-title {
   margin: 0 20px 0 0;
@@ -90,8 +117,7 @@ body[data-jsd-workbench] [data-composer-card]:focus-within {
 
 .jsd-nav {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px;
+  grid-template-columns: minmax(0, 1fr);
   width: 100%;
   padding: 10px 4px;
   border-top: 1px solid var(--dsw-alias-border-l1);
@@ -102,12 +128,12 @@ body[data-jsd-workbench] [data-composer-card]:focus-within {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 36px;
+  min-height: 42px;
   padding: 0 8px;
   border-radius: var(--dsw-radius-sm);
   color: var(--dsw-alias-label-secondary);
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 14px;
+  line-height: 22px;
   text-decoration: none;
   transition: background-color 160ms ease, color 160ms ease;
 }
@@ -119,7 +145,7 @@ body[data-jsd-workbench] [data-composer-card]:focus-within {
 
 .jsd-nav a:focus-visible,
 .jsd-resource a:focus-visible,
-.jsd-inbox-actions :is(button, select):focus-visible {
+.jsd-continue-action:focus-visible {
   outline: 2px solid var(--jsd-focus);
   outline-offset: 2px;
 }
@@ -151,25 +177,34 @@ body[data-jsd-workbench] [data-composer-card]:focus-within {
   background: var(--dsw-alias-bg-layer-1);
   font-size: 13px;
 }
-.jsd-inbox-actions {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  flex-wrap: wrap;
-  padding: 4px 12px;
-  font: 12px/1.5 var(--dsw-font-family);
+/* Keep the native primary action's layout seat; the empty paused state uses
+   the input extension to place Continue in that same seat. */
+body[data-jsd-workbench] [data-composer-card]:has(.jsd-continue-action) button[aria-busy]:disabled:not([aria-expanded]):not(.jsd-continue-action) {
+  visibility: hidden;
 }
-.jsd-inbox-actions select { min-width: 0; max-width: 50%; }
-.jsd-inbox-actions :is(button, select) {
-  background: var(--dsw-alias-bg-layer-1);
-  color: var(--dsw-alias-label-secondary);
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
-  padding: 4px 8px;
-  font: inherit;
+.jsd-continue-action {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  corner-shape: round;
+  background: var(--dsw-alias-button-info-fill);
+  color: #fff;
+  cursor: pointer;
 }
-.jsd-inbox-actions button { cursor: pointer; }
-.jsd-inbox-actions button:disabled { opacity: .4; cursor: default; }
+.jsd-continue-action > svg:not(.jsd-continue-spinner) { transform: scale(1.5); }
+.jsd-continue-action:hover:not(:disabled) { background: var(--dsw-alias-button-info-hover); }
+.jsd-continue-action:disabled { opacity: .4; cursor: default; }
+.jsd-continue-action[aria-busy='true']:disabled { opacity: 1; cursor: progress; }
+.jsd-continue-spinner { animation: jsd-continue-spin 800ms linear infinite; }
+@keyframes jsd-continue-spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 767px) {
   .jsd-starters { grid-template-columns: minmax(0, 1fr); gap: 8px; margin-block: 6px; }
@@ -178,9 +213,48 @@ body[data-jsd-workbench] [data-composer-card]:focus-within {
   .jsd-page-title { font-size: 16px; margin-right: 8px; }
   .jsd-resource { padding: 16px; }
   .jsd-nav a { min-height: 44px; }
-  .jsd-inbox-actions :is(button, select) { min-height: 36px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   body[data-jsd-workbench] [data-composer-card], .jsd-nav a, .jsd-starters button { transition: none; }
+  .jsd-continue-spinner { animation: none; }
 }
+
+/* Source links stay ordinary native Markdown links and retain keyboard/menu behavior. */
+body[data-jsd-workbench] a[href*="/api/v1/knowledge/documents/"][href*="/content"],
+body[data-jsd-workbench] a[href*="/api/v1/agents/private-sources/"][href*="/content"],
+.jsd-source-link {
+  color: inherit;
+  font-size: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--dsw-alias-border-l2, #d3d0cd);
+  text-underline-offset: .2em;
+  overflow-wrap: anywhere;
+}
+body[data-jsd-workbench] a[href*="/content"]:hover, .jsd-source-link:hover {
+  text-decoration-color: currentColor;
+}
+body[data-jsd-workbench] a[href*="/content"]:focus-visible, .jsd-source-link:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+/* Citation chrome stays inline; the native message owns all layout and media. */
+.jsd-cited-answer { display: contents; }
+body[data-jsd-workbench] .jsd-cited-answer a[data-jsd-citation] {
+  color: var(--dsw-alias-label-secondary, inherit);
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.12));
+  border-radius: 4px;
+  font-size: .78em;
+  font-weight: 400;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  vertical-align: baseline;
+  text-decoration: none;
+  padding: 1px 6px;
+  margin-inline: 2px;
+}
+body[data-jsd-workbench] .jsd-cited-answer a[data-jsd-citation] > svg { display: none; }
+body[data-jsd-workbench] .jsd-cited-answer a[data-jsd-citation]:hover { color: var(--dsw-alias-label-primary, inherit); text-decoration: none; }

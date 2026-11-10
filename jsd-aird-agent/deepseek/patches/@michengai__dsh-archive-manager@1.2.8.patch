@@ -1,0 +1,39 @@
+diff --git a/lib/workspace.js b/lib/workspace.js
+index 592f8caa4559eecee94483db16f3550554e7884d..52564f71c19287cb633560efde0748ea999e6b59 100644
+--- a/lib/workspace.js
++++ b/lib/workspace.js
+@@ -797,8 +797,10 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
+   }
+   /** 串行化后的删除主体（级联路径复用：它已持有操作链，绝不能再入队）。 */
+   async deleteSessionCore(sessionId, descendantHeaders) {
++    await this.ctx.parallel("enterprise/session-before-delete", sessionId);
+     if (!await this.sessionKnown(sessionId)) {
+       await this.cleanupUnknownArchivedSession(sessionId);
++      await this.ctx.parallel("enterprise/session-deleted", sessionId);
+       return { deleted: true, skipped: true };
+     }
+     const sessions = this.ctx.get("sessions");
+@@ -840,6 +842,7 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
+     }
+     await this.removeFromWorkspaceAccounts(sessionId);
+     this.forgetIndexedSession(sessionId);
++    await this.ctx.parallel("enterprise/session-deleted", sessionId);
+     this.publishDeletedSession(sessionId);
+     return { deleted: true };
+   }
+@@ -882,13 +885,13 @@ var ArchiveWorkspaceRegistry = class extends WorkspaceRegistry {
+   /** 官方 JSONL 已知布局清理会话专属目录；其他后端只删除定位到的工件。 */
+   async removeTranscriptDirectory(sessionId) {
+     const persistence = this.ctx.get("sessionPersistence");
+-    if (persistence === void 0 || typeof persistence.locate !== "function") {
++    if (persistence === void 0 || typeof persistence.stat !== "function") {
+       throw new Error(
+         `cannot delete session "${sessionId}": the session persistence backend does not expose locate() to resolve its transcript artifact`
+       );
+     }
+     const header = this.headers?.get(sessionId) ?? await this.readSessionHeader(sessionId);
+-    const location = persistence.locate(header);
++    const location = (await persistence.stat(sessionId))?.location;
+     if (location === void 0 || typeof location.path !== "string") {
+       throw new Error(
+         `cannot delete session "${sessionId}": the session persistence backend could not resolve its transcript artifact`

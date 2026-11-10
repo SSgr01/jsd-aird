@@ -31,14 +31,14 @@ import com.jsd.aird.ops.application.port.FileObjectRepository;
 import com.jsd.aird.ops.application.port.ObjectStorage;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
 import com.jsd.aird.tpl.application.port.TemplateImportRepository;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import com.jsd.aird.tpl.domain.TemplateStatus;
-import com.jsd.aird.tpl.application.port.BlankWordDocumentFactory;
-import com.jsd.aird.tpl.application.port.WordOoxmlPatcher;
-import com.jsd.aird.tpl.application.port.WordDocumentParser;
-import com.jsd.aird.rnd.application.port.ExperimentRepository;
-import com.jsd.aird.rnd.domain.ExperimentStatus;
-import com.jsd.aird.rnd.domain.ExperimentModels.Detail;
+import com.jsd.aird.tpl.api.BlankWordDocumentFactory;
+import com.jsd.aird.tpl.api.WordOoxmlPatcher;
+import com.jsd.aird.tpl.api.WordDocumentParser;
+import com.jsd.aird.tpl.api.ExperimentTemplateSource;
+
+import com.jsd.aird.tpl.api.ExperimentTemplateSource.Snapshot;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -69,7 +69,7 @@ public class TemplateWorkspaceService {
     private final WordOoxmlPatcher wordOoxmlPatchService;
     private final WordDocumentParser wordDocumentParser;
     private final TemplateImportContractCompiler importContractCompiler;
-    private final ExperimentRepository experimentRepository;
+    private final ExperimentTemplateSource experimentRepository;
     private final TransactionTemplate transactionTemplate;
     private final String storageBucket;
 
@@ -89,7 +89,7 @@ public class TemplateWorkspaceService {
             WordOoxmlPatcher wordOoxmlPatchService,
             WordDocumentParser wordDocumentParser,
             TemplateImportContractCompiler importContractCompiler,
-            ExperimentRepository experimentRepository,
+            ExperimentTemplateSource experimentRepository,
             PlatformTransactionManager transactionManager,
             @Value("${app.storage.bucket}") String storageBucket
     ) {
@@ -483,9 +483,9 @@ public class TemplateWorkspaceService {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "实验模板复制服务未配置");
         }
 
-        var experiment = experimentRepository.detail(actor.organizationId(), experimentId)
+        var experiment = experimentRepository.templateSource(actor.organizationId(), experimentId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验不存在"));
-        if (experiment.summary().status() == ExperimentStatus.VOIDED) {
+        if (experiment.summary().voided()) {
             throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "作废实验不支持另存为模板");
         }
         var labSource=currentExperimentSnapshot(experiment);
@@ -584,14 +584,14 @@ public class TemplateWorkspaceService {
         throw new ApiException(ApiErrorCode.BAD_REQUEST, "当前实验文档格式不支持另存为模板");
     }
 
-    private JsonNode currentExperimentSnapshot(Detail experiment) {
+    private JsonNode currentExperimentSnapshot(Snapshot experiment) {
         var saved = experiment.editModel() == null ? null : experiment.editModel().path("documentSnapshot");
         if (saved != null && saved.isObject() && !saved.isEmpty()) return saved;
         var template = experiment.templateSnapshot();
         return template != null && template.isObject() && !template.isEmpty() ? template : null;
     }
 
-    private byte[] experimentWordBase(Detail experiment, Actor actor) throws Exception {
+    private byte[] experimentWordBase(Snapshot experiment, Actor actor) throws Exception {
         UUID sourceFileId = experiment.sourceFileId();
         if (sourceFileId == null) {
             sourceFileId = uuidFrom(experiment.editModel() == null

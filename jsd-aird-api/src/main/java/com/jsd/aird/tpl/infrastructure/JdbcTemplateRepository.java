@@ -15,7 +15,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import com.jsd.aird.tpl.domain.TemplateStatus;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;

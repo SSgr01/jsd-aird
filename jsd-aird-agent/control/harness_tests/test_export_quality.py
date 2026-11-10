@@ -3,7 +3,8 @@ import json
 import pytest
 from fastapi import HTTPException
 
-from aird_agent.capabilities.export_quality import validate_export
+from aird_agent.capabilities.files.quality import validate_format
+from aird_agent.capabilities.literature.export import validate_literature_export
 from aird_agent.hosts.jsd.task_state import check_delivery
 
 REF = {"evidence_id": "e" + "1" * 24, "quote_id": "q" + "2" * 24}
@@ -25,35 +26,51 @@ ROW = f"0.81,kg,1*0.81,{REF['evidence_id']},{REF['quote_id']}\r\n"
 )
 def test_export_rejects_malformed_tables_and_foreign_or_missing_citations(content, reason):
     with pytest.raises(HTTPException, match=reason):
-        validate_export("output/result.csv", content.encode(), [REF])
+        validate_literature_export("output/result.csv", validate_format("output/result.csv", content.encode()), [REF])
 
 
 def test_export_accepts_bom_quoted_multiline_and_matching_json_without_changing_bytes():
     content = ("\ufeff" + HEADER + ROW.replace("1*0.81", '"1*0.81,\nrounded input"')).encode()
     original = bytes(content)
-    validate_export("output/result.csv", content, [REF])
-    validate_export(
-        "output/result.json", json.dumps({"water_mass": 0.81, "source_quotes": [REF]}).encode(), [REF]
+    validate_literature_export("output/result.csv", validate_format("output/result.csv", content), [REF])
+    validate_literature_export(
+        "output/result.json",
+        validate_format("output/result.json", json.dumps({"water_mass": 0.81, "source_quotes": [REF]}).encode()),
+        [REF],
     )
     assert content == original
 
 
 def test_json_requires_embedded_citations_and_rejects_mismatched_pairs():
     with pytest.raises(HTTPException, match="EXPORT_CITATIONS_MISSING"):
-        validate_export("output/result.json", b'{"water_mass":0.81}', [REF])
-    with pytest.raises(HTTPException, match="EXPORT_QUOTE_INVALID"):
-        validate_export(
-            "output/result.json", json.dumps({**REF, "quote_id": "other-version"}).encode(), [REF]
+        validate_literature_export(
+            "output/result.json", validate_format("output/result.json", b'{"water_mass":0.81}'), [REF]
         )
-    validate_export("output/result.json", b'{"water_mass":0.81}', [])
+    with pytest.raises(HTTPException, match="EXPORT_QUOTE_INVALID"):
+        validate_literature_export(
+            "output/result.json",
+            validate_format("output/result.json", json.dumps({**REF, "quote_id": "other-version"}).encode()),
+            [REF],
+        )
+    validate_literature_export(
+        "output/result.json", validate_format("output/result.json", b'{"water_mass":0.81}'), []
+    )
 
 
 def test_user_given_basis_can_have_no_citation_but_source_rows_must_use_real_pairs():
-    validate_export("output/result.csv", (HEADER + "1,kg,user given,,\n" + ROW).encode(), [REF])
+    validate_literature_export(
+        "output/result.csv", validate_format("output/result.csv", (HEADER + "1,kg,user given,,\n" + ROW).encode()), [REF]
+    )
     with pytest.raises(HTTPException, match="EXPORT_CITATIONS_MISSING"):
-        validate_export("output/result.csv", (HEADER + "1,kg,user given,,\n").encode(), [REF])
+        validate_literature_export(
+            "output/result.csv", validate_format("output/result.csv", (HEADER + "1,kg,user given,,\n").encode()), [REF]
+        )
     with pytest.raises(HTTPException, match="EXPORT_QUOTE_INVALID.*row 2"):
-        validate_export("output/result.csv", (HEADER + f"1,kg,source,{REF['evidence_id']},\n").encode(), [REF])
+        validate_literature_export(
+            "output/result.csv",
+            validate_format("output/result.csv", (HEADER + f"1,kg,source,{REF['evidence_id']},\n").encode()),
+            [REF],
+        )
 
 
 def test_delivery_requires_each_explicitly_requested_file():

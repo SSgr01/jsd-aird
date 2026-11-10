@@ -1,9 +1,12 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdir, readFile, writeFile, symlink, realpath, lstat, unlink } from 'node:fs/promises';
+import { resolve, dirname } from 'node:path';
+import { createRequire } from 'node:module';
 import { enterprisePatch } from './config.mjs';
 
 const mutable = new Set(['agent-default-model', 'llm-deepseek', 'llm-pi-ai',
-  'ui-settings-models', 'ui-model-selection', 'session-title-llm', 'ui-chat']);
+  'ui-settings-models', 'ui-model-selection', 'session-title-llm', 'ui-chat', 'dsh-rewind-plugin']);
+const addons = ['@michengai/dsh-archive-manager', 'dsh-rewind-plugin'];
+const require = createRequire(import.meta.url);
 
 /** Native profile overrides must sit above deployment defaults to remain editable. */
 export async function prepareProfile(config, home, executionRoot) {
@@ -24,6 +27,25 @@ export async function prepareProfile(config, home, executionRoot) {
   manifest ??= { name: 'dsh-profile-web', private: true, dependencies: {},
     dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } } };
   const bundles = manifest.dsh.profile.bundles;
+  manifest.dependencies ??= {};
+  const previousDefaults = bundles.indexOf(bundleName);
+  if (previousDefaults !== -1) bundles.splice(previousDefaults, 1);
+  // Use the pinned deployment packages and the Host's shared peer services.
+  // The native profile resolver discovers both Host and browser entry points.
+  for (const name of addons) {
+    const target = dirname(require.resolve(name + '/package.json'));
+    const link = resolve(profile, 'node_modules', name);
+    await mkdir(dirname(link), {recursive:true});
+    const info = await lstat(link).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    if (info && !info.isSymbolicLink()) throw new Error('MANAGED_PLUGIN_LINK_CHANGED');
+    const current = info ? await realpath(link).catch(error => { if (error.code !== 'ENOENT') throw error; }) : undefined;
+    if (current !== await realpath(target)) {
+      if (info) await unlink(link);
+      await symlink(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+    }
+    manifest.dependencies[name] = 'link:' + target.replaceAll('\\', '/');
+    if (!bundles.includes(name)) bundles.push(name);
+  }
   if (!bundles.includes(bundleName)) bundles.push(bundleName);
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
   // Authority and execution boundaries stay in the final deployment layer.

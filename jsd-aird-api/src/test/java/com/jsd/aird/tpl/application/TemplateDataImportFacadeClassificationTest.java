@@ -2,7 +2,7 @@ package com.jsd.aird.tpl.application;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Optional;

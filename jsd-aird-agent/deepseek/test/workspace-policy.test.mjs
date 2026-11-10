@@ -13,6 +13,12 @@ import { presetForProfile, profileForPreset } from '../src/session-policy.mjs';
 const owner = {organization_id:'00000000-0000-0000-0000-000000000001',actor_id:'00000000-0000-0000-0000-000000000099',auth_version:1,expires_at:4e9};
 const rpc = (method, request) => ({type:'client-request',method,payload:{args:{request}}});
 
+test('the enterprise gateway permits native idempotent session forks', async () => {
+  const request = {sessionId:'source-session',atSeq:12,requestId:'branch-attempt'};
+  await checkRpc('session/fork',rpc('session/fork',request),{executionRoot:'unused'});
+  assert.deepEqual(request,{sessionId:'source-session',atSeq:12,requestId:'branch-attempt'});
+});
+
 test('one owner uses one Host across modes; other users, organizations and revoked identities do not', async () => {
   const hosts = new Hosts({maxHosts:10}), stopped = [];
   let starts = 0;
@@ -92,4 +98,15 @@ test('one enterprise preset composes the native standard tools, skills and compa
   assert.equal(patch.find(row=>row.id==='ui-schedule').disabled,false);
   assert.equal(profileForPreset(agent.config.id),'agent');
   assert.equal(patch.find(row=>row.id==='workspace-controller').config.documentsDirectory,tmpdir());
+});
+
+
+test('favorite RPC accepts the plugin input contract and rejects malformed identities', async () => {
+  const endpoint='workspaceRegistry/setSessionFavorite';
+  const invoke = args => checkRpc(endpoint,{type:'client-request',method:endpoint,payload:{args}},{});
+  await invoke({input:{sessionId:'session-owner',favorite:true}});
+  await invoke({input:{sessionId:'session-owner',favorite:false}});
+  await assert.rejects(invoke({sessionId:'session-owner',favorite:true}),/FAVORITE_REQUIRED/);
+  await assert.rejects(invoke({input:{sessionId:'../foreign',favorite:true}}),/SESSION_REQUIRED/);
+  await assert.rejects(invoke({input:{sessionId:'session-owner',favorite:'true'}}),/FAVORITE_REQUIRED/);
 });

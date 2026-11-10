@@ -1,4 +1,5 @@
 package com.jsd.aird.kb.application;
+import com.jsd.aird.shared.text.LatexEvidenceProjector;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -14,7 +15,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.jsd.aird.kb.domain.DocumentParser;
+import com.jsd.aird.kb.api.DocumentParser;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import org.slf4j.Logger;

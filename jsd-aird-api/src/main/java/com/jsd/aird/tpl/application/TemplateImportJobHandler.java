@@ -2,7 +2,7 @@ package com.jsd.aird.tpl.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.ops.application.port.AsyncJobHandler;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import org.springframework.stereotype.Component;
 
 @Component

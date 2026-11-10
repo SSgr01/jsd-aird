@@ -3,8 +3,17 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24.9.0 <25" },
+  "engines": {
+    "node": ">=24.9.0 <25"
+  },
   "packageManager": "pnpm@11.28.5",
-  "dependencies": { "ws": "8.21.3" },
-  "scripts": { "start": "node src/server.mjs", "test": "node --experimental-transform-types --test test/*.test.mjs" }
+  "dependencies": {
+    "@michengai/dsh-archive-manager": "1.2.8",
+    "dsh-rewind-plugin": "0.21.2",
+    "ws": "8.21.3"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --experimental-transform-types --test test/*.test.mjs"
+  }
 }

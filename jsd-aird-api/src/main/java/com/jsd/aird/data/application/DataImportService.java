@@ -737,6 +737,9 @@ public class DataImportService {
             var code=pending.path("code").asText("INSTANCE_STRUCTURE_UNCONFIRMED");
             // Per-value quantity validation below supplies the specific warning.
             if(code.equals("FORMULA_INCOMPLETE"))continue;
+            // Prefer the located warning when the parser also returns its field-level precursor.
+            if(draft!=null && pending.path("address").asText().isBlank()
+                    && duplicatesParsedWorkbookIssue(draft.instance(),pending,sourceSheets,true))continue;
             issues.add(new DataRepository.Issue(null,sheet.sheetId(),null,"WARNING",code,null,null,pending.path("address").asText(null),pending.path("message").asText("数据待核对"),pending.deepCopy(),"OPEN"));
         }
         if(draft!=null)for(var pending:draft.instance().path("issues")) {
@@ -901,6 +904,11 @@ public class DataImportService {
 
     private boolean duplicatesParsedWorkbookIssue(JsonNode instance, JsonNode pending,
                                                     List<DataRepository.Sheet> sourceSheets) {
+        return duplicatesParsedWorkbookIssue(instance,pending,sourceSheets,false);
+    }
+
+    private boolean duplicatesParsedWorkbookIssue(JsonNode instance, JsonNode pending,
+                                                    List<DataRepository.Sheet> sourceSheets, boolean locatedOnly) {
         var code=pending.path("code").asText();
         var fieldId=pending.path("fieldId").asText();
         var address=pending.path("address").asText();
@@ -922,6 +930,7 @@ public class DataImportService {
         for(var sheet:sourceSheets) {
             if(!sheet.selected()||!sheetId.isBlank()&&!sheetId.equals(sheet.sheetId()))continue;
             for(var parsed:sheet.structure().path("labParseIssues")) {
+                if(locatedOnly && parsed.path("address").asText().isBlank())continue;
                 if(!parsed.path("code").asText().equals(code))continue;
                 boolean sameField=!fieldId.isBlank()&&parsed.path("fieldId").asText().equals(fieldId);
                 boolean sameCell=!address.isBlank()&&parsed.path("address").asText().equalsIgnoreCase(address);

@@ -66,9 +66,27 @@ public class AgentExperimentService implements AgentExperimentFacade {
             var query = args.path("query").asText("").strip();
             if (offset < 0 || offset > 100000 || query.length() > 1000) throw new ApiException(ApiErrorCode.BAD_REQUEST);
             var org = ActorContext.required().organizationId();
-            var ids = jdbc.queryForList("SELECT id FROM rnd.experiment WHERE organization_id=? AND deleted=false "
-                + "AND (?='' OR title ILIKE ? OR experiment_no ILIKE ?) ORDER BY updated_at DESC,id", UUID.class,
-                org, query, "%" + query + "%", "%" + query + "%");
+            boolean briefing = args.hasNonNull("task_type");
+            var sql = new StringBuilder("SELECT " + (briefing ? "id,updated_at,revision" : "id") + " FROM rnd.experiment WHERE organization_id=? AND deleted=false "
+                + "AND (?='' OR title ILIKE ? OR experiment_no ILIKE ?)");
+            var parameters = new java.util.ArrayList<Object>(java.util.List.of(org, query, "%" + query + "%", "%" + query + "%"));
+            for (var field : java.util.List.of("updated_from", "updated_before")) if (args.hasNonNull(field)) {
+                sql.append(" AND updated_at" + ("updated_from".equals(field) ? ">=?" : "<?"));
+                parameters.add(java.sql.Timestamp.from(Instant.parse(args.path(field).asText())));
+            }
+            if (args.path("project_ids").isArray() && !args.path("project_ids").isEmpty()) {
+                if (args.path("project_ids").size() > 20) throw new ApiException(ApiErrorCode.BAD_REQUEST);
+                sql.append(" AND project_id IN (" + String.join(",", java.util.Collections.nCopies(args.path("project_ids").size(), "?")) + ")");
+                args.path("project_ids").forEach(id -> parameters.add(UUID.fromString(id.asText())));
+            }
+            sql.append(briefing ? " ORDER BY updated_at,id" : " ORDER BY updated_at DESC,id");
+            java.util.List<UUID> ids;
+            if (briefing) {
+                var index = jdbc.queryForList(sql.toString(), parameters.toArray());
+                ids = index.stream().map(row -> (UUID)row.get("id")).toList();
+                result.put("index_revision", canonical.hash(json.valueToTree(index.stream()
+                    .filter(row -> authorization.check(check((UUID)row.get("id"))).allowed()).toList())));
+            } else ids = jdbc.queryForList(sql.toString(), UUID.class, parameters.toArray());
             UUID project = uuid(args, "project_id");
             var allowed = ids.stream().filter(id -> authorization.check(check(id)).allowed())
                 .filter(id -> project == null || project.equals(detail(id).summary().projectId()))
@@ -94,6 +112,7 @@ public class AgentExperimentService implements AgentExperimentFacade {
             var vid = uuid(args, "version_id");
             candidates.add(candidate(id, version(id, vid == null ? item.currentVersionId() : vid), item.summary().title(), args));
             result.put("path", "/experiments/" + id);
+            result.set("reading", candidates.get(0).path("reading"));
         } else throw new ApiException(ApiErrorCode.BAD_REQUEST);
         result.putObject("trace").put("kind", "AUTHORIZED_EXPERIMENT_RECORDS").put("read_at", Instant.now().toString());
         return result;
@@ -101,7 +120,25 @@ public class AgentExperimentService implements AgentExperimentFacade {
 
     private ObjectNode candidate(UUID id, ExperimentModels.Version version, String title, JsonNode query) {
         var projection = new AgentExperimentProjection(json);
-        String text = projection.text(canonical.canonicalize(projection.page(id, version, query)));
+        var content = projection.page(id, version, query);
+        var summary = detail(id).summary();
+        var relations = json.createObjectNode();
+        var relationText = new StringBuilder("当前业务归属（当前记录关系，不代表历史版本归属；关联正文需另行授权读取）：\n");
+        if (summary.projectId() == null) relationText.append("当前无所属项目。\n");
+        else {
+            relations.putObject("project").put("id", summary.projectId().toString()).put("name", summary.projectName());
+            relationText.append("所属项目：").append(summary.projectName() == null ? "名称未填写" : summary.projectName()).append('\n');
+        }
+        if (summary.stageId() != null) {
+            relations.putObject("stage").put("id", summary.stageId().toString()).put("name", summary.stageName());
+            relationText.append("所属阶段：").append(summary.stageName() == null ? "名称未填写" : summary.stageName()).append('\n');
+        }
+        if (summary.taskId() != null) {
+            relations.putObject("task").put("id", summary.taskId().toString()).put("name", summary.taskName());
+            relationText.append("所属任务：").append(summary.taskName() == null ? "名称未填写" : summary.taskName()).append('\n');
+        }
+        content.set("current_relations", relations);
+        String text = projection.text(canonical.canonicalize(content));
         var page = json.createObjectNode().put("section", query.path("section").asText("overview"))
             .put("offset", query.path("offset").asInt(0)).put("limit", query.path("limit").asInt(8));
         for (var name : List.of("sample_key", "field_codes")) if (query.hasNonNull(name)) page.set(name, query.get(name));
@@ -109,9 +146,13 @@ public class AgentExperimentService implements AgentExperimentFacade {
             .put("resource_id", id.toString()).put("document_id", id.toString()).put("version_id", version.id().toString())
             .put("source_node_key", "EXPERIMENT:" + id + ":" + version.id() + ":" + canonical.hash(page)).put("title", title)
             .put("content_sha256", canonical.hashText(text));
+        if (summary.projectId() != null) source.put("project_id", summary.projectId().toString());
         source.putObject("anchor").put("experimentId", id.toString()).put("versionId", version.id().toString())
-            .put("versionNo", version.versionNo()).set("page", page);
-        return json.createObjectNode().put("text", text).set("source", source);
+            .put("versionNo", version.versionNo()).put("version_hash", canonical.hash(version.editModel())).set("page", page);
+        var result = json.createObjectNode().put("text", text).put("model_text", relationText + projection.modelText(content));
+        var reading = result.putObject("reading").put("section", content.path("section").asText()).put("offset", content.path("offset").asInt());
+        for (var key : List.of("section_counts", "next_offset", "total", "complete")) if (content.has(key)) reading.set(key, content.get(key));
+        result.set("source", source); return result;
     }
 
     @Override public void validateSource(JsonNode source, String excerpt) {
@@ -122,6 +163,8 @@ public class AgentExperimentService implements AgentExperimentFacade {
         var record = version(id, vid);
         var authoritative = candidate(id, record, detail(id).summary().title(), source.path("anchor").path("page"));
         var expected = authoritative.path("source");
+        // Original native evidence still checks its exact page body and excerpt.
+        if (!source.path("anchor").has("version_hash")) ((ObjectNode)expected.path("anchor")).remove("version_hash");
         for (var key : List.of("document_id", "source_node_key", "content_sha256", "anchor"))
             if (!expected.path(key).equals(source.path(key))) throw new ApiException(ApiErrorCode.VERSION_CONFLICT, "实验来源版本或正文已改变");
         if (excerpt != null && !authoritative.path("text").asText().contains(excerpt))

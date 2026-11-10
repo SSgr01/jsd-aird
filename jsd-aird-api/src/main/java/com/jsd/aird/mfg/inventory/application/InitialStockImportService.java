@@ -21,8 +21,9 @@ import java.util.UUID;
 
 @Service
 public class InitialStockImportService {
-    @org.springframework.beans.factory.annotation.Autowired(required=false)
     private com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void setIsolated(com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated) { this.isolated = isolated; }
     private JsonNode cells(MultipartFile file)throws java.io.IOException {
         if(isolated!=null)return isolated.execute("inventory-cells",file.getInputStream(),null,JsonNode.class);
         var result=mapper.createArrayNode();result.addArray();

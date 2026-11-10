@@ -12,7 +12,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,9 +36,7 @@ public class HttpRerankerProvider implements RerankerProvider {
         this.endpoint = endpoint == null ? "" : endpoint.strip();
         this.apiKey = apiKey == null ? "" : apiKey.strip();
         this.model = model == null ? "" : model.strip();
-        var factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(timeout);
-        factory.setReadTimeout(timeout);
+        var factory = new BudgetHttpRequestFactory(timeout);
         this.client = RestClient.builder().requestFactory(factory).build();
     }
 

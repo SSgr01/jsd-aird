@@ -15,7 +15,8 @@ ARG SANDBOX_PIP_INDEX_URL=https://pypi.org/simple
 RUN pip install --no-cache-dir --index-url "${SANDBOX_PIP_INDEX_URL}" numpy==2.3.5 pandas==2.3.3 scipy==1.16.3 openpyxl==3.1.5 python-docx==1.2.0 \
        reportlab==4.4.5 pypdf==6.1.1 \
     && groupadd --gid 10001 analysis && useradd --uid 10001 --gid 10001 --no-create-home analysis \
-    && mkdir -p /work/input /work/source-scratch /work/scratch /work/output
+    && mkdir -p /work/input /work/source-scratch /work/scratch /work/output \
+    && ln -s /work/scratch/native /workspaces
 COPY runner.py /opt/jsd/runner.py
 COPY aird_files.py /opt/jsd/aird_files.py
 USER 10001:10001

@@ -36,14 +36,3 @@ def register_candidates(evidence, candidates):
     if len(updated) > 500 or sum(len(c["text"]) for c in updated.values()) > 2_000_000:
         raise HTTPException(409, "EVIDENCE_BUDGET_EXCEEDED")
     return updated
-
-
-def alias_map(candidates):
-    aliases = {}
-    for candidate in candidates:
-        item = canonical_candidate(candidate)
-        label = item["label"]
-        if label in aliases:
-            raise HTTPException(422, "AMBIGUOUS_ANSWER_CONTEXT_LABEL")
-        aliases[label] = item["evidence_id"]
-    return aliases

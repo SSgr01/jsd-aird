@@ -2,10 +2,16 @@
 import re
 
 
-def citation_links(evidence, origin):
+def citation_links(evidence, origin, *, quote_aliases=False):
     result = {}
     for eid, candidate in evidence.items():
         source = candidate.get("source", {})
+        anchor = source.get("anchor") or {}
+        if source.get("kind") == "BUSINESS_RECORD" and anchor.get("business_adapter") == "v1":
+            path = anchor.get("read_path")
+            if isinstance(path, str) and path.startswith("/api/v1/agents/business/") and not any(char in path for char in "\r\n\\"):
+                result[eid] = {"url": origin.rstrip("/") + path, "label": source.get("title") or "业务原始记录"}
+            continue
         if source.get("kind") == "BUSINESS_RECORD" and source.get("resource_type") in {"PROJECT", "STAGE", "TASK", "REQUIREMENT", "MATERIAL"}:
             project = source.get("project_id") or source.get("anchor", {}).get("project_id")
             if source["resource_type"] == "PROJECT":
@@ -28,8 +34,22 @@ def citation_links(evidence, origin):
             path = f"/api/v1/agents/private-sources/{source['document_id']}/content?version_id={source['version_id']}"
         if isinstance(page, int) and page > 0:
             path += f"#page={page}"
-        result[eid] = {"url": origin.rstrip("/") + path,
-                       "label": f"原文·第{page}页" if page else "原文"}
+        topic = anchor.get("section_title") or anchor.get("section") or source.get("title") or "原文"
+        if not isinstance(topic, str):
+            topic = source.get("title") or "原文"
+        topic = re.sub(r"^(?:PMC\d+|W\d+)[_\s-]+", "", topic, flags=re.I)
+        topic = re.sub(r"\.pdf$", "", topic, flags=re.I)
+        topic = re.sub(r"_?sub_?(\d+)_?sub_?", r"\1", topic, flags=re.I)
+        topic = re.sub(r"[_\s]+", " ", topic).strip()[:64] or "原文"
+        topic = re.sub(r"[\[\]\r\n]", " ", topic)
+        label = (f"原文·第{page}页" if page else "原文") if topic == "原文" else topic + (f" · 第{page}页" if page else "")
+        result[eid] = {"url": origin.rstrip("/") + path, "label": label}
+    if quote_aliases:
+        from aird_agent.evidence.quotes import quotes
+        for eid, candidate in evidence.items():
+            if eid in result:
+                for quote in quotes(candidate):
+                    result[quote["quote_id"]] = {**result[eid], "evidence_id": eid}
     return result
 
 

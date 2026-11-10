@@ -1,0 +1,25 @@
+name: jsd-aird-memory
+
+services:
+  hindsight:
+    # Server and coding-agent integration have independent release versions.
+    image: ghcr.io/vectorize-io/hindsight:0.8.6@sha256:ffa391a77284e49f6b55e32c86f33529ac4257831407b14038a72b6a0a232039
+    restart: unless-stopped
+    stop_grace_period: 40s
+    env_file:
+      - path: ../../.runtime/hindsight/service.env
+        format: raw
+    ports:
+      - "127.0.0.1:8888:8888"
+      - "127.0.0.1:9999:9999"
+    volumes:
+      - model-cache:/home/hindsight/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8888/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 180s
+
+volumes:
+  model-cache:

@@ -14,6 +14,36 @@ import static org.mockito.Mockito.*;
 import static org.assertj.core.api.Assertions.*;
 
 class ResearchNavigationTest {
+    @Test void libraryLiteralDiscoveryUsesTheIndexWithoutExpandingEveryPublication() {
+        var mapper=new ObjectMapper();
+        var repo=mock(KnowledgeRepository.class);
+        var governance=mock(KnowledgeGovernanceService.class);
+        var codec=mock(StructuredDocumentCodec.class);
+        var authorization=mock(AuthorizationService.class);
+        var index=mock(KnowledgeSearchFacade.class);
+        var docId=UUID.randomUUID();var publicationId=UUID.randomUUID();
+        var doc=mock(KnowledgeRepository.DocumentRow.class);
+        when(doc.currentPublicationId()).thenReturn(publicationId);
+        when(repo.findDocument(any(),eq(docId))).thenReturn(Optional.of(doc));
+        when(repo.researchDocuments(any(),eq(0),eq(501))).thenReturn(List.of(
+            new KnowledgeRepository.ResearchDocument(docId,publicationId,UUID.randomUUID(),"resin.pdf")));
+        when(authorization.check(any())).thenReturn(new com.jsd.aird.iam.api.PermissionDecision(true,"knowledge.view","ALLOW","ALL","allowed"));
+        when(index.recall(any())).thenReturn(new KnowledgeSearchFacade.RecallResult(List.of(),
+            new KnowledgeSearchFacade.RetrievalTrace("RAW_CHANNELS",0,0,0,List.of()),List.of()));
+        var service=new ResearchKnowledgeService(repo,governance,codec,index,authorization,mapper);
+        ActorContext.set(new Actor(UUID.randomUUID(),UUID.randomUUID(),"reader","USER"));
+        try {
+            for(var mode:List.of("phrase","all","any")) {
+                var result=service.discoverRecall("boron nitride",null,mode,new ResearchKnowledgeFacade.RecallOptions(true,true,true,48));
+                assertThat(result.trace()).containsEntry("canonical_documents",0)
+                    .containsEntry("ranking_scope","BOUNDED_CURRENT_INDEX_CANDIDATES")
+                    .containsEntry("fulltext_coverage",false);
+            }
+            verify(index,times(3)).recall(any());
+            verifyNoInteractions(codec,governance);
+        } finally {ActorContext.clear();}
+    }
+
     @Test void distantTableRowsKeepTheirOwnHeadersAcrossPagesAndReplay() {
         var mapper = new ObjectMapper(); var repo = mock(KnowledgeRepository.class);
         var governance = mock(KnowledgeGovernanceService.class); var authorization = mock(AuthorizationService.class);
@@ -73,11 +103,20 @@ class ResearchNavigationTest {
                 row.source().publication_id(),row.source().source_node_key(),row.source().content_sha256(),row.source().anchor(),row.source().title(),null);
             assertThatThrownBy(() -> service.validateAll(List.of(new ResearchKnowledgeFacade.SourceExcerpt(wrongVersion,row.text()))))
                 .isInstanceOf(com.jsd.aird.shared.error.ApiException.class);
+            assertThatThrownBy(() -> service.image(wrongVersion,"auto"))
+                .isInstanceOf(com.jsd.aird.shared.error.ApiException.class);
+            var changedAnchor = (com.fasterxml.jackson.databind.node.ObjectNode) row.source().anchor().deepCopy();
+            changedAnchor.putObject("original").put("page",1).put("assetFileId",UUID.randomUUID().toString());
+            var wrongImage = new ResearchKnowledgeFacade.SourceRef(row.source().kind(),row.source().document_id(),row.source().version_id(),
+                row.source().publication_id(),row.source().source_node_key(),row.source().content_sha256(),changedAnchor,row.source().title(),null);
+            assertThatThrownBy(() -> service.image(wrongImage,"auto"))
+                .isInstanceOf(com.jsd.aird.shared.error.ApiException.class);
             when(view.excludedReviewNodeIds()).thenReturn(List.of(UUID.fromString(rowKeys.getFirst())));
             assertThat(service.read(ref,5,1).candidates().getFirst().table_context().path("header_node_keys")).isEmpty();
             doThrow(new IllegalStateException("revoked")).when(authorization).require(any());
             assertThatThrownBy(()->service.context(row.source(),0,0,0)).hasMessage("revoked");
             assertThatThrownBy(()->service.validateAll(List.of(new ResearchKnowledgeFacade.SourceExcerpt(row.source(),row.text())))).hasMessage("revoked");
+            assertThatThrownBy(()->service.image(row.source(),"auto")).hasMessage("revoked");
         } finally {ActorContext.clear();}
     }
 

@@ -1,10 +1,39 @@
 """Append-only execution receipts and owner-audited reconciliation without replay."""
 
+import asyncio
+import logging
+
 from fastapi import HTTPException
 from psycopg.types.json import Jsonb
 
 from aird_agent.core.contracts import digest
 from aird_agent.core.receipts import receipt as receipt
+
+logger = logging.getLogger(__name__)
+
+
+async def reconcile_cancelled_execution(service, principal, rid, call_id):
+    """A stop response can precede both Docker cleanup and the turn/end projection."""
+    try:
+        async with asyncio.timeout(20):
+            while True:
+                async with service.store.pool.connection() as conn:
+                    operation = await (await conn.execute(
+                        "SELECT status,tool_name FROM agent_runtime.harness_calls WHERE run_id=%s AND call_id=%s",
+                        (rid, call_id))).fetchone()
+                if operation and operation["tool_name"] != "dsh_execute":
+                    return
+                if operation and operation["status"] in {"SUCCEEDED", "FAILED"}:
+                    return
+                if operation and operation["status"] == "UNKNOWN":
+                    result = await reconcile(service, principal, rid, call_id)
+                    if result["outcome"] != "STILL_UNKNOWN":
+                        return
+                await asyncio.sleep(0.5)
+    except (HTTPException, TimeoutError):
+        logger.info("Sandbox stop still requires reconciliation run=%s call=%s", rid, call_id)
+    except Exception as error:
+        logger.warning("Sandbox stop reconciliation unavailable run=%s call=%s failure=%s", rid, call_id, type(error).__name__)
 
 
 async def list_operations(service, principal, rid):

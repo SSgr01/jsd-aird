@@ -17,8 +17,8 @@ import java.util.Map;
 import java.util.function.Supplier;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.jsd.aird.kb.domain.DocumentParser;
-import com.jsd.aird.kb.domain.MediaExtractionProvider;
+import com.jsd.aird.kb.api.DocumentParser;
+import com.jsd.aird.kb.api.MediaExtractionProvider;
 import com.jsd.aird.kb.domain.MediaExtractionException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;

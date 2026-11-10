@@ -29,6 +29,8 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
     private final com.jsd.aird.kb.api.KnowledgeSearchFacade publishedRecall;
     private com.jsd.aird.kb.application.port.BibliographyRepository bibliography;
     @org.springframework.beans.factory.annotation.Autowired
+    private ResearchImageReader imageReader;
+    @org.springframework.beans.factory.annotation.Autowired
     void bibliography(com.jsd.aird.kb.application.port.BibliographyRepository value) {bibliography=value;}
     @org.springframework.beans.factory.annotation.Autowired
     public ResearchKnowledgeService(KnowledgeRepository repository, KnowledgeGovernanceService governance,
@@ -211,20 +213,26 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
     }
     @Override public Recall discoverRecall(String query,String cursor,String mode,RecallOptions options) {
         authorize(List.of());var window=authorizedWindow(cursor);
-        var raw=recallAuthorized(window.refs(),query,mode,options);var trace=new LinkedHashMap<>(raw.trace());
+        var raw=recallAuthorized(window.refs(),query,mode,options,true);var trace=new LinkedHashMap<>(raw.trace());
         trace.put("scope","AUTHORIZED_LIBRARY");trace.put("coverage",window.nextCursor()!=null?"MORE_LIBRARY_WINDOWS_AVAILABLE":"CURRENT_WINDOW_COMPLETE");
         trace.put("window_revision",windowRevision(window));
         return new Recall(raw.channels(),trace,window.nextCursor());
     }
 
     private Recall recallAuthorized(List<DocumentRef> documents,String query,String mode,RecallOptions options) {
+        return recallAuthorized(documents,query,mode,options,false);
+    }
+
+    private Recall recallAuthorized(List<DocumentRef> documents,String query,String mode,RecallOptions options,boolean discovery) {
         com.jsd.aird.kb.api.ResearchTextMatch.terms(query);
         if(!Set.of("auto","phrase","all","any").contains(mode)||options.limit()<1||options.limit()>100)throw new ApiException(ApiErrorCode.BAD_REQUEST);
         var actor=ActorContext.required();var trace=new LinkedHashMap<String,Object>();var channels=new ArrayList<RecallChannel>();
         var indexedRefs=new LinkedHashMap<UUID,DocumentRef>();var canonicalRefs=new ArrayList<DocumentRef>();
         for(var ref:new LinkedHashSet<>(documents)) {
             var current=repository.findDocument(actor.organizationId(),ref.document_id()).map(KnowledgeRepository.DocumentRow::currentPublicationId).orElse(null);
-            if("auto".equals(mode)&&ref.publication_id().equals(current))indexedRefs.put(ref.document_id(),ref);else canonicalRefs.add(ref);
+            // Discovery is a bounded index search in every mode. Exhaustive
+            // literal matching belongs to explicitly selected publications.
+            if((discovery||"auto".equals(mode))&&ref.publication_id().equals(current))indexedRefs.put(ref.document_id(),ref);else canonicalRefs.add(ref);
         }
         var allowed=Set.copyOf(indexedRefs.keySet());
         trace.put("match_mode",mode);trace.put("current_documents",indexedRefs.size());trace.put("canonical_documents",canonicalRefs.size());
@@ -241,13 +249,18 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
             // Discovery channels may return lightweight rows. Hydrate canonical anchors once before
             // issuing evidence handles, so a later read/replay verifies the same source position.
             var recalled = new LinkedHashMap<UUID, com.jsd.aird.kb.api.KnowledgeSearchFacade.SearchHit>();
-            raw.channels().forEach(c -> c.hits().forEach(h -> recalled.putIfAbsent(h.chunkId(), h)));
+            raw.channels().forEach(c -> c.hits().stream()
+                .filter(h -> "auto".equals(mode)||com.jsd.aird.kb.api.ResearchTextMatch.score(h.content(),query,mode)>=0)
+                .forEach(h -> recalled.putIfAbsent(h.chunkId(), h)));
             var canonicalSources = indexedSources(List.copyOf(recalled.values()));
             for(var entry:raw.channels()) {
                 var values=new ArrayList<Candidate>();
                 for(var row:entry.hits()) {
+                    if(!recalled.containsKey(row.chunkId()))continue;
                     var ref=indexedRefs.get(row.documentId());
-                    if(ref==null||!governance.publishedContent(ref.document_id(),ref.publication_id()).publication().versionId().equals(row.versionId()))continue;
+                    // indexedSources already checks the body, anchor and fixed
+                    // version once per distinct source, before this projection.
+                    if(ref==null||!canonicalSources.containsKey(row.chunkId()))continue;
                     values.add(new Candidate(row.content(),canonicalSources.get(row.chunkId()),row.retrievalScore()));
                 }
                 channels.add(new RecallChannel(entry.name(),entry.weight(),values));
@@ -388,6 +401,13 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
             if (item.excerpt() == null || !text.contains(item.excerpt()))
                 throw new ApiException(ApiErrorCode.VERSION_CONFLICT, "原文摘录不匹配");
         }
+    }
+
+    @Override public JsonNode image(SourceRef source, String view) {
+        // Reuse canonical text, location, version and IAM validation before reading any bytes.
+        authoritativeText(source);
+        var ref = documentRef(source);
+        return imageReader.read(source, governance.publishedContent(ref.document_id(), ref.publication_id()), view);
     }
 
     @Override public List<Candidate> replay(List<Handle> handles) {

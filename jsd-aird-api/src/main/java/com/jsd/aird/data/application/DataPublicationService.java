@@ -28,8 +28,9 @@ public class DataPublicationService {
     private final AuthorizationService authorization;
     private final AuditLogFacade audit;
     private ExperimentAssemblyService assembly;
-    @org.springframework.beans.factory.annotation.Autowired
     private com.jsd.aird.shared.resource.TemporarySpace temporarySpace;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setTemporarySpace(com.jsd.aird.shared.resource.TemporarySpace temporarySpace) { this.temporarySpace = temporarySpace; }
     @Transactional(readOnly=true)
     public com.jsd.aird.shared.resource.PreparedFile prepareExport(UUID jobId) {
         return com.jsd.aird.shared.resource.PreparedFile.create(temporarySpace,512L*1024*1024,output->writeExport(jobId,output));
@@ -476,11 +477,6 @@ public class DataPublicationService {
                 rs.getString(5), rs.getString(6), (Integer) rs.getObject(7), parse(rs.getString(8)),parse(rs.getString(9))));});
     }
 
-    private String sourceAddress(UUID recordId, JsonNode value) {
-        return jdbc.query("SELECT cell_address FROM data.source_anchor WHERE record_id=? AND binding_id=? AND value_path=? ORDER BY id LIMIT 1",
-                (rs, n) -> Objects.toString(rs.getString(1), ""), recordId, value.path("bindingId").asText(),
-                value.path("valuePath").asText()).stream().findFirst().orElse("");
-    }
 
     private DataRepository.Job require(UUID jobId, String permission, boolean lock) {
         var actor = ActorContext.required();

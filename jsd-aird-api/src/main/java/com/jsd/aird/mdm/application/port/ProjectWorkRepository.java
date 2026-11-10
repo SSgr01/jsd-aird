@@ -1,29 +1,26 @@
 package com.jsd.aird.mdm.application.port;
-
-import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
-
-import com.jsd.aird.mdm.application.query.ProjectTaskQuery;
-import com.jsd.aird.mdm.application.query.ProjectTaskSummary;
-import com.jsd.aird.mdm.domain.model.ProjectTask;
-
-/** Outbound port for project task persistence. */
+import com.jsd.aird.mdm.application.query.*;
+import com.jsd.aird.mdm.domain.model.*;
+import java.util.*;
 public interface ProjectWorkRepository {
+ boolean stageBelongs(UUID stageId, UUID projectId);
+ void insertTask(ProjectTask task);
+ Optional<ProjectTask> task(UUID id);
+ int updateTask(ProjectTask task);
+ int deleteTask(UUID id,long version);
 
-    List<ProjectTask> tasks(UUID stageId);
-
-    boolean stageBelongs(UUID stageId, UUID projectId);
-
-    void insertTask(ProjectTask task);
-
-    Optional<ProjectTask> task(UUID id);
-
-    int updateTask(ProjectTask task);
-
-    List<ProjectTaskSummary> findTaskPage(ProjectTaskQuery query, long offset, int limit);
-
-    long countTasks(ProjectTaskQuery query);
-
-    List<String> findTaskOwners();
+List<ProjectTask> tasks(UUID stageId);
+int moveTaskExperiments(UUID taskId, UUID toStageId);
+int moveTaskTestRecords(UUID taskId, UUID toStageId);
+int moveTaskExperimentImportJobs(UUID taskId, UUID toStageId);
+int moveTaskUploadFiles(UUID taskId, UUID toStageId);
+int moveTaskDataRecords(UUID taskId, UUID toStageId);
+int moveTaskProductionUploads(UUID taskId, UUID toStageId);
+int dropShadowedTaskResourceLinks(UUID taskId, UUID toStageId);
+int moveTaskResourceLinks(UUID taskId, UUID toStageId);
+int dropShadowedTaskReferences(UUID taskId, UUID toStageId);
+int moveTaskReferences(UUID taskId, UUID toStageId);
+List<ProjectTaskSummaryRow> findTaskPage(ProjectTaskQuery query, long offset, int limit);
+long countTasks(ProjectTaskQuery query);
+List<String> findTaskOwners();
 }

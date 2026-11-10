@@ -34,7 +34,19 @@ public class AgentToolsController {
     private final AgentArtifactService artifacts;
     private final PrivateResearchSourceService privateSources;
     private final ScholarlyLiteratureFacade scholarly;
+    @Value("${app.ai.retrieval.tool-timeout-ms:30000}")
+    private long retrievalTimeoutMs = 30000;
+    private static final Set<String> RETRIEVAL_ACTIONS = Set.of("knowledge_search", "retrieval_context",
+        "private_source_search", "query_structured_data");
     private com.jsd.aird.rnd.api.AgentExperimentFacade experiments;
+    private org.springframework.beans.factory.ObjectProvider<com.jsd.aird.ai.application.BusinessDataService> businessData;
+    private org.springframework.beans.factory.ObjectProvider<com.jsd.aird.ai.application.BusinessComputeService> businessCompute;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void businessServices(org.springframework.beans.factory.ObjectProvider<com.jsd.aird.ai.application.BusinessDataService> data,
+            org.springframework.beans.factory.ObjectProvider<com.jsd.aird.ai.application.BusinessComputeService> compute) {
+        this.businessData = data; this.businessCompute = compute;
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
     void experiments(com.jsd.aird.rnd.api.AgentExperimentFacade experiments) { this.experiments = experiments; }
@@ -52,15 +64,33 @@ public class AgentToolsController {
         this.scholarly = scholarly;
     }
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.jsd.aird.ai.application.ResearchBriefingService briefings;
+
     public record ToolRequest(String action, ObjectNode arguments) { }
 
     @PostMapping("/internal/v1/agent-tools")
     public Object invoke(@RequestHeader(value="X-Jsd-Agent-Ticket", defaultValue="") String ticket, @RequestBody ToolRequest command) {
+        if (RETRIEVAL_ACTIONS.contains(command.action())) {
+            try (var budget = com.jsd.aird.shared.resource.OperationBudget.open(
+                    com.jsd.aird.shared.resource.OperationBudget.Kind.READ, Math.max(100, retrievalTimeoutMs));
+                 var alarm = new com.jsd.aird.shared.resource.DeadlineInterrupt(
+                    com.jsd.aird.shared.resource.OperationBudget.remainingMillis())) {
+                var result = dispatch(ticket, command);
+                com.jsd.aird.shared.resource.OperationBudget.check();
+                return result;
+            }
+        }
+        return dispatch(ticket, command);
+    }
+
+    private Object dispatch(String ticket, ToolRequest command) {
         if (!enabled) throw new ApiException(ApiErrorCode.AI_NOT_CONFIGURED, "Agent 尚未启用");
         var previous = ActorContext.current();
         try {
             ActorContext.set(delegation.verify(ticket));
             artifacts.requireUse();
+            delegation.requireAction(ticket, command.action(), command.arguments());
             var args = command.arguments();
             if (args == null || args.toString().length() > 16000000) throw new ApiException(ApiErrorCode.BAD_REQUEST);
             return switch (command.action()) {
@@ -83,7 +113,11 @@ public class AgentToolsController {
                 case "source_context" -> "parent".equals(args.path("relation").asText("neighbors"))
                     ? knowledge.parentContext(mapper.convertValue(args.path("source"), ResearchKnowledgeFacade.SourceRef.class),args.path("cursor").asInt(),2000)
                     : knowledge.context(mapper.convertValue(args.path("source"), ResearchKnowledgeFacade.SourceRef.class),args.path("before").asInt(1),args.path("after").asInt(1),args.path("cursor").asInt());
-                case "operation_receipt" -> "create_experiment_draft".equals(args.path("tool").asText())
+                case "get_research_briefing_context" -> briefings.context(args);
+                case "business_search", "business_read", "business_links", "business_query" -> businessData.getObject().invoke(command.action(), args);
+                case "get_compute_context", "get_compute_result", "run_prediction", "run_formula_design", "run_experiment_optimization" -> businessCompute.getObject().invoke(command.action(), args);
+                case "operation_receipt" -> Set.of("run_prediction", "run_formula_design", "run_experiment_optimization").contains(args.path("tool").asText())
+                    ? businessCompute.getObject().receipt(args) : "create_experiment_draft".equals(args.path("tool").asText())
                     ? (args.path("close_uncommitted").asBoolean(false)
                         ? experiments.reconcileReceipt(args.path("operation_key").asText(), args.path("arguments") instanceof ObjectNode request ? request : null)
                         : experiments.receipt(args.path("operation_key").asText(), args.path("arguments") instanceof ObjectNode request ? request : null)) : research.receipt(args);
@@ -91,6 +125,14 @@ public class AgentToolsController {
                 case "create_experiment_draft" -> experiments.createDraft(args);
                 case "search_projects", "get_project_snapshot", "list_project_stages", "list_project_tasks", "get_task_detail", "get_project_records" -> projects.read(command.action(), args);
                 case "authorize" -> { knowledge.authorize(refs(args.path("documents"))); yield Map.of("allowed", true); }
+                case "source_image" -> {
+                    var source = mapper.convertValue(args.path("source"), ResearchKnowledgeFacade.SourceRef.class);
+                    var scope = args.hasNonNull("topic_id") ? topic(UUID.fromString(args.path("topic_id").asText())) : host.context(args);
+                    var ref = new ResearchKnowledgeFacade.DocumentRef(UUID.fromString(source.document_id()), UUID.fromString(source.publication_id()));
+                    if (!"AUTOMATIC".equals(scope.path("scope_mode").asText()) && !research.documents(scope).contains(ref))
+                        throw new ApiException(ApiErrorCode.DATA_SCOPE_DENIED);
+                    yield knowledge.image(source, args.path("view").asText("auto"));
+                }
                 case "knowledge_search" -> {
                     var scope = args.hasNonNull("topic_id") ? topic(UUID.fromString(args.path("topic_id").asText())) : host.context(args);
                     yield retrieval.documents(scope, args);

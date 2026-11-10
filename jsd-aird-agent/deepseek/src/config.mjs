@@ -48,9 +48,9 @@ export function standardPlugins(config) {
   const blueprint = parse(readFileSync(resolve(upstream, 'packages/bundle/web-app/presets/standard.patch.yml'), 'utf8'), {
     customTags: [{ tag: 'tag:yaml.org,2002:js', resolve: value => value }],
   });
-  // Host plugin installation, delegation and background jobs remain unavailable.
+  // Host plugin installation and delegation remain unavailable.
   // Scheduling uses the native Host service and the enterprise execution gates.
-  const excluded = new Set(['delegation', 'tool-plugin-manager', 'tool-plugin-market', 'tool-jobs']);
+  const excluded = new Set(['delegation', 'tool-plugin-manager', 'tool-plugin-market']);
   return blueprint[0].insert[0].config.plugins.filter(row => !excluded.has(row.id)).map(row => {
     if (row.id === 'persona') return { ...row, config: { prefix: '你是由 {{model}} 驱动的企业研发助手。' } };
     // Native instruction discovery must stop at the tenant's execution root.
@@ -58,7 +58,7 @@ export function standardPlugins(config) {
       ...row.config, projectRootMarkers: ['.dsh-workspace-root', '.git'],
     } };
     // The execution world is Linux even when the enterprise gateway runs on Windows.
-    if (row.id === 'tool-bash') return { ...row, disabled: false, config: { enableRunInBackground: false, promoteOnTimeout: false } };
+    if (row.id === 'tool-bash') return { ...row, disabled: false };
     if (row.id === 'tool-pwsh') return { ...row, disabled: true };
     if (row.id === 'skill-filesystem') return { ...row, name: pathToFileURL(resolve(config.plugin, 'src/skill-runtime.mjs')).href, config: {
       includeDefaultRoots: false, bundledSkillDir: resolve(config.plugin, 'skills'), watch: false,
@@ -73,7 +73,7 @@ export function enterprisePatch(config) {
     'session-log-deepseek', 'session-telemetry-otel', 'desktop-product-telemetry', 'product-analytics',
     'plugin-manager', 'tool-plugin-manager', 'hmr',
     'directory-picker', 'fs-sandbox', 'bash-sandbox', 'pwsh-sandbox', 'terminal-controller', 'subprocess',
-    'job-controller', 'account-controller', 'mcp-manager', 'cordis-host-runner',
+    'account-controller', 'mcp-manager', 'cordis-host-runner',
     'cordis-client-runner', 'cordis-inspect-providers', 'open-in-app',
     'session-log-download', 'subagent', 'agent-team', 'subagent-spawn-in-process',
     'subagent-fork-in-process', 'subagent-model-selection-settings', 'ptc-runtime', 'tool-executor-ptc',
@@ -84,11 +84,13 @@ export function enterprisePatch(config) {
     'ui-settings-shell', 'ui-settings-subagent', 'ui-settings-web-search', 'ui-settings-agent-loop',
     'ui-settings-session-log', 'ui-settings-plugin-inventory', 'ui-cordis', 'ui-agent-team', 'ui-subagent',
     'ui-sidebar-terminal', 'ui-open-in-app',
-    'ui-workflow-run',
-    'entry-customization', 'ui-brand-official', 'tool-agent-team', 'client-hmr', 'ui-jobs',
+    'ui-workflow-run', 'ui-trajectory',
+    'entry-customization', 'ui-brand-official', 'tool-agent-team', 'client-hmr',
   ];
   return [
     ...disabled.map(id => ({ id, disabled: true })),
+    { id: 'working-directory', name: resolve(config.plugin, 'src/working-directory.mjs') },
+    { id: 'spill-local', name: resolve(config.plugin, 'src/spill-store.mjs') },
     { id: 'web', config: { searchProvider: 'enterprise-search', fetchProvider: 'http' } },
     { id: 'agent-default-model', config: { provider: config.model.provider || 'deepseek-official', model: config.model.id,
       ...(config.model.reasoning ? { reasoningEffort: config.model.reasoning } : {}) } },
@@ -108,12 +110,14 @@ export function enterprisePatch(config) {
     { id: 'ui-settings-models', disabled: false, config: { credentialOnboarding: false } },
     { id: 'ui-model-selection', disabled: false },
     { id: 'ui-schedule', disabled: false },
+    { id: 'ui-workspace-archive-manager', config: { updater: false, onlineUpdate: false } },
+    { id: 'dsh-rewind-plugin', config: { fileCheckpointingEnabled: true } },
     { id: 'session-title-llm', disabled: false, config: {
       targetWords: 5, targetCjkCharacters: 10, maxInputBytes: 4096, maxOutputTokens: 4096,
       timeoutMs: 60000,
     } },
     { id: 'session-controller', config: { nativeOpen: false } },
-    { id: 'workspace-controller', config: { documentsDirectory: config.executionRoot } },
+    { id: 'workspace-controller', name: resolve(config.plugin, 'src/workspace-controller.mjs'), config: { documentsDirectory: config.executionRoot } },
     { id: 'ui-chat', config: { transcriptView: 'standard', collapseTiming: 'completion',
       foldedReplies: 'final', performanceUsage: 'detailed', linkOpening: 'sidebar' } },
     { id: 'agent-preset-registry', config: { default: 'enterprise' } },

@@ -131,26 +131,25 @@ final class RetrievalContextSupport {
         if (detail == null || detail.mode() == DataSourceFileSearchFacade.DataQueryMode.NONE) {
             var searchSummary = switch (dataChannelStatus) {
                 case "SUCCEEDED" -> "常规结构化检索已找到相关证据，见上方上下文。";
-                case "EMPTY" -> "常规结构化检索本轮没有返回匹配内容。";
+                case "EMPTY" -> "常规结构化检索在当前授权范围内未返回匹配内容。";
                 case "SKIPPED" -> "本轮选择的检索范围不包含结构化数据来源，未执行这部分检索。";
-                case "FAILED" -> "常规结构化检索未能完成，不能据此判断是否有匹配记录。";
+                case "FAILED" -> "常规结构化检索未能完成。";
                 case "PARTIAL" -> "常规结构化检索部分失败，只能依据已返回的证据回答。";
                 default -> "本轮结构化检索结果未能确定。";
             };
-            return "本轮未执行精确的记录/字段定位；" + searchSummary
-                    + "未命中只表示本轮授权范围内没有检索到匹配内容，不能据此判断整个资料库是否包含相关数据。";
+            return "本轮未执行精确的记录/字段定位；" + searchSummary;
         }
         var exactResultEmpty = detail.hits().isEmpty();
         var state = "SKIPPED".equals(dataChannelStatus)
                 ? "本轮没有检索结构化数据来源，因为用户选择的范围不包含数据中心或实验记录。"
                 : "FAILED".equals(dataChannelStatus)
-                ? "结构化数据检索未能完成，不能据此判断是否存在匹配记录。"
+                ? "结构化数据检索未能完成。"
                 : "PARTIAL".equals(dataChannelStatus)
                 ? "结构化数据检索部分失败；只可依据已提供的命中回答，不能声称结果完整。"
                 : "SUCCEEDED".equals(dataChannelStatus) && exactResultEmpty
                 ? "精确的记录/字段定位未返回目标值，但一般结构化检索已找到相关证据；请依据上方命中内容回答。"
                 : "EMPTY".equals(dataChannelStatus) && exactResultEmpty
-                ? "精确定位和一般结构化检索本轮都未返回匹配内容，未找到匹配文件或记录；只能说明当前授权范围内本次未命中，不能据此判断整个资料库是否包含相关数据。"
+                ? "精确定位和一般结构化检索在当前授权范围内均未找到匹配文件或记录。"
                 : switch (detail.resolution()) {
             case RESOLVED -> detail.hits().isEmpty()
                     ? "查询已执行，但没有找到匹配的非空记录值。"

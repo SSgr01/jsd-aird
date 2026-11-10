@@ -1,23 +1,24 @@
 package com.jsd.aird.rnd.application;
+import com.jsd.aird.shared.office.ExperimentImagePdfConverter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
-import com.jsd.aird.kb.domain.DocumentParser;
-import com.jsd.aird.kb.domain.OcrMode;
-import com.jsd.aird.kb.domain.MediaExtractionProvider;
-import com.jsd.aird.kb.domain.OrderedDocumentProjector;
+import com.jsd.aird.kb.api.DocumentParser;
+import com.jsd.aird.kb.api.OcrMode;
+import com.jsd.aird.kb.api.MediaExtractionProvider;
+import com.jsd.aird.kb.api.OrderedDocumentProjector;
 import com.jsd.aird.rnd.application.port.ExperimentImportRepository;
 import com.jsd.aird.rnd.domain.ExperimentModels.Summary;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.Actor;
 import com.jsd.aird.shared.security.ActorContext;
-import com.jsd.aird.tpl.application.port.OfficeStructureParser;
+import com.jsd.aird.tpl.api.OfficeStructureParser;
 import com.jsd.aird.ops.application.port.TemplateOfficeNormalizationFacade;
 import com.jsd.aird.tpl.api.TemplateOfficeFacade;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,12 +36,13 @@ import java.util.Set;
 import java.util.UUID;
 
 @Service
-public class ExperimentImportService {
+public class ExperimentImportService implements com.jsd.aird.rnd.api.ExperimentSourceParser {
     private org.springframework.transaction.support.TransactionTemplate commitTransaction;
     @org.springframework.beans.factory.annotation.Autowired
     void configureTransactions(org.springframework.transaction.PlatformTransactionManager manager){commitTransaction=new org.springframework.transaction.support.TransactionTemplate(manager);}
-    @org.springframework.beans.factory.annotation.Autowired
     private com.jsd.aird.iam.api.AuthorizationService authorization;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setAuthorization(com.jsd.aird.iam.api.AuthorizationService authorization) { this.authorization = authorization; }
     private final ExperimentImportRepository imports;
     private final ExperimentService experiments;
     private final FileStorageFacade files;
@@ -949,110 +951,7 @@ public class ExperimentImportService {
         catch (RuntimeException ignored) { return 0d; }
     }
 
-    private ObjectNode workbookTextSheet(String id, String name, List<List<String>> rows, ObjectNode styles) {
-        ensureOcrStyles(styles);
-        var sheet = objectMapper.createObjectNode()
-                .put("id", id)
-                .put("name", name)
-                .put("rowCount", Math.max(200, rows.size() + 20))
-                .put("columnCount", Math.max(8, rows.stream().mapToInt(List::size).max().orElse(1)))
-                .put("defaultRowHeight", 26)
-                .put("defaultColumnWidth", 100)
-                .put("showGridlines", 1);
-        var cellData = objectMapper.createObjectNode();
-        for (var rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
-            var rowData = objectMapper.createObjectNode();
-            var row = rows.get(rowIndex);
-            for (var columnIndex = 0; columnIndex < row.size(); columnIndex++) {
-                rowData.set(String.valueOf(columnIndex), objectMapper.createObjectNode()
-                        .put("v", row.get(columnIndex))
-                        .put("s", rowIndex == 0 ? "ocr-header" : "ocr-text"));
-            }
-            cellData.set(String.valueOf(rowIndex), rowData);
-        }
-        sheet.set("cellData", cellData);
-        sheet.set("mergeData", objectMapper.createArrayNode());
-        sheet.set("rowData", objectMapper.createObjectNode());
-        var columnData = objectMapper.createObjectNode();
-        columnData.set("0", objectMapper.createObjectNode().put("w", 70));
-        columnData.set("1", objectMapper.createObjectNode().put("w", 140));
-        columnData.set("2", objectMapper.createObjectNode().put("w", 560));
-        columnData.set("3", objectMapper.createObjectNode().put("w", 90));
-        sheet.set("columnData", columnData);
-        return sheet;
-    }
 
-    private ObjectNode workbookTableSheet(String id, String name, List<DocumentParser.TextBlock> rows,
-                                           ObjectNode styles) {
-        ensureOcrStyles(styles);
-        var placements = new ArrayList<OcrCellPlacement>();
-        var occupiedUntilRow = new ArrayList<Integer>();
-        var columnWidths = new ArrayList<Integer>();
-        var maxColumn = 0;
-        for (var rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
-            var block = rows.get(rowIndex);
-            var cells = tableCellModels(block.attributes());
-            if (cells.isEmpty()) cells = List.of(new OcrTableCell(block.content() == null ? "" : block.content(), 1, 1, false));
-            var column = 0;
-            for (var cell : cells) {
-                var columnSpan = Math.max(1, cell.columnSpan());
-                var rowSpan = Math.max(1, cell.rowSpan());
-                while (!freeColumnRange(occupiedUntilRow, column, columnSpan, rowIndex)) column++;
-                while (occupiedUntilRow.size() < column + columnSpan) occupiedUntilRow.add(-1);
-                for (var offset = 0; offset < columnSpan; offset++) {
-                    occupiedUntilRow.set(column + offset, Math.max(occupiedUntilRow.get(column + offset), rowIndex + rowSpan - 1));
-                    while (columnWidths.size() <= column + offset) columnWidths.add(88);
-                    var estimated = Math.min(240, Math.max(88, 22 + cell.text().length() * 14 / columnSpan));
-                    columnWidths.set(column + offset, Math.max(columnWidths.get(column + offset), estimated));
-                }
-                placements.add(new OcrCellPlacement(rowIndex, column, cell));
-                column += columnSpan;
-                maxColumn = Math.max(maxColumn, column);
-            }
-        }
-
-        var sheet = objectMapper.createObjectNode()
-                .put("id", id).put("name", name)
-                .put("rowCount", Math.max(200, rows.size() + 20))
-                .put("columnCount", Math.max(12, maxColumn + 5))
-                .put("defaultRowHeight", 30).put("defaultColumnWidth", 88)
-                .put("showGridlines", 0).put("detectedColumnCount", maxColumn);
-        var cellData = objectMapper.createObjectNode();
-        var mergeData = objectMapper.createArrayNode();
-        var rowData = objectMapper.createObjectNode();
-        for (var placement : placements) {
-            var cell = placement.cell();
-            var row = cellData.withObject("/" + placement.row());
-            row.set(String.valueOf(placement.column()), objectMapper.createObjectNode()
-                    .put("v", cell.text())
-                    .put("s", cell.header() ? "ocr-header" : "ocr-table"));
-            if (cell.rowSpan() > 1 || cell.columnSpan() > 1) {
-                mergeData.add(objectMapper.createObjectNode()
-                        .put("startRow", placement.row())
-                        .put("endRow", placement.row() + cell.rowSpan() - 1)
-                        .put("startColumn", placement.column())
-                        .put("endColumn", placement.column() + cell.columnSpan() - 1));
-            }
-            var visualLength = Math.max(1, cell.text().length() / Math.max(1, cell.columnSpan()));
-            if (visualLength > 25) {
-                var height = Math.min(100, 30 + (visualLength / 25) * 20);
-                var current = rowData.path(String.valueOf(placement.row())).path("h").asInt(0);
-                if (height > current) rowData.set(String.valueOf(placement.row()), objectMapper.createObjectNode().put("h", height));
-            }
-        }
-        var columnData = objectMapper.createObjectNode();
-        for (var column = 0; column < columnWidths.size(); column++) {
-            columnData.set(String.valueOf(column), objectMapper.createObjectNode().put("w", columnWidths.get(column)));
-        }
-        sheet.set("cellData", cellData);
-        sheet.set("mergeData", mergeData);
-        sheet.set("rowData", rowData);
-        sheet.set("columnData", columnData);
-        sheet.set("freeze", objectMapper.createObjectNode().put("startRow", -1).put("startColumn", -1).put("xSplit", 0).put("ySplit", 0));
-        sheet.set("rowHeader", objectMapper.createObjectNode().put("width", 46));
-        sheet.set("columnHeader", objectMapper.createObjectNode().put("height", 20));
-        return sheet;
-    }
 
     private boolean freeColumnRange(List<Integer> occupiedUntilRow, int start, int span, int row) {
         for (var column = start; column < start + span; column++) {
@@ -1061,18 +960,6 @@ public class ExperimentImportService {
         return true;
     }
 
-    private int tableRowOrder(DocumentParser.TextBlock block) {
-        if (block.attributes() == null) return Integer.MAX_VALUE;
-        for (var key : List.of("tableRowNo", "tableRowIndex", "logicalRowNo")) {
-            var value = block.attributes().get(key);
-            if (value instanceof Number number) return number.intValue();
-            if (value != null) {
-                try { return Integer.parseInt(String.valueOf(value)); }
-                catch (NumberFormatException ignored) { }
-            }
-        }
-        return Integer.MAX_VALUE;
-    }
 
     private void ensureOcrStyles(ObjectNode styles) {
         if (styles.has("ocr-table")) return;
@@ -1098,11 +985,6 @@ public class ExperimentImportService {
                 .put("ff", "Microsoft YaHei").put("fs", 11).put("vt", 2).put("tb", 3));
     }
 
-    private String stringAttribute(Map<String, Object> attributes, String key) {
-        if (attributes == null) return "";
-        var value = attributes.get(key);
-        return value == null ? "" : String.valueOf(value);
-    }
 
     private List<OcrTableCell> tableCellModels(Map<String, Object> attributes) {
         if (attributes == null || !(attributes.get("cells") instanceof List<?> source)) return List.of();

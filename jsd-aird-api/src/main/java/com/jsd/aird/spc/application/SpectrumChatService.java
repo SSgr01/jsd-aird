@@ -30,7 +30,7 @@ import com.jsd.aird.spc.application.port.SpectrumPromptPort;
 import com.jsd.aird.spc.application.port.SpectrumPromptPort.ConversationMessage;
 import com.jsd.aird.spc.application.port.SpectrumPromptPort.SpectrumAnalysisPromptContext;
 import com.jsd.aird.spc.application.port.SpectrumVisionClient;
-import com.jsd.aird.spc.infrastructure.SpectrumAnalysisEventNotifier;
+import com.jsd.aird.spc.application.port.SpectrumAnalysisEvents;
 import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
@@ -75,7 +75,7 @@ public class SpectrumChatService {
     private final AuditLogFacade audit;
     private final String model;
     private final int pdfRenderDpi;
-    private final SpectrumAnalysisEventNotifier eventNotifier;
+    private final SpectrumAnalysisEvents eventNotifier;
 
     public SpectrumChatService(SpectrumRepository repository, SpectrumService charts, ObjectMapper objectMapper,
                                OpsAsyncFacade async, SpectrumVisionClient vision, SpectrumPromptPort prompts,
@@ -92,7 +92,7 @@ public class SpectrumChatService {
                                AuditLogFacade audit,
                                SpectrumIntentResolver intentResolver,
                                SpectrumProtocolResolver protocolResolver,
-                               ObjectProvider<SpectrumAnalysisEventNotifier> eventNotifier,
+                               ObjectProvider<SpectrumAnalysisEvents> eventNotifier,
                                @org.springframework.beans.factory.annotation.Value("${app.spectrum.model.name:}") String model,
                                @org.springframework.beans.factory.annotation.Value("${app.spectrum.pdf-render-dpi:240}") int pdfRenderDpi) {
         this(repository, charts, objectMapper, async, vision, prompts, resultValidator, resultPresenter,
@@ -123,7 +123,7 @@ public class SpectrumChatService {
                         SpectrumResultValidator resultValidator, SpectrumResultPresenter resultPresenter,
                         AuditLogFacade audit, String model, SpectrumIntentResolver intentResolver,
                         SpectrumProtocolResolver protocolResolver, int pdfRenderDpi,
-                        SpectrumAnalysisEventNotifier eventNotifier) {
+                        SpectrumAnalysisEvents eventNotifier) {
         this.repository = repository;
         this.charts = charts;
         this.objectMapper = objectMapper;
@@ -633,7 +633,7 @@ public class SpectrumChatService {
     }
 
     private void pumpEvents(SseEmitter emitter, UUID organizationId, UUID analysisId, long cursor,
-                            SpectrumAnalysisEventNotifier.Subscription subscription) {
+                            SpectrumAnalysisEvents.Subscription subscription) {
         var lastHeartbeat = System.nanoTime();
         try {
             for (int attempt = 0; attempt < 1200; attempt++) {

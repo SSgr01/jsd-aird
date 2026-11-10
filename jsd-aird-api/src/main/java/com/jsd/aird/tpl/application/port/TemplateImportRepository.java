@@ -1,4 +1,6 @@
 package com.jsd.aird.tpl.application.port;
+import com.jsd.aird.tpl.api.RecognitionModelClient;
+import com.jsd.aird.tpl.api.OfficeStructureParser;
 
 import java.time.Instant;
 import java.util.List;
@@ -7,7 +9,7 @@ import java.util.UUID;
 import com.jsd.aird.shared.api.AllowedActions;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 
 public interface TemplateImportRepository {
 

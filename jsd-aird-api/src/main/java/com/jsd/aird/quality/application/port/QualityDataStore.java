@@ -11,7 +11,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 /** Persistence boundary for the quality data application service. */
-public interface QualityDataStore {
+public interface QualityDataStore extends com.jsd.aird.quality.api.QualityRecordLookup {
     void lockCategory(UUID organizationId,UUID categoryId);
 
     record Category(UUID id, String businessType, String name, String description,
@@ -19,19 +19,6 @@ public interface QualityDataStore {
         public String getRevision(){return com.jsd.aird.shared.json.RevisionToken.of(id,businessType,name,description,systemDefault,sortOrder);}
         public List<String> getAllowedActions() {
             return AllowedActions.category(systemDefault);
-        }
-    }
-
-    record RecordView(UUID id, String businessType, UUID categoryId, String categoryName,
-                      String businessNo, String displayName, JsonNode data, UUID sourceFileId, String sourceFileName,
-                      UUID projectId, String projectName, UUID stageId, String stageName,
-                      UUID taskId, String taskName,
-                      String visibility, JsonNode workbookSnapshot, long lockVersion,
-                      Instant createdAt, Instant updatedAt) {
-        public List<String> getAllowedActions() {
-            // Quality records currently expose no completed/reference marker;
-            // the existing service permits soft deletion and re-checks it at command time.
-            return List.of("DELETE");
         }
     }
 

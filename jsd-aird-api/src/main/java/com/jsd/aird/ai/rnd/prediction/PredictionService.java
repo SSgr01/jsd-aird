@@ -184,7 +184,6 @@ public class PredictionService {
     }
     private boolean domainReady(PredictionRepository.TargetBinding b){var domain=b.modelDomain();return domain!=null&&domain.path("features").isArray()&&domain.path("minimum").isArray()&&domain.path("maximum").isArray()&&domain.path("nearBoundaryRatio").isNumber();}
     private ObjectNode scoreBinding(PredictionRepository.TargetBinding b){return com.jsd.aird.ai.rnd.modeling.WorkbenchModelBinding.create(b,json,artifacts,false);}
-    private ObjectNode mergedDomain(PredictionRepository.TargetBinding b){return (ObjectNode)b.modelDomain().deepCopy();}
     static ObjectNode rewriteTarget(JsonNode source,UUID target){
         var out=((ObjectNode)source).deepCopy();out.put("targetId",target.toString());
         if(!out.hasNonNull("errorCode")&&out.hasNonNull("code"))out.set("errorCode",out.get("code"));
@@ -231,7 +230,6 @@ public class PredictionService {
     private JsonNode normalized(JsonNode request){return hashing.canonical(request);}
     private List<UUID> distinct(List<UUID> ids){return ids.stream().filter(Objects::nonNull).distinct().sorted().toList();}
     private void validateRequest(PredictionRequest request){if(request==null||request.targets()==null||request.targets().isEmpty())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"至少选择一个预测目标");if(request.inputs()==null)throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"实验前条件不能为空");if(distinct(request.targets().stream().map(x->x.targetId()).toList()).size()!=request.targets().size())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"预测目标不能重复");}
-    private JsonNode read(String raw){try{return json.readTree(raw);}catch(Exception e){throw new IllegalStateException(e);}}
     private String textOrNull(JsonNode node,String name){return node.hasNonNull(name)?node.path(name).asText():null;}
     private void requireKey(String key){if(key==null||key.isBlank()||key.length()>200)throw new ApiException(ApiErrorCode.BAD_REQUEST,"Idempotency-Key不能为空且不能超过200字符");}
     private Actor actor(){return ActorContext.required();}

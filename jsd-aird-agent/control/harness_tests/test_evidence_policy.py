@@ -14,32 +14,7 @@ from aird_agent.capabilities.literature.quality import (
     resolve_quote,
     validate_review,
 )
-from aird_agent.hosts.jsd.task_state import check_delivery, read_progress, record_read, source_catalog
-
-
-def test_recovery_catalog_reuses_handles_without_merging_publication_versions():
-    evidence = {}
-    for i, (publication, text) in enumerate(
-        [("v1", "page footer"), ("v1", "Original results. " * 50), ("v2", "Revised results.")]
-    ):
-        evidence[str(i)] = {
-            "evidence_id": str(i),
-            "text": text,
-            "node_offset": i,
-            "source": {
-                "kind": "KB_PUBLICATION",
-                "document_id": "doc",
-                "publication_id": publication,
-                "version_id": publication,
-                "title": "Research",
-            },
-        }
-    catalog = source_catalog({"evidence": evidence})
-    assert len(catalog) == 2
-    assert catalog[0]["publication_id"] == "v1" and catalog[1]["publication_id"] == "v2"
-    assert catalog[0]["reading_handles"][0] == {"evidence_id": "1", "node_offset": 1}
-    assert catalog[0]["evidence_count"] == 2
-    assert "Original results" not in str(catalog)
+from aird_agent.hosts.jsd.task_state import check_delivery, read_progress, record_read
 
 
 def test_quote_handles_pin_exact_text_source_version_and_offsets():

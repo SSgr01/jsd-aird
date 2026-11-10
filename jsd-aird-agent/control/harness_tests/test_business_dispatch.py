@@ -1,7 +1,8 @@
 """Real PostgreSQL ledger + extracted adapter; Java/model responses are synthetic."""
 
-import copy
+import asyncio
 import base64
+import copy
 import hashlib
 import json
 import time
@@ -78,7 +79,7 @@ async def setup(settings, store, principal):
             if conversation_id is None:
                 conversation = await store.create(principal, "conversation", {"messages": []}, conn)
                 conversation_id = conversation["id"]
-            return await store.create(
+            seeded = await store.create(
                 principal,
                 "run",
                 {
@@ -109,6 +110,10 @@ async def setup(settings, store, principal):
                 },
                 conn,
             )
+            from psycopg.types.json import Jsonb
+            await conn.execute("INSERT INTO agent_runtime.harness_admission(run_id,organization_id,actor_id,principal,origin,state,epoch,lease_until) "
+                "VALUES(%s,%s,%s,%s,'native','GRANTED',%s,now()+interval '10 minutes')",(seeded['id'],*principal.key,Jsonb(principal.model_dump(mode='json')),seeded['epoch']))
+            return seeded
 
     async def native_command(actor, command, args):
         assert command == "review"
@@ -121,6 +126,8 @@ async def setup(settings, store, principal):
     try:
         yield service, host, await create_run(), create_run
     finally:
+        async with store.pool.connection() as conn:
+            await conn.execute("UPDATE agent_runtime.harness_admission SET state='RELEASED' WHERE organization_id=%s AND actor_id=%s",principal.key)
         await service.http.aclose()
 
 
@@ -128,8 +135,179 @@ async def invoke(service, principal, run, name, args, call_id=None):
     return await service.tool(principal, run["id"], run["epoch"], call_id or str(uuid4()), name, args, native=name == "dsh_execute")
 
 
+@pytest.mark.parametrize('stop_reason,receipt_status,expected', [
+    (None,'SUCCEEDED','SUCCEEDED'), ('max-tokens','SUCCEEDED','FAILED'),
+    (None,'CANCELLED','CANCELLED'), (None,'FAILED','FAILED'),
+])
+async def test_native_background_receipt_settles_after_model_response(setup, principal, store, monkeypatch, stop_reason, receipt_status, expected):
+    from aird_agent.hosts.jsd import native_files
+
+    service, host, run, _ = setup
+    candidate = (await read_source(service, host, principal, run))['candidates'][0]
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def execute(*args):
+        entered.set()
+        await release.wait()
+        if receipt_status != 'SUCCEEDED':
+            return {'error':'SANDBOX_'+receipt_status, 'receipt':{'status':receipt_status}}
+        return {'exit_code':0, 'files':[], 'receipt':{'status':receipt_status}}
+
+    monkeypatch.setattr(native_files, 'native_execute', execute)
+    operation = asyncio.create_task(invoke(service, principal, run, 'dsh_execute', {'command':'work','files':[]}, 'background'))
+    await asyncio.wait_for(entered.wait(), 3)
+    try:
+        async with store.transaction(principal, run['id']) as conn:
+            current = await store.get(principal, 'run', run['id'], conn)
+            current['last_text'] = '计算已结束，结果见命令输出。[E:' + candidate['evidence_id'] + ']'
+            await store.update(principal, 'run', current, conn)
+        request = {'run_id':run['id'], 'session_id':run['dsh_session_id'], 'turn':1, 'stop_reason':stop_reason}
+        pending = await service.complete_dsh(principal, request)
+        assert pending['status'] == 'RUNNING' and pending['pending_operations'] == 1
+        saved = await store.get(principal, 'run', run['id'])
+        assert saved['dsh_pending_operations'] == ['background'] and 'dsh_completed_turn' not in saved
+    finally:
+        release.set()
+    assert (await asyncio.wait_for(operation, 3))['receipt']['status'] == receipt_status
+    saved = await store.get(principal, 'run', run['id'])
+    assert saved['status'] == expected and saved['dsh_completed_turn'] == 1
+    if stop_reason:
+        assert saved['error'] == 'OUTPUT_LIMIT_EXCEEDED'
+
+
+@pytest.mark.parametrize('terminal_status', ['CANCELLED', 'FAILED'])
+async def test_admitted_native_command_can_settle_after_run_closes_but_new_commands_cannot(setup, principal, store, monkeypatch, terminal_status):
+    from aird_agent.hosts.jsd import native_files
+
+    service, _, run, _ = setup
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def execute(*args):
+        entered.set()
+        await release.wait()
+        return {'exit_code':0, 'files':[], 'receipt':{'status':'SUCCEEDED'}}
+
+    monkeypatch.setattr(native_files, 'native_execute', execute)
+    operation = asyncio.create_task(invoke(service, principal, run, 'dsh_execute', {'command':'work','files':[]}, 'admitted'))
+    await asyncio.wait_for(entered.wait(), 3)
+    async with store.transaction(principal, run['id']) as conn:
+        current = await store.get(principal, 'run', run['id'], conn)
+        current.update(epoch=2, status=terminal_status)
+        await store.update(principal, 'run', current, conn)
+    release.set()
+    assert (await asyncio.wait_for(operation, 3))['receipt']['status'] == 'SUCCEEDED'
+    assert (await store.get(principal, 'run', run['id']))['status'] == terminal_status
+    with pytest.raises(HTTPException, match='RUN_INACTIVE'):
+        await invoke(service, principal, run, 'dsh_execute', {'command':'second','files':[]}, 'not-admitted')
+    async with store.pool.connection() as conn:
+        rows = await (await conn.execute('SELECT call_id,status FROM agent_runtime.harness_calls WHERE run_id=%s', (run['id'],))).fetchall()
+    assert rows == [{'call_id':'admitted','status':'SUCCEEDED'}]
+
+
+async def test_native_completion_projection_failure_preserves_command_receipt(setup, principal, store, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from aird_agent.hosts.jsd import native_files
+
+    service, _, run, _ = setup
+    async with store.transaction(principal, run['id']) as conn:
+        current = await store.get(principal, 'run', run['id'], conn)
+        current.update(dsh_pending_operations=['background'], dsh_model_completed_turn=1)
+        await store.update(principal, 'run', current, conn)
+    monkeypatch.setattr(native_files, 'native_execute', AsyncMock(return_value={'exit_code':0,'files':[], 'receipt':{'status':'SUCCEEDED'}}))
+    monkeypatch.setattr(service, 'complete_dsh', AsyncMock(side_effect=HTTPException(403, 'ACCESS_REVOKED')))
+    result = await invoke(service, principal, run, 'dsh_execute', {'command':'work','files':[]}, 'background')
+    assert result['receipt']['status'] == 'SUCCEEDED'
+    async with store.pool.connection() as conn:
+        row = await (await conn.execute('SELECT status,result FROM agent_runtime.harness_calls WHERE run_id=%s', (run['id'],))).fetchone()
+    assert row['status'] == 'SUCCEEDED' and row['result'] == result
+
+
+async def test_multiple_background_receipts_keep_an_earlier_cancellation_until_the_last_job_finishes(setup, principal, store, monkeypatch):
+    from aird_agent.hosts.jsd import native_files
+
+    service, host, run, _ = setup
+    candidate = (await read_source(service, host, principal, run))['candidates'][0]
+    entered = {name:asyncio.Event() for name in ['first','last']}
+    release = {name:asyncio.Event() for name in entered}
+
+    async def execute(_service, _principal, _run, args, call_id):
+        entered[call_id].set()
+        await release[call_id].wait()
+        if call_id == 'first':
+            return {'error':'SANDBOX_CANCELLED','receipt':{'status':'CANCELLED'}}
+        return {'exit_code':0,'files':[],'receipt':{'status':'SUCCEEDED'}}
+
+    monkeypatch.setattr(native_files,'native_execute',execute)
+    tasks = {name:asyncio.create_task(invoke(service,principal,run,'dsh_execute',{'command':'work','files':[]},name)) for name in entered}
+    await asyncio.wait_for(asyncio.gather(*(event.wait() for event in entered.values())),3)
+    try:
+        async with store.transaction(principal,run['id']) as conn:
+            current=await store.get(principal,'run',run['id'],conn)
+            current['last_text']='任务已启动。[E:'+candidate['evidence_id']+']'
+            await store.update(principal,'run',current,conn)
+        await service.complete_dsh(principal,{'run_id':run['id'],'session_id':run['dsh_session_id'],'turn':1})
+        release['first'].set()
+        await asyncio.wait_for(tasks['first'],3)
+        waiting=await store.get(principal,'run',run['id'])
+        assert waiting['status']=='RUNNING' and waiting['dsh_pending_operations']==['first','last']
+    finally:
+        for event in release.values():
+            event.set()
+        await asyncio.wait_for(asyncio.gather(*tasks.values()),3)
+    finished=await store.get(principal,'run',run['id'])
+    assert finished['status']=='CANCELLED' and finished['error']=='SANDBOX_CANCELLED'
+
+
+async def test_native_output_uses_original_epoch_and_enforces_owner_session_turn(setup, principal, store):
+    from unittest.mock import AsyncMock
+
+    from aird_agent.hosts.jsd.native_files import native_output
+
+    service, host, run, _ = setup
+    async with store.transaction(principal, run['id']) as conn:
+        await conn.execute("INSERT INTO agent_runtime.harness_calls(run_id,call_id,request_hash,tool_name,status,execution_epoch) VALUES(%s,'command','bound','dsh_execute','RUNNING',1)", (run['id'],))
+        current = await store.get(principal, 'run', run['id'], conn)
+        current['epoch'] = 2
+        await store.update(principal, 'run', current, conn)
+    service.bindings.sandbox.output = AsyncMock(return_value={'status':'RUNNING','streams':{}})
+    body = {'run_id':run['id'],'session_id':run['dsh_session_id'],'turn':1,'call_id':'command','stdout_offset':10,'stderr_offset':0}
+    await native_output(service, principal, body)
+    service.bindings.sandbox.output.assert_awaited_once_with(digest([run['id'],1,'command'])[:32],10,0)
+    for changed in [{'session_id':'other'},{'turn':2},{'stdout_offset':-1},{'stderr_offset':True}]:
+        with pytest.raises(HTTPException):
+            await native_output(service, principal, {**body, **changed})
+    outsider = principal.model_copy(update={'actor_id':uuid4()})
+    with pytest.raises(HTTPException):
+        await native_output(service, outsider, body)
+    host.denied = True
+    with pytest.raises(HTTPException):
+        await native_output(service, principal, body)
+
+
 async def read_source(service, host, principal, run):
-    return await invoke(service, principal, run, "document_read", host.document)
+    return await invoke(service, principal, run, "document_read", {**host.document, "refresh": True})
+
+
+@pytest.mark.parametrize('reason,status,error', [
+    ({'kind':'error','error':{'code':'TOKEN_BUDGET_EXCEEDED'}}, 'FAILED', 'TOKEN_BUDGET_EXCEEDED'),
+    ({'kind':'aborted','reason':{'kind':'user'}}, 'CANCELLED', 'DSH_EXECUTION_INTERRUPTED'),
+    ({'kind':'interrupted'}, 'FAILED', 'DSH_EXECUTION_INTERRUPTED'),
+])
+async def test_durable_native_end_reconciles_a_lost_failure_callback(setup, principal, store, reason, status, error):
+    service, host, run, _ = setup
+    async with store.transaction(principal, 'session-bind') as conn:
+        conversation = await store.get(principal, 'conversation', run['conversation_id'], conn)
+        conversation.update(dsh_session_id=run['dsh_session_id'], active_run=run['id'])
+        await store.update(principal, 'conversation', conversation, conn)
+    event = {'session_id':run['dsh_session_id'], 'event':{'type':'turn/end', 'seq':9,
+        'data':{'turn':1, 'reason':reason}}}
+    await service.project_event(principal, event)
+    saved = await store.get(principal, 'run', run['id'])
+    assert (saved['status'],saved['error'],saved['started_at']) == (status,error,None)
+    revision = saved['revision']
+    await service.project_event(principal, event)
+    assert (await store.get(principal, 'run', run['id']))['revision'] == revision
 
 
 def project_candidate(kind, resource_id, project_id, count):
@@ -138,6 +316,86 @@ def project_candidate(kind, resource_id, project_id, count):
         "resource_id": resource_id, "project_id": project_id, "document_id": project_id,
         "version_id": "0", "source_node_key": kind + ":" + resource_id,
         "content_sha256": hashlib.sha256(text.encode()).hexdigest(), "anchor": {}, "title": "Synthetic record"}}
+
+
+async def enable_business_data(service, host, run, principal, store):
+    host.scope["pack_ids"].append("business-data")
+    async with store.transaction(principal, run["id"]) as conn:
+        run.update(pack_ids=host.scope["pack_ids"], pack_versions=service.packs.pin(host.scope["pack_ids"]))
+        await store.update(principal, "run", run, conn)
+
+
+async def test_unified_business_reads_register_full_proof_and_expose_only_compact_model_results(setup, principal, store):
+    from aird_agent.evidence.presentation import model_result
+
+    service, host, run, _ = setup
+    await enable_business_data(service, host, run, principal, store)
+    resource = str(uuid4())
+    text = "隔离客户关联的真实研发数据；材料质量0 g，结果未测。"
+    proof = {"text": text, "model_text": "数值和状态见rows", "ref": {"type": "CUSTOMER", "id": resource, "revision": "1"},
+        "source": {"kind": "BUSINESS_RECORD", "resource_type": "CUSTOMER", "resource_id": resource,
+            "document_id": resource, "version_id": "1", "source_node_key": "CUSTOMER:" + resource,
+            "content_sha256": hashlib.sha256(text.encode()).hexdigest(), "title": "隔离客户",
+            "anchor": {"business_adapter": "v1", "read_path": "/api/v1/agents/business/records/CUSTOMER/" + resource + "?ref=isolated"}}}
+    original = host.call
+
+    async def authority(user, action, args, run_id=None):
+        if action in {"business_search", "business_read"} and not host.denied:
+            return {"candidates": [copy.deepcopy(proof)], "rows": [{"mass": 0, "measured": None}]}
+        return await original(user, action, args, run_id)
+
+    host.call = authority
+    names = {item["name"] for item in service.bindings.tools_for(run)}
+    assert "business_search" in names and "query_structured_data" not in names
+    discovered = await invoke(service, principal, run, "tool_search", {"query": "business_read"})
+    assert "business_read" in discovered["activate_tools"]
+    result = await invoke(service, principal, run, "business_search", {"type": "CUSTOMER"})
+    candidate = result["candidates"][0]
+    await invoke(service, principal, run, "business_read", {"ref": candidate["ref"]})
+    current = await store.get(principal, "run", run["id"])
+    assert current["evidence"][candidate["evidence_id"]]["text"] == text
+    assert model_result(result)["candidates"][0]["text"] == "数值和状态见rows"
+    assert result["rows"] == [{"mass": 0, "measured": None}]
+    other = Principal(organization_id=uuid4(), actor_id=uuid4(), auth_version=1, username="another", role="USER")
+    with pytest.raises(HTTPException):
+        await store.get(other, "run", run["id"])
+    host.denied = True
+    with pytest.raises(HTTPException, match="TEST_ACCESS_REVOKED"):
+        await invoke(service, principal, run, "business_read", {"ref": candidate["ref"]})
+
+
+async def test_compute_lost_response_uses_the_native_call_receipt_without_replaying(setup, principal, store):
+    from aird_agent.core.contracts import digest
+
+    service, host, run, _ = setup
+    await enable_business_data(service, host, run, principal, store)
+    original = host.call
+    submissions = []
+    confirmed = False
+    operation_key = digest([run["id"], "prediction-once"])
+
+    async def authority(user, action, args, run_id=None):
+        if action == "run_prediction":
+            submissions.append(args)
+            assert args["operation_key"] == operation_key
+            raise httpx.ReadTimeout("Isolated lost compute submission response")
+        if action == "operation_receipt":
+            assert args["tool"] == "run_prediction" and args["operation_key"] == operation_key
+            return {"status": "SUCCEEDED" if confirmed else "UNKNOWN", "operation_key": operation_key,
+                **({"result": {"id": "isolated-compute", "kind": "PREDICTION", "executionStatus": "ACCEPTED"}} if confirmed else {})}
+        return await original(user, action, args, run_id)
+
+    host.call = authority
+    result = await invoke(service, principal, run, "run_prediction", {"request": {"inputs": {"mass": 0}, "targets": []}}, "prediction-once")
+    assert result["requires_reconciliation"] is True
+    assert (await reconcile(service, principal, run["id"], "prediction-once"))["outcome"] == "STILL_UNKNOWN"
+    with pytest.raises(HTTPException, match="TOOL_RESULT_UNKNOWN"):
+        await invoke(service, principal, run, "run_prediction", {"request": {"inputs": {"mass": 1}, "targets": []}}, "prediction-again")
+    confirmed = True
+    assert (await reconcile(service, principal, run["id"], "prediction-once"))["outcome"] == "CONFIRMED_SUCCEEDED"
+    operations = await list_operations(service, principal, run["id"])
+    assert operations[0]["status"] == "SUCCEEDED"
+    assert len(submissions) == 1
 
 
 @pytest.mark.parametrize("denied", [False, True])
@@ -245,10 +503,44 @@ async def test_native_steps_retain_read_receipts_without_reinjecting_source_text
     assert "authorized_context" not in snapshot
     assert "citation_links" not in snapshot
     assert second["citation_links"]  # renderer still has the authoritative links
-    assert snapshot["task_state"]["read_coverage"]
+    assert "read_coverage" not in snapshot["task_state"]
+    assert "sources" not in snapshot["task_state"]
+    assert (await store.get(principal, "run", run["id"]))["read_coverage"]
     host.denied = True
     with pytest.raises(HTTPException, match="TEST_ACCESS_REVOKED"):
         await service.register_step(principal, request)
+
+
+@pytest.mark.parametrize("usage_field", ["dsh_model_attempts", "dsh_usage"])
+async def test_native_budget_notice_leaves_room_to_answer_without_loosening_hard_limit(setup, principal, store, usage_field):
+    service, _, run, _ = setup
+    sid = run["dsh_session_id"]
+    body = {"session_id": sid, "turn": 1, "profile": "agent"}
+
+    async def record_usage(usages):
+        async with store.transaction(principal, run["id"]) as conn:
+            current = await store.get(principal, "run", run["id"], conn)
+            current[usage_field] = [{"usage": usage} for usage in usages] if usage_field == "dsh_model_attempts" else usages
+            if usage_field == "dsh_usage":
+                current.pop("dsh_model_attempts", None)
+            await store.update(principal, "run", current, conn)
+            conversation = await store.get(principal, "conversation", run["conversation_id"], conn)
+            conversation.update(profile="agent", dsh_session_id=sid, active_run=run["id"])
+            await store.update(principal, "conversation", conversation, conn)
+
+    await record_usage([{"totalTokens": 100000}])
+    assert "budget_notice" not in json.loads((await service.register_step(principal, body))["context"])
+
+    await record_usage([{"totalTokens": 100000}] * 17 + [{"totalTokens": 120000}])
+    context = json.loads((await service.register_step(principal, body))["context"])
+    assert "已取得的证据" in context["budget_notice"]
+    assert "资料缺口" in context["budget_notice"]
+    await service.gate_dsh(principal, {**body, "run_id": run["id"], "kind": "model", "call_id": "final-answer"})
+
+    await record_usage([{"totalTokens": 100000}] * 20)
+    with pytest.raises(HTTPException, match="TOKEN_BUDGET_EXCEEDED"):
+        await service.gate_dsh(principal, {**body, "run_id": run["id"], "kind": "model", "call_id": "over-limit"})
+    assert service.settings.max_total_tokens == 2000000
 
 
 async def test_native_file_registration_accepts_binary_payload_larger_than_prompt_text(setup, principal, store):
@@ -312,6 +604,26 @@ async def test_cached_results_are_not_returned_after_revocation(setup, principal
         await invoke(service, principal, run, "document_read", host.document, "read-1")
 
 
+async def test_concurrent_overlapping_reads_commit_only_one_body_and_preserve_replay(setup, principal, store):
+    service, host, run, _ = setup
+    results = await asyncio.gather(*(
+        invoke(service, principal, run, "document_read", host.document, call_id)
+        for call_id in ("overlap-a", "overlap-b")
+    ))
+    assert sum("text" in result["candidates"][0] for result in results) == 1
+    assert sum(result["candidates"][0].get("already_retrieved", False) for result in results) == 1
+    for call_id, result in zip(("overlap-a", "overlap-b"), results):
+        assert await invoke(service, principal, run, "document_read", host.document, call_id) == result
+    current = await store.get(principal, "run", run["id"])
+    eid = results[0]["candidates"][0]["evidence_id"]
+    assert current["evidence_delivery"][eid] == [[0, len(host.candidate["text"])]]
+    assert current["evidence"][eid]["text"] == host.candidate["text"]
+    assert current["read_coverage"][host.document["document_id"] + ":" + host.document["publication_id"]]["ranges"] == [[0, 1]]
+    host.denied = True
+    with pytest.raises(HTTPException, match="TEST_ACCESS_REVOKED"):
+        await invoke(service, principal, run, "document_read", {**host.document, "refresh": True})
+
+
 async def test_repeated_exact_quote_reads_stop_without_losing_sources_or_blocking_new_spans(setup, principal, store):
     service, host, run, _ = setup
     host.candidate["text"] = " ".join(f"Sample {i} was tested under its stated condition." for i in range(9))
@@ -320,7 +632,8 @@ async def test_repeated_exact_quote_reads_stop_without_losing_sources_or_blockin
     eid = page["candidates"][0]["evidence_id"]
     args = {"evidence_id": eid}
     first = await invoke(service, principal, run, "evidence_read", args, "quote-first")
-    assert first["new_quote_count"] == 6 and first["next_quote_offset"] == 6
+    assert first["new_quote_count"] == 0 and first["next_quote_offset"] == 6
+    assert all(span["already_retrieved"] and "text" not in span for span in first["quotes"])
     # An uncertain receipt replays normally, without advancing the stall counter.
     assert await invoke(service, principal, run, "evidence_read", args, "quote-first") == first
     for _ in range(2):
@@ -332,9 +645,10 @@ async def test_repeated_exact_quote_reads_stop_without_losing_sources_or_blockin
     current = await store.get(principal, "run", run["id"])
     assert current["evidence"][eid]["text"] == host.candidate["text"]
     next_page = await invoke(service, principal, run, "evidence_read", {**args, "quote_offset": 6})
-    assert next_page["new_quote_count"] == 3 and next_page["next_quote_offset"] is None
-    restored = await invoke(service, principal, run, "evidence_read", args)
-    assert restored["quotes"] == first["quotes"]
+    assert next_page["new_quote_count"] == 0 and next_page["next_quote_offset"] is None
+    restored = await invoke(service, principal, run, "evidence_read", {**args, "refresh": True})
+    assert restored["quotes"] == quotes(current["evidence"][eid])[:6]
+    assert restored["new_quote_count"] == 6
     host.denied = True
     with pytest.raises(HTTPException, match="TEST_ACCESS_REVOKED"):
         await invoke(service, principal, run, "evidence_read", args)
@@ -881,6 +1195,90 @@ async def test_artifact_lineage_matches_immutable_execution_output_hash(setup, p
     assert changed["error"].startswith("ARTIFACT_EXECUTION_HASH_MISMATCH")
 
 
+async def test_native_text_delivery_rejects_stale_change_note_and_registers_repaired_sources(setup, principal, store):
+    from aird_agent.capabilities.files.completion import check_file_completion
+
+    service, host, run, _ = setup
+    result = await read_source(service, host, principal, run)
+    eid = result["candidates"][0]["evidence_id"]
+    filename = "PET基材厚度更正说明.md"
+    obsolete = "q" + "9" * 24
+    async with store.transaction(principal, run["id"]) as conn:
+        current = await store.get(principal, "run", run["id"], conn)
+        current["required_artifacts"] = [filename]
+        await store.update(principal, "run", current, conn)
+
+    async def present(text, call_id):
+        data = text.encode()
+        return await service.tool(principal, run["id"], run["epoch"], call_id, "artifact_save", {
+            "path": filename, "base64": base64.b64encode(data).decode(),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }, native=True)
+
+    failed = await present(f"# Correction\nObsolete citations: `{obsolete}`\nModulus: 12 kPa. [E:{eid}]", "bad-present")
+    assert failed["error"].startswith("ANALYSIS_SOURCE_QUOTES_REQUIRED")
+    assert filename + ":2 " + obsolete in failed["error"]
+    assert not any(name == "artifact_save" for name, _, _ in host.calls)
+    with pytest.raises(HTTPException, match="DELIVERABLE_FILES_MISSING"):
+        check_file_completion(await store.get(principal, "run", run["id"]))
+
+    result = await present(f"# Correction\nObsolete citations replaced.\nModulus: 12 kPa. [E:{eid}]", "fixed-present")
+    assert result.get("id") and result["source_quotes"] and result["source_refs"]
+    check_file_completion(await store.get(principal, "run", run["id"]))
+
+
+async def test_native_delivery_checkpoint_keeps_hash_and_source_checks_before_final_receipt(setup, principal, store):
+    from aird_agent.capabilities.files.completion import check_file_completion
+    from aird_agent.core.receipts import receipt
+    from aird_agent.core.workspace import Workspace
+    from aird_agent.hosts.jsd.native_files import storage_path
+
+    service, host, run, _ = setup
+    result = await read_source(service, host, principal, run)
+    eid = result["candidates"][0]["evidence_id"]
+    name = "PET基材厚度更正说明.md"
+    workspace = Workspace(service.settings.storage_root / "workspaces", str(principal.organization_id), run["id"])
+    workspace.prepare()
+    async with store.transaction(principal, run["id"]) as conn:
+        current = await store.get(principal, "run", run["id"], conn)
+        current["required_artifacts"] = [name]
+        await store.update(principal, "run", current, conn)
+
+    async def checkpoint(text, tag):
+        original = workspace.write("scratch/" + tag + "/" + name, text)
+        output = workspace.write(storage_path(name), text)
+        execution = {
+            "exit_code": 0, "artifacts": [output], "inputs": {"files": [original]},
+            "receipt": {"status": "SUCCEEDED", "execution_id": tag, "request_hash": tag, "finished_at": 1},
+        }
+        async with store.transaction(principal, run["id"]) as conn:
+            await receipt(store, principal, run["id"], tag, "tool-result", execution, conn)
+
+    async def present(text, tag):
+        data = text.encode()
+        return await service.tool(principal, run["id"], run["epoch"], tag, "artifact_save", {
+            "path": name, "base64": base64.b64encode(data).decode(),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }, native=True)
+
+    await checkpoint("Original document", "old-bash")
+    stale = f"Old citations removed: `q{'9' * 24}`\nModulus: 12 kPa. [E:{eid}]"
+    mismatch = await present(stale, "first-present")
+    assert mismatch["error"].startswith("ARTIFACT_EXECUTION_HASH_MISMATCH")
+    await checkpoint(stale, "current-checkpoint")
+    rejected = await present(stale, "checkpointed-present")
+    assert rejected["error"].startswith("ANALYSIS_SOURCE_QUOTES_REQUIRED")
+    assert not any(action == "artifact_save" for action, _, _ in host.calls)
+
+    corrected = f"Old citations replaced with current evidence.\nModulus: 12 kPa. [E:{eid}]"
+    await checkpoint(corrected, "corrected-checkpoint")
+    saved = await present(corrected, "corrected-present")
+    assert saved.get("id") and saved["source_quotes"]
+    assert saved["execution_receipt"]["artifact_sha256"] == hashlib.sha256(corrected.encode()).hexdigest()
+    assert saved["execution_receipt"]["execution_id"] == "corrected-checkpoint"
+    check_file_completion(await store.get(principal, "run", run["id"]))
+
+
 @pytest.mark.parametrize("filename,content", [
     ("note.txt", "User supplied summary"),
     ("result.csv", "name,value\nwater,0.81\n"),
@@ -895,7 +1293,6 @@ async def test_core_files_register_without_topic_or_literature(setup, principal,
         current["pack_ids"] = ["core", "files"]
         current["pack_versions"] = service.packs.pin(current["pack_ids"])
         await store.update(principal, "run", current, conn)
-    path = "output/" + filename
     import base64
     payload = {"path": filename, "base64": base64.b64encode(content.encode()).decode(), "sha256": hashlib.sha256(content.encode()).hexdigest()}
     result = await service.tool(principal, run["id"], run["epoch"], "native-file", "artifact_save", payload, native=True)
@@ -1057,6 +1454,30 @@ async def test_invalid_final_citation_still_fails_after_delivery_review(setup, p
     await service.complete_dsh(principal, {"run_id": run["id"], "session_id": "native", "turn": 1})
     final = await store.get(principal, "run", run["id"])
     assert final["status"] == "FAILED" and final["error"] == "CITATION_INVALID"
+
+
+async def test_citation_repair_counts_distinct_reads_and_rejects_discovery_at_the_executor(setup, principal, store):
+    service, host, run, _ = setup
+    candidate = (await read_source(service, host, principal, run))["candidates"][0]
+    async with store.transaction(principal, run["id"]) as conn:
+        current = await store.get(principal, "run", run["id"], conn)
+        current["last_text"] = "A measured value [E:unknown]."
+        await store.update(principal, "run", current, conn)
+    await service.begin_output_repair(principal, {
+        "run_id": run["id"], "session_id": run["dsh_session_id"], "turn": 1})
+    before = len(host.calls)
+    with pytest.raises(HTTPException, match="CITATION_REPAIR_TARGETED_READ_ONLY"):
+        await invoke(service, principal, run, "knowledge_search", {"query": "new paper"})
+    assert not any(call[0] == "knowledge_search" for call in host.calls[before:])
+    args = {"evidence_id": candidate["evidence_id"], "refresh": True}
+    first = await invoke(service, principal, run, "evidence_read", args, "repair-read-1")
+    assert not first.get("error")
+    assert await invoke(service, principal, run, "evidence_read", args, "repair-read-1") == first
+    await invoke(service, principal, run, "evidence_read", args, "repair-read-2")
+    with pytest.raises(HTTPException, match="CITATION_REPAIR_READ_BUDGET_EXCEEDED"):
+        await invoke(service, principal, run, "evidence_read", args, "repair-read-3")
+    current = await store.get(principal, "run", run["id"])
+    assert current["output_repair"]["tool_calls"] == 2
 
 
 async def test_failed_script_cannot_satisfy_requested_file_delivery(setup, principal, store):

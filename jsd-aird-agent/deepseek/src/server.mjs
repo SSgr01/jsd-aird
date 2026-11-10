@@ -1,26 +1,40 @@
+import { BackgroundHosts } from './background-hosts.mjs';
 import { createServer, request as httpRequest } from 'node:http';
 import { configuration, engine, revision } from './config.mjs';
 import { Hosts } from './hosts.mjs';
 import { credentialMatches, json, readJson, requireSameOrigin, sameOwner } from './security.mjs';
 import { checkRpc, checkStream, checkUpload, nativeFileSession } from './rpc-policy.mjs';
+import { pluginRoute, checkPluginRequest } from './plugin-policy.mjs';
+import { browserMetadata, browserJsonResponse } from './path-view.mjs';
 import { staticBrandingTarget, brandStaticResponse } from './branding.mjs';
+import { requestError } from './request-error.mjs';
+import { browserRedirect } from './redirects.mjs';
 import { WebSocket, WebSocketServer } from 'ws';
 
 export async function identity(config, headers) {
   const result = await fetch(config.javaUrl + '/internal/v1/agent-identity', {
     method: 'POST', headers: { authorization: 'Bearer ' + config.secret, ...headers }, signal: AbortSignal.timeout(10000),
   });
-  if (!result.ok) throw Object.assign(new Error('ENTERPRISE_AUTH_REQUIRED'), { status: result.status });
+  if (!result.ok) throw Object.assign(new Error(result.status === 401 ? 'ENTERPRISE_AUTH_REQUIRED'
+    : result.status === 403 ? 'ENTERPRISE_ACCESS_DENIED' : 'ENTERPRISE_IDENTITY_UNAVAILABLE'),
+  { status: [401, 403].includes(result.status) ? result.status : 503 });
   return result.json();
 }
 export function gateway(config) {
   const hosts = new Hosts(config);
+  const background = new BackgroundHosts(config,hosts);
   const sockets = new WebSocketServer({noServer:true, perMessageDeflate:false, maxPayload:1024*1024});
   async function browserHost(req) {
     requireSameOrigin(req, config.origin);
     if (!req.headers.cookie) throw Object.assign(new Error('ENTERPRISE_AUTH_REQUIRED'), { status: 401 });
     const user = await identity(config, { cookie: req.headers.cookie });
-    return hosts.ensure(user);
+    const host=await hosts.ensure(user);
+    await background.install(host).catch(error => {
+      // An unavailable background exchange must not lock users out of the
+      // interactive workbench. Installation remains durable and is retried.
+      process.stderr.write('Built-in task installation pending ('+(error.status || 'connection')+')\n');
+    });
+    return host;
   }
   const server = createServer(async (req, res) => {
     try {
@@ -35,7 +49,7 @@ export function gateway(config) {
         const user = await identity(config, { 'x-jsd-agent-ticket': body.ticket || '' });
         const host = await hosts.ensure(user);
         const action = url.pathname.slice('/internal/'.length);
-        if (!['create', 'prompt', 'cancel', 'queue', 'resume', 'state', 'review', 'models'].includes(action)) return json(res, 404, { error: 'NOT_FOUND' });
+        if (!['create', 'prompt', 'cancel', 'queue', 'resume', 'wake', 'state', 'review', 'models'].includes(action)) return json(res, 404, { error: 'NOT_FOUND' });
         return json(res, 200, { ...await hosts.call(host, action, { ...body, identity: undefined, ticket: user.ticket }), workspace_url: host.path });
       }
       if (!url.pathname.startsWith('/agent/')) return json(res, 404, { error: 'NOT_FOUND' });
@@ -57,7 +71,17 @@ export function gateway(config) {
         delete headers['if-none-match']; delete headers['if-modified-since'];
       }
       let rpcBody;
-      if (url.pathname === host.path + 'api/session/uploadFileBinary' && req.method === 'POST') {
+      const targetPath = target.split('?', 1)[0];
+      if (targetPath.startsWith('/api/')) headers['accept-encoding'] = 'identity';
+      if (pluginRoute(targetPath)) {
+        const body = req.method === 'POST' ? await readJson(req) : undefined;
+        const sessionId = checkPluginRequest(targetPath, req.method, body);
+        if (sessionId) await hosts.call(host, 'authorize', {session_id:sessionId});
+        if (body !== undefined) {
+          rpcBody = JSON.stringify(body);
+          delete headers['transfer-encoding']; headers['content-length'] = Buffer.byteLength(rpcBody);
+        }
+      } else if (url.pathname === host.path + 'api/session/uploadFileBinary' && req.method === 'POST') {
         checkUpload(url, req.headers);
       } else if (target.startsWith('/api/') && req.method === 'POST') {
         const endpoint = decodeURIComponent(url.pathname.slice(host.path.length + 4));
@@ -74,13 +98,14 @@ export function gateway(config) {
         const forwarded = { ...reply.headers, 'cache-control': 'no-store', 'referrer-policy': 'same-origin' };
         delete forwarded['set-cookie'];
         if (forwarded.location) {
-          const destination = new URL(forwarded.location, config.origin + host.path);
-          if (destination.searchParams.has('token')) { reply.destroy(); return json(res, 502, { error: 'INVALID_UPSTREAM_REDIRECT' }); }
-          if (destination.origin === config.origin && destination.pathname.startsWith('/')) forwarded.location = host.path + destination.pathname.slice(1) + destination.search;
+          try { forwarded.location = browserRedirect(forwarded.location, {origin:config.origin,prefix:host.path,target}); }
+          catch { reply.destroy(); return json(res, 502, { error: 'INVALID_UPSTREAM_REDIRECT' }); }
         }
         void (async () => {
           try {
-            const branded = req.method === 'GET' ? await brandStaticResponse(target, reply, forwarded) : undefined;
+            const branded = targetPath.startsWith('/api/')
+              ? await browserJsonResponse(reply, forwarded, host.executionRoot)
+              : req.method === 'GET' ? await brandStaticResponse(target, reply, forwarded) : undefined;
             res.writeHead(reply.statusCode, forwarded);
             if (branded !== undefined) res.end(branded); else reply.pipe(res);
           } catch {
@@ -96,7 +121,7 @@ export function gateway(config) {
       upstream.on('error', () => { if (!res.headersSent) json(res, 503, { error: 'DEEPSEEK_UNAVAILABLE' }); else res.destroy(); });
       req.on('aborted', () => upstream.destroy());
       if (rpcBody !== undefined) upstream.end(rpcBody); else req.pipe(upstream);
-    } catch (error) { if (!res.headersSent) json(res, error.status || 503, { error: error.status && error.status < 500 ? 'ENTERPRISE_REQUEST_REFUSED' : 'DEEPSEEK_UNAVAILABLE' }); else res.destroy(); }
+    } catch (error) { requestError(req, res, error, config.origin); }
   });
   server.on('upgrade', async (req, socket, head) => {
     try {
@@ -112,7 +137,12 @@ export function gateway(config) {
           try { if (binary) throw new Error(); checkStream(JSON.parse(data.toString())); upstream.send(data.toString()); }
           catch { connection.close(1008,'ENTERPRISE_STREAM_REFUSED'); }
         });
-        upstream.on('message', (data, binary) => { if (connection.readyState === WebSocket.OPEN) connection.send(data,{binary}); });
+        upstream.on('message', (data, binary) => {
+          if (connection.readyState !== WebSocket.OPEN) return;
+          if (binary) { connection.send(data,{binary}); return; }
+          try { connection.send(JSON.stringify(browserMetadata(JSON.parse(data.toString()),host.executionRoot))); }
+          catch { connection.close(1011,'WORKSPACE_METADATA_UNAVAILABLE'); }
+        });
         upstream.on('close',()=>connection.close());
         const check = setInterval(async () => {
           try { if (!sameOwner(await identity(config, { cookie: req.headers.cookie }), host.identity)) throw new Error(); }
@@ -123,7 +153,8 @@ export function gateway(config) {
       upstream.once('error', () => socket.destroy());
     } catch { socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); }
   });
-  server.once('close', () => { void hosts.close(); });
+  server.once('listening',()=>background.start());
+  server.once('close', () => { background.close(); void hosts.close(); });
   return server;
 }
 if (import.meta.url === new URL(process.argv[1], 'file:').href || process.argv[1]?.endsWith('server.mjs')) {

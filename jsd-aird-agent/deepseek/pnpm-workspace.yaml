@@ -1,0 +1,5 @@
+# Plugins share the pinned Host's native services; do not install a second runtime.
+autoInstallPeers: false
+patchedDependencies:
+  '@michengai/dsh-archive-manager@1.2.8': patches/@michengai__dsh-archive-manager@1.2.8.patch
+  dsh-rewind-plugin@0.21.2: patches/dsh-rewind-plugin@0.21.2.patch

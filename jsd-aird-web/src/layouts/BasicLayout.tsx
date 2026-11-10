@@ -129,7 +129,7 @@ const route = {
       icon: <RobotOutlined />,
       routes: [
         { path: '/knowledge/search', name: '文件检索', icon: <FileSearchOutlined /> },
-        { path: '/assistant', name: 'AI问答', icon: <RobotOutlined /> },
+        { path: '/assistant', name: 'AI工作台', icon: <RobotOutlined /> },
         { path: '/assistant/formula-prediction', name: 'AI配方预测', icon: <AimOutlined /> },
         { path: '/assistant/performance-prediction', name: '性能预测', icon: <LineChartOutlined /> },
         { path: '/assistant/experiment-optimization', name: 'AI实验优化', icon: <ExperimentOutlined /> },
@@ -315,7 +315,14 @@ export function BasicLayout() {
         actionsRender={false}
         rightContentRender={() => null}
         contentStyle={{ minHeight: 'calc(var(--app-viewport-height, 100vh) - 64px)', padding: 0 }}
-        menuItemRender={(item: MenuDataItem & { isUrl: boolean; onClick: () => void }, dom: React.ReactNode, menuProps: { isMobile?: boolean }) => (item.path ? <PrefetchLink to={item.path} onClick={menuProps.isMobile ? item.onClick : undefined}>{dom}</PrefetchLink> : dom)}
+        menuItemRender={(item: MenuDataItem & { isUrl: boolean; onClick: () => void }, dom: React.ReactNode, menuProps: { isMobile?: boolean }) => (item.path ? <PrefetchLink to={item.path} onClick={() => {
+          if (item.path === '/assistant' && location.pathname !== '/assistant') {
+            try {
+              sessionStorage.setItem('jsd.ai-workbench.return', location.pathname + location.search + location.hash);
+            } catch { /* Returning to the system homepage remains available without browser storage. */ }
+          }
+          if (menuProps.isMobile) item.onClick();
+        }}>{dom}</PrefetchLink> : dom)}
       >
         <main
           className={`app-content${isAssistant ? ' app-content-assistant' : ''}${isWorkspace ? ' app-content-workspace' : ''}${isProjectDocumentWorkspace ? ' app-content-project-document-workspace' : ''}${isKnowledgeWorkbench ? ' app-content-knowledge-workbench' : ''}${isPermissionManagement ? ' app-content-permission-management' : ''}`}

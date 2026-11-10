@@ -1,4 +1,5 @@
 package com.jsd.aird.ai.application;
+import com.jsd.aird.shared.json.AiJsonParser;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

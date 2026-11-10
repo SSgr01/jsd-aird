@@ -54,6 +54,18 @@ class LiteratureTools:
             self.settings.storage_root / "workspaces", str(principal.organization_id), run["id"]
         )
         workspace.prepare()
+        if name == "evidence_image_read":
+            candidate = run.get("evidence", {}).get(args["evidence_id"])
+            if candidate is None:
+                raise HTTPException(422, "UNKNOWN_EVIDENCE_ID: retrieve the document evidence first")
+            if candidate["source"]["kind"] != "KB_PUBLICATION":
+                raise HTTPException(422, "SOURCE_IMAGE_REQUIRES_KNOWLEDGE_PUBLICATION")
+            result = await self.java(principal, "source_image", {
+                **self.context_request(run), "topic_id": run.get("topic_id"),
+                "source": candidate["source"], "view": args.get("view", "auto"),
+            }, run["id"])
+            return {**result, "evidence_id": candidate["evidence_id"],
+                    "image_analysis_hint": "调用原生read_image(file_path=business_file.path)才会把原图传给视觉模型。结合此证据正文、图注及页码核对；预览看不清时以view=detail重新读取高清PDF页，再调用read_image。注意image中的实际尺寸及降采样信息；仍无法辨认时说明限制，不猜测键型、立体构型或公式符号。"}
         if name in {"knowledge_search", "document_read", "document_outline", "table_read"}:
             context = self.context_request(run)
             if name == "knowledge_search" and args.get("documents"):
@@ -89,6 +101,7 @@ class LiteratureTools:
                     args,
                     self.tool_character_budget,
                     total_key="total_nodes" if name == "document_read" else "candidate_count",
+                    delivered=await self.store.get(principal, "run", run["id"]),
                 )
             candidates = result.get("candidates", [])
             async with self.store.transaction(principal, run["id"]) as conn:
@@ -205,7 +218,7 @@ class LiteratureTools:
                 progress_key = digest(["evidence_read", candidate["evidence_id"], offset])
                 stalls = current.setdefault("navigation_stalls", {})
                 stalls[progress_key] = 0 if new else stalls.get(progress_key, 0) + 1
-                blocked = stalls[progress_key] >= 3
+                blocked = stalls[progress_key] >= 3 and not args.get("refresh")
                 await self.store.update(principal, "run", current, conn)
             if blocked:
                 raise HTTPException(
@@ -216,11 +229,9 @@ class LiteratureTools:
                     "If the required support is still unavailable, disclose that gap and finish PARTIAL."
                 )
             result["new_quote_count"] = len(new)
-            if not new:
+            if not new and not args.get("refresh"):
                 result["next_action"] = (
-                    "This source window is unchanged. Reuse these exact quotes; do not repeat the same read. "
-                    "Read evidence_context for missing headers/conditions or follow next_quote_offset. "
-                    "For report findings, fix only the affected assertion and cite its actual sources."
+                    "Reuse returned quote handles; use evidence_context or next_quote_offset for new spans."
                 )
             return result
 

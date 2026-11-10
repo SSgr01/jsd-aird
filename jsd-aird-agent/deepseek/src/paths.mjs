@@ -1,10 +1,12 @@
 import { lstat, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
+import {hostDirectory} from './path-view.mjs';
 
 function denied() { return Object.assign(new Error('EXECUTION_DIRECTORY_DENIED'), { status: 403 }); }
 
 /** Directory admission only. Registering a native Workspace grants no business access. */
 export async function executionDirectory(root, value) {
+  value = hostDirectory(root, value);
   if (typeof value !== 'string' || !isAbsolute(value) || /[\x00-\x1f]/.test(value)) throw denied();
   if (process.platform === 'win32' && !/^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/]+[^\\/]+)/.test(value)) throw denied();
   const base = resolve(root), target = resolve(value), within = relative(base, target);

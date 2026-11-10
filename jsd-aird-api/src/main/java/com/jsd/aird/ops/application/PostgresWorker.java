@@ -48,7 +48,9 @@ public class PostgresWorker {
     private final java.util.concurrent.ThreadPoolExecutor jobExecutor = new java.util.concurrent.ThreadPoolExecutor(
             0,2,30,TimeUnit.SECONDS,new java.util.concurrent.SynchronousQueue<>(),Thread.ofVirtual().name("aird-job-",0).factory(),new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     private com.jsd.aird.shared.resource.BoundedGate executionGate=new com.jsd.aird.shared.resource.BoundedGate(2,0);
-    @Autowired(required=false) private com.jsd.aird.shared.resource.IsolatedProcessRunner documentProcesses;
+    private com.jsd.aird.shared.resource.IsolatedProcessRunner documentProcesses;
+    @Autowired(required=false)
+    public void setDocumentProcesses(com.jsd.aird.shared.resource.IsolatedProcessRunner documentProcesses) { this.documentProcesses = documentProcesses; }
     @Autowired void configureCapacity(com.jsd.aird.shared.resource.CapacityProperties limits,com.jsd.aird.shared.resource.ResourceAdmission admission){
         jobExecutor.setMaximumPoolSize(limits.heavy());executionGate=admission.heavy;
     }

@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { FileSystem, FsError } from '../../../vendor/deepseek-harness/packages/fs/fs/lib/index.js';
 import { LocalFileSystem } from '../../../vendor/deepseek-harness/packages/fs/fs-local/lib/index.js';
 
-export const worldRoot = '/work/scratch/native';
+export const worldRoot = '/workspaces';
 export const sha256 = value => createHash('sha256').update(value).digest('hex');
 const denied = () => new FsError('Path is outside the managed execution directory', 'FS_SANDBOX_DENIED');
 
@@ -105,10 +105,11 @@ export default class EnterpriseFileSystem extends FileSystem {
     try {await writeFile(temporary,bytes,{flag:'wx'});await this.checked(destination);await rename(temporary,destination);}
     finally {await unlink(temporary).catch(error=>{if(error.code!=='ENOENT')throw error;});}
   }
-  async snapshot(cwd,signal) {
+  async snapshot(cwd,signal,{excludeProcessOutput=false}={}) {
     const root=await this.resolve(cwd), files=[];let total=0;
     const visit=async (target,path='')=>{
       for(const entry of await this.listDir(target,signal)) {
+        if(excludeProcessOutput && entry.name==='.dsh-process-output')continue;
         const name=path?path+'/'+entry.name:entry.name;
         if(entry.type==='directory') await visit(entry.target,name);
         else if(entry.type==='file') {

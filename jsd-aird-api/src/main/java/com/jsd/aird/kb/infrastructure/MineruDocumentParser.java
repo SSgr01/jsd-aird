@@ -30,8 +30,8 @@ import java.util.zip.ZipFile;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.kb.application.SystemParsingPolicy;
-import com.jsd.aird.kb.domain.DocumentParser;
-import com.jsd.aird.kb.domain.OcrMode;
+import com.jsd.aird.kb.api.DocumentParser;
+import com.jsd.aird.kb.api.OcrMode;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -49,7 +49,7 @@ import org.springframework.web.client.RestClientResponseException;
 
 /** MinerU PDF parser and shared precise extraction for presentations. */
 @Component
-public final class MineruDocumentParser implements DocumentParser {
+public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDocumentParser {
 
     static final long MAX_DOWNLOAD_BYTES = 512L * 1024 * 1024;
     private static final long MAX_PRESENTATION_BYTES = 200L * 1024 * 1024;

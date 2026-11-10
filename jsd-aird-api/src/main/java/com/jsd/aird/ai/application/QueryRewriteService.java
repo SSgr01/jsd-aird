@@ -1,4 +1,5 @@
 package com.jsd.aird.ai.application;
+import com.jsd.aird.shared.json.AiJsonParser;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -207,7 +208,7 @@ public class QueryRewriteService {
     }
 
     private String call(ChatClient.Builder builder, String system, String user) {
-        Future<String> future = executor.submit(() -> {
+        var future = com.jsd.aird.shared.resource.BudgetedTask.submit(executor, timeout.toMillis(), () -> {
             var options = OpenAiChatOptions.builder()
                     .model(model)
                     .temperature(0d)
@@ -223,9 +224,9 @@ public class QueryRewriteService {
             return content == null ? "" : content;
         });
         try {
-            return future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            return future.await();
         } catch (Exception exception) {
-            future.cancel(true);
+            future.cancel();
             throw new IllegalStateException("查询改写模型调用失败", exception);
         }
     }
@@ -625,10 +626,6 @@ public class QueryRewriteService {
         }
     }
 
-    private static boolean validTerm(RetrievalTerm value) {
-        if (value == null || !StringUtils.hasText(value.text()) || value.text().length() > MAX_TERM_LENGTH) return false;
-        return value.aliases() == null || value.aliases().size() <= MAX_ALIASES_PER_TERM;
-    }
 
     private static boolean validFact(RequiredFact value) {
         return value != null && StringUtils.hasText(value.label()) && value.label().length() <= MAX_LABEL_LENGTH
@@ -640,15 +637,6 @@ public class QueryRewriteService {
                 && value.query().length() <= MAX_WEB_QUERY_LENGTH;
     }
 
-    private static boolean validDataRequest(DataRequest value) {
-        if (value == null) return true;
-        var intent = value.intent() == null ? "NONE" : value.intent().strip().toUpperCase(java.util.Locale.ROOT);
-        return DATA_INTENTS.contains(intent)
-                && DATA_ANALYSIS_GOALS.contains(value.analysisGoal())
-                && DATA_FILE_SCOPES.contains(value.fileScope())
-                && (value.fileName() == null || value.fileName().length() <= 260)
-                && validDataTerms(value.recordTerms()) && validDataTerms(value.fieldTerms());
-    }
 
     private static boolean validDataTerms(List<String> values) {
         return values == null || values.size() <= MAX_DATA_TERMS

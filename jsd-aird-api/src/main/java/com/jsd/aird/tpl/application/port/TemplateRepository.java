@@ -8,11 +8,18 @@ import java.util.Set;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import com.jsd.aird.tpl.domain.TemplateStatus;
 import com.jsd.aird.shared.api.AllowedActions;
 
-public interface TemplateRepository {
+public interface TemplateRepository extends com.jsd.aird.tpl.api.TemplateWordSource {
+ default Optional<com.jsd.aird.tpl.api.TemplateWordSource.SnapshotSource> snapshotSource(UUID organizationId, UUID versionId) {
+ return findWorkspace(organizationId,versionId).map(w -> new com.jsd.aird.tpl.api.TemplateWordSource.SnapshotSource(w.inlineSnapshot(),w.snapshotFileId()));
+ }
+ default Optional<JsonNode> wordDocumentSource(UUID organizationId, UUID versionId) {
+     return findWorkspace(organizationId,versionId).map(TemplateWorkspace::wordDocument);
+ }
+
     void lockTemplate(UUID organizationId,UUID templateId);
     default Optional<TemplateListItem> findCatalogItem(UUID org,UUID id){
         return findTemplates(new TemplateQuery(org,null,null,false,null,null,null,null,null,"UPDATED_AT","DESC",1,1,new DataScopeFilter("SELECTED",null,Set.of(id)))).items().stream().findFirst();

@@ -12,7 +12,15 @@ test('tool schema failures expose repairable paths without submitted values', as
 
 test('internal failures never forward server bodies or stack traces', async()=>{
   const error=await businessError(new Response(JSON.stringify({detail:'connection-string secret'}),{status:500}));
-  assert.equal(error.message,'ENTERPRISE_GATE_500');
+  assert.equal(error.code,'ENTERPRISE_GATE_500');
+  assert.match(error.message,/业务服务暂时不可用/);
+  assert.doesNotMatch(error.message,/secret|ENTERPRISE_GATE/);
+});
+
+test('permission refusals use a readable diagnosis and never copy internal host fields', async()=>{
+  const error=await businessError(new Response(JSON.stringify({detail:'DATA_SCOPE_DENIED SHIPMENT private field'}),{status:403}));
+  assert.match(error.message,/无权执行/);
+  assert.doesNotMatch(error.message,/DATA_SCOPE_DENIED|SHIPMENT|private|ENTERPRISE_GATE/);
 });
 
 test('native turn failures retain a useful business or budget diagnosis', async()=>{

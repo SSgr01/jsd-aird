@@ -22,7 +22,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-public class IamAuthService {
+public class IamAuthService implements com.jsd.aird.iam.api.DelegationIdentity {
+    @Override public com.jsd.aird.iam.api.DelegationIdentity.Identity delegationUser(UUID userId) {
+        var user = user(userId);
+        return user == null ? null : new com.jsd.aird.iam.api.DelegationIdentity.Identity(user.id(), user.organizationId(), user.username(), user.roleCode(), user.status(), user.authVersion());
+    }
+
 
     private static final SecureRandom RANDOM = new SecureRandom();
 

@@ -17,8 +17,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.tpl.application.GroupNameNormalizer;
 import com.jsd.aird.tpl.application.ExperimentSemanticResolver;
 import com.jsd.aird.tpl.application.RecognitionIdentity;
-import com.jsd.aird.tpl.application.StandardFieldDictionary;
-import com.jsd.aird.tpl.application.port.RecognitionModelClient;
+import com.jsd.aird.tpl.api.StandardFieldDictionary;
+import com.jsd.aird.tpl.api.RecognitionModelClient;
 import com.jsd.aird.tpl.application.port.StandardFieldRepository;
 
 /** Converts a validated sparse semantic response into persistence-compatible candidates. */

@@ -1,6 +1,8 @@
 package com.jsd.aird.mdm.application.service;
+import com.jsd.aird.mdm.api.PartnerContact;
+import com.jsd.aird.mdm.api.PartnerStatus;
 
-import com.jsd.aird.mdm.application.command.PartnerCommands;
+import com.jsd.aird.mdm.api.PartnerCommands;
 import com.jsd.aird.mdm.application.port.ContactProjectVector;
 import com.jsd.aird.mdm.application.port.PartnerContactRepository;
 import com.jsd.aird.mdm.application.port.ProjectRepository;
@@ -17,7 +19,7 @@ import java.util.Set;
 import java.util.UUID;
 
 @Service
-public class PartnerContactService {
+public class PartnerContactService implements com.jsd.aird.mdm.api.PartnerContacts {
     private final PartnerContactRepository repository;
     private final BusinessPartnerService partnerService;
     private final ProjectRepository projectRepository;

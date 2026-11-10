@@ -5,10 +5,10 @@ import java.util.List;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.tpl.api.TemplateOfficeFacade;
-import com.jsd.aird.tpl.application.port.OfficeStructureParser;
-import com.jsd.aird.tpl.application.port.WordOoxmlPatcher;
-import com.jsd.aird.tpl.application.port.WorkbookSnapshotStructureParser;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.OfficeStructureParser;
+import com.jsd.aird.tpl.api.WordOoxmlPatcher;
+import com.jsd.aird.tpl.api.WorkbookSnapshotStructureParser;
+import com.jsd.aird.tpl.api.TemplateFormat;
 
 import org.springframework.stereotype.Service;
 

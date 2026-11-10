@@ -24,6 +24,9 @@ class Service(SessionViews, BusinessService):
             http=http,
         )
 
+        from aird_agent.hosts.jsd.briefings import Briefings
+        self.briefings = Briefings(self)
+
     async def java(self, principal, action, arguments=None, run_id=None):
         return await self.host_call(principal, action, arguments, run_id)
 

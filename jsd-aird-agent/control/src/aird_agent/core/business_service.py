@@ -26,6 +26,8 @@ class BusinessService:
         # This client only carries internal service requests and delegation tickets.
         self.http = http or httpx.AsyncClient(timeout=120, follow_redirects=False, trust_env=False)
         self.host, self.packs, self.bindings = host, registry, bindings
+        from aird_agent.core.admission import RunAdmission
+        self.admission = RunAdmission(self)
         self.tool_limits = {}
         bindings.attach(self)
 
@@ -68,6 +70,8 @@ class BusinessService:
         from jsonschema import ValidationError, validate
 
         run = await self.store.get(principal, "run", rid)
+        if native and run.get("automation"):
+            raise HTTPException(403, "BACKGROUND_READ_ONLY")
         if native:
             from aird_agent.hosts.jsd.native_files import native_spec
             required_pack = "retrieval" if name == "dsh_web_search" else "files"
@@ -91,6 +95,11 @@ class BusinessService:
             if error.validator == "additionalProperties" and isinstance(error.instance, dict):
                 detail["unexpected_fields"] = sorted(set(error.instance) - set(error.schema.get("properties", {})))[:20]
             raise HTTPException(422, detail) from None
+        if run.get("automation") and name in {"business_read", "business_search", "business_links"}:
+            from aird_agent.hosts.jsd.briefings import RESEARCH_TYPES
+            kind = arguments.get("type", arguments.get("ref", {}).get("type"))
+            if kind and kind not in RESEARCH_TYPES:
+                raise HTTPException(403, "BACKGROUND_RESEARCH_ONLY")
         topic = await self.authorized_topic(principal, run)
         await self.bindings.authorize_tool(principal, rid, name, arguments)
         signature = {"tool": name, "arguments": arguments, "scope": run["scope_hash"]}
@@ -110,6 +119,13 @@ class BusinessService:
                 if prior["status"] in {"SUCCEEDED", "FAILED"}:
                     return prior["result"]
                 raise HTTPException(409, "TOOL_RESULT_UNKNOWN: do not blindly replay")
+            if run.get("output_repair"):
+                self.bindings.authorize_repair_tool(run, name, arguments)
+                repair = run["output_repair"]
+                if name != "artifact_save":
+                    if repair["tool_calls"] >= repair["max_tool_calls"]:
+                        raise HTTPException(409, "CITATION_REPAIR_READ_BUDGET_EXCEEDED")
+                    repair["tool_calls"] += 1
             if name in self.mutation_tools(run):
                 unknown = await (
                     await conn.execute(
@@ -153,7 +169,7 @@ class BusinessService:
                 from aird_agent.hosts.jsd.native_web import search
                 result = await search(self, principal, run, arguments)
             elif native:
-                from aird_agent.hosts.jsd.native_files import native_execute, native_artifact
+                from aird_agent.hosts.jsd.native_files import native_artifact, native_execute
                 result = await (native_execute if name == "dsh_execute" else native_artifact)(self, principal, run, arguments, call_id)
             elif handler:
                 result = await handler(
@@ -185,14 +201,18 @@ class BusinessService:
                 result.update(self.bindings.error_info(exc))
         async with self.store.transaction(principal, rid) as conn:
             current = await self.store.get(principal, "run", rid, conn)
-            if (
+            if not (native and name == "dsh_execute") and (
                 current["epoch"] != epoch
                 or current["status"] not in {"RUNNING", "WAITING_APPROVAL"}
             ):
                 raise HTTPException(409, "RUN_INACTIVE_OR_LEASE_LOST")
+            if not native and "error" not in result:
+                result, delivery_changed = self.bindings.delivery_result(current, name, arguments, result)
+                if delivery_changed:
+                    current = await self.store.update(principal, "run", current, conn)
             if not native and any(key in result for key in ("candidates", "evidence_id", "quotes")):
                 from aird_agent.evidence.links import citation_links
-                links = citation_links(current.get("evidence", {}), self.settings.public_url)
+                links = citation_links(current.get("evidence", {}), self.settings.public_url, quote_aliases=True)
                 if links:
                     result = {**result, "citation_links": links}
             await conn.execute(
@@ -205,17 +225,22 @@ class BusinessService:
                 allowed = {tool["name"] for tool in self.tools_for(current)}
                 current["active_tools"] = sorted(set(current.get("active_tools", self.bindings.initial_tools(current)))
                     | (set(result["activate_tools"]) & allowed))
-                await self.store.update(principal, "run", current, conn)
+                current = await self.store.update(principal, "run", current, conn)
+            if current.get("briefing_snapshot"):
+                from aird_agent.hosts.jsd.briefings import Briefings
+                Briefings.record_read(current, name, arguments, authority_result or result)
+                current = await self.store.update(principal, "run", current, conn)
+                current = await self.store.get(principal, "run", rid, conn)
             if registered_output:
                 current.setdefault("registered_outputs", []).append(registered_output)
                 current.pop("completion", None)
-                await self.store.update(principal, "run", current, conn)
+                current = await self.store.update(principal, "run", current, conn)
             if not outcome and "error" not in result and name in {
                 "get_project_snapshot", "list_project_stages", "list_project_tasks",
                 "get_task_detail", "get_experiment_record",
             } and authority_result.get("candidates"):
                 current["business_records_read"] = True
-                await self.store.update(principal, "run", current, conn)
+                current = await self.store.update(principal, "run", current, conn)
             if name in self.bindings.activities:
                 await self.store.event(
                     principal,
@@ -229,6 +254,17 @@ class BusinessService:
                     },
                     conn,
                 )
+        if native and name == "dsh_execute":
+            try:
+                current = await self.store.get(principal, "run", rid)
+                if current["status"] == "RUNNING" and current.get("dsh_pending_operations") and current.get("dsh_model_completed_turn"):
+                    await self.complete_dsh(principal, {"run_id": rid, "session_id": current["dsh_session_id"],
+                                                       "turn": current["dsh_model_completed_turn"],
+                                                       "stop_reason": current.get("dsh_model_completed_stop_reason")})
+            except Exception:
+                # Projection/authorization failure cannot erase a committed command
+                # receipt. The completion callback can reconcile the run separately.
+                logger.exception("Native command settled; run completion requires reconciliation run=%s", rid)
         return result
 
 
@@ -262,6 +298,7 @@ class BusinessService:
         run = await self.store.get(principal, "run", rid, conn)
         if run["epoch"] != epoch or run["status"] not in {"RUNNING", "WAITING_APPROVAL"}:
             raise HTTPException(409, "RUN_INACTIVE")
+        await self.admission.require(principal, rid, epoch, conn)
         return run
 
     async def runtime(self, rid, operation, body=None):
@@ -275,6 +312,8 @@ class BusinessService:
         from aird_agent.core.contracts import Principal
         run = row["payload"]
         principal = Principal.model_validate(run["principal"])
+        if principal.automation_grant_id and not run.get("automation"):
+            raise HTTPException(403, "NATIVE_DELIVERY_REQUIRED")
         if run.get("engine_version") != "dsh-v1":
             raise HTTPException(409, "DSH_SESSION_REQUIRED")
         action = {"abort": "cancel"}.get(operation, operation)
@@ -306,6 +345,10 @@ class BusinessService:
             pinned = (payload.get("retrieval_scope") or {}).get("knowledge_documents")
             allowed = {(item["document_id"], item["publication_id"]) for item in pinned or []}
             for snapshot in snapshots.values():
+                # Prior briefing periods remain in the native log, but cannot
+                # supply authoritative evidence or coverage for a new period.
+                if snapshot.get("automation"):
+                    continue
                 candidates = snapshot.get("evidence", {}).values()
                 if allowed:
                     candidates = [candidate for candidate in candidates
@@ -360,8 +403,16 @@ class BusinessService:
     async def launch(self, principal, rid):
         run = await self.store.get(principal, "run", rid)
         await self.authorized_topic(principal, run, execution=False)
+        await self.admission.enqueue(principal, run, origin="api")
+        return run
+
+    async def _dispatch_run(self, principal, rid):
+        run = await self.store.get(principal, "run", rid)
+        epoch = run["epoch"]
+        await self.authorized_topic(principal, run, execution=False)
         if run.get("dsh_dispatched"):
             return run
+        await self.admission.require(principal, rid, epoch)
         # A known UUID lets the native request log deduplicate an uncertain prompt acceptance.
         if not run.get("dsh_session_id"):
             allocated = await self.dsh_command(principal, "create", {
@@ -369,12 +420,15 @@ class BusinessService:
             })
             await self.bind_session(principal, rid, allocated["sessionId"])
         run = await self.store.get(principal, "run", rid)
+        await self.admission.require(principal, rid, epoch)
         await self.dsh_command(principal, "prompt", {"run_id": rid, "profile": run["profile"],
             "session_id": run["dsh_session_id"], "request_id": rid, "text": run["request"]})
         async with self.store.transaction(principal, rid) as conn:
             current = await self.store.get(principal, "run", rid, conn)
+            if current["epoch"] != epoch:
+                raise HTTPException(409, "STALE_EXECUTION_EPOCH")
             current["dsh_dispatched"] = True
-            await self.store.update(principal, "run", current, conn)
+            current = await self.store.update(principal, "run", current, conn)
         return current
 
     async def bind_session(self, principal, rid, sid):
@@ -405,10 +459,29 @@ class BusinessService:
             raise HTTPException(403, "SESSION_NOT_OWNED")
         if body.get("turn") is not None and run.get("dsh_turn") != body["turn"]:
             raise HTTPException(409, "TURN_BINDING_CONFLICT")
+        if body.get("epoch") is not None and run["epoch"] != body["epoch"]:
+            raise HTTPException(409, "STALE_EXECUTION_EPOCH")
         return run
 
     async def register_step(self, principal, body):
         sid, turn = body["session_id"], body["turn"]
+        if body.get("admission_only") and body.get("input_signature"):
+            async with self.store.pool.connection() as conn:
+                existing = await (await conn.execute(
+                    "SELECT id FROM agent_runtime.harness_records WHERE kind='run' AND organization_id=%s "
+                    "AND actor_id=%s AND payload->>'dsh_session_id'=%s AND payload->>'dsh_input_signature'=%s "
+                    "ORDER BY created_at DESC LIMIT 1", (*principal.key,sid,body["input_signature"])
+                )).fetchone()
+            if existing:
+                rid = str(existing["id"])
+                if body.get("cancelled"):
+                    current = await self.store.get(principal,"run",rid)
+                    if current["status"] in {"RUNNING","WAITING_APPROVAL"}:
+                        await self.cancel(principal,rid)
+                    else:
+                        await self.admission.release(principal,rid,cancelled=True,stopped=True)
+                return await self.admission.state(principal,rid)
+        automation = await self.briefings.binding(principal, body) if hasattr(self, "briefings") else None
         conversation = await self.session_conversation(principal, sid)
         run = None
         if conversation:
@@ -419,18 +492,22 @@ class BusinessService:
             rid = conversation.get("active_run") or conversation.get("last_run")
             if rid:
                 current = await self.store.get(principal, "run", rid)
-                if current.get("dsh_turn") in {None, turn}:
+                if current.get("dsh_turn") in {None, turn} and not (body.get("admission_only") and current["status"] in {"CANCELLED", "FAILED", "SUCCEEDED"}):
                     run = current
         if run is None:
-            from aird_agent.hosts.jsd.request_inputs import request_inputs, native_documents
+            from aird_agent.hosts.jsd.request_inputs import native_documents, request_inputs
             inputs = request_inputs(body.get("request", ""))
             if body.get("attachments"):
                 conversation = await self.ensure_conversation(principal, sid, body["profile"])
                 inputs["private_source_ids"] = await native_documents(self, principal, conversation, body["attachments"])
                 conversation = await self.store.get(principal, "conversation", conversation["id"])
             request = RunRequest(**inputs, profile=body["profile"],
-                **({"conversation_id": conversation["id"], "expected_revision": conversation["revision"]} if conversation else {}))
-            run = await self.create_run(principal, request, digest([sid, turn]), dispatch=False)
+                # The native Inbox owns input order. Its concurrent event
+                # projection can advance the conversation revision while the
+                # host authorizes this request; API optimistic revisions do not
+                # apply to this already durable native input.
+                **({"conversation_id": conversation["id"]} if conversation else {}))
+            run = await self.create_run(principal, request, digest([sid, turn, body.get("input_signature")]), dispatch=False)
             await self.bind_session(principal, run["id"], sid)
         if run["status"] in {"CANCELLED", "FAILED", "SUCCEEDED"}:
             raise HTTPException(409, "RUN_REQUIRES_EXPLICIT_RESUME")
@@ -460,15 +537,43 @@ class BusinessService:
                     run.update(context_refs=refs, private_source_ids=private_ids,
                         private_documents=topic.get("private_documents", []), scope_hash=self.bindings.scope_digest(topic))
                     await self.store.update(principal, "run", run, conn)
+        if body.get("admission_only"):
+            if body.get("input_signature"):
+                async with self.store.transaction(principal,run["id"]) as conn:
+                    run=await self.store.get(principal,"run",run["id"],conn)
+                    if not run.get("dsh_input_signature"):
+                        run["dsh_input_signature"]=body["input_signature"]
+                        run=await self.store.update(principal,"run",run,conn)
+            admitted = await self.admission.enqueue(principal, run, origin="native")
+            if body.get("cancelled"):
+                await self.admission.release(principal,run["id"],cancelled=True,stopped=True)
+                return await self.admission.state(principal,run["id"])
+            return admitted
+        if body.get("run_id") and body["run_id"] != run["id"]:
+            raise HTTPException(409, "TURN_BINDING_CONFLICT")
+        state = await self.admission.state(principal, run["id"])
+        if state["admission"] != "GRANTED":
+            # Older/native callers still enter the durable queue. The early turn
+            # hook waits for admission before any tool availability is resolved.
+            await self.admission.enqueue(principal, run, origin="native")
+            if not await self.admission.grant(principal, run["id"]):
+                raise HTTPException(409, "RUN_ADMISSION_REQUIRED")
         async with self.store.transaction(principal, run["id"]) as conn:
-            await conn.execute("SELECT pg_advisory_xact_lock(1847091011)")
             run = await self.store.get(principal, "run", run["id"], conn)
-            if run["status"] != "RUNNING":
-                count = await (await conn.execute("SELECT count(*) AS count FROM agent_runtime.harness_records WHERE kind='run' AND payload->>'engine_version'='dsh-v1' AND payload->>'status'='RUNNING' AND id<>%s", (run["id"],))).fetchone()
-                if count["count"] >= self.settings.max_running_runs:
-                    raise HTTPException(429, "RUN_CAPACITY_REACHED")
+            await self.admission.require(principal, run["id"], body.get("epoch", run["epoch"]), conn)
+            if run["status"] in {"CANCELLED", "FAILED", "SUCCEEDED"}:
+                raise HTTPException(409, "RUN_REQUIRES_EXPLICIT_RESUME")
+            before = {key: run.get(key) for key in ("automation", "active_tools", "status", "dsh_turn", "epoch", "started_at")}
+            if automation:
+                if run.get("automation") and run["automation"]["id"] != automation["id"]:
+                    raise HTTPException(409, "AUTOMATION_TURN_CONFLICT")
+                run["automation"] = automation
+                run["active_tools"] = sorted(set(run.get("active_tools", [])) | {"get_research_briefing_context", "business_read", "business_links", "tool_search"})
+            elif run.get("automation"):
+                raise HTTPException(403, "NATIVE_DELIVERY_REQUIRED")
             run.update(status="RUNNING", dsh_turn=turn, epoch=max(1, run["epoch"]), started_at=run.get("started_at") or time.time())
-            await self.store.update(principal, "run", run, conn)
+            if any(run.get(key) != value for key, value in before.items()):
+                run = await self.store.update(principal, "run", run, conn)
         run = await self.bindings.prepare_run(principal, run)
         await self.authorized_topic(principal, run)
         # Native session messages retain inputs and tool results. Introduce source
@@ -476,18 +581,54 @@ class BusinessService:
         # Citation URLs belong to the renderer, not every model request.
         context = {"task_state": self.bindings.gate_state(run),
                    "evidence": self.bindings.evidence_summaries(run)}
+        usage_records = [attempt.get("usage", {}) for attempt in run.get("dsh_model_attempts", [])] or run.get("dsh_usage", [])
+        total_tokens = sum(usage.get("totalTokens", 0) for usage in usage_records)
+        last_usage = usage_records[-1] if usage_records else {}
+        # Reserve room for a final response using the actual context size.
+        # Raw (including cached) usage and the hard limit retain their meaning.
+        final_reserve = max(self.settings.max_total_tokens // 10,
+            2 * (last_usage.get("totalTokens", 0) + self.settings.model_output_tokens))
+        if total_tokens and self.settings.max_total_tokens - total_tokens <= final_reserve:
+            context["budget_notice"] = "本轮已接近执行预算。请用已取得的证据完成原问题的结论、适用边界和资料缺口；停止扩展全库检索或重读已有正文。未取得的事实明确标为未确认，不补造结果。"
         if body.get("request") or body.get("attachments") or not run.get("dsh_generation_started"):
             topic = await self.host_call(principal, "runtime_context", self.context_request(run), run["id"])
             context["authorized_context"] = await self.bindings.runtime_topic(principal, run, topic)
-        conversation = await self.session_conversation(principal, sid)
+        if run.get("automation"):
+            from aird_agent.hosts.jsd.briefings import coverage
+            reading = coverage(run.get("briefing_snapshot", {}))
+            context["briefing"] = {"task_type": run["automation"]["builtin_id"], "window": run["automation"]["window"],
+                "coverage": {**reading, "missing": reading["missing"][:20], "missing_total": len(reading["missing"])},
+                "policy": "先用get_research_briefing_context加载并读完本期索引，历史轮次的索引不能代表本期覆盖。本期只读。实验优先用business_read的section=record读完整版本，过大时再按概览分区分页。读完各索引再整理正文；读取不足不能推进复盘位置。"}
+        if body.get("binding_protocol") == 2:
+            from aird_agent.core.binding_projection import binding_projection
+            return binding_projection(self, run, body, json.dumps(context, ensure_ascii=False))
         from aird_agent.evidence.links import citation_links
-        links = citation_links(run.get("evidence", {}), self.settings.public_url)
-        return {**run, "tools": self.tools_for(run), "active_tools": run.get("active_tools", self.bindings.initial_tools(run)),
+        links = citation_links(run.get("evidence", {}), self.settings.public_url, quote_aliases=True)
+        active_tools = run.get("active_tools", self.bindings.initial_tools(run))
+        if run.get("automation"):
+            active_tools = list(dict.fromkeys([*active_tools, "get_research_briefing_context"]))
+        return {**run, "tools": self.tools_for(run), "active_tools": active_tools,
             "citation_links": links,
             "instructions": self.instructions_for(run), "context": json.dumps(context, ensure_ascii=False)}
 
+    async def begin_output_repair(self, principal, body):
+        run = await self.session_run(principal, body)
+        await self.authorized_topic(principal, run)
+        async with self.store.transaction(principal, run["id"]) as conn:
+            run = await self.active(principal, run["id"], run["epoch"], conn)
+            if not run.get("output_repair"):
+                run["output_repair"] = self.bindings.prepare_output_repair(run)
+                await self.store.update(principal, "run", run, conn)
+                await self.store.event(principal, run["id"], "output.repair.started", {
+                    "turn": run["dsh_turn"], "diagnostics": run["output_repair"]["diagnostics"],
+                }, conn)
+        return {"repair": run["output_repair"]}
+
     async def gate_dsh(self, principal, body):
         run = await self.session_run(principal, body)
+        if run.get("automation") and (body.get("kind") == "native-tool" or body.get("native_name")) and body.get("native_name") not in {
+                "skill", "todo_write", "ask_user_question", "enter_plan_mode", "exit_plan_mode", "get_goal", "create_goal", "update_goal"}:
+            raise HTTPException(403, "BACKGROUND_READ_ONLY")
         await self.authorized_topic(principal, run)
         async with self.store.transaction(principal, run["id"]) as conn:
             run = await self.active(principal, run["id"], run["epoch"], conn)
@@ -500,6 +641,14 @@ class BusinessService:
             if sum(usage.get("totalTokens", usage.get("inputTokens", 0) + usage.get("outputTokens", 0)) for usage in usage_records) >= self.settings.max_total_tokens:
                 raise HTTPException(409, "TOKEN_BUDGET_EXCEEDED")
             kind = body["kind"]
+            if run.get("output_repair"):
+                repair = run["output_repair"]
+                if body.get("native_name") and body["native_name"] != "present":
+                    raise HTTPException(409, "CITATION_REPAIR_TARGETED_READ_ONLY")
+                if kind == "model":
+                    if repair["model_calls"] >= repair["max_model_calls"]:
+                        raise HTTPException(409, "CITATION_REPAIR_BUDGET_EXCEEDED")
+                    repair["model_calls"] += 1
             counter, maximum = {"step": ("steps", self.settings.max_steps),
                 "model": ("model_calls", self.settings.max_model_calls), "tool": ("tool_calls", self.settings.max_tool_calls), "native-tool": ("tool_calls", self.settings.max_tool_calls)}[kind]
             if run[counter] >= maximum:
@@ -568,6 +717,12 @@ class BusinessService:
         return {"accepted": True}
 
     async def project_event(self, principal, body):
+        from aird_agent.core.progress_projection import BUSINESS_EVENTS, project_progress
+        event = body["event"]
+        if not isinstance(event.get("seq"), int):
+            raise HTTPException(422, "INVALID_SESSION_EVENT")
+        if event.get("type") not in BUSINESS_EVENTS:
+            return await project_progress(self.store, principal, body)
         conversation = await self.session_conversation(principal, body["session_id"])
         if not conversation:
             return {"accepted": True}
@@ -631,6 +786,20 @@ class BusinessService:
                     conversation["messages"].append({"id": message.get("id", str(uuid4())), "role": "user", "text": text, "run_id": rid})
             elif kind == "turn/end":
                 run["dsh_stop_reason"] = data.get("reason")
+                reason = data.get("reason", {})
+                if run.get("status") == "RUNNING" and reason.get("kind") in {"error", "aborted", "interrupted"}:
+                    # Reconcile the durable native ending even when the live
+                    # failure callback was lost. Delivery alone is not success.
+                    code = reason.get("error", {}).get("code")
+                    run.update(status="CANCELLED" if reason["kind"] == "aborted" else "FAILED",
+                        error=code if code in {"TOKEN_BUDGET_EXCEEDED", "BUDGET_EXCEEDED", "SIDE_EFFECT_RECONCILIATION_REQUIRED", "CITATION_REPAIR_BUDGET_EXCEEDED"}
+                            else "DSH_EXECUTION_INTERRUPTED")
+                    run["active_seconds"] = run.get("active_seconds", 0) + max(0, time.time() - (run.get("started_at") or time.time()))
+                    run["started_at"] = None
+                    await conn.execute("UPDATE agent_runtime.harness_calls SET status='UNKNOWN',updated_at=now() WHERE run_id=%s AND status='RUNNING'", (rid,))
+                    if hasattr(self, "briefings"):
+                        await self.briefings.finish(principal, run, conn)
+                    await self.store.event(principal, rid, "run." + run["status"].lower(), {"error": run["error"]}, conn, key=f"dsh:{seq}:end")
                 if data.get("reason", {}).get("kind") == "max-tokens" and run.get("error") != "SIDE_EFFECT_RECONCILIATION_REQUIRED":
                     run.update(status="FAILED", error="OUTPUT_LIMIT_EXCEEDED", completion={
                         "outcome":"PARTIAL", "summary":"回答被截断，本轮任务尚未完成。",
@@ -652,8 +821,16 @@ class BusinessService:
         return {"accepted": True}
 
     async def project_stream(self, principal, body):
-        run = await self.session_run(principal, body)
+        from aird_agent.core.progress_projection import stream_binding
+        run = await stream_binding(self.store, principal, body)
         async with self.store.transaction(principal, run["id"]) as conn:
+          if body.get("epoch") is not None:
+            current = await (await conn.execute(
+                "SELECT payload->'epoch' AS epoch FROM agent_runtime.harness_records WHERE kind='run' "
+                "AND id=%s AND organization_id=%s AND actor_id=%s", (run["id"],*principal.key)
+            )).fetchone()
+            if not current or body["epoch"] != current["epoch"]:
+                raise HTTPException(409, "STALE_EXECUTION_EPOCH")
           for frame in body.get("frames", [body.get("frame", {})]):
             if frame.get("type") == "chunk":
                 chunk = frame.get("chunk", {})
@@ -669,8 +846,33 @@ class BusinessService:
         text, valid = self.bindings.validate_output(run, run.get("last_text", ""))
         async with self.store.transaction(principal, run["id"]) as conn:
             run = await self.store.get(principal, "run", run["id"], conn)
+            if body.get("epoch") is not None and body["epoch"] != run["epoch"]:
+                raise HTTPException(409, "STALE_EXECUTION_EPOCH")
+            if run["status"] == "CANCELLED":
+                return {"accepted": True, "status": run["status"], "completion": run.get("completion")}
             if run.get("dsh_completed_turn") == body.get("turn"):
                 return {"accepted": True, "status": run["status"], "completion": run.get("completion")}
+            pending = await (await conn.execute(
+                "SELECT call_id FROM agent_runtime.harness_calls WHERE run_id=%s AND tool_name='dsh_execute' AND status='RUNNING'",
+                (run["id"],))).fetchall()
+            if pending:
+                # A model response can finish while native jobs still own admitted commands.
+                # Only their durable receipts can finish the business execution.
+                run["dsh_pending_operations"] = sorted(set(run.get("dsh_pending_operations", []))
+                                                       | {row["call_id"] for row in pending})
+                run["dsh_model_completed_turn"] = body.get("turn")
+                run["dsh_model_completed_stop_reason"] = body.get("stop_reason")
+                run["completion"] = {"status": "pending", "gaps": ["BACKGROUND_COMMANDS_RUNNING"]}
+                if not body.get("check_only"):
+                    await self.store.update(principal, "run", run, conn)
+                    await self.store.event(principal, run["id"], "run.background_pending",
+                        {"pending_operations": len(pending)}, conn)
+                return {"accepted": True, "status": run["status"], "completion": run["completion"],
+                        "pending_operations": len(pending)}
+            pending_ids = run.pop("dsh_pending_operations", [])
+            settled = await (await conn.execute(
+                "SELECT status,result FROM agent_runtime.harness_calls WHERE run_id=%s AND call_id=ANY(%s)",
+                (run["id"], pending_ids))).fetchall() if pending_ids else []
             unknown = await (await conn.execute(
                 "SELECT 1 FROM agent_runtime.harness_calls WHERE run_id=%s AND status='UNKNOWN' LIMIT 1", (run["id"],)
             )).fetchone()
@@ -683,15 +885,33 @@ class BusinessService:
                 run.update(status="FAILED", error=error.detail)
             if body.get("stop_reason") == "max-tokens" and not unknown:
                 run.update(status="FAILED", error="OUTPUT_LIMIT_EXCEEDED")
+            # Only the jobs that kept this original turn open govern its
+            # deferred outcome. An unrelated failed foreground command may be
+            # handled normally by the model. A user's stop remains cancellation.
+            if not unknown:
+                cancelled = any((row["result"] or {}).get("receipt", {}).get("status") == "CANCELLED" for row in settled)
+                failed = any(row["status"] == "FAILED" for row in settled)
+                if cancelled:
+                    run.update(status="CANCELLED", error="SANDBOX_CANCELLED")
+                elif failed:
+                    run.update(status="FAILED", error="BACKGROUND_COMMAND_FAILED")
+            if run.get("automation"):
+                from aird_agent.hosts.jsd.briefings import coverage
+                if not coverage(run.get("briefing_snapshot", {}))["complete"]:
+                    run.update(status="FAILED", error="BRIEFING_COVERAGE_INCOMPLETE")
             run["completion"] = self.bindings.default_completion(run)
             if body.get("check_only"):
                 # The native stop hook may steer a correction while this run
                 # remains active. A preflight never commits a terminal result.
-                return {"accepted": True, "status": run["status"], "completion": run["completion"]}
+                return {"accepted": True, "status": run["status"], "completion": run["completion"],
+                        **({"citation_diagnostics": self.bindings.output_diagnostics(run, text)} if not valid else {}),
+                        **({"coverage": coverage(run.get("briefing_snapshot", {}))} if run.get("automation") else {})}
             run["active_seconds"] += max(0, time.time() - (run.get("started_at") or time.time()))
             run["started_at"] = None
             run["dsh_completed_turn"] = body.get("turn")
             await self.store.update(principal, "run", run, conn)
+            if hasattr(self, "briefings"):
+                await self.briefings.finish(principal, run, conn)
             from aird_agent.evidence.links import public_answer, public_citations
             await self.store.event(principal, run["id"], "run." + run["status"].lower(), {
                 "text": public_answer(run["result"], run["evidence"], self.settings.public_url),
@@ -721,14 +941,23 @@ class BusinessService:
     async def cancel(self, principal, rid):
         run = await self.store.get(principal, "run", rid)
         await self.authorized_topic(principal, run, execution=False)
-        await self.runtime(rid, "abort")
-        await self.bindings.cancel_execution(principal, run)
+        was_queued=run["status"]=="QUEUED"
         async with self.store.transaction(principal, rid) as conn:
             run = await self.store.get(principal, "run", rid, conn)
             run["status"] = "CANCELLED"
+            self.admission.settle_time(run)
             await conn.execute("UPDATE agent_runtime.harness_calls SET status='UNKNOWN',updated_at=now() WHERE run_id=%s AND status='RUNNING'", (rid,))
             await self.store.update(principal, "run", run, conn)
             await self.store.event(principal, rid, "run.cancelled", {}, conn)
+        await self.admission.release(principal, rid, cancelled=True, stopped=not run.get("dsh_session_id"))
+        try:
+            if run.get("dsh_session_id"):
+                await self.runtime(rid,"abort",{"cancel_waiting":was_queued,"input_signature":run.get("dsh_input_signature")})
+            await self.bindings.cancel_execution(principal,run)
+        except HTTPException:
+            # The durable cancellation is already fenced. Reconciliation retains
+            # its slot and confirms host termination before granting another.
+            pass
         return {"run_id": rid, "status": "CANCELLED"}
 
     async def resume(self, principal, rid):
@@ -736,6 +965,12 @@ class BusinessService:
         await self.authorized_topic(principal, run, execution=False)
         if run.get("engine_version") != "dsh-v1":
             raise HTTPException(409, "DSH_SESSION_REQUIRED")
+        if run['status'] in {'QUEUED','RUNNING'}:
+            return {'run_id':rid,'status':run['status']}
+        native = await self.runtime(rid, "state") if run.get("dsh_session_id") else {"running":False}
+        if native.get("running"):
+            raise HTTPException(409, "RUN_STILL_STOPPING")
+        await self.admission.release(principal, rid, stopped=True)
         async with self.store.transaction(principal, rid) as conn:
             unknown = await (await conn.execute("SELECT 1 FROM agent_runtime.harness_calls WHERE run_id=%s AND status IN ('UNKNOWN','RUNNING') LIMIT 1", (rid,))).fetchone()
             if unknown:
@@ -744,7 +979,10 @@ class BusinessService:
             run.update(status="QUEUED", principal=principal.model_dump(mode="json"), error=None)
             run.pop("dsh_turn", None)
             run.pop("dsh_completed_turn", None)
+            run.pop("dsh_input_signature",None)
             run["started_at"] = None
+            if run.get("dsh_session_id"):
+                run["admission_resume"] = str(uuid4())
             await self.store.update(principal, "run", run, conn)
-        await self.runtime(rid, "resume", {"text": "继续当前任务，先核对已有业务回执和已登记成果。", "request_id": str(uuid4())})
+        await self.admission.enqueue(principal, run, origin="api")
         return {"run_id": rid, "status": "QUEUED"}

@@ -15,7 +15,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jsd.aird.kb.domain.MediaExtractionProvider;
+import com.jsd.aird.kb.api.MediaExtractionProvider;
 import com.jsd.aird.kb.domain.MediaExtractionException;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
@@ -452,7 +452,7 @@ class QwenMediaProviderTest {
     }
 
     @SuppressWarnings("unchecked")
-    private List<Map<String, Object>> cells(com.jsd.aird.kb.domain.DocumentParser.TextBlock block) {
+    private List<Map<String, Object>> cells(com.jsd.aird.kb.api.DocumentParser.TextBlock block) {
         return (List<Map<String, Object>>) block.attributes().get("cells");
     }
 

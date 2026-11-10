@@ -19,7 +19,7 @@ def issue(
     secret: str, principal: Principal, audience: str, *, run_id: str | None = None, ttl: int = 3600
 ) -> str:
     now = int(time.time())
-    payload = {**principal.model_dump(mode="json"), "aud": audience, "iat": now, "exp": now + ttl}
+    payload = {**principal.model_dump(mode="json", exclude_none=True), "aud": audience, "iat": now, "exp": now + ttl}
     if run_id:
         payload["run_id"] = run_id
     body = encode(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
@@ -40,7 +40,7 @@ def verify(secret: str, ticket: str, audience: str) -> tuple[Principal, dict]:
             raise ValueError()
         if claims["exp"] - claims["iat"] > 3600:
             raise ValueError()
-        principal = Principal.model_validate({k: claims[k] for k in Principal.model_fields})
+        principal = Principal.model_validate({k: claims[k] for k in Principal.model_fields if k in claims})
         return principal, claims
     except (ValueError, KeyError, TypeError):
         raise HTTPException(401, "Invalid or expired service delegation") from None

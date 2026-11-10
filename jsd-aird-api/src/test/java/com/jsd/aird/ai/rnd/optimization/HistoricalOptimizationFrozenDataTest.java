@@ -8,6 +8,8 @@ import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import com.jsd.aird.shared.security.Actor;
 import com.jsd.aird.shared.security.ActorContext;
+import com.jsd.aird.shared.error.ApiException;
+import com.jsd.aird.shared.error.ApiErrorCode;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentMatchers;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -16,10 +18,27 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class HistoricalOptimizationFrozenDataTest {
+    @Test void dataChangeBetweenAuthorizedReadAndSubmissionRejectsBeforeAnyRunIsCreated() {
+        var json=new ObjectMapper();var repo=mock(OptimizationRepository.class);var jdbc=mock(JdbcTemplate.class);
+        when(repo.jdbc()).thenReturn(jdbc);var datasetId=UUID.randomUUID();
+        var service=spy(new OptimizationService(repo,null,new ConfigurationHashing(json),mock(OpsAsyncFacade.class),mock(AuditLogFacade.class),mock(AuthorizationService.class),null,json,false));
+        var changed=json.createObjectNode().put("id",datasetId.toString()).put("name","隔离数据的新版本");
+        changed.putArray("rows").addObject().put("sourceExperimentId",UUID.randomUUID().toString()).put("versionId",UUID.randomUUID().toString());
+        doReturn(changed).when(service).historyDataset(datasetId);
+        var request=json.createObjectNode().put("mode","HISTORICAL_GP_BO").put("datasetId",datasetId.toString());
+        request.putObject("expectedDatasetHashes").put(datasetId.toString(),"0".repeat(64));
+        ActorContext.set(ActorContext.developmentDefault());
+        try {
+            assertThatThrownBy(()->service.submit(request,"isolated-snapshot-key"))
+                .isInstanceOfSatisfying(ApiException.class,e->assertThat(e.errorCode()).isEqualTo(ApiErrorCode.VERSION_CONFLICT));
+            verify(repo,never()).materialCatalog(any());
+        } finally { ActorContext.clear(); }
+    }
     @Test void nextRoundUsesTheSavedSamplesAndObservationsWithoutReloadingOriginalReports() throws Exception {
         var json=new ObjectMapper();var captured=new AtomicReference<JsonNode>();
         var repository=mock(OptimizationRepository.class,call->{

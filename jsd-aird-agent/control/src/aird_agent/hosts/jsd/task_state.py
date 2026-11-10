@@ -92,10 +92,13 @@ def check_delivery(run):
             raise HTTPException(422, "CURRENT_MATRIX_CHECKED_REPORT_REQUIRED")
 
 
-def bound_document_page(result, args, max_characters, total_key="total_nodes"):
+def bound_document_page(result, args, max_characters, total_key="total_nodes", delivered=None):
     """Deliver complete nodes, never count a workspace preview as reading them."""
+    from aird_agent.evidence.delivery import delivery_result, delivery_snapshot
     from aird_agent.evidence.metadata import attach_metadata
     from aird_agent.evidence.presentation import model_result
+
+    snapshot = delivery_snapshot(delivered or {}, result)
 
     metadata = result.get("document_metadata", [])
     result = {key: value for key, value in result.items() if key != "document_metadata"}
@@ -109,7 +112,8 @@ def bound_document_page(result, args, max_characters, total_key="total_nodes"):
         proposed["next_offset"] = (
             offset + len(proposed["candidates"]) if offset + len(proposed["candidates"]) < total else None
         )
-        if len(json.dumps(model_result(proposed), ensure_ascii=False, default=str)) > max_characters - 256:
+        compact, _ = delivery_result(dict(snapshot), "document_read", args, proposed)
+        if len(json.dumps(model_result(compact), ensure_ascii=False, default=str)) > max_characters - 256:
             break
         page = proposed
     if not page["candidates"] and offset < total:
@@ -120,7 +124,8 @@ def bound_document_page(result, args, max_characters, total_key="total_nodes"):
         offset + len(page["candidates"]) if offset + len(page["candidates"]) < total else None
     )
     page["trace"]["delivered_nodes"] = len(page["candidates"])
-    return attach_metadata(page, metadata, max_characters, projection=model_result)
+    return attach_metadata(page, metadata, max_characters, projection=lambda value: model_result(
+        delivery_result(dict(snapshot), "document_read", args, value)[0]))
 
 
 def fully_read(value):
@@ -129,28 +134,6 @@ def fully_read(value):
     return total > 0 and bool(ranges) and ranges[0][0] == 0 and ranges[0][1] >= total
 
 
-def source_catalog(run):
-    """Recovery handles only; canonical text and permission checks stay in the ledger."""
-    groups = {}
-    for item in run.get("evidence", {}).values():
-        source = item["source"]
-        key = tuple(source.get(field) for field in ("kind", "document_id", "publication_id", "version_id"))
-        groups.setdefault(key, []).append(item)
-    return [
-        {
-            **{
-                field: items[0]["source"].get(field)
-                for field in ("kind", "document_id", "publication_id", "version_id")
-            },
-            "title": items[0]["source"].get("title", "")[:160],
-            "evidence_count": len(items),
-            "reading_handles": [
-                {"evidence_id": item["evidence_id"], "node_offset": item.get("node_offset")}
-                for item in sorted(items, key=lambda value: len(value.get("text", "")), reverse=True)[:3]
-            ],
-        }
-        for items in list(groups.values())[-6:]
-    ]
 
 
 def read_progress(coverage):

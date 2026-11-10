@@ -16,8 +16,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.excel.WorkbookInstanceParser;
-import com.jsd.aird.tpl.application.port.OfficeStructureParser;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.OfficeStructureParser;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import org.apache.poi.ss.usermodel.BorderStyle;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
@@ -35,8 +35,9 @@ import org.springframework.stereotype.Component;
 /** Converts XLSX OOXML into a business-fidelity Univer workbook and recognition summary. */
 @Component
 public class XlsxStructureParser implements OfficeStructureParser, WorkbookInstanceParser {
-    @org.springframework.beans.factory.annotation.Autowired(required=false)
     private com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void setIsolated(com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated) { this.isolated = isolated; }
 
     static final int STRUCTURE_VERSION = WorkbookPhysicalFactsBuilder.STRUCTURE_VERSION;
     private static final double POINT_TO_PIXEL = 96d / 72d;

@@ -6,9 +6,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
-import com.jsd.aird.kb.domain.DocumentParser;
-import com.jsd.aird.kb.domain.OcrMode;
-import com.jsd.aird.kb.infrastructure.MineruImageDocumentParser;
+import com.jsd.aird.kb.api.DocumentParser;
+import com.jsd.aird.kb.api.OcrMode;
+import com.jsd.aird.kb.api.ImageDocumentParser;
 import com.jsd.aird.quality.application.port.QualityDataStore;
 import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.error.ApiErrorCode;
@@ -33,13 +33,13 @@ public class QualityDataService {
     private final FileStorageFacade storage;
     private final QualitySourceParser sourceParser;
     private final WorkbookInstanceParser workbookParser;
-    private final MineruImageDocumentParser imageParser;
+    private final ImageDocumentParser imageParser;
     private final AuditLogFacade audit;
     private final com.jsd.aird.iam.api.AuthorizationService authorization;
     public QualityDataService(QualityDataStore repository, ObjectMapper objectMapper,
                               FileStorageFacade storage, QualitySourceParser sourceParser,
                               WorkbookInstanceParser workbookParser,
-                              MineruImageDocumentParser imageParser,
+                              ImageDocumentParser imageParser,
                               AuditLogFacade audit,com.jsd.aird.iam.api.AuthorizationService authorization) {
         this.repository = repository;
         this.objectMapper = objectMapper;

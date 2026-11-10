@@ -9,12 +9,12 @@ import com.jsd.aird.mfg.ingest.application.DocumentImagePreprocessor;
 import com.jsd.aird.mfg.ingest.application.InstanceWorkbookManifest;
 import com.jsd.aird.mfg.ingest.application.WorkbookInstanceExtractor;
 import com.jsd.aird.mfg.ingest.application.port.InstanceDocumentRecognitionClient;
-import com.jsd.aird.kb.domain.DocumentParser;
-import com.jsd.aird.kb.domain.OcrMode;
-import com.jsd.aird.kb.infrastructure.MineruDocumentParser;
-import com.jsd.aird.rnd.application.ExperimentImagePdfConverter;
+import com.jsd.aird.kb.api.DocumentParser;
+import com.jsd.aird.kb.api.OcrMode;
+import com.jsd.aird.kb.api.PreciseDocumentParser;
+import com.jsd.aird.shared.office.ExperimentImagePdfConverter;
 import com.jsd.aird.mfg.upload.application.port.ProductionUploadRepository;
-import com.jsd.aird.mfg.upload.infrastructure.DocxTableWorkbookConverter;
+import com.jsd.aird.mfg.upload.application.port.DocxWorkbookConverter;
 import com.jsd.aird.ops.application.port.FileObjectRepository;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.ops.application.port.ObjectStorage;
@@ -39,7 +39,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.TemporalAccessor;
 
-import com.jsd.aird.tpl.application.StandardFieldDictionary;
+import com.jsd.aird.tpl.api.StandardFieldDictionary;
 
 @Service
 public class ProductionUploadRecognitionService {
@@ -54,12 +54,12 @@ public class ProductionUploadRecognitionService {
     private final ObjectMapper objectMapper;
     private final DocumentImagePreprocessor imagePreprocessor;
     private final InstanceDocumentRecognitionClient documentRecognitionClient;
-    private final MineruDocumentParser mineruParser;
+    private final PreciseDocumentParser mineruParser;
     private final FileStorageFacade fileStorage;
     private final TemplateOfficeNormalizationFacade officeNormalization;
     private final TemplateOfficeFacade officeStructure;
     private final ProductionUploadWorkbookBuilder workbookBuilder;
-    private final DocxTableWorkbookConverter docxTableConverter;
+    private final DocxWorkbookConverter docxTableConverter;
     private final WordTemplateValueExtractor wordValueExtractor;
     private final ProductionUploadRecognitionReviewAssembler reviewAssembler;
     private final boolean photoEnabled;
@@ -70,11 +70,11 @@ public class ProductionUploadRecognitionService {
             WorkbookInstanceExtractor extractor, JsonCanonicalizer canonicalizer, ObjectMapper objectMapper,
             DocumentImagePreprocessor imagePreprocessor,
             InstanceDocumentRecognitionClient documentRecognitionClient,
-            MineruDocumentParser mineruParser,
+            PreciseDocumentParser mineruParser,
             FileStorageFacade fileStorage, TemplateOfficeNormalizationFacade officeNormalization,
             TemplateOfficeFacade officeStructure,
             ProductionUploadWorkbookBuilder workbookBuilder,
-            DocxTableWorkbookConverter docxTableConverter,
+            DocxWorkbookConverter docxTableConverter,
             WordTemplateValueExtractor wordValueExtractor,
             ProductionUploadRecognitionReviewAssembler reviewAssembler,
             @Value("${app.production-instance-photo.enabled:false}") boolean photoEnabled
@@ -542,7 +542,7 @@ public class ProductionUploadRecognitionService {
      * when the document has no table, or when the conversion failed, so the caller
      * falls back to the rich-text document path and never fails the upload.
      */
-    private DocxTableWorkbookConverter.ConvertedWorksheet convertTablesToWorksheet(
+    private DocxWorkbookConverter.ConvertedWorksheet convertTablesToWorksheet(
             WordArtifact artifact, ObjectNode result) {
         if (artifact == null) return null;
         try {
@@ -841,15 +841,6 @@ public class ProductionUploadRecognitionService {
                 || name.endsWith(".doc");
     }
 
-    private String imageContentType(com.jsd.aird.ops.application.port.FileObjectRepository.FileObject file) {
-        var contentType = file.contentType() == null ? "" : file.contentType().toLowerCase(java.util.Locale.ROOT);
-        if (contentType.startsWith("image/")) return contentType;
-        var name = file.originalName() == null ? "" : file.originalName().toLowerCase(java.util.Locale.ROOT);
-        if (name.endsWith(".png")) return "image/png";
-        if (name.endsWith(".gif")) return "image/gif";
-        if (name.endsWith(".webp")) return "image/webp";
-        return "image/jpeg";
-    }
 
     public void fail(UUID uploadId, String message) {
         uploads.failRecognition(uploadId, message);

@@ -1,4 +1,5 @@
 package com.jsd.aird.kb.application;
+import com.jsd.aird.shared.text.LatexEvidenceProjector;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;

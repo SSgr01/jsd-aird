@@ -98,7 +98,7 @@ public class AgentHostService {
         }
         var packs = result.putArray("pack_ids").add("core");
         {
-            packs.add("files").add("literature").add("private-literature").add("retrieval");
+            packs.add("files").add("literature").add("private-literature").add("retrieval").add("business-data");
             if (projects.available()) packs.add("project-readonly");
             if (experiments != null && experiments.available()) packs.add("experiments");
         }
@@ -122,7 +122,8 @@ public class AgentHostService {
     }
 
     public ObjectNode authorizeSources(ObjectNode args) {
-        sources.authorize(args.path("sources"));
+        if ("briefing-history".equals(args.path("purpose").asText())) sources.authorizeBriefingHistory(args.path("sources"));
+        else sources.authorize(args.path("sources"));
         return mapper.createObjectNode().put("allowed", true);
     }
 

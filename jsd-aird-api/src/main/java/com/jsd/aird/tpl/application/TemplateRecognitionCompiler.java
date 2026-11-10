@@ -1,4 +1,5 @@
 package com.jsd.aird.tpl.application;
+import com.jsd.aird.tpl.api.StandardFieldDictionary;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -11,7 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.tpl.application.port.TemplateImportRepository;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 

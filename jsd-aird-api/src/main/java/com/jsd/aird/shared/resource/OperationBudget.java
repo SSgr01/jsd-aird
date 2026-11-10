@@ -17,6 +17,23 @@ public final class OperationBudget {
     }
     public static Kind kind(){var state=CURRENT.get();return state==null?Kind.WRITE:state.kind();}
     public static boolean active(){return CURRENT.get()!=null;}
+    /** Capture the absolute deadline before queueing; worker reservations are owned by that worker. */
+    public static <T> java.util.concurrent.Callable<T> propagate(java.util.concurrent.Callable<T> work){
+        var inherited=CURRENT.get();
+        return ()->{
+            if(inherited==null)return work.call();
+            var previous=CURRENT.get();
+            var resources=new java.util.ArrayList<AutoCloseable>();
+            long deadline=previous==null?inherited.deadline():Math.min(inherited.deadline(),previous.deadline());
+            var kind=previous==null||inherited.kind().ordinal()<previous.kind().ordinal()?inherited.kind():previous.kind();
+            CURRENT.set(new State(kind,deadline,resources));
+            try(var alarm=new DeadlineInterrupt(remainingMillis())){check();return work.call();}
+            finally{
+                for(int i=resources.size()-1;i>=0;i--)try{resources.get(i).close();}catch(Exception ignored){ }
+                if(previous==null)CURRENT.remove();else CURRENT.set(previous);
+            }
+        };
+    }
     public static void hold(AutoCloseable resource){var state=CURRENT.get();if(state==null)throw new IllegalStateException("No operation owns this reservation");state.resources().add(resource);}
     public static long remainingMillis(){var state=CURRENT.get();return state==null?Long.MAX_VALUE:Math.max(0,TimeUnit.NANOSECONDS.toMillis(state.deadline()-System.nanoTime()));}
     public static void check(){if(Thread.currentThread().isInterrupted() || remainingMillis()==0)throw new ApiException(ApiErrorCode.OPERATION_TIMEOUT);}

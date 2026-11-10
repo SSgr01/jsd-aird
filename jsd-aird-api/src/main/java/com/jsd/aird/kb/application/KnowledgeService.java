@@ -15,7 +15,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -28,14 +30,14 @@ import com.jsd.aird.kb.api.KnowledgeEmbeddingFacade;
 import com.jsd.aird.kb.api.KnowledgeSearchFacade;
 import com.jsd.aird.kb.application.port.KnowledgeRepository;
 import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
-import com.jsd.aird.kb.domain.DocumentParser;
+import com.jsd.aird.kb.api.DocumentParser;
 import com.jsd.aird.kb.domain.DocumentParsingFailure;
-import com.jsd.aird.kb.domain.FileSafetyScanner;
-import com.jsd.aird.kb.domain.MediaExtractionProvider;
+import com.jsd.aird.kb.api.FileSafetyScanner;
+import com.jsd.aird.kb.api.MediaExtractionProvider;
 import com.jsd.aird.kb.domain.MediaExtractionException;
-import com.jsd.aird.kb.domain.OcrMode;
+import com.jsd.aird.kb.api.OcrMode;
 import com.jsd.aird.kb.domain.LexicalAnalyzer;
-import com.jsd.aird.kb.infrastructure.MineruImageDocumentParser;
+import com.jsd.aird.kb.api.ImageDocumentParser;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
@@ -44,6 +46,7 @@ import com.jsd.aird.shared.api.AllowedActions;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
+import com.jsd.aird.shared.resource.OperationBudget;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -58,6 +61,13 @@ import org.springframework.util.StringUtils;
 public class KnowledgeService implements KnowledgeSearchFacade {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeService.class);
+
+    private org.springframework.transaction.support.TransactionTemplate publicationTransaction;
+
+    @Autowired
+    void publicationTransaction(org.springframework.transaction.PlatformTransactionManager manager) {
+        this.publicationTransaction = new org.springframework.transaction.support.TransactionTemplate(manager);
+    }
 
     private org.springframework.context.ApplicationEventPublisher bibliographyEvents;
     @Autowired
@@ -82,6 +92,10 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     private final SystemParsingPolicy systemParsingPolicy;
     private final ProjectResourceFacade projectResources;
     private final Executor retrievalExecutor;
+    @org.springframework.beans.factory.annotation.Value("${app.ai.retrieval.recall-timeout-ms:20000}")
+    private long recallTimeoutMs = 20000;
+    @org.springframework.beans.factory.annotation.Value("${app.ai.retrieval.channel-timeout-ms:10000}")
+    private long channelTimeoutMs = 10000;
 
     @Autowired
     public KnowledgeService(
@@ -564,40 +578,44 @@ public class KnowledgeService implements KnowledgeSearchFacade {
 
     @Override
     public KnowledgeSearchFacade.RecallResult recall(KnowledgeSearchFacade.SearchRequest request) {
+        try (var budget = OperationBudget.open(OperationBudget.Kind.READ, Math.max(100, recallTimeoutMs))) {
+            return recallWithinBudget(request);
+        }
+    }
+
+    private KnowledgeSearchFacade.RecallResult recallWithinBudget(KnowledgeSearchFacade.SearchRequest request) {
         if (!StringUtils.hasText(request.query()) || request.allowedDocumentIds()!=null&&request.allowedDocumentIds().isEmpty()) return new KnowledgeSearchFacade.RecallResult(List.of(),
             new KnowledgeSearchFacade.RetrievalTrace("RAW_CHANNELS",0,0,0,List.of("EMPTY_QUERY_OR_AUTHORIZED_SCOPE")),List.of());
         var organizationId = request.organizationId();
         var variants = searchVariants(request);
         var vectorQueries = vectorQueries(request);
         var phrases = searchPhrases(request);
-        CompletableFuture<ChannelResult> bm25Future;
-        CompletableFuture<ChannelResult> vectorFuture;
-        if (!request.options().bm25()) bm25Future = CompletableFuture.completedFuture(new ChannelResult(List.of(), List.of(new KnowledgeSearchFacade.QueryTrace(request.query(), "BM25", "SKIPPED_CONFIG", 0, 0, "", List.of())), List.of(), Map.of()));
-        else try { bm25Future = CompletableFuture.supplyAsync(() -> bm25Channel(organizationId,variants,request.aiOnly(),request.categoryIds(),request.allowedDocumentIds()),retrievalExecutor); }
-        catch (java.util.concurrent.RejectedExecutionException error) { bm25Future = CompletableFuture.completedFuture(new ChannelResult(List.of(),List.of(),List.of("BM25_REJECTED"),Map.of())); }
-        if (!request.options().vector()) vectorFuture = CompletableFuture.completedFuture(new ChannelResult(List.of(), List.of(new KnowledgeSearchFacade.QueryTrace(request.query(), "VECTOR", "SKIPPED_CONFIG", 0, 0, "", List.of())), List.of(), Map.of()));
-        else try { vectorFuture = CompletableFuture.supplyAsync(() -> vectorChannel(organizationId,vectorQueries,request.aiOnly(),request.categoryIds(),request.allowedDocumentIds()),retrievalExecutor); }
-        catch (java.util.concurrent.RejectedExecutionException error) { vectorFuture = CompletableFuture.completedFuture(new ChannelResult(List.of(),List.of(),List.of("VECTOR_REJECTED"),Map.of())); }
-        var bm25 = bm25Future.join(); var vector = vectorFuture.join();
+        var bm25Future = channelTask("BM25", request.options().bm25(), () ->
+            bm25Channel(organizationId,variants,request.aiOnly(),request.categoryIds(),request.allowedDocumentIds()));
+        var vectorFuture = channelTask("VECTOR", request.options().vector(), () ->
+            vectorChannel(organizationId,vectorQueries,request.aiOnly(),request.categoryIds(),request.allowedDocumentIds()));
+        ChannelResult bm25, vector;
+        try { bm25 = awaitChannel(bm25Future, "BM25"); vector = awaitChannel(vectorFuture, "VECTOR"); }
+        finally { bm25Future.task().cancel(true); vectorFuture.task().cancel(true); }
         var fallbacks = new ArrayList<String>(); fallbacks.addAll(bm25.fallbacks()); fallbacks.addAll(vector.fallbacks());
         var traces = new ArrayList<KnowledgeSearchFacade.QueryTrace>(); traces.addAll(bm25.traces()); traces.addAll(vector.traces());
         var timings = new LinkedHashMap<String,Long>(); timings.putAll(bm25.timings()); timings.putAll(vector.timings());
         var ids = new LinkedHashSet<UUID>(); bm25.ranks().forEach(r->ids.add(r.chunkId())); vector.ranks().forEach(r->ids.add(r.chunkId()));
         var rows = new LinkedHashMap<UUID, KnowledgeRepository.SearchRow>();
-        try { repository.loadSearchRows(organizationId,List.copyOf(ids)).forEach(row->rows.put(row.chunkId(),row)); }
+        try { OperationBudget.check(); repository.loadSearchRows(organizationId,List.copyOf(ids)).forEach(row->rows.put(row.chunkId(),row)); }
         catch(RuntimeException error) { fallbacks.add("CHUNK_HYDRATION_ERROR"); }
         var channels = new ArrayList<KnowledgeSearchFacade.RecallChannel>();
         var facts = new LinkedHashMap<String, Set<UUID>>();
         rawChannels(organizationId,"BM25",variants,bm25.ranks(),rows,channels,facts);
         rawChannels(organizationId,"VECTOR",vectorQueries,vector.ranks(),rows,channels,facts);
         int phraseCount = 0;
-        if(request.options().bm25() && bm25.ranks().isEmpty()) {
+        if(request.options().bm25() && bm25.ranks().isEmpty() && bm25.fallbacks().stream().noneMatch(f->f.contains("TIMEOUT")||f.contains("REJECTED")) && hasBudget()) {
             fallbacks.add("BM25_EMPTY");
             var fallback = phrases.isEmpty() ? List.of(request.originalQuery()) : phrases;
             long started = System.nanoTime();
             try {
                 var values = request.allowedDocumentIds()!=null
-                    ? fallback.stream().flatMap(q->repository.fullTextSearch(organizationId,q,request.aiOnly(),request.categoryIds(),request.allowedDocumentIds(),48).stream()).distinct().limit(48).toList()
+                    ? fallback.stream().takeWhile(q->hasBudget()).flatMap(q->{OperationBudget.check();return repository.fullTextSearch(organizationId,q,request.aiOnly(),request.categoryIds(),request.allowedDocumentIds(),48).stream();}).distinct().limit(48).toList()
                     : phrases.isEmpty() ? repository.fullTextSearch(organizationId,fallback.getFirst(),request.aiOnly(),request.categoryIds(),48)
                     : repository.phraseSearch(organizationId,fallback,request.aiOnly(),request.categoryIds(),48);
                 phaseChannel(organizationId,"PHRASE",String.join(" | ",fallback),1.2,values,channels);
@@ -608,7 +626,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             }
             timings.put("phraseDbMs",elapsedMs(started));
         }
-        if (request.options().metadata()) {
+        if (request.options().metadata() && hasBudget()) {
         var metadataQueries = new LinkedHashSet<String>();
         metadataQueries.addAll(discoveryQueries(request.originalQuery()));
         metadataQueries.addAll(discoveryQueries(request.query()));
@@ -628,6 +646,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         timings.put("metadataSearchMs",elapsedMs(started));
         started = System.nanoTime();
         try {
+            OperationBudget.check();
             var values = repository.searchPublishedTags(organizationId,List.copyOf(metadataQueries),request.aiOnly(),request.categoryIds(),request.allowedDocumentIds(),request.options().metadataLimit());
             phaseChannel(organizationId,"TAG",String.join(" | ",metadataQueries),3,values,channels);
             values.forEach(row->ids.add(row.chunkId()));
@@ -636,12 +655,46 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             fallbacks.add("DOCUMENT_TAG_ERROR");traces.add(queryTrace(String.join(" | ",metadataQueries),"DOCUMENT_TAG","FAILED",List.of(),started,safeTraceError(error)));
         }
         timings.put("tagSearchMs",elapsedMs(started));
-        } else traces.add(new KnowledgeSearchFacade.QueryTrace(request.query(), "DOCUMENT_METADATA", "SKIPPED_CONFIG", 0, 0, "", List.of()));
+        } else traces.add(new KnowledgeSearchFacade.QueryTrace(request.query(), "DOCUMENT_METADATA", hasBudget()?"SKIPPED_CONFIG":"SKIPPED_DEADLINE", 0, 0, "", List.of()));
+        if (!hasBudget()) fallbacks.add("RETRIEVAL_DEADLINE_EXCEEDED");
         var factCandidates = request.requiredFacts().stream().map(f->new KnowledgeSearchFacade.FactCandidateSet(f.label(),f.retrievalQuery(),List.copyOf(facts.getOrDefault(f.retrievalQuery(),Set.of())))).toList();
         return new KnowledgeSearchFacade.RecallResult(channels,new KnowledgeSearchFacade.RetrievalTrace("RAW_BM25_VECTOR_PHRASE_METADATA",
             (int)bm25.ranks().stream().map(KnowledgeRepository.RankedChunk::chunkId).distinct().count(),
             (int)vector.ranks().stream().map(KnowledgeRepository.RankedChunk::chunkId).distinct().count(),ids.size(),phraseCount,
             fallbacks.stream().distinct().toList(),traces,variants.size(),timings),factCandidates);
+    }
+
+    private boolean hasBudget() { return !Thread.currentThread().isInterrupted() && OperationBudget.remainingMillis() > 0; }
+
+    private record PendingChannel(FutureTask<ChannelResult> task, long deadline) { }
+
+    private PendingChannel channelTask(String name, boolean enabled, Callable<ChannelResult> work) {
+        try (var budget = OperationBudget.open(OperationBudget.Kind.READ, Math.max(50, channelTimeoutMs))) {
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(OperationBudget.remainingMillis());
+            var task = new FutureTask<>(OperationBudget.propagate(enabled ? work : () -> new ChannelResult(List.of(),
+                List.of(new KnowledgeSearchFacade.QueryTrace("", name, "SKIPPED_CONFIG", 0, 0, "", List.of())), List.of(), Map.of())));
+            try { if (enabled) retrievalExecutor.execute(task); else task.run(); }
+            catch (java.util.concurrent.RejectedExecutionException error) {
+                task = new FutureTask<>(() -> failedChannel(name, "REJECTED")); task.run();
+            }
+            return new PendingChannel(task, deadline);
+        }
+    }
+
+    private ChannelResult awaitChannel(PendingChannel pending, String name) {
+        try { return pending.task().get(Math.max(0, pending.deadline()-System.nanoTime()), TimeUnit.NANOSECONDS); }
+        catch (java.util.concurrent.TimeoutException error) { pending.task().cancel(true); return failedChannel(name, "TIMEOUT"); }
+        catch (InterruptedException error) { pending.task().cancel(true); Thread.currentThread().interrupt(); return failedChannel(name, "TIMEOUT"); }
+        catch (java.util.concurrent.ExecutionException error) {
+            // The worker's deadline alarm may finish the Future before get() times out.
+            return failedChannel(name, com.jsd.aird.shared.resource.ResourceFailures.code(error)==ApiErrorCode.OPERATION_TIMEOUT
+                ? "TIMEOUT" : "ERROR");
+        }
+    }
+
+    private ChannelResult failedChannel(String name, String reason) {
+        return new ChannelResult(List.of(), List.of(new KnowledgeSearchFacade.QueryTrace("",name,reason,0,0,"",List.of())),
+            List.of(name + "_" + reason), Map.of());
     }
 
     private void rawChannels(UUID org, String channel, List<String> queries, List<KnowledgeRepository.RankedChunk> ranked,
@@ -667,6 +720,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var queries = new ArrayList<KnowledgeRepository.AnalyzedQuery>();
         try {
             for (var ordinal = 0; ordinal < variants.size(); ordinal++) {
+                OperationBudget.check();
                 var terms = lexicalAnalyzer.analyzeCompatibleQuery(variants.get(ordinal)).stream()
                         .flatMap(family -> family.alternatives().stream().map(term ->
                                 new KnowledgeRepository.AnalyzedTerm(family.ordinal(), term.analyzerVersion(), term.term())))
@@ -682,8 +736,9 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var analyzeMs = elapsedMs(analyzeStarted);
         var dbStarted = System.nanoTime();
         try {
+            OperationBudget.check();
             var ranks = allowed==null ? repository.batchBm25Rank(organizationId, queries, aiOnly, categoryIds, 48)
-                : scopedBm25(organizationId,queries,aiOnly,categoryIds,allowed);
+                : repository.batchBm25Rank(organizationId,queries,aiOnly,categoryIds,allowed,48);
             var dbMs = elapsedMs(dbStarted);
             return new ChannelResult(ranks, rankTraces("BM25", variants, ranks, dbMs, "SUCCEEDED"), List.of(),
                     Map.of("lexicalAnalyzeMs", analyzeMs, "bm25DbMs", dbMs));
@@ -691,7 +746,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             var dbMs = elapsedMs(dbStarted);
             log.warn("Batch BM25 search failed; continuing with other channels", exception);
             return new ChannelResult(List.of(), rankTraces("BM25", variants, List.of(), dbMs, "FAILED"),
-                    List.of("BM25_ERROR"), Map.of("lexicalAnalyzeMs", analyzeMs, "bm25DbMs", dbMs));
+                    List.of(com.jsd.aird.shared.resource.ResourceFailures.code(exception)==ApiErrorCode.OPERATION_TIMEOUT?"BM25_TIMEOUT":"BM25_ERROR"), Map.of("lexicalAnalyzeMs", analyzeMs, "bm25DbMs", dbMs));
         }
     }
 
@@ -701,6 +756,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         List<java.util.Optional<String>> vectors;
         try {
             var embedding = embeddings.getIfAvailable();
+            OperationBudget.check();
             vectors = embedding == null ? List.of() : embedding.embedVectors(queryTexts);
             if (vectors == null) vectors = List.of();
         } catch (RuntimeException exception) {
@@ -729,37 +785,21 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         }
         var dbStarted = System.nanoTime();
         try {
+            OperationBudget.check();
             var ranks = allowed==null ? repository.batchVectorRank(organizationId, vectorQueries, aiOnly, categoryIds, 48, embeddingDimension)
-                : scopedVector(organizationId,vectorQueries,aiOnly,categoryIds,allowed);
+                : repository.batchVectorRank(organizationId,vectorQueries,aiOnly,categoryIds,allowed,48,embeddingDimension);
             var dbMs = elapsedMs(dbStarted);
             traces.addAll(rankTraces("VECTOR", queryTexts, ranks, dbMs, "SUCCEEDED"));
             return new ChannelResult(ranks, List.copyOf(traces), List.copyOf(fallbacks),
                     Map.of("embeddingMs", embeddingMs, "vectorDbMs", dbMs));
         } catch (RuntimeException exception) {
             var dbMs = elapsedMs(dbStarted);
-            fallbacks.add("VECTOR_ERROR");
+            fallbacks.add(com.jsd.aird.shared.resource.ResourceFailures.code(exception)==ApiErrorCode.OPERATION_TIMEOUT?"VECTOR_TIMEOUT":"VECTOR_ERROR");
             traces.addAll(rankTraces("VECTOR", queryTexts, List.of(), dbMs, "FAILED"));
             log.warn("Batch vector search failed; continuing with lexical retrieval", exception);
             return new ChannelResult(List.of(), List.copyOf(traces), List.copyOf(fallbacks),
                     Map.of("embeddingMs", embeddingMs, "vectorDbMs", dbMs));
         }
-    }
-
-    private List<KnowledgeRepository.RankedChunk> scopedBm25(UUID org,List<KnowledgeRepository.AnalyzedQuery> queries,boolean aiOnly,List<UUID> categories,Set<UUID> allowed) {
-        var result=new ArrayList<KnowledgeRepository.RankedChunk>();
-        for(var query:queries) {
-            var rows=repository.bm25Search(org,query.terms(),aiOnly,categories,allowed,48);
-            for(int i=0;i<rows.size();i++)result.add(new KnowledgeRepository.RankedChunk(query.ordinal(),rows.get(i).chunkId(),rows.get(i).score(),i+1));
-        }
-        return result;
-    }
-    private List<KnowledgeRepository.RankedChunk> scopedVector(UUID org,List<KnowledgeRepository.VectorQuery> queries,boolean aiOnly,List<UUID> categories,Set<UUID> allowed) {
-        var result=new ArrayList<KnowledgeRepository.RankedChunk>();
-        for(var query:queries) {
-            var rows=repository.vectorSearch(org,query.vector(),aiOnly,categories,allowed,48,embeddingDimension);
-            for(int i=0;i<rows.size();i++)result.add(new KnowledgeRepository.RankedChunk(query.ordinal(),rows.get(i).chunkId(),rows.get(i).score(),i+1));
-        }
-        return result;
     }
 
     private List<String> searchVariants(KnowledgeSearchFacade.SearchRequest request) {
@@ -851,7 +891,6 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         }
     }
 
-    @Transactional
     public KnowledgeGovernanceRepository.PublicationRow buildAndPublish(UUID organizationId, UUID actorId,
                                                                          UUID documentId, UUID versionId,
                                                                          UUID reviewRevisionId, int expectedLockVersion) {
@@ -859,7 +898,6 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 expectedLockVersion, false);
     }
 
-    @Transactional
     public KnowledgeGovernanceRepository.PublicationRow buildAndPublish(UUID organizationId, UUID actorId,
                                                                          UUID documentId, UUID versionId,
                                                                          UUID reviewRevisionId, int expectedLockVersion,
@@ -873,6 +911,20 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var prepared = prepareIndex(organizationId, documentId, versionId, reviewRevisionId, review.title(),
                 review.reviewRevision().confirmedDocument(), review.reviewRevision().excludedReviewNodeIds(),
                 review.sourceNodes());
+
+        // Embedding calls must finish before opening a database transaction. A slow
+        // remote provider otherwise leaves the connection idle until PostgreSQL kills it.
+        if (publicationTransaction != null) {
+            return publicationTransaction.execute(ignored -> publishPrepared(organizationId, actorId,
+                    documentId, versionId, reviewRevisionId, expectedLockVersion, authorizeAi, prepared));
+        }
+        return publishPrepared(organizationId, actorId, documentId, versionId,
+                reviewRevisionId, expectedLockVersion, authorizeAi, prepared);
+    }
+
+    private KnowledgeGovernanceRepository.PublicationRow publishPrepared(UUID organizationId, UUID actorId,
+            UUID documentId, UUID versionId, UUID reviewRevisionId, int expectedLockVersion,
+            boolean authorizeAi, PreparedIndex prepared) {
 
         repository.startProcessingStep(organizationId, documentId, versionId, reviewRevisionId,
                 "CHUNK", "block-aware-chunker", lexicalAnalyzer.version(), prepared.textHash());
@@ -1100,7 +1152,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             }
             repository.updateScanStatus(documentId, "SAFE");
             repository.finishProcessingStep(organizationId, versionId, null, "SCAN", "SUCCEEDED", version.sha256(), null);
-            var imageSource = MineruImageDocumentParser.isImageSource(version.originalName(), version.contentType());
+            var imageSource = ImageDocumentParser.isImageSource(version.originalName(), version.contentType());
             var mediaProvider = imageSource ? null : mediaProviders.stream()
                     .filter(candidate -> candidate.supports(version.originalName(), version.contentType()))
                     .sorted((left, right) -> Boolean.compare(right.isConfigured(), left.isConfigured()))

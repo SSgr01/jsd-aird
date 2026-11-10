@@ -106,6 +106,9 @@ def retryable_failure(run):
         code
         in {
             "DSH_RUNTIME_UNAVAILABLE",
+            "DSH_EXECUTION_INTERRUPTED",
+            "RUN_CAPACITY_REACHED",
+            "TOOL_ACTIVATION_FAILED",
             "RUNTIME_EXECUTION_FAILED",
             "MODEL_DID_NOT_COMPLETE",
             "CONTEXT_COMPACTION_FAILED",
@@ -148,8 +151,15 @@ class HarnessSettings(BaseSettings):
     max_tool_calls: int = Field(default=128, ge=1, le=512)
     max_total_tokens: int = Field(default=2000000, ge=1024)
     max_active_seconds: int = Field(default=1800, ge=10)
+    stage_timing: bool = False
+    citation_repair_model_calls: int = Field(default=2, ge=1, le=2)
+    citation_repair_tool_calls: int = Field(default=2, ge=0, le=2)
     parallelism: int = Field(default=4, ge=1, le=8)
     max_running_runs: int = Field(default=4, ge=1, le=32)
+    max_running_runs_per_user: int = Field(default=2, ge=1, le=32)
+    max_running_runs_per_organization: int | None = Field(default=None, ge=1, le=32)
+    admission_heartbeat_seconds: int = Field(default=10, ge=1, le=60)
+    admission_lease_seconds: int = Field(default=60, ge=10, le=600)
     workspace_retention_days: int = Field(default=7, ge=1, le=90)
     sandbox_enabled: bool = False
     sandbox_url: str = "http://127.0.0.1:8094"
@@ -157,11 +167,13 @@ class HarnessSettings(BaseSettings):
     sandbox_image: str = "jsd-aird-analysis:1"
     sandbox_memory: str = "1g"
     sandbox_cpus: str = "1"
-    sandbox_timeout_seconds: int = Field(default=120, ge=1, le=600)
+    sandbox_timeout_seconds: int = Field(default=600, ge=1, le=600)
     report_review_timeout_seconds: int = Field(default=120, ge=10, le=600)
 
     @model_validator(mode="after")
     def boundaries(self):
+        if self.admission_lease_seconds < self.admission_heartbeat_seconds * 3:
+            raise ValueError('Admission lease must allow at least three heartbeats')
         from urllib.parse import urlsplit
 
         if not urlsplit(self.database_url.get_secret_value()).path.strip("/").startswith("jsd_aird_agents"):

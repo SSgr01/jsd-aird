@@ -5,10 +5,6 @@ import math
 
 from fastapi import HTTPException
 
-from aird_agent.evidence.citations import normalize_citations as normalize_citations
-from aird_agent.evidence.citations import validate_report as validate_report
-
-
 class RCS:
     def __init__(self, settings):
         self.settings = settings

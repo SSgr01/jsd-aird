@@ -1,13 +1,13 @@
 package com.jsd.aird.mdm.infrastructure.persistence;
 import com.jsd.aird.mdm.application.query.ProjectTaskQuery;
 import com.jsd.aird.mdm.domain.model.*;
-import com.jsd.aird.mdm.infrastructure.model.ProjectTaskSummaryRow;
+import com.jsd.aird.mdm.application.query.ProjectTaskSummaryRow;
 import org.apache.ibatis.annotations.*;
 import java.time.LocalDate;
 import java.util.*;
 
 @Mapper
-public interface ProjectWorkMapper {
+public interface ProjectWorkMapper extends com.jsd.aird.mdm.application.port.ProjectWorkRepository {
  @Select("SELECT t.id,t.task_code taskCode,t.project_id projectId,t.stage_id stageId,t.name,t.owner,t.priority,t.planned_date plannedDate,t.status,"+
   "(SELECT count(*) FROM rnd.experiment e WHERE e.task_id=t.id AND e.deleted=false) experimentCount,t.version,t.created_at createdAt,t.updated_at updatedAt " +
   "FROM mdm.project_task t WHERE t.stage_id=#{stageId} AND t.deleted=false ORDER BY t.created_at")

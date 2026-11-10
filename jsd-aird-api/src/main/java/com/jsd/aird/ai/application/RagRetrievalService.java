@@ -194,11 +194,11 @@ public class RagRetrievalService {
             }
         }
         var byHit = new LinkedHashMap<UUID, DataHitAccumulator>();
-        var searchTasks = new ArrayList<CompletableFuture<DataSearchResponse>>();
+        var searchTasks = new ArrayList<com.jsd.aird.shared.resource.BudgetedTask<DataSearchResponse>>();
         for (var query : queries) {
             queryCount++;
             try {
-                searchTasks.add(CompletableFuture.supplyAsync(() -> {
+                searchTasks.add(com.jsd.aird.shared.resource.BudgetedTask.submit(dataSearchExecutor, 10000, () -> {
                     var queryStarted = System.nanoTime();
                     try {
                         var found = legacyFacadeCalls
@@ -210,7 +210,7 @@ public class RagRetrievalService {
                     } catch (RuntimeException exception) {
                         return new DataSearchResponse(query, List.of(), exception, elapsedMs(queryStarted));
                     }
-                }, dataSearchExecutor));
+                }));
             } catch (RuntimeException exception) {
                 failures++;
                 log.warn("assistant_data_row_lookup_failed organizationId={} query={} categoryIds={} exceptionType={} detail={}",
@@ -221,7 +221,7 @@ public class RagRetrievalService {
         var maxSearchElapsedMs = 0L;
         for (var searchTask : searchTasks) {
             try {
-                var response = searchTask.join();
+                var response = searchTask.await();
                 searchElapsedMs += response.elapsedMs();
                 maxSearchElapsedMs = Math.max(maxSearchElapsedMs, response.elapsedMs());
                 if (response.error() != null) {

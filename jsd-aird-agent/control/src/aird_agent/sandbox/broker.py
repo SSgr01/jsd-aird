@@ -2,10 +2,11 @@
 
 import asyncio
 import base64
-import contextlib
 import hmac
 import json
 import shutil
+import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 from uuid import UUID
@@ -15,7 +16,9 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from aird_agent.core.workspace import Workspace
+from aird_agent.sandbox.containers import LABEL, ContainerPool, stage_inputs
 from aird_agent.sandbox.jobs import BrokerJobs, TransferFile
+from aird_agent.sandbox.streams import ExecutionStreams
 
 
 class BrokerSettings(BaseSettings):
@@ -25,8 +28,11 @@ class BrokerSettings(BaseSettings):
     image: str = "jsd-aird-analysis:1"
     memory: str = "1g"
     cpus: str = "1"
-    timeout_seconds: int = Field(default=120, ge=1, le=600)
+    timeout_seconds: int = Field(default=600, ge=1, le=600)
     parallelism: int = Field(default=4, ge=1, le=8)
+    startup_seconds: int = Field(default=45, ge=1, le=120)
+    cleanup_seconds: int = Field(default=10, ge=1, le=30)
+    output_bytes_per_stream: int = Field(default=8 * 1024 * 1024, ge=65536, le=64 * 1024 * 1024)
     oci_runtime: str | None = None
 
 
@@ -37,6 +43,7 @@ class Execution(BaseModel):
     execution_id: str = Field(pattern="^[a-f0-9]{32}$")
     script: str = Field(max_length=65536)
     language: Literal["python", "shell"]
+    timeout_ms: int | None = Field(default=None, ge=1, le=600000)
 
 
 class TransferExecution(Execution):
@@ -46,8 +53,15 @@ class TransferExecution(Execution):
 class ContainerRunner:
     def __init__(self, settings):
         self.settings = settings
+        self.pool = ContainerPool(settings, self.command)
 
-    def command(self, workspace, script, language, execution_id):
+    async def start(self):
+        await self.pool.start()
+
+    async def close(self):
+        await self.pool.close()
+
+    def command(self, workspace, script, language, execution_id, *, prepared=False):
         if not shutil.which("docker"):
             raise HTTPException(503, "SANDBOX_UNAVAILABLE: no host-execution fallback")
         if language not in {"python", "shell"} or len(script.encode()) > 65536:
@@ -55,9 +69,11 @@ class ContainerRunner:
         command = [
             "docker",
             "run",
+            "--interactive",
             "--rm",
             "--name",
             "jsd-analysis-" + execution_id,
+            "--label", LABEL + "=" + self.pool.scope,
             "--network=none",
             "--read-only",
             "--user=10001:10001",
@@ -80,32 +96,51 @@ class ContainerRunner:
                 f"type=bind,source={workspace.root / source},target=/work/{target},readonly",
             ]
         payload = base64.b64encode(json.dumps({"script": script, "language": language}).encode()).decode()
-        return command + ["--workdir=/work", self.settings.image, payload]
+        return command + ["--workdir=/work", self.settings.image, "--stdin" if prepared else payload]
 
     async def execute(self, workspace, request):
-        command = self.command(workspace, request.script, request.language, request.execution_id)
-        process = await asyncio.create_subprocess_exec(
-            *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-
-        async def bounded(stream, maximum):
-            output = bytearray()
-            while chunk := await stream.read(8192):
-                output.extend(chunk)
-                if len(output) > maximum:
-                    raise HTTPException(413, "Sandbox transport output limit exceeded")
-            return bytes(output)
-
+        if len(request.script.encode()) > 65536:
+            raise HTTPException(400, "Invalid script")
+        slot = None
+        started = time.monotonic()
+        timeout = min(self.settings.timeout_seconds, (request.timeout_ms or 600000) / 1000)
+        streams = ExecutionStreams(workspace.root / ".streams", self.settings.output_bytes_per_stream) if workspace else None
         try:
-            async with asyncio.timeout(self.settings.timeout_seconds):
-                stdout, _ = await asyncio.gather(
-                    bounded(process.stdout, 16 * 1024 * 1024), bounded(process.stderr, 65536)
-                )
+            async with asyncio.timeout(timeout):
+                slot = await self.pool.acquire()
+                acquired = time.monotonic()
+                # A cancelled to_thread future does not stop its thread. Finish the
+                # bounded copy before releasing (and deleting) its staging tree.
+                staging = asyncio.create_task(asyncio.to_thread(stage_inputs, workspace, slot.workspace))
+                try:
+                    await asyncio.shield(staging)
+                except asyncio.CancelledError:
+                    await staging
+                    raise
+                staged = time.monotonic()
+                process = slot.process
+                process.stdin.write(json.dumps({"script": request.script, "language": request.language}).encode() + b"\n")
+                await process.stdin.drain()
+                process.stdin.close()
+                result = None
+                while frame := await process.stdout.readline():
+                    if len(frame) > 16 * 1024 * 1024 or result is not None:
+                        raise ValueError("Invalid sandbox frame")
+                    event = json.loads(frame)
+                    if event.get("event") == "output" and event.get("stream") in {"stdout", "stderr"}:
+                        content = base64.b64decode(event["base64"], validate=True)
+                        if len(content) > 16384:
+                            raise ValueError("Invalid output frame")
+                        streams.append(event["stream"], content)
+                    elif event.get("event") == "result":
+                        result = event["result"]
+                    else:
+                        raise ValueError("Invalid sandbox event")
+                await slot.stderr
                 code = await process.wait()
             if code != 0:
                 raise HTTPException(503, "SANDBOX_CONTAINER_FAILED")
-            result = json.loads(stdout)
-            if not isinstance(result.get("exit_code"), int) or not isinstance(result.get("output"), str):
+            if not isinstance(result, dict) or not isinstance(result.get("exit_code"), int):
                 raise ValueError()
             artifacts, total = [], 0
             if not isinstance(result.get("files"), list) or len(result["files"]) > 50:
@@ -122,7 +157,7 @@ class ContainerRunner:
                 decoded.append((path, content))
             for path, content in decoded:
                 artifacts.append(workspace.write_bytes(path, content))
-            text = result["output"][:12000]
+            text, truncated = streams.summary()
             log = workspace.write(
                 f"output/execution-{request.execution_id}.json",
                 json.dumps({"exit_code": result["exit_code"], "output": text}, ensure_ascii=False),
@@ -130,36 +165,39 @@ class ContainerRunner:
             return {
                 "exit_code": result["exit_code"],
                 "output": text,
-                "truncated": result.get("truncated", False),
+                "truncated": truncated,
+                "streams": {name: streams.state(name) for name in ("stdout", "stderr")},
                 "artifacts": artifacts,
                 "log": log,
+                "timings": {"container_startup_seconds": round(slot.startup_seconds, 3),
+                    "ready_wait_seconds": round(acquired-started, 3), "input_stage_seconds": round(staged-acquired, 3),
+                    "run_and_export_seconds": round(time.monotonic()-staged, 3), **result.get("timings", {})},
             }
         except (ValueError, KeyError, TypeError):
             raise HTTPException(502, "Invalid sandbox result") from None
         except TimeoutError:
-            raise HTTPException(504, "SANDBOX_TIMEOUT") from None
+            raise HTTPException(504, "SANDBOX_TIMEOUT" if slot else "SANDBOX_STARTUP_TIMEOUT") from None
         finally:
-            if process.returncode is None:
-                cleanup = await asyncio.create_subprocess_exec(
-                    "docker",
-                    "kill",
-                    "jsd-analysis-" + request.execution_id,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                with contextlib.suppress(TimeoutError):
-                    async with asyncio.timeout(5):
-                        await cleanup.wait()
-                with contextlib.suppress(ProcessLookupError):
-                    process.kill()
-                await process.wait()
+            if slot and not await asyncio.shield(self.pool.release(slot)):
+                raise HTTPException(503, "SANDBOX_CLEANUP_PENDING")
 
 
 def create_broker(settings=None):
     settings = settings or BrokerSettings()
-    app = FastAPI(title="JSD isolated sandbox broker")
     runner = ContainerRunner(settings)
     jobs = BrokerJobs(settings.workspace_root.resolve() / "executions", runner, settings.parallelism)
+    @asynccontextmanager
+    async def lifespan(app):
+        if hasattr(runner, "start"):
+            await runner.start()
+        try:
+            yield
+        finally:
+            await jobs.close()
+            if hasattr(runner, "close"):
+                await runner.close()
+    app = FastAPI(title="JSD isolated sandbox broker", lifespan=lifespan)
+    app.state.jobs, app.state.runner = jobs, runner
     limit = asyncio.Semaphore(settings.parallelism)
 
     def authorize(authorization):
@@ -171,7 +209,8 @@ def create_broker(settings=None):
     @app.get("/health")
     async def health(authorization: str = Header(default="")):
         authorize(authorization)
-        return {"available": bool(shutil.which("docker")), "host_execution": False}
+        ready = runner.pool.ready.qsize() if hasattr(runner, "pool") else 0
+        return {"available": ready > 0, "ready": ready, "host_execution": False}
 
     @app.post("/execute")
     async def execute(request: Execution, authorization: str = Header(default="")):
@@ -191,6 +230,12 @@ def create_broker(settings=None):
     async def status(execution_id: str, authorization: str = Header(default="")):
         authorize(authorization)
         return jobs.get(execution_id)
+
+    @app.get("/executions/{execution_id}/output")
+    async def output(execution_id: str, stdout_offset: int = 0, stderr_offset: int = 0,
+                     authorization: str = Header(default="")):
+        authorize(authorization)
+        return jobs.output(execution_id, stdout_offset, stderr_offset)
 
     @app.delete("/executions/{execution_id}")
     async def cancel(execution_id: str, authorization: str = Header(default="")):

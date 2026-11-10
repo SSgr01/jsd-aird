@@ -15,7 +15,6 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,9 +45,7 @@ public class OpenAiCompatibleEmbeddingFacade implements KnowledgeEmbeddingFacade
         this.model = model == null ? "" : model.strip();
         this.dimension = dimension;
         this.springModels = springModels;
-        var factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(timeout);
-        factory.setReadTimeout(timeout);
+        var factory = new BudgetHttpRequestFactory(timeout);
         this.client = RestClient.builder().requestFactory(factory).build();
     }
 

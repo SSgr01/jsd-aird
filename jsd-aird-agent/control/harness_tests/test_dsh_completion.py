@@ -10,6 +10,30 @@ from aird_agent.hosts.jsd.bindings import JsdBindings
 from aird_agent.core.business_service import BusinessService
 
 
+async def test_completion_rechecks_generation_after_authorization(store, principal, settings):
+    from fastapi import HTTPException
+
+    async with store.transaction(principal, 'completion-generation') as conn:
+        run = await store.create(principal, 'run', {
+            'status':'RUNNING', 'epoch':1, 'dsh_session_id':'completion-generation', 'dsh_turn':1,
+            'evidence':{}, 'last_text':'answer', 'active_seconds':0, 'started_at':None,
+        }, conn)
+
+    async def recover(*args):
+        async with store.transaction(principal, run['id']) as conn:
+            current = await store.get(principal, 'run', run['id'], conn)
+            current.update(epoch=2, status='QUEUED')
+            await store.update(principal, 'run', current, conn)
+
+    service = SimpleNamespace(store=store, settings=settings, session_run=AsyncMock(return_value=run),
+        authorized_topic=recover, bindings=SimpleNamespace(validate_output=lambda run,text:(text,True)))
+    with pytest.raises(HTTPException, match='STALE_EXECUTION_EPOCH'):
+        await BusinessService.complete_dsh(service,principal,{
+            'run_id':run['id'], 'session_id':'completion-generation', 'turn':1, 'epoch':1})
+    current = await store.get(principal, 'run', run['id'])
+    assert current['epoch']==2 and current['status']=='QUEUED'
+
+
 @pytest.mark.parametrize('valid', [False, True])
 async def test_delivery_preflight_leaves_the_run_active_until_native_stop_commits(store, principal, valid, settings):
     async with store.transaction(principal, 'native-preflight') as conn:
@@ -18,6 +42,7 @@ async def test_delivery_preflight_leaves_the_run_active_until_native_stop_commit
             'evidence':{}, 'last_text':'answer', 'active_seconds':0, 'started_at':None,
         }, conn)
     bindings = SimpleNamespace(validate_output=lambda run, text:(text,valid),
+        output_diagnostics=lambda run, text:{"code":"SOURCE_CITATIONS_REQUIRED"},
         validate_delivery=AsyncMock(), default_completion=JsdBindings().default_completion)
     service = SimpleNamespace(store=store, settings=settings, session_run=AsyncMock(return_value=run),
         authorized_topic=AsyncMock(), bindings=bindings)
@@ -54,7 +79,7 @@ async def test_native_failure_preserves_business_validation_diagnosis(settings, 
             'dsh_turn': 1, 'dsh_completed_turn': 1 if completed else None,
             'error': 'SOURCE_CITATIONS_REQUIRED' if completed else None,
         }, conn)
-    service = SimpleNamespace(session_run=AsyncMock(return_value=run))
+    service = SimpleNamespace(session_run=AsyncMock(return_value=run), briefings=SimpleNamespace(finish=AsyncMock()))
     app = create_app(settings, store, service)
     headers = {'X-Jsd-Agent-Ticket': issue(settings.shared_secret.get_secret_value(), principal, 'control'),
                'Authorization': 'Bearer '+settings.runtime_secret.get_secret_value()}
@@ -67,17 +92,18 @@ async def test_native_failure_preserves_business_validation_diagnosis(settings, 
     assert updated['error'] == error
 
 
-async def test_native_budget_failure_does_not_become_an_unknown_interruption(settings, store, principal):
+@pytest.mark.parametrize('error_code', ['TOKEN_BUDGET_EXCEEDED', 'CITATION_REPAIR_BUDGET_EXCEEDED'])
+async def test_native_budget_failure_does_not_become_an_unknown_interruption(settings, store, principal, error_code):
     async with store.transaction(principal, 'native-budget-failure') as conn:
         run = await store.create(principal, 'run', {'status': 'RUNNING', 'dsh_session_id': 'native', 'dsh_turn': 1}, conn)
-    app = create_app(settings, store, SimpleNamespace(session_run=AsyncMock(return_value=run)))
+    app = create_app(settings, store, SimpleNamespace(session_run=AsyncMock(return_value=run), briefings=SimpleNamespace(finish=AsyncMock())))
     headers = {'X-Jsd-Agent-Ticket': issue(settings.shared_secret.get_secret_value(), principal, 'control'),
                'Authorization': 'Bearer '+settings.runtime_secret.get_secret_value()}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://harness.test') as client:
         response = await client.post('/internal/v1/harness/dsh/failure', headers=headers,
-            json={'run_id':run['id'], 'session_id':'native', 'turn':1, 'error_code':'TOKEN_BUDGET_EXCEEDED'})
+            json={'run_id':run['id'], 'session_id':'native', 'turn':1, 'error_code':error_code})
     assert response.status_code == 200
-    assert (await store.get(principal, 'run', run['id']))['error'] == 'TOKEN_BUDGET_EXCEEDED'
+    assert (await store.get(principal, 'run', run['id']))['error'] == error_code
 
 
 async def test_native_output_truncation_is_never_a_successful_delivery(store, principal, settings):

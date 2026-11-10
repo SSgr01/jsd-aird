@@ -259,10 +259,6 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         if(raw==null||raw.isBlank())return null;
         try{return UUID.fromString(raw.trim());}catch(IllegalArgumentException ignored){return null;}
     }
-    private String generateExperimentNo(){
-        long seq = jdbc.queryForObject("SELECT nextval('rnd.experiment_no_seq')", Long.class);
-        return "EXP-" + LocalDate.now().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE) + "-" + seq;
-    }
     private void validate(Detail d,ExperimentStatus t,String comment){if(t==ExperimentStatus.PENDING_REVIEW||t==ExperimentStatus.COMPLETED){var m=d.editModel();if("FAILED".equals(m.path("conclusion").path("resultStatus").asText())&&!text(m.path("conclusion").path("failureCategory").asText()))invalid("失败实验必须填写失败原因分类");}if(t==ExperimentStatus.RETURNED&&!text(comment))invalid("退回必须填写原因");if(t==ExperimentStatus.VOIDED&&!text(comment))invalid("作废必须填写原因");}
     private Detail detailRow(ResultSet r)throws SQLException{var s=summary(r,0);var vid=r.getObject("current_version_id",UUID.class);return new Detail(s,vid,r.getObject("source_file_id",UUID.class),r.getObject("template_version_id",UUID.class),r.getString("template_snapshot_hash"),node(r,"template_snapshot_jsonb"),node(r,"edit_model_jsonb"),reviews(s.id()),attachments(s.id()));}
     private List<Review> reviews(UUID id){return jdbc.query("SELECT * FROM rnd.experiment_review WHERE experiment_id=? ORDER BY created_at DESC",(r,n)->new Review(r.getObject("id",UUID.class),r.getString("action"),r.getString("comment"),r.getString("operator_name"),r.getTimestamp("created_at").toInstant()),id);}

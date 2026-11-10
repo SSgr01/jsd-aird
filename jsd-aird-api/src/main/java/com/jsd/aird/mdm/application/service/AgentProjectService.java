@@ -58,6 +58,7 @@ public class AgentProjectService implements AgentProjectFacade {
         if (offset < 0 || offset > 100000) throw new ApiException(ApiErrorCode.BAD_REQUEST);
         var result = mapper.createObjectNode();
         var candidates = result.putArray("candidates");
+        if ("briefing_records".equals(action)) return briefingRecords(args);
         if ("search_projects".equals(action)) {
             var query = args.path("query").asText("").strip();
             if (query.length() > 1000) throw new ApiException(ApiErrorCode.BAD_REQUEST);
@@ -65,8 +66,10 @@ public class AgentProjectService implements AgentProjectFacade {
             // Fetch identifiers only, then authorize before pagination or loading record contents.
             // No forbidden titles, total counts or pre-authorization ranking leave this boundary.
             var ids = jdbc.queryForList("SELECT id FROM mdm.project WHERE organization_id=? AND deleted=false "
-                + "AND (?='' OR name ILIKE ? OR project_code ILIKE ?) ORDER BY updated_at DESC,id", UUID.class,
-                actor.organizationId(), query, "%" + query + "%", "%" + query + "%");
+                + "AND (?='' OR name ILIKE ? OR project_code ILIKE ?) "
+                + (args.hasNonNull("customer_id") ? "AND partner_id=? " : "") + "ORDER BY updated_at DESC,id", UUID.class,
+                args.hasNonNull("customer_id") ? new Object[]{actor.organizationId(), query, "%" + query + "%", "%" + query + "%", UUID.fromString(args.path("customer_id").asText())}
+                    : new Object[]{actor.organizationId(), query, "%" + query + "%", "%" + query + "%"});
             var allowed = ids.stream()
                 .filter(id -> authorization.check(check(id)).allowed()).skip(offset).limit(21).toList();
             for (var id : allowed.stream().limit(20).toList()) {
@@ -125,6 +128,58 @@ public class AgentProjectService implements AgentProjectFacade {
         return result;
     }
 
+    private ObjectNode briefingRecords(ObjectNode args) {
+        String type = args.path("record_type").asText();
+        String table = switch (type) {
+            case "PROJECT" -> "mdm.project";
+            case "STAGE" -> "mdm.project_stage";
+            case "TASK" -> "mdm.project_task";
+            default -> throw new ApiException(ApiErrorCode.BAD_REQUEST);
+        };
+        int offset = args.path("offset").asInt();
+        if (offset < 0 || offset > 100000) throw new ApiException(ApiErrorCode.BAD_REQUEST);
+        String pid = "PROJECT".equals(type) ? "r.id" : "r.project_id";
+        var sql = new StringBuilder("SELECT r.id,r.updated_at,r.version," + pid + " AS project_id FROM " + table
+            + " r JOIN mdm.project p ON p.id=" + pid + " WHERE p.organization_id=? AND p.deleted=false AND r.deleted=false");
+        var values = new ArrayList<Object>(); values.add(ActorContext.required().organizationId());
+        if ("project-morning".equals(args.path("task_type").asText())) sql.append(" AND p.status NOT IN ('COMPLETED','CANCELLED')");
+        for (var field : List.of("updated_from", "updated_before")) if (args.hasNonNull(field)) {
+            sql.append(" AND r.updated_at" + ("updated_from".equals(field) ? ">=?" : "<?"));
+            values.add(java.sql.Timestamp.from(Instant.parse(args.path(field).asText())));
+        }
+        if (args.path("project_ids").isArray() && !args.path("project_ids").isEmpty()) {
+            if (args.path("project_ids").size() > 20) throw new ApiException(ApiErrorCode.BAD_REQUEST);
+            sql.append(" AND " + pid + " IN (" + String.join(",", Collections.nCopies(args.path("project_ids").size(), "?")) + ")");
+            args.path("project_ids").forEach(id -> values.add(UUID.fromString(id.asText())));
+        }
+        sql.append(" ORDER BY r.updated_at,r.id");
+        var authorized = jdbc.queryForList(sql.toString(), values.toArray()).stream()
+            .filter(row -> authorization.check(check((UUID)row.get("project_id"))).allowed()).toList();
+        var rows = authorized.stream().skip(offset).limit(21).toList();
+        var result = mapper.createObjectNode().put("index_revision", sha(authorized.toString()));
+        var candidates = result.putArray("candidates");
+        for (var row : rows.stream().limit(20).toList()) {
+            UUID id = (UUID)row.get("id"), project = (UUID)row.get("project_id");
+            if ("PROJECT".equals(type)) {
+                var value = projects.get(id);
+                candidates.add(candidate(project, type, id, value.version(), value.name(), mapper.valueToTree(value)));
+            } else if ("STAGE".equals(type)) {
+                var value = stages.listByProject(project).stream().filter(stage -> id.equals(stage.id())).findFirst()
+                    .orElseThrow(() -> new ApiException(ApiErrorCode.VERSION_CONFLICT));
+                candidates.add(candidate(project, type, id, value.version(), value.name(), mapper.valueToTree(value)));
+            } else {
+                var value = work.getTask(id);
+                candidates.add(candidate(project, type, id, value.version(), value.name(), mapper.valueToTree(value)));
+            }
+        }
+        for (int i = 0; i < candidates.size(); i++) {
+            if (!candidates.get(i).path("source").path("version_id").asText().equals(rows.get(i).get("version").toString()))
+                throw new ApiException(ApiErrorCode.VERSION_CONFLICT, "活动记录已更新，请重新读取本期索引");
+        }
+        if (rows.size() > 20) result.put("next_offset", offset + 20);
+        return result;
+    }
+
     private List<UUID> relatedIds(UUID pid, String type) {
         return switch (type) {
             case "REQUIREMENT" -> jdbc.queryForList("SELECT id FROM mdm.customer_requirement WHERE deleted=false "
@@ -146,13 +201,16 @@ public class AgentProjectService implements AgentProjectFacade {
     }
 
     private ObjectNode candidate(UUID pid, String type, UUID id, long version, String title, JsonNode value) {
-        String text = value.toString();
+        // Keep business counts and progress; only editor/action protocol is removed.
+        var facts = (ObjectNode)com.jsd.aird.shared.business.BusinessViews.clean(value);
+        String text = com.jsd.aird.shared.business.BusinessViews.markdown(title, facts);
         var source = mapper.createObjectNode().put("kind", "BUSINESS_RECORD").put("resource_type", type)
             .put("resource_id", id.toString()).put("project_id", pid.toString()).put("document_id", pid.toString())
             .put("version_id", Long.toString(version)).put("source_node_key", type + ":" + id)
             .put("title", title).put("content_sha256", sha(text));
         source.putObject("anchor").put("projectId", pid.toString()).put("recordId", id.toString()).put("recordType", type).put("recordVersion", version);
-        return mapper.createObjectNode().put("text", text).set("source", source);
+        return mapper.createObjectNode().put("text", text)
+            .put("model_text", com.jsd.aird.shared.business.BusinessViews.modelMarkdown(title, facts)).set("source", source);
     }
 
     @Override public void authorizeSource(JsonNode source) {

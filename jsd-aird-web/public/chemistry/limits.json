@@ -1,0 +1,9 @@
+{
+  "maxSourceChars": 65536,
+  "maxEntryChars": 32768,
+  "maxEntries": 100,
+  "maxSvgBytes": 8388608,
+  "loadTimeoutMs": 45000,
+  "itemTimeoutMs": 45000,
+  "groupTimeoutMs": 180000
+}

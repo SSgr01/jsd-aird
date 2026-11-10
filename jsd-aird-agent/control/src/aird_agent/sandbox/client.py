@@ -88,7 +88,7 @@ class Sandbox:
     def prepare(self, workspace, input_paths):
         return self.inputs(workspace, input_paths)[1]
 
-    async def execute(self, workspace, script, language, execution_id, input_paths):
+    async def execute(self, workspace, script, language, execution_id, input_paths, *, timeout_ms=None):
         if not self.settings.sandbox_enabled:
             raise HTTPException(503, "SANDBOX_UNAVAILABLE: no host-execution fallback")
         if language not in {"python", "shell"} or len(script.encode()) > 65536:
@@ -123,6 +123,7 @@ class Sandbox:
                     response = await client.post(endpoint, headers=headers, json={
                         "organization_id": workspace.root.parent.name, "run_id": workspace.root.name,
                         "execution_id": execution_id, "script": script, "language": language, "files": files,
+                        **({"timeout_ms": timeout_ms} if timeout_ms is not None else {}),
                     })
                 except httpx.HTTPError as error:
                     logger.warning("Sandbox submission response lost execution=%s failure=%s",
@@ -140,7 +141,8 @@ class Sandbox:
                                 return {**self.accept_result(workspace, record), "inputs": manifest}
                             if record["status"] in {"FAILED", "CANCELLED"}:
                                 return {
-                                    "error": "SANDBOX_" + record["status"],
+                                    "error": record.get("error") or "SANDBOX_" + record["status"],
+                                    "timed_out": record.get("error") in {"SANDBOX_TIMEOUT", "SANDBOX_STARTUP_TIMEOUT"},
                                     "receipt": {
                                         k: record[k]
                                         for k in ("execution_id", "request_hash", "status", "finished_at")
@@ -152,10 +154,7 @@ class Sandbox:
                             await asyncio.sleep(0.2)
                             response = await receipt_response()
                 except (asyncio.CancelledError, TimeoutError):
-                    try:
-                        await asyncio.shield(client.delete(endpoint + "/" + execution_id, headers=headers))
-                    except httpx.HTTPError:
-                        pass
+                    await asyncio.shield(self.cancel(execution_id))
                     raise
         except TimeoutError:
             raise HTTPException(504, "SANDBOX_TIMEOUT_RESULT_UNKNOWN") from None
@@ -201,7 +200,7 @@ class Sandbox:
         if record.get("execution_id") != execution_id:
             return {"status": "UNKNOWN"}
         if record.get("status") in {"FAILED", "CANCELLED"}:
-            return {"status": "FAILED", "result": {"id": execution_id, "error": "SANDBOX_" + record["status"],
+            return {"status": "FAILED", "result": {"id": execution_id, "error": record.get("error") or "SANDBOX_" + record["status"],
                 "receipt": {key: record[key] for key in ("execution_id", "request_hash", "status", "finished_at")}}}
         if record.get("status") != "SUCCEEDED":
             return {"status": "UNKNOWN"}
@@ -211,11 +210,35 @@ class Sandbox:
             "result": {"id": execution_id, **self.accept_result(workspace, record)},
         }
 
+    async def output(self, execution_id, stdout_offset=0, stderr_offset=0):
+        if not self.settings.sandbox_enabled:
+            raise HTTPException(503, "SANDBOX_UNAVAILABLE")
+        async with httpx.AsyncClient(timeout=5, follow_redirects=False, trust_env=False) as client:
+            response = await client.get(self.settings.sandbox_url + "/executions/" + execution_id + "/output",
+                params={"stdout_offset": stdout_offset, "stderr_offset": stderr_offset},
+                headers={"Authorization": "Bearer " + self.settings.sandbox_secret.get_secret_value()})
+        if response.status_code == 404:
+            return {"status": "QUEUED", "streams": {}, "pending_registration": True}
+        if response.status_code != 200:
+            raise HTTPException(503, "SANDBOX_OUTPUT_UNAVAILABLE")
+        return response.json()
+
     async def cancel(self, execution_id):
         if not self.settings.sandbox_enabled:
-            return
-        async with httpx.AsyncClient(timeout=5, follow_redirects=False, trust_env=False) as client:
-            await client.delete(
-                self.settings.sandbox_url + "/executions/" + execution_id,
-                headers={"Authorization": "Bearer " + self.settings.sandbox_secret.get_secret_value()},
-            )
+            return {"status": "UNKNOWN"}
+        async with httpx.AsyncClient(timeout=2, follow_redirects=False, trust_env=False) as client:
+            endpoint = self.settings.sandbox_url + "/executions/" + execution_id
+            headers = {"Authorization": "Bearer " + self.settings.sandbox_secret.get_secret_value()}
+            try:
+                response = await client.delete(endpoint, headers=headers)
+                response.raise_for_status()
+                return response.json()
+            except (httpx.HTTPError, ValueError):
+                logger.warning("Sandbox cancellation requires reconciliation execution=%s", execution_id)
+                try:
+                    response = await client.get(endpoint, headers=headers)
+                    if response.status_code == 200:
+                        return response.json()
+                except (httpx.HTTPError, ValueError):
+                    pass
+        return {"execution_id": execution_id, "status": "UNKNOWN", "cancel_requested": True}

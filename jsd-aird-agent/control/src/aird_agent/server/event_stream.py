@@ -66,6 +66,9 @@ async def stream_events(store, service, notifications, user, run_id, request, cu
             batch = await store.events(user, run_id, cursor)
             for event in batch:
                 cursor = event["seq"]
+                if event.get("payload", {}).get("error"):
+                    from aird_agent.server.api import public_failure
+                    event = {**event, "payload": {**event["payload"], "error": public_failure(event["payload"]["error"])}}
                 yield f"id: {cursor}\nevent: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
             if batch:
                 # Drain replay/backlog without inserting a pause between pages.

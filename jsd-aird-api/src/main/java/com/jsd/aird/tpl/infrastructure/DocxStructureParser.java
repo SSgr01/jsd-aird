@@ -25,9 +25,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
-import com.jsd.aird.tpl.application.port.OfficeStructureParser;
-import com.jsd.aird.tpl.application.port.WordDocumentParser;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.OfficeStructureParser;
+import com.jsd.aird.tpl.api.WordDocumentParser;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import org.springframework.stereotype.Component;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
@@ -36,8 +36,9 @@ import org.w3c.dom.NodeList;
 
 @Component
 public class DocxStructureParser implements OfficeStructureParser, WordDocumentParser {
-    @org.springframework.beans.factory.annotation.Autowired(required=false)
     private IsolatedOfficeProcess isolated;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void setIsolated(IsolatedOfficeProcess isolated) { this.isolated = isolated; }
 
     private static final String WORDPROCESSINGML =
             "http://schemas.openxmlformats.org/wordprocessingml/2006/main";

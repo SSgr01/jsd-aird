@@ -1,4 +1,5 @@
 package com.jsd.aird.mdm.application.service;
+import com.jsd.aird.mdm.api.PartnerStatus;
 
 import com.jsd.aird.mdm.domain.model.*;
 import com.jsd.aird.shared.error.*;

@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
-import com.jsd.aird.kb.domain.DocumentParser;
+import com.jsd.aird.kb.api.DocumentParser;
 import org.springframework.stereotype.Component;
 
 /** Converts Qwen OCR output into the neutral source-node vocabulary. */

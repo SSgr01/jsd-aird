@@ -9,7 +9,7 @@ import com.jsd.aird.tpl.application.StandardFieldService;
 import com.jsd.aird.tpl.application.TemplateDataImportFacadeImpl;
 import com.jsd.aird.tpl.application.UnifiedLabTemplateCatalog;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import com.jsd.aird.tpl.infrastructure.GenericTabularStructureParser;
 import com.jsd.aird.tpl.infrastructure.XlsxStructureParser;
 import org.junit.jupiter.api.Test;

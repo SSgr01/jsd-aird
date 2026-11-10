@@ -1,0 +1,119 @@
+diff --git a/packages/client/ui-primitives/src/markdown/ChemistryFrame.module.css b/packages/client/ui-primitives/src/markdown/ChemistryFrame.module.css
+new file mode 100644
+index 0000000000..c48242f0d8
+--- /dev/null
++++ b/packages/client/ui-primitives/src/markdown/ChemistryFrame.module.css
+@@ -0,0 +1,6 @@
++.frame {
++  display: block;
++  width: 100%;
++  border: 0;
++  margin-block: var(--dsw-spacing-3, 12px);
++}
+diff --git a/packages/client/ui-primitives/src/markdown/ChemistryFrame.tsx b/packages/client/ui-primitives/src/markdown/ChemistryFrame.tsx
+new file mode 100644
+index 0000000000..a0f12deffd
+--- /dev/null
++++ b/packages/client/ui-primitives/src/markdown/ChemistryFrame.tsx
+@@ -0,0 +1,22 @@
++import { useEffect, useRef, useState } from 'react'
++import css from './ChemistryFrame.module.css'
++
++/** Isolate RDKit while accepting height updates only from this same-origin frame. */
++export function ChemistryFrame({ src, title }: { src: string; title: string }) {
++  const frame = useRef<HTMLIFrameElement>(null)
++  const [height, setHeight] = useState(390)
++  useEffect(() => {
++    const receive = (event: MessageEvent) => {
++      if (event.origin !== location.origin || event.source !== frame.current?.contentWindow) return
++      const value: unknown = event.data
++      if (typeof value !== 'object' || value === null || !('type' in value) || value.type !== 'jsd-chemistry-height'
++        || !('height' in value) || typeof value.height !== 'number' || !Number.isFinite(value.height)) return
++      setHeight(Math.max(100, Math.min(8000, value.height + 4)))
++    }
++    window.addEventListener('message', receive)
++    return () => { window.removeEventListener('message', receive) }
++  }, [src])
++  return <iframe ref={frame} title={title} loading="lazy" className={css.frame}
++    sandbox="allow-scripts allow-same-origin allow-downloads" referrerPolicy="no-referrer"
++    src={src} style={{ height }} />
++}
+diff --git a/packages/client/ui-primitives/src/markdown/chemistry-input.ts b/packages/client/ui-primitives/src/markdown/chemistry-input.ts
+new file mode 100644
+index 0000000000..1074a0dfc5
+--- /dev/null
++++ b/packages/client/ui-primitives/src/markdown/chemistry-input.ts
+@@ -0,0 +1,30 @@
++/** Shared by both Markdown renderers and the isolated RDKit viewer (see prepare-chemistry.mjs). */
++export interface ChemistryEntry { label: string; source: string }
++
++// SMILES lexical tokens, not molecule-name or subject keywords. RDKit performs chemical validation.
++function smilesTokens(value: string): boolean {
++  return value.length > 0 && /^(?:Br|Cl|[BCNOPSFIbcnops*]|\[[^\[\]\s]+\]|[0-9%()=#+\-/\\.:@~$>])+$/u.test(value)
++}
++
++/**
++ * Parse labelled SMILES lines; chemical validation belongs to RDKit.
++ * @param source - Newline-separated display labels and structure strings.
++ * @param strict - Require SMILES lexical tokens when detecting a labelled list.
++ * @returns Every parsed entry, or null when any line is not a labelled structure.
++ */
++export function chemistryList(source: string, strict = true): ChemistryEntry[] | null {
++  const lines = source.split(/\r?\n/u).filter(line => line.trim())
++  if (!lines.length) return null
++  const items: ChemistryEntry[] = []
++  for (const line of lines) {
++    const match = /^\s*(.+?)\s*[:：]\s*(\S+)\s*$/u.exec(line)
++    if (!match) return null
++    const label = match[1]?.trim()
++    const raw = match[2]
++    if (!label || raw === undefined) return null
++    const value = /^(?:".*"|'.*')$/u.test(raw) ? raw.slice(1, -1) : raw
++    if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(label) || (strict && !smilesTokens(value))) return null
++    items.push({ label, source: value })
++  }
++  return items
++}
+diff --git a/packages/client/ui-primitives/src/markdown/katex.tsx b/packages/client/ui-primitives/src/markdown/katex.tsx
+index 45c1226b83..431846e9ac 100644
+--- a/packages/client/ui-primitives/src/markdown/katex.tsx
++++ b/packages/client/ui-primitives/src/markdown/katex.tsx
+@@ -18,6 +18,7 @@
+ import { createElement } from 'react'
+ import type { CSSProperties, ReactNode } from 'react'
+ import katex from 'katex'
++import 'katex/dist/contrib/mhchem.mjs'
+ 
+ /**
+  * Convert one inline `style` attribute string into React's style object.
+diff --git a/packages/client/ui-primitives/src/markdown/render.tsx b/packages/client/ui-primitives/src/markdown/render.tsx
+index 3267902a4b..cb66c6cb4c 100644
+--- a/packages/client/ui-primitives/src/markdown/render.tsx
++++ b/packages/client/ui-primitives/src/markdown/render.tsx
+@@ -25,6 +25,8 @@ import type {} from 'mdast-util-math'
+ import { normalizeUri } from 'micromark-util-sanitize-uri'
+ import type { CodeToolbarLabels } from '../CodeToolbar.tsx'
+ import { CodeBlock } from './CodeBlock.tsx'
++import { ChemistryFrame } from './ChemistryFrame.tsx'
++import { chemistryList } from './chemistry-input.ts'
+ import { isExplicitFilePath, parseFileLink } from './file-link.ts'
+ import { renderTexToReact } from './katex.tsx'
+ import { LinkIconMedium, classifyLinkPath } from '../LinkIcon.tsx'
+@@ -428,6 +430,17 @@ function renderCode(node: Md.Code, key: Key, context: MarkdownRenderContext): Re
+   // The replaced pipeline recovered the grammar id from the hast class with
+   // /language-([\w-]+)/, which truncates at the first non-word character.
+   const lang = language === undefined ? undefined : /^[\w-]+/.exec(language)?.[0]
++  const source = node.value.trim()
++  const namedList = (lang === 'yaml' || lang === 'yml') && chemistryList(source) !== null
++  if (!context.streaming && source && (lang === 'smiles' || lang === 'reaction-smiles' || namedList)) {
++    const parameters = new URLSearchParams({ source, kind: lang === 'reaction-smiles' ? lang : 'smiles' })
++    const labelled = namedList || (source.includes('\n') && chemistryList(source, false) !== null)
++    parameters.set('format', labelled ? 'labels' : 'raw')
++    for (const [, name, value] of (node.meta ?? '').matchAll(/\b(name|review)="([^"\n]+)"/g)) {
++      if (name !== undefined && value !== undefined) parameters.set(name, value)
++    }
++    return <ChemistryFrame key={key} title="SMILES" src={`/agent/chemistry-assets/viewer.html#${parameters}`} />
++  }
+   if (!context.streaming && lang === 'math') {
+     // ```math fences render as display TeX once settled (rehype-katex parity);
+     // its text extraction saw the code block's trailing newline.

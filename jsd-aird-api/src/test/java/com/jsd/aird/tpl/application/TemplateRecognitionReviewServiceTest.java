@@ -20,10 +20,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ops.application.port.FileObjectRepository;
 import com.jsd.aird.ops.application.port.ObjectStorage;
-import com.jsd.aird.tpl.application.port.RecognitionModelClient;
+import com.jsd.aird.tpl.api.RecognitionModelClient;
 import com.jsd.aird.tpl.application.port.TemplateImportRepository;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 

@@ -1,4 +1,4 @@
-import { LockOutlined, SafetyCertificateOutlined, UserOutlined } from '@ant-design/icons';
+import { LockOutlined, UserOutlined } from '@ant-design/icons';
 import { App, Button, Card, Checkbox, Form, Input, Typography } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useEffect } from 'react';
@@ -7,6 +7,7 @@ import { markPerformance, measurePerformance } from '@/services/performance/metr
 import { useAuthStore } from '@/stores/auth-store';
 import { HttpError } from '@/services/http/errors';
 import { workbenchReturn } from './workbench-return';
+import { loginDestination } from './login-redirect';
 import './auth.css';
 
 interface LoginForm {
@@ -31,8 +32,8 @@ export function LoginPage() {
         window.location.replace(workbench);
         return;
       }
-      const from = (location.state as { from?: string } | null)?.from || '/assistant';
-      navigate(from, { replace: true });
+      const requestedFrom = (location.state as { from?: string } | null)?.from;
+      navigate(loginDestination(requestedFrom), { replace: true });
     } catch (error) {
       message.error(error instanceof HttpError ? error.message : '登录失败，请稍后重试');
     }
@@ -40,9 +41,9 @@ export function LoginPage() {
 
   return (
     <div className="auth-page">
-      <div className="auth-brand-mark"><SafetyCertificateOutlined /></div>
-      <Typography.Title className="auth-brand-title">杰事达材料研发系统</Typography.Title>
-      <Typography.Text className="auth-brand-subtitle">研发数据与 AI 协同工作台</Typography.Text>
+      {/* <div className="auth-brand-mark"><SafetyCertificateOutlined /></div>
+      <Typography.Title className="auth-brand-title">AI研发数字化平台</Typography.Title>
+      <Typography.Text className="auth-brand-subtitle">研发数据与 AI 协同工作台</Typography.Text> */}
       <Card className="auth-card" variant="borderless">
         <div className="auth-card-heading">
           <Typography.Title level={3}>欢迎回来</Typography.Title>

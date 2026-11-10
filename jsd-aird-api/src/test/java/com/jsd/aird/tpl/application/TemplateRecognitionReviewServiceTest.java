@@ -32,6 +32,48 @@ class TemplateRecognitionReviewServiceTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
+    void allowsPublishingFormalMappingsWhenRevisionHasNoRecognitionRun() {
+        var importRepository = mock(TemplateImportRepository.class);
+        var templateRepository = mock(TemplateRepository.class);
+        var service = new TemplateRecognitionReviewService(
+                importRepository, templateRepository, mock(FileObjectRepository.class),
+                mock(ObjectStorage.class), objectMapper, mock(RecognitionModelClient.class));
+        var organizationId = UUID.randomUUID();
+        var versionId = UUID.randomUUID();
+        var workspace = mock(TemplateRepository.TemplateWorkspace.class);
+        when(workspace.versionId()).thenReturn(versionId);
+        when(templateRepository.findWorkspace(organizationId, versionId)).thenReturn(Optional.of(workspace));
+        when(importRepository.findLatestForVersion(organizationId, versionId)).thenReturn(Optional.empty());
+
+        assertThat(service.hasIncompleteRecognition(organizationId, versionId)).isFalse();
+    }
+
+    @Test
+    void countsFieldConflictsSeparatelyFromPendingFields() throws Exception {
+        var service = new TemplateRecognitionReviewService(
+                mock(TemplateImportRepository.class), mock(TemplateRepository.class),
+                mock(FileObjectRepository.class), mock(ObjectStorage.class), objectMapper,
+                mock(RecognitionModelClient.class));
+        var regions = objectMapper.createArrayNode();
+        var region = regions.addObject();
+        region.putArray("alternatives");
+        region.putArray("auditSuggestions");
+        region.putArray("fields").addObject()
+                .put("fieldName", "产品")
+                .put("status", "CONFLICT");
+        Method statisticsMethod = TemplateRecognitionReviewService.class.getDeclaredMethod(
+                "buildReviewStatistics", List.class,
+                com.fasterxml.jackson.databind.node.ArrayNode.class, List.class);
+        statisticsMethod.setAccessible(true);
+
+        var statistics = (TemplateRecognitionReviewService.RecognitionReviewStatistics)
+                statisticsMethod.invoke(service, List.of(), regions, List.of());
+
+        assertThat(statistics.fieldCount()).isEqualTo(1);
+        assertThat(statistics.pendingFieldCount()).isZero();
+    }
+
+    @Test
     void keepsWordFieldsIndependentlyReviewableInsideTheSameRegion() throws Exception {
         var service = new TemplateRecognitionReviewService(
                 mock(TemplateImportRepository.class), mock(TemplateRepository.class),

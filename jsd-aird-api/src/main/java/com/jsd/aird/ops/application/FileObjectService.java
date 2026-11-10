@@ -59,7 +59,7 @@ public class FileObjectService implements FileStorageFacade {
 
     private long uploadLimit(String kind){return switch(kind==null?"":kind.toUpperCase(java.util.Locale.ROOT)){
         case "KNOWLEDGE"->Math.min(capacity.fileBytes(),MAX_KNOWLEDGE_UPLOAD_BYTES);
-        case "PROJECT_DOCUMENT","EXPERIMENT_SOURCE"->Math.min(capacity.fileBytes(),MAX_DOCUMENT_UPLOAD_BYTES);
+        case "PROJECT_DOCUMENT","EXPERIMENT_SOURCE","QUOTATION_SOURCE"->Math.min(capacity.fileBytes(),MAX_DOCUMENT_UPLOAD_BYTES);
         case "SPC_CHART"->Math.min(capacity.fileBytes(),MAX_SPC_UPLOAD_BYTES);
         default->capacity.fileBytes();
     };}
@@ -135,6 +135,9 @@ public class FileObjectService implements FileStorageFacade {
             }
             if ("EXPERIMENT_SOURCE".equalsIgnoreCase(kind) && size > MAX_DOCUMENT_UPLOAD_BYTES) {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "实验文档超过 200MB 限制");
+            }
+            if ("QUOTATION_SOURCE".equalsIgnoreCase(kind) && size > MAX_DOCUMENT_UPLOAD_BYTES) {
+                throw new ApiException(ApiErrorCode.BAD_REQUEST, "报价文件超过 200MB 限制");
             }
             if ("SPC_CHART".equalsIgnoreCase(kind) && size > MAX_SPC_UPLOAD_BYTES) {
                 throw new ApiException(ApiErrorCode.BAD_REQUEST, "图谱文件超过 100MB 限制");

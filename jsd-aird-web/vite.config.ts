@@ -9,11 +9,14 @@ import { browserCssCompat } from './scripts/browser-css-compat';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
+  const rootEnv = loadEnv(mode, fileURLToPath(new URL('..', import.meta.url)), '');
   const apiTarget = env.VITE_DEV_API_TARGET || 'http://localhost:8080';
   const agentTarget = env.VITE_DEV_AGENT_TARGET || process.env.VITE_DEV_AGENT_TARGET || 'http://127.0.0.1:8092';
+  const appVersion = rootEnv.VITE_APP_VERSION || '';
 
   return {
     plugins: [react(), buildInfoPlugin()],
+    define: { 'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion) },
     css: { postcss: { plugins: [browserCssCompat()] } },
     resolve: {
       // Keep linked dependency assets on the checkout's drive. Vite's raw-file

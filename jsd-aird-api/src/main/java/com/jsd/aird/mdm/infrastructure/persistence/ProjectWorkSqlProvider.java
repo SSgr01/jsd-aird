@@ -8,7 +8,7 @@ public class ProjectWorkSqlProvider {
     private static final String TASK_COLUMNS =
         "t.id, t.task_code taskCode, t.project_id projectId, p.name projectName, " +
         "t.stage_id stageId, s.name stageName, t.name, t.owner, t.priority, " +
-        "t.planned_date plannedDate, t.status, " +
+        "t.planned_date plannedDate, t.planned_end plannedEnd, t.status, " +
         "(SELECT count(*) FROM rnd.experiment e WHERE e.task_id = t.id AND e.deleted = false) experimentCount, " +
         "t.version, t.created_at createdAt, t.updated_at updatedAt";
 

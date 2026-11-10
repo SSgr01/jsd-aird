@@ -103,6 +103,8 @@ app:
     session-idle-timeout: ${JSD_AIRD_SESSION_IDLE_TIMEOUT:12h}
     session-absolute-timeout: ${JSD_AIRD_SESSION_ABSOLUTE_TIMEOUT:30d}
     session-touch-interval: ${JSD_AIRD_SESSION_TOUCH_INTERVAL:30s}
+    max-login-failures: ${JSD_AIRD_MAX_LOGIN_FAILURES:5}
+    login-lock-duration: ${JSD_AIRD_LOGIN_LOCK_DURATION:5m}
     cookie-secure: ${JSD_AIRD_COOKIE_SECURE:false}
     cookie-same-site: ${JSD_AIRD_COOKIE_SAME_SITE:Lax}
     enforcement-mode: ${JSD_AIRD_IAM_ENFORCEMENT_MODE:ENFORCE}

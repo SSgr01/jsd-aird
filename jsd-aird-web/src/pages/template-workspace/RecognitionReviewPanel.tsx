@@ -153,7 +153,8 @@ export function RecognitionReviewPanel({
   if (review.regions?.length) {
     const fields = canonicalRegions.flatMap((region) => region.fields ?? []);
     filterCounts.CONFIRMED = fields.filter((field) => field.status === 'CONFIRMED').length;
-    filterCounts.CONFLICT = review.statistics?.structureConflictGroups ?? 0;
+    filterCounts.CONFLICT = fields.filter((field) => field.status === 'CONFLICT').length
+      + (review.statistics?.structureConflictGroups ?? 0);
     filterCounts.LOW = fields.filter((field) => field.status !== 'IGNORED' && field.confidence < 0.65).length;
   }
   const visibleFilters = FILTERS.filter((item) => item.value === 'ALL' || filterCounts[item.value] > 0);
@@ -590,7 +591,9 @@ function filterRegionTree(
     })
     .filter((region) => {
       if (filter === 'ALL') return true;
-      return region.fields.length > 0 || region.alternatives.length > 1;
+      return region.fields.length > 0 || (filter === 'CONFLICT'
+        && region.alternatives.length > 1
+        && ['CONFLICT', 'UNRESOLVED', 'PROVISIONAL'].includes(region.structureStatus ?? ''));
     });
 }
 

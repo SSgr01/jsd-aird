@@ -233,6 +233,12 @@ export default function TaskPage() {
       render: (value: string | undefined) => value || '—',
     },
     {
+      title: '结束日期',
+      dataIndex: 'plannedEnd',
+      width: 120,
+      render: (value: string | undefined) => value || '—',
+    },
+    {
       title: '优先级',
       dataIndex: 'priority',
       width: 100,
@@ -398,6 +404,10 @@ export default function TaskPage() {
                     <div className="pm-card-info-item">
                       <span className="pm-card-info-label">执行人</span>
                       <strong className="pm-card-info-value">{task.owner || '—'}</strong>
+                    </div>
+                    <div className="pm-card-info-item">
+                      <span className="pm-card-info-label">结束日期</span>
+                      <strong className="pm-card-info-value">{task.plannedEnd || '—'}</strong>
                     </div>
                     <div className="pm-card-info-item">
                       <span className="pm-card-info-label">实验数</span>

@@ -91,7 +91,10 @@ public class IamBootstrapService {
                 "data.download", "quality.view", "quality.upload", "quality.create", "quality.update",
                 "quality.delete", "quality.publish", "quality.export", "spectrum.view", "spectrum.create", "spectrum.update", "spectrum.export",
                 "spectrum.download", "ai.use", "production.view", "production.create", "production.update",
-                "production.submit", "production.cancel", "production.export", "ops.file.view", "ops.file.upload", "ops.file.download");
+                "production.submit", "production.cancel", "production.export",
+                "quotation.view", "quotation.create", "quotation.edit", "quotation.submit",
+                "quotation.review", "quotation.delete",
+                "ops.file.view", "ops.file.upload", "ops.file.download");
         var inventory = List.of("inventory.view", "inventory.create", "inventory.update", "inventory.reverse");
         var production = List.of("production.view", "production.create", "production.update", "production.submit",
                 "production.cancel", "template.view", "data.view", "ops.file.view", "ops.file.upload", "ops.file.download");
@@ -113,6 +116,7 @@ public class IamBootstrapService {
                         "knowledge.update", "knowledge.submit", "data.view", "data.create", "data.update",
                         "data.submit", "spectrum.view", "spectrum.create", "spectrum.update", "ai.use",
                         "production.view", "production.create", "production.update", "production.submit",
+                        "quotation.view", "quotation.create", "quotation.edit", "quotation.submit",
                         "ops.file.view", "ops.file.upload").contains(code))
                 .forEach(code -> store.ensureRoleBinding(organizationId, roles.get("RND_ENGINEER").id(), new Binding(code, "ALLOW", defaultScope(code), List.of())));
         inventory.stream().filter(code -> Set.of("inventory.view", "inventory.create", "inventory.update").contains(code))

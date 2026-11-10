@@ -78,9 +78,9 @@ class AgentProjectRecordsTest {
     @Test void taskSearchEvidenceSurvivesDetailReadButRejectsActualTaskChanges() throws Exception {
         var id = UUID.randomUUID(); var stage = UUID.randomUUID();
         var task = new ProjectTask(id, "TASK-TEST", project, stage, "同条件复测", "验收", ProjectPriority.MEDIUM,
-            null, "PENDING", 0, 1, Instant.EPOCH, Instant.EPOCH);
+            null, null, "PENDING", 0, 1, Instant.EPOCH, Instant.EPOCH);
         when(work.searchTasks(any())).thenReturn(List.of(new ProjectTaskSummary(id, "TASK-TEST", project,
-            "关联项目名称", stage, "关联阶段名称", task.name(), task.owner(), "MEDIUM", null, "PENDING",
+            "关联项目名称", stage, "关联阶段名称", task.name(), task.owner(), "MEDIUM", null, null, "PENDING",
             0, 1, Instant.EPOCH, Instant.EPOCH)));
         when(work.getTask(id)).thenReturn(task);
         var args = json.createObjectNode().put("project_id", project.toString());
@@ -90,11 +90,11 @@ class AgentProjectRecordsTest {
         var source = json.readTree(listed.path("source").toString());
         service.validateSource(source, "同条件复测");
         when(work.getTask(id)).thenReturn(new ProjectTask(id, "TASK-TEST", project, stage, task.name(),
-            task.owner(), task.priority(), null, "PENDING", 1, 1, Instant.EPOCH, Instant.EPOCH));
+            task.owner(), task.priority(), null, null, "PENDING", 1, 1, Instant.EPOCH, Instant.EPOCH));
         assertThatCode(() -> service.authorizeSource(source)).doesNotThrowAnyException();
         assertThatThrownBy(() -> service.validateSource(source, null)).isInstanceOf(ApiException.class);
         when(work.getTask(id)).thenReturn(new ProjectTask(id, "TASK-TEST", project, stage, "已变更",
-            task.owner(), task.priority(), null, "PENDING", 0, 2, Instant.EPOCH, Instant.EPOCH));
+            task.owner(), task.priority(), null, null, "PENDING", 0, 2, Instant.EPOCH, Instant.EPOCH));
         assertThatThrownBy(() -> service.authorizeSource(source)).isInstanceOf(ApiException.class);
         assertThatThrownBy(() -> service.validateSource(source, null)).isInstanceOf(ApiException.class);
     }

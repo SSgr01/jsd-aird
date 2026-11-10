@@ -79,6 +79,8 @@ httpClient.interceptors.response.use(
       const response = error.response;
       const requestConfig = (response?.config || error.config) as RetriableRequestConfig | undefined;
       const isLoginRequest = response?.config.url?.endsWith('/api/v1/auth/login') ?? false;
+      const isCurrentPasswordMismatch = response?.config.url?.endsWith('/api/v1/auth/password/change')
+        && response?.data?.code === 'AUTH_INVALID';
       const method = (requestConfig?.method || 'get').toLowerCase();
       const isUnsafe = ['post', 'put', 'patch', 'delete'].includes(method);
       const isCsrfFailure = response?.data?.code === 'CSRF_TOKEN_INVALID';
@@ -111,7 +113,7 @@ httpClient.interceptors.response.use(
           return httpClient.request(requestConfig);
         });
       }
-      if (response?.status === 401 && !isLoginRequest) notifyAuthRequired();
+      if (response?.status === 401 && !isLoginRequest && !isCurrentPasswordMismatch) notifyAuthRequired(response.data?.code);
       throw new HttpError(
         response?.data?.message || error.message || '请求失败',
         response?.data?.code || 'HTTP_REQUEST_FAILED',

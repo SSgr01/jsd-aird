@@ -260,6 +260,19 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             return read ? permission("template.view", "TEMPLATE", "READ") : null;
         }
 
+        // 报价记录：上传任务与查看列表同属一个业务模块，读写权限独立授予。
+        if (path.startsWith("/api/v1/quotation-imports") || path.startsWith("/api/v1/quotations")) {
+            if (read) return permission("quotation.view", "QUOTATION", "READ");
+            if (path.endsWith("/rollback")) return permission("quotation.edit", "QUOTATION", "WRITE");
+            if (path.endsWith("/review/submit")) return permission("quotation.submit", "QUOTATION", "WRITE");
+            if (path.endsWith("/review/approve") || path.endsWith("/review/reject"))
+                return permission("quotation.review", "QUOTATION", "WRITE");
+            if (method.equals("DELETE")) return permission("quotation.delete", "QUOTATION", "WRITE");
+            if (method.equals("PUT")) return permission("quotation.edit", "QUOTATION", "WRITE");
+            if (method.equals("POST")) return permission("quotation.create", "QUOTATION", "WRITE");
+            return null;
+        }
+
         if (path.startsWith("/api/v1/production-orders")) {
             if (path.contains("/export")) return permission("production.export", "PRODUCTION", "READ");
             if (read) return permission("production.view", "PRODUCTION", "READ");
@@ -394,6 +407,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
                 return permission("template.upload", "TEMPLATE", "WRITE");
             if ("EXPERIMENT_SOURCE".equalsIgnoreCase(request.getParameter("kind")))
                 return permission("experiment.create", "EXPERIMENT", "WRITE");
+            if ("QUOTATION_SOURCE".equalsIgnoreCase(request.getParameter("kind")))
+                return permission("quotation.create", "QUOTATION", "WRITE");
             if ("RESEARCH_TEST_SOURCE".equalsIgnoreCase(request.getParameter("kind")))
                 return permission("research-test.report.create", "RESEARCH_TEST", "WRITE");
             if ("RESEARCH_TEST_STANDARD_SOURCE".equalsIgnoreCase(request.getParameter("kind")))

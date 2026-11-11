@@ -20,7 +20,7 @@ import java.util.zip.ZipFile;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jsd.aird.kb.domain.DocumentParser;
+import com.jsd.aird.kb.api.DocumentParser;
 
 /** Converts a validated MinerU result archive into the neutral structured block contract. */
 final class MineruDocumentAdapter {

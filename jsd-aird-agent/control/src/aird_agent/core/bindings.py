@@ -1,8 +1,8 @@
-"""Host policy ports. The coordinator never chooses business authorities or domain tools."""
+"""Host policy ports. The business adapter never chooses business authorities or domain tools."""
 
 from fastapi import HTTPException
 
-from aird_agent.core.contracts import Principal, digest
+from aird_agent.core.contracts import digest
 
 
 class RuntimeBindings:
@@ -13,9 +13,6 @@ class RuntimeBindings:
         self.runtime = runtime
         self.settings, self.store, self.packs = runtime.settings, runtime.store, runtime.packs
         self.active, self.tool, self.callback = runtime.active, runtime.tool, runtime.callback
-
-    def restore_principal(self, value):
-        return Principal.model_validate(value)
 
     def tools_for(self, run):
         return self.packs.tools(run["pack_ids"])
@@ -62,7 +59,7 @@ class RuntimeBindings:
         payload.update(
             pack_ids=selected, pack_versions=self.packs.pin(selected), host_scope=scope.get("scope", {})
         )
-        return payload, scope, False
+        return payload, scope
 
     def conversation_metadata(self, payload):
         return {key: payload.get(key) for key in ("profile", "pack_ids", "pack_versions", "host_scope")}
@@ -70,9 +67,6 @@ class RuntimeBindings:
     def validate_conversation_scope(self, conversation, payload):
         if conversation.get("host_scope") != payload.get("host_scope"):
             raise HTTPException(409, "CONVERSATION_SCOPE_CHANGED")
-
-    def inherit(self, previous):
-        return {}
 
     def initial_state(self, scope, evidence):
         return {"host_scope": scope.get("scope", {}), "source_documents": [], "source_refs": []}
@@ -96,6 +90,9 @@ class RuntimeBindings:
             raise HTTPException(413, "TOOL_OUTPUT_TOO_LARGE")
         return result
 
+    def delivery_result(self, run, name, arguments, result):
+        return result, False
+
     async def remember_sources(self, principal, run, result):
         return result
 
@@ -103,7 +100,7 @@ class RuntimeBindings:
         raise HTTPException(400, "UNBOUND_TOOL")
 
     def gate_state(self, run):
-        return {key: run.get(key) for key in ("plan", "completion", "registered_outputs")}
+        return {key: run.get(key) for key in ("completion", "registered_outputs")}
 
     def evidence_summaries(self, run):
         return []
@@ -118,10 +115,7 @@ class RuntimeBindings:
         return self.packs.initial_tools(run["pack_ids"])
 
     async def prepare_run(self, principal, run):
-        return await self.prepare_fast_qa(principal, run) if run.get("profile") == "fast_qa" else run
-
-    async def prepare_fast_qa(self, principal, run):
-        raise HTTPException(422, "EXECUTION_PROFILE_NOT_BOUND")
+        return run
 
     def instructions_for(self, run):
         return self.packs.instructions(run["pack_ids"])
@@ -138,6 +132,15 @@ class RuntimeBindings:
 
     def validate_output(self, run, text):
         return text, isinstance(text, str)
+
+    def output_diagnostics(self, run, text):
+        return {}
+
+    def prepare_output_repair(self, run):
+        raise HTTPException(409, "OUTPUT_REPAIR_UNAVAILABLE")
+
+    def authorize_repair_tool(self, run, name, arguments):
+        raise HTTPException(409, "OUTPUT_REPAIR_UNAVAILABLE")
 
     def default_completion(self, run):
         return {

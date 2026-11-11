@@ -67,3 +67,8 @@ Thumbs.db
 !/scripts/testdata/r10_noformula_bundle.py
 !/scripts/testdata/r10_register_noformula_model.sql
 /jsd-aird-agent/control/.coverage
+
+/jsd-aird-web/public/chemistry/RDKit_minimal.js
+/jsd-aird-web/public/chemistry/RDKit_minimal.wasm
+/jsd-aird-web/public/chemistry/input.js
+/jsd-aird-agent/enterprise-plugin/lib/chemistry/

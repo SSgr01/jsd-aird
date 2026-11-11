@@ -5,7 +5,7 @@ import java.math.BigInteger;
 
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
-import com.jsd.aird.tpl.application.port.BlankWordDocumentFactory;
+import com.jsd.aird.tpl.api.BlankWordDocumentFactory;
 import org.docx4j.model.structure.PageSizePaper;
 import org.docx4j.openpackaging.packages.WordprocessingMLPackage;
 import org.docx4j.wml.ObjectFactory;

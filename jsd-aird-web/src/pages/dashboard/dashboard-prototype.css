@@ -4,9 +4,9 @@
   min-height: calc(100dvh - 64px);
   margin: -24px;
   padding: 22px 24px 64px;
-  background: linear-gradient(135deg, #eaf3ff 0%, #f4f8ff 55%, #ecfaf4 100%);
-  font-family: 'Microsoft YaHei', 'PingFang SC', Arial, sans-serif;
-  color: #11233f;
+  background: var(--app-background);
+  font-family: var(--app-font-family);
+  color: var(--app-text);
 }
 
 .dashboard-page-head {
@@ -19,16 +19,16 @@
 
 .dashboard-page-title {
   margin: 0 0 4px;
-  font-size: 22px;
+  font-size: var(--app-font-size-title);
   font-weight: 600;
   line-height: 30px;
-  color: #11233f;
+  color: var(--app-text);
 }
 
 .dashboard-page-desc {
   margin: 0;
   font-size: 13px;
-  color: #55708f;
+  color: var(--app-text-secondary);
 }
 
 .dashboard-page-extra {
@@ -39,7 +39,7 @@
 
 .dashboard-page-username {
   font-size: 13px;
-  color: #44546f;
+  color: var(--app-text-secondary);
   white-space: nowrap;
 }
 
@@ -56,16 +56,16 @@
   align-items: center;
   gap: 12px;
   padding: 14px 16px;
-  background: #ffffff;
-  border: 1px solid #dbe6f4;
-  border-radius: 10px;
-  box-shadow: 0 4px 14px rgba(42, 72, 110, 0.06);
+  background: var(--app-surface);
+  border: 0;
+  border-radius: var(--app-radius-card);
+  box-shadow: var(--app-shadow);
   transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
 
 .dashboard-stat:hover {
   transform: translateY(-1px);
-  box-shadow: 0 8px 20px rgba(42, 72, 110, 0.1);
+  box-shadow: var(--app-shadow-hover);
 }
 
 .dashboard-stat-icon {
@@ -77,7 +77,7 @@
   font-size: 18px;
   color: var(--stat-tint);
   background: var(--stat-bg);
-  border-radius: 10px;
+  border-radius: var(--app-radius-control);
 }
 
 .dashboard-stat-body {
@@ -88,15 +88,15 @@
 }
 
 .dashboard-stat-value {
-  font-size: 22px;
-  font-weight: 700;
-  color: #11233f;
+  font-size: 24px;
+  font-weight: 500;
+  color: var(--app-text);
 }
 
 .dashboard-stat-label {
   margin-top: 4px;
   font-size: 12px;
-  color: #5b6c84;
+  color: var(--app-text-secondary);
 }
 
 /* 模块区 */
@@ -124,10 +124,10 @@
 }
 
 .dashboard-module {
-  background: #ffffff;
-  border: 1px solid #dbe6f4;
-  border-radius: 10px;
-  box-shadow: 0 6px 18px rgba(42, 72, 110, 0.06);
+  background: var(--app-surface);
+  border: 0;
+  border-radius: var(--app-radius-card);
+  box-shadow: var(--app-shadow);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -138,19 +138,19 @@
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px solid #eef2f8;
+  border-bottom: 1px solid var(--app-row-rule);
 }
 
 .dashboard-module-title {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--app-font-size-section);
   font-weight: 600;
-  color: #11233f;
+  color: var(--app-text);
 }
 
 .dashboard-module-more {
   font-size: 12px;
-  color: #1677ff;
+  color: var(--app-primary);
 }
 
 .dashboard-module-more:hover {
@@ -184,7 +184,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px dashed #edf1f7;
+  border-bottom: 1px dashed var(--app-row-rule);
   font-size: 13px;
 }
 
@@ -198,12 +198,12 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  color: #14243a;
+  color: var(--app-text);
   text-decoration: none;
 }
 
 a.dashboard-module-item-main:hover .dashboard-module-item-title {
-  color: #1677ff;
+  color: var(--app-primary);
 }
 
 .dashboard-module-item-title {
@@ -216,16 +216,16 @@ a.dashboard-module-item-main:hover .dashboard-module-item-title {
 
 .dashboard-module-item-meta {
   font-size: 12px;
-  color: #7889a1;
+  color: var(--app-text-secondary);
 }
 
 .dashboard-module-item-badge {
   flex: 0 0 auto;
   margin-left: 10px;
   padding: 2px 8px;
-  font-size: 11px;
-  color: #1677ff;
-  background: #e8f1ff;
+  font-size: 12px;
+  color: var(--app-primary);
+  background: var(--app-primary-soft);
   border-radius: 999px;
 }
 
@@ -235,23 +235,23 @@ a.dashboard-module-item-main:hover .dashboard-module-item-title {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  color: #7b8ba5;
+  color: var(--app-text-secondary);
   text-align: center;
 }
 
 .dashboard-module-empty-icon {
   font-size: 24px;
-  color: #c4cfdf;
+  color: var(--app-border-strong);
 }
 
 .dashboard-module-empty-text {
   font-size: 13px;
-  color: #7889a1;
+  color: var(--app-text-secondary);
 }
 
 .dashboard-module-empty-cta {
   font-size: 13px;
-  color: #1677ff;
+  color: var(--app-primary);
 }
 
 .dashboard-module-empty-cta:hover {
@@ -266,7 +266,7 @@ a.dashboard-module-item-main:hover .dashboard-module-item-title {
   width: 52px !important;
   height: 52px !important;
   font-size: 22px;
-  box-shadow: 0 10px 24px rgba(22, 119, 255, 0.32);
+  box-shadow: var(--app-shadow-hover);
 }
 
 /* 底部脚注 */
@@ -277,7 +277,7 @@ a.dashboard-module-item-main:hover .dashboard-module-item-title {
   justify-content: center;
   gap: 8px;
   font-size: 12px;
-  color: #7b8ba5;
+  color: var(--app-text-secondary);
 }
 
 /* 响应式 */
@@ -308,4 +308,8 @@ a.dashboard-module-item-main:hover .dashboard-module-item-title {
   .dashboard-page-username {
     display: none;
   }
+}
+
+@media (max-width: 767px) {
+  .dashboard-page-title { font-size: var(--app-font-size-title-mobile); }
 }

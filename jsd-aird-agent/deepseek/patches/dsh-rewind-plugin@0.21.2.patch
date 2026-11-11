@@ -1,0 +1,143 @@
+diff --git a/lib/client.js b/lib/client.js
+index a47dffd578f175587cae85ad7e8726c4b53f5519..5256fcdfcc83dd94087b1ebe53d2fce33b9e4d43 100644
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -1650,7 +1650,7 @@ var en = {
+   "popover.chat": "Rewind conversation only",
+   "popover.chat.hint": "Context only; workspace untouched",
+   "popover.both": "Rewind conversation and files",
+-  "popover.both.hint": "Context and restore workspace files",
++  "popover.both.hint": "Restore conversation and backed-up files; saved business records remain",
+   "popover.checking": "Checking for file changes\u2026",
+   "popover.noChanges": "No restorable file changes",
+   "popover.backupDisabled": "Snapshots off; the restore may be incomplete",
+@@ -1691,7 +1691,7 @@ var zh = {
+   "popover.chat": "\u4EC5\u56DE\u9000\u5BF9\u8BDD",
+   "popover.chat.hint": "\u4EC5\u56DE\u9000\u4E0A\u4E0B\u6587\uFF0C\u4E0D\u52A8\u5DE5\u4F5C\u533A\u6587\u4EF6",
+   "popover.both": "\u56DE\u9000\u5BF9\u8BDD\u548C\u6587\u4EF6",
+-  "popover.both.hint": "\u56DE\u9000\u4E0A\u4E0B\u6587\u5E76\u8FD8\u539F\u5DE5\u4F5C\u533A\u6587\u4EF6",
++  "popover.both.hint": "还原对话和已备份文件；不撤销实验草稿、报告或成果登记",
+   "popover.checking": "\u6B63\u5728\u68C0\u67E5\u6587\u4EF6\u53D8\u66F4\u2026",
+   "popover.noChanges": "\u65E0\u53EF\u8FD8\u539F\u7684\u6587\u4EF6\u53D8\u66F4",
+   "popover.backupDisabled": "\u5FEB\u7167\u5907\u4EFD\u5DF2\u5173\u95ED\uFF0C\u8FD8\u539F\u53EF\u80FD\u4E0D\u5145\u5206",
+diff --git a/lib/index.js b/lib/index.js
+index f190d9032587500ea1dfbb323ba48571d7c66272..3208858a76d01e079da5bb0ffeb0885ca6a15723 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -2705,7 +2705,8 @@ async function captureBefore(fs, workingDirectory, store, exec, pending) {
+   const cwd = await workingDirectory.ensure(agent, exec.signal);
+   const target = await resolveTarget(fs, path, cwd, exec.signal);
+   if (target === void 0) return;
+-  if (fs.processPathFromHostPath(target.displayPath) === void 0) return;
++  const hostPath = typeof fs.checked === "function" ? await fs.checked(String(target.targetKey)) : target.displayPath;
++  if (fs.processPathFromHostPath(hostPath) === void 0) return;
+   const info = await fs.stat(target, exec.signal).catch((error) => {
+     if (isNotFoundError(error)) return void 0;
+     throw error;
+@@ -2714,15 +2715,15 @@ async function captureBefore(fs, workingDirectory, store, exec, pending) {
+   if (info !== void 0 && store.isOverFileCap(info.size)) return;
+   const key = `${exec.agent?.id ?? "anon"}:${exec.callId}`;
+   if (info === void 0) {
+-    pending.set(key, { path: target.displayPath, backup: null });
++    pending.set(key, { path: hostPath, backup: null });
+     return;
+   }
+   const staged = await store.stageCapture(agent.session.id, key);
+   let backup;
+   try {
+-    await copyFile3(target.displayPath, staged);
++    await copyFile3(hostPath, staged);
+     const st = await stat3(staged);
+-    const source = await stat3(target.displayPath).catch(() => void 0);
++    const source = await stat3(hostPath).catch(() => void 0);
+     backup = {
+       file: staged,
+       size: st.size,
+@@ -2732,7 +2733,7 @@ async function captureBefore(fs, workingDirectory, store, exec, pending) {
+     await rm2(staged, { force: true });
+     throw error;
+   }
+-  pending.set(key, { path: target.displayPath, backup });
++  pending.set(key, { path: hostPath, backup });
+ }
+ async function commitEntry(store, pending, anchorCache, trackedBySession, exec, result, checkpointingEnabled) {
+   const key = `${exec.agent?.id ?? "anon"}:${exec.callId}`;
+@@ -2814,7 +2815,7 @@ function queryFailure(code, message) {
+ function queryResponse(result) {
+   return Response.json(result);
+ }
+-function createRewindQueryHandler(store, agentsOf, checkpointingEnabled, query) {
++function createRewindQueryHandler(store, agentsOf, checkpointingEnabled, query, displayPath = (path) => path) {
+   return async (request) => {
+     try {
+       if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+@@ -2839,7 +2840,11 @@ function createRewindQueryHandler(store, agentsOf, checkpointingEnabled, query)
+       if (query === "preview") {
+         const seq = payload["seq"];
+         if (!Number.isSafeInteger(seq)) return queryResponse(queryFailure("rewind/bad-request", "seq must be an integer"));
+-        return queryResponse({ ok: true, value: await previewImpact(store, session, seq, checkpointingEnabled()) });
++        const impact = await previewImpact(store, session, seq, checkpointingEnabled());
++        return queryResponse({ ok: true, value: { ...impact,
++          files: impact.files.map(item => ({ ...item, path: displayPath(item.path) })),
++          uncovered: impact.uncovered.map(item => ({ ...item, path: displayPath(item.path) }))
++        } });
+       }
+       return queryResponse({
+         ok: true,
+@@ -2857,10 +2862,10 @@ function renderFailures(failed) {
+     list: failed.map((f) => t("failures.item", { path: f.path, message: f.message })).join(t("sep.list"))
+   });
+ }
+-function renderSkipped(outcome, uncovered, maxFileBytes) {
++function renderSkipped(outcome, uncovered, maxFileBytes, displayPath = (path) => path) {
+   const capped = new Set(uncovered.map((item) => item.path));
+   const limit = formatBytes(maxFileBytes);
+-  return outcome.skipped.filter((path) => capped.has(path)).map((path) => t("plan.skip", { path, reason: t("skipReason.oversized", { limit }) })).join("\n");
++  return outcome.skipped.filter((path) => capped.has(path)).map((path) => t("plan.skip", { path: displayPath(path), reason: t("skipReason.oversized", { limit }) })).join("\n");
+ }
+ async function resolveObservationTarget(fs, path) {
+   try {
+@@ -2936,6 +2941,7 @@ async function executeRewind(ctx, store, fs, invocation, rawTarget, mode, inflig
+     } catch (error) {
+       return rewindErrorResult(error);
+     }
++    await ctx.parallel("enterprise/session-before-rewind", { sessionId, targetSeq: plan.targetSeq, mode });
+     const marker = buildMarker();
+     let event;
+     try {
+@@ -2961,18 +2967,23 @@ async function executeRewind(ctx, store, fs, invocation, rawTarget, mode, inflig
+       }
+       if (outcome !== void 0) {
+         await syncRestoreObservations(ctx, fs, agent, outcome);
++        const displayPath = (path) => fs?.processPathFromHostPath(path) ?? path;
+         const parts = [];
+         if (outcome.restored.length > 0) parts.push(t("restore.count", { count: outcome.restored.length }));
+         if (outcome.deleted.length > 0) parts.push(t("delete.count", { count: outcome.deleted.length }));
+         if (outcome.skipped.length > 0) {
+           parts.push(t("skip.count", { count: outcome.skipped.length }));
+           const capped = await store.uncoveredPaths(agent.session.id).catch(() => []);
+-          const skippedLines = renderSkipped(outcome, capped, store.fileCapBytes);
++          const skippedLines = renderSkipped(outcome, capped, store.fileCapBytes, displayPath);
+           if (skippedLines !== "") parts.push(skippedLines);
+         }
+         if (!checkpointingEnabled) parts.push(t("backupOff"));
+         restore = parts.length > 0 ? `${t("sep.clause")}${parts.join(t("sep.list"))}` : t("noRestorable");
+-        restore += renderFailures(outcome.failed);
++        const failures = typeof fs?.checked === "function" ? outcome.failed.map((failure) => {
++          ctx.logger.warn("File restore failed: %s (%s)", failure.path, failure.message);
++          return { path: displayPath(failure.path), message: /^[A-Z][A-Z_]+(?=:)/.exec(failure.message)?.[0] ?? "FILE_RESTORE_FAILED" };
++        }) : outcome.failed;
++        restore += renderFailures(failures);
+       }
+     }
+     return {
+@@ -3295,7 +3306,8 @@ function apply(ctx, config) {
+           path,
+           methods: ["POST"],
+           requestBody: "buffered",
+-          fetch: createRewindQueryHandler(store, agentsOf, checkpointingEnabled, query)
++          fetch: createRewindQueryHandler(store, agentsOf, checkpointingEnabled, query,
++            path => scope.get("fs")?.processPathFromHostPath(path) ?? path)
+         }), `dsh-rewind ${path} route`);
+       } catch (error) {
+         ctx.logger.error(`[dsh-rewind] route registration failed for ${path}: ${error instanceof Error ? error.message : String(error)}`);

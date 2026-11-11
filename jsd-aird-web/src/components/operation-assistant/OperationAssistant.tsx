@@ -104,6 +104,7 @@ export function OperationAssistant() {
   const nearBottom = useRef(true);
   const drag = useRef<ActiveDrag | null>(null);
   const suppressLauncherClick = useRef(false);
+  const previousViewport = useRef({ width: window.innerWidth, height: window.innerHeight });
   const [dragging, setDragging] = useState(false);
   const currentPage = currentOperationPage(location.pathname, location.search);
   const suggestions = operationSuggestions(currentPage?.id, user);
@@ -118,13 +119,29 @@ export function OperationAssistant() {
   }, [messages, open]);
 
   useEffect(() => {
-    const reposition = () => {
+    const reposition = (event?: Event) => {
       const state = useOperationAssistantStore.getState();
       const mode = state.open ? 'panel' : 'launcher';
       const element = mode === 'panel' ? panel.current : launcher.current;
       if (!element) return;
       const rect = element.getBoundingClientRect();
-      const position = mode === 'panel' ? state.panelPosition : state.launcherPosition;
+      let position = mode === 'panel' ? state.panelPosition : state.launcherPosition;
+      if (position && event?.type === 'resize') {
+        const previous = previousViewport.current;
+        const oldWidth = mode === 'launcher' ? previous.width <= 480 ? 44 : 48 : Math.min(420, Math.max(0, previous.width - (previous.width <= 480 ? 24 : 48)));
+        const oldHeight = mode === 'launcher' ? previous.width <= 480 ? 44 : 48 : Math.min(560, Math.max(0, previous.height - (previous.width <= 480 ? 80 : 96)));
+        // Keep the distance to the nearest viewport edges. Clamping alone
+        // permanently strands a corner launcher in the middle after resizing.
+        position = {
+          x: position.x + oldWidth / 2 > previous.width / 2
+            ? window.innerWidth - rect.width - Math.max(12, previous.width - position.x - oldWidth)
+            : position.x,
+          y: position.y + oldHeight / 2 > previous.height / 2
+            ? window.innerHeight - rect.height - Math.max(12, previous.height - position.y - oldHeight)
+            : position.y,
+        };
+      }
+      previousViewport.current = { width: window.innerWidth, height: window.innerHeight };
       const next = clampPosition(position || defaultPosition(mode), rect.width, rect.height);
       setPosition(mode, next, true);
     };

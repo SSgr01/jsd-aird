@@ -209,7 +209,6 @@ public class TestSemanticsCatalogService {
                 || !java.util.Objects.equals(previous.standardFieldCode(), row.standardFieldCode());
     }
 
-    private String json(JsonNode value){return value==null?"{}":value.toString();}
 
     private record Row(int sourceRow,int ordinal,String semanticKey,String rawItem,String rawMethod,String rawExample,String rawFactors,String atomicName,String suggestedCode,String valueType,String unit,String standardFieldCode,JsonNode qualifiers,List<String> aliases,List<String> factors,JsonNode evidence,int confidence) { }
 }

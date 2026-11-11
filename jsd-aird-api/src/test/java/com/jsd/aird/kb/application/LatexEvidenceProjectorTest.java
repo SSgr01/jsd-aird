@@ -1,4 +1,6 @@
 package com.jsd.aird.kb.application;
+import com.jsd.aird.shared.text.MineruLatexNormalizer;
+import com.jsd.aird.shared.text.LatexEvidenceProjector;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

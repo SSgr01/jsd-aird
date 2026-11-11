@@ -9,8 +9,8 @@ import java.util.Map;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.jsd.aird.tpl.application.port.OfficeStructureParser;
-import com.jsd.aird.tpl.application.port.WorkbookSnapshotStructureParser;
+import com.jsd.aird.tpl.api.OfficeStructureParser;
+import com.jsd.aird.tpl.api.WorkbookSnapshotStructureParser;
 import org.springframework.stereotype.Component;
 
 /** Converts a persisted Univer workbook snapshot into the same compact structure used by XLSX recognition. */

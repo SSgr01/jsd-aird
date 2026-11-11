@@ -2,8 +2,8 @@ package com.jsd.aird.mdm.application.service;
 import com.jsd.aird.mdm.application.query.ProjectTaskQuery;
 import com.jsd.aird.mdm.application.query.ProjectTaskSummary;
 import com.jsd.aird.mdm.domain.model.*;
-import com.jsd.aird.mdm.infrastructure.model.ProjectTaskSummaryRow;
-import com.jsd.aird.mdm.infrastructure.persistence.ProjectWorkMapper;
+import com.jsd.aird.mdm.application.query.ProjectTaskSummaryRow;
+import com.jsd.aird.mdm.application.port.ProjectWorkRepository;
 import com.jsd.aird.shared.error.*;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,11 +13,11 @@ import java.util.*;
 
 @Service
 public class ProjectWorkService {
- private final ProjectWorkMapper mapper;
+ private final ProjectWorkRepository mapper;
  private final ProjectService projectAccess;
  @Autowired
- public ProjectWorkService(ProjectWorkMapper mapper, ProjectService projectAccess){this.mapper=mapper;this.projectAccess=projectAccess;}
- public ProjectWorkService(ProjectWorkMapper mapper){this(mapper,null);}
+ public ProjectWorkService(ProjectWorkRepository mapper, ProjectService projectAccess){this.mapper=mapper;this.projectAccess=projectAccess;}
+ public ProjectWorkService(ProjectWorkRepository mapper){this(mapper,null);}
  public List<ProjectTask> tasks(UUID stageId){if(projectAccess!=null)requireProject(mapper.stageProjectId(stageId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"阶段不存在")));return mapper.tasks(stageId);}
  @Transactional
  public ProjectTask createTask(UUID projectId,TaskInput input){
@@ -45,7 +45,7 @@ public class ProjectWorkService {
  }
  /**
   * 任务换阶段时，任务下的过程产物需要一起迁到新阶段：这些数据以 (stage_id, task_id) 成对存储，
-  * 且关联查询要求与任务同阶段，否则换阶段后它们会在新阶段里查不到（详见 ProjectWorkMapper 中的说明）。
+  * 且关联查询要求与任务同阶段，否则换阶段后它们会在新阶段里查不到（详见 ProjectWorkRepository 中的说明）。
   */
  private void moveTaskChildren(UUID taskId,UUID toStageId){
   mapper.moveTaskExperiments(taskId,toStageId);

@@ -1,6 +1,8 @@
 import '@/compat/browser';
+import { observeEditorSize } from './observe-editor-size';
 import { markPerformance } from '@/services/performance/metrics';
 import { editorReady } from './workspace-loading';
+import { editorTheme } from './editor-theme';
 import {
   createUniver,
   ICommandService,
@@ -95,6 +97,7 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
     let animationFrame = 0;
     let initialSelectionTimer = 0;
     let initialized = false;
+    let stopObservingSize: (() => void) | undefined;
     let commandSubscription: { dispose(): void } | undefined;
     let ownedUniver: ReturnType<typeof createUniver>['univer'] | undefined;
     let ownedApi: FUniver | undefined;
@@ -127,6 +130,7 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
       }
       try {
         const { univer, univerAPI } = createUniver({
+          theme: editorTheme,
           locale: LocaleType.ZH_CN,
           locales: {
             [LocaleType.ZH_CN]: mergeLocales(UniverPresetDocsCoreZhCN as Record<string, unknown>, docsFeatureLocale),
@@ -155,6 +159,9 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
         apiRef.current = univerAPI;
         const restored = modeSnapshotRef.current?.source === normalizedSnapshot ? modeSnapshotRef.current : undefined;
         const document = univerAPI.createDocument(restored?.value ?? normalizedSnapshot);
+        stopObservingSize = observeEditorSize(container, () => {
+          if (!cancelled) univer.__getInjector().get(IRenderManagerService).getRenderUnitById(document.getId())?.engine.resize();
+        });
         const model = univer.__getInjector().get(IUniverInstanceService).getUnit<DocumentDataModel>(document.getId());
         rawSnapshotRef.current = () => model?.getSnapshot();
         contentRevisionRef.current = restored?.revision ?? 0;
@@ -240,6 +247,7 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
 
     return () => {
       cancelled = true;
+      stopObservingSize?.();
       // An explicit edit/preview mode change must retain the current document.
       // Save acknowledgements intentionally leave the original snapshot prop stable.
       if (editableRef.current !== editable && sourceSnapshotRef.current === (normalizedSnapshot as unknown) && ownedApi?.getActiveDocument()) {
@@ -368,7 +376,7 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
   );
 
   if (initializationError) throw initializationError;
-  return <div ref={containerRef} className="univer-editor-surface" aria-label="Word 模板编辑器" />;
+  return <div ref={containerRef} className="univer-editor-surface univer-docs-surface" aria-label="Word 模板编辑器" />;
 });
 
 function toEditorText(value: unknown) {

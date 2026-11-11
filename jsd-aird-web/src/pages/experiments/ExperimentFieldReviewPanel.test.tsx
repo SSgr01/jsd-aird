@@ -36,7 +36,7 @@ it('uses the template field review description when a workbook region is covered
 
   fireEvent.click(screen.getByRole('tab', { name: '字段结构' }));
   expect(screen.getByText('区域 1 · 字段 1 · 待确认 1')).toBeInTheDocument();
-  expect(screen.getByText('普通字段：在空白位置输入名称后自动发现；明细字段请点击对应区域右侧“＋”。在数据区填写业务值不会创建字段。')).toBeInTheDocument();
+  expect(screen.getByText('在区域标题位置输入名称，可自动创建位置明确的字段；其他位置可使用“新增字段”设置。填写结果或物料编码不会创建字段。')).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: /实验时间/ }));
   expect(screen.getByText('基本属性')).toBeInTheDocument();

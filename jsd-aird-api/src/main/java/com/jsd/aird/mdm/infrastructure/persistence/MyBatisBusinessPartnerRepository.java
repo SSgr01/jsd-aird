@@ -1,4 +1,7 @@
 package com.jsd.aird.mdm.infrastructure.persistence;
+import com.jsd.aird.mdm.api.BusinessPartner;
+import com.jsd.aird.mdm.api.PartnerContact;
+import com.jsd.aird.mdm.api.PartnerStatus;
 
 import com.jsd.aird.mdm.application.port.BusinessPartnerRepository;
 import com.jsd.aird.mdm.domain.model.*;

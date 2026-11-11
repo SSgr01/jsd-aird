@@ -324,6 +324,16 @@ public class PrivateResearchSourceService {
         }
     }
 
+    public void validateEvidence(JsonNode evidence) {
+        var documents = new java.util.HashMap<UUID, ObjectNode>();
+        for (var item : evidence) {
+            var reference = item.path("source");
+            if (!Set.of("RUN_UPLOAD", "EXTERNAL_FULLTEXT").contains(reference.path("kind").asText())) continue;
+            var id = UUID.fromString(reference.path("document_id").asText());
+            validate(reference, item.path("text").asText(), documents.computeIfAbsent(id, this::get));
+        }
+    }
+
     private void validate(JsonNode reference, String excerpt, ObjectNode source) {
         if (!"READY".equals(source.path("status").asText())
                 || !source.path("conversation_id").asText().equals(reference.path("resource_id").asText())
@@ -343,8 +353,14 @@ public class PrivateResearchSourceService {
     }
 
     public FileStorageFacade.StoredFile open(UUID id) {
+        return open(id, null);
+    }
+
+    public FileStorageFacade.StoredFile open(UUID id, UUID expectedVersion) {
         var source = get(id);
-        return files.open(ActorContext.required().organizationId(), UUID.fromString(source.path("version_id").asText()));
+        var version = UUID.fromString(source.path("version_id").asText());
+        if (expectedVersion != null && !expectedVersion.equals(version)) throw new ApiException(ApiErrorCode.VERSION_CONFLICT);
+        return files.open(ActorContext.required().organizationId(), version);
     }
 
     private static String sha(String text) { return sha(text.getBytes(StandardCharsets.UTF_8)); }

@@ -31,3 +31,14 @@ it('updates text immediately while the router commits the URL in a transition', 
   expect(input).toHaveValue('3333');
   await waitFor(()=>expect(screen.getByRole('status')).toHaveTextContent('keyword=3333'));
 });
+
+it('keeps a newer filter when a completed request corrects an older page', async () => {
+  const wrapper = ({ children }: PropsWithChildren) => <MemoryRouter initialEntries={['/projects/list?page=3']} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>{children}</MemoryRouter>;
+  const { result } = renderHook(() => useListUrl(), { wrapper });
+  const correctPage = result.current.update;
+  act(() => { result.current.update({ keyword: '耐候性' }, true); });
+  await waitFor(() => expect(result.current.text('keyword')).toBe('耐候性'));
+  act(() => { correctPage({ page: 1 }); });
+  await waitFor(() => expect(result.current.number('page', 0)).toBe(1));
+  expect(result.current.text('keyword')).toBe('耐候性');
+});

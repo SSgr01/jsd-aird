@@ -32,11 +32,16 @@ public class DataSearchAuthorizationService {
      * searched.
      */
     public DataSourceFileSearchFacade.RetrievalAccessScope requireRetrievalScopes(Actor actor) {
-        var data = resolve(actor, "data.view", "DATA");
-        var experiment = resolve(actor, "experiment.view", "EXPERIMENT");
-        if (!data.allowed() && !experiment.allowed()) {
+        var scopes = resolveRetrievalScopes(actor);
+        if ("DENIED".equals(scopes.dataScope().type()) && "DENIED".equals(scopes.experimentScope().type())) {
             throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有数据中心或按模板实验查看权限");
         }
+        return scopes;
+    }
+
+    public DataSourceFileSearchFacade.RetrievalAccessScope resolveRetrievalScopes(Actor actor) {
+        var data = resolve(actor, "data.view", "DATA");
+        var experiment = resolve(actor, "experiment.view", "EXPERIMENT");
         return new DataSourceFileSearchFacade.RetrievalAccessScope(
                 data.allowed() ? toAccessScope(actor, data) : DataSourceFileSearchFacade.AccessScope.denied(),
                 experiment.allowed() ? toAccessScope(actor, experiment) : DataSourceFileSearchFacade.AccessScope.denied());

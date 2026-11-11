@@ -532,8 +532,8 @@ public final class BlockAwareChunker {
         var type = piece.nodeType() == null ? "" : piece.nodeType().toLowerCase(java.util.Locale.ROOT);
         if (Set.of("header", "footer", "pagenumber").contains(type)) return true;
         var path = String.join(" ", piece.headingPath()).strip().toLowerCase(java.util.Locale.ROOT);
-        if (path.matches(".*(?:references|bibliography|acknowledg(?:e)?ments?|supporting information|"
-                + "supplementary (?:information|material)|参考文献|致谢|补充材料).*")) return true;
+        // Supplementary sections contain experimental evidence and remain searchable.
+        if (path.matches(".*(?:references|bibliography|acknowledg(?:e)?ments?|参考文献|致谢).*")) return true;
         var text = piece.text() == null ? "" : piece.text().strip();
         if (text.isBlank()) return true;
         var box = polygon(piece.anchors());

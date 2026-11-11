@@ -13,8 +13,8 @@ import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.office.SnapshotWorkbookExporter;
 import com.jsd.aird.shared.security.ActorContext;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
-import com.jsd.aird.tpl.application.port.WordOoxmlPatcher;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.WordOoxmlPatcher;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import com.jsd.aird.tpl.domain.TemplateStatus;
 import org.springframework.stereotype.Service;
 

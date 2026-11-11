@@ -17,7 +17,7 @@ import com.jsd.aird.tpl.api.TemplateDataImportFacade;
 import com.jsd.aird.tpl.api.ProjectTemplateFacade;
 import com.jsd.aird.tpl.application.port.TabularStructureParser;
 import com.jsd.aird.tpl.application.port.TemplateRepository;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import org.springframework.stereotype.Service;
 
 @Service

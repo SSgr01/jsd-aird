@@ -9,7 +9,7 @@ describe('unified laboratory workbook', () => {
     };
     const copied = copyLabCells([[source, { v: '旧样品', s: 'style-1' }]], 1, 2);
     expect(copied[0]![0]!.f).toBe('=IF(C2="A1",SUM($B$52:$B$59,J53:J60),$C2+F$2)');
-    expect(copied[0]![1]).toEqual({ v: '', s: 'style-1' });
+    expect(copied[0]![1]).toEqual({ v: null, t: null, s: 'style-1' });
     expect(source.f).toContain('H52:H59');
   });
   it('keeps masses in grams and suppresses an incomplete total', () => {

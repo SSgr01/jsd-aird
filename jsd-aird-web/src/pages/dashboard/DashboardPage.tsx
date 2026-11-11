@@ -55,8 +55,8 @@ const DASHBOARD_STATS: StatMetric[] = [
     value: 0,
     to: '/projects/list',
     icon: <FolderOutlined />,
-    tint: '#1f6feb',
-    bg: '#e8f1ff',
+    tint: 'var(--app-primary)',
+    bg: 'var(--app-primary-soft)',
   },
   {
     key: 'tasks',
@@ -64,8 +64,8 @@ const DASHBOARD_STATS: StatMetric[] = [
     value: 0,
     to: '/projects/tasks',
     icon: <UnorderedListOutlined />,
-    tint: '#8b5cf6',
-    bg: '#f1ebff',
+    tint: 'var(--app-violet)',
+    bg: 'var(--app-violet-soft)',
   },
   {
     key: 'experiments',
@@ -73,8 +73,8 @@ const DASHBOARD_STATS: StatMetric[] = [
     value: 0,
     to: '/experiments/list',
     icon: <HistoryOutlined />,
-    tint: '#0ea5e9',
-    bg: '#e4f6ff',
+    tint: 'var(--app-primary)',
+    bg: 'var(--app-primary-soft)',
   },
   {
     key: 'pending-review',
@@ -82,8 +82,8 @@ const DASHBOARD_STATS: StatMetric[] = [
     value: 0,
     to: '/experiments/list?status=PENDING_REVIEW',
     icon: <ScheduleOutlined />,
-    tint: '#f59e0b',
-    bg: '#fff5e0',
+    tint: 'var(--app-warning)',
+    bg: 'var(--app-warning-soft)',
   },
   {
     key: 'to-be-filled',
@@ -91,8 +91,8 @@ const DASHBOARD_STATS: StatMetric[] = [
     value: 0,
     to: '/experiments/list?status=RETURNED',
     icon: <FileTextOutlined />,
-    tint: '#10b981',
-    bg: '#e6fbf2',
+    tint: 'var(--app-success)',
+    bg: 'var(--app-success-soft)',
   },
   {
     key: 'inventory',
@@ -100,8 +100,8 @@ const DASHBOARD_STATS: StatMetric[] = [
     value: 0,
     to: '/inventory/query',
     icon: <DatabaseOutlined />,
-    tint: '#475569',
-    bg: '#eef1f6',
+    tint: 'var(--app-text-secondary)',
+    bg: 'var(--app-surface-subtle)',
   },
 ];
 

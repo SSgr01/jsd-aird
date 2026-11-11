@@ -12,7 +12,7 @@ import com.jsd.aird.core.api.ProjectResourceFacade;
 import com.jsd.aird.core.api.ProjectResourceFacade.ResourceType;
 import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
 import com.jsd.aird.kb.application.port.KnowledgeRepository;
-import com.jsd.aird.kb.domain.FileSafetyScanner;
+import com.jsd.aird.kb.api.FileSafetyScanner;
 import com.jsd.aird.kb.domain.LexicalAnalyzer;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.FileStorageFacade;

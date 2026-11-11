@@ -50,7 +50,7 @@
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
-  border: 1px solid #dfe6f0;
+  border: 1px solid var(--app-border);
   border-radius: 12px;
   background: #fff;
 }
@@ -163,8 +163,8 @@
 }
 .research-test-report-card.is-selected {
   border-color: var(--app-primary);
-  background: linear-gradient(135deg, #f7f9ff, var(--app-primary-soft));
-  box-shadow: inset 0 0 0 1px rgb(49 92 246 / 8%), var(--app-shadow);
+  background: var(--app-primary-soft);
+  box-shadow: inset 0 0 0 1px rgb(53 111 200 / 8%), var(--app-shadow);
 }
 .research-test-card-head {
   display: flex;
@@ -514,7 +514,7 @@
 .research-test-create-modal .ant-modal-header {
   margin: 0;
   padding: 20px 24px;
-  border-bottom: 1px solid #dfe6f0;
+  border-bottom: 1px solid var(--app-border);
 }
 .research-test-create-modal .ant-modal-title {
   font-size: 20px;
@@ -525,7 +525,7 @@
 .research-test-create-modal .ant-modal-footer {
   margin: 0;
   padding: 16px 20px;
-  border-top: 1px solid #dfe6f0;
+  border-top: 1px solid var(--app-border);
 }
 .research-test-rename-modal .ant-modal-content {
   padding: 0;
@@ -535,7 +535,7 @@
 .research-test-rename-modal .ant-modal-header {
   margin: 0;
   padding: 20px 24px;
-  border-bottom: 1px solid #dfe6f0;
+  border-bottom: 1px solid var(--app-border);
 }
 .research-test-rename-modal .ant-modal-title {
   font-size: 20px;
@@ -547,7 +547,7 @@
 .research-test-rename-modal .ant-modal-footer {
   margin: 0;
   padding: 16px 20px;
-  border-top: 1px solid #dfe6f0;
+  border-top: 1px solid var(--app-border);
 }
 .research-test-rename-form-grid {
   display: grid;
@@ -591,13 +591,13 @@
 }
 .research-test-report-modal .ant-modal-header {
   padding: 18px 24px;
-  background: linear-gradient(180deg, #f8fbff 0%, #fff 100%);
+  background: var(--app-surface);
 }
 .research-test-report-modal .ant-modal-title {
   color: var(--app-text);
   font-size: 19px;
   font-weight: 700;
-  letter-spacing: -0.01em;
+  letter-spacing: normal;
 }
 .research-test-report-modal .ant-modal-body {
   max-height: min(680px, calc(100vh - 190px));
@@ -648,10 +648,10 @@
 }
 .research-test-report-modal .research-test-choice-section button:hover {
   border-color: #8eaff5;
-  background: #f8fbff;
+  background: var(--app-surface-subtle);
 }
 .research-test-report-modal .research-test-choice-section button.active {
-  border: 2px solid #3478f6;
+  border: 2px solid var(--app-primary);
   background: #f2f6ff;
   box-shadow: 0 4px 12px rgb(52 120 246 / 12%);
 }
@@ -661,7 +661,7 @@
   margin-right: 12px;
   border-radius: 9px;
   background: #eaf1ff;
-  color: #3478f6;
+  color: var(--app-primary);
   font-size: 15px;
 }
 .research-test-report-modal .research-test-choice-section button b {
@@ -749,7 +749,7 @@
 }
 .research-test-choice-section button.active {
   border: 2px solid #678bff;
-  background: #f5f8ff;
+  background: var(--app-surface-subtle);
 }
 .research-test-choice-section button > span {
   display: grid;
@@ -757,8 +757,8 @@
   height: 32px;
   margin-right: 10px;
   border-radius: 8px;
-  background: #eaf0ff;
-  color: #346bf2;
+  background: var(--app-primary-soft);
+  color: var(--app-primary);
   place-items: center;
 }
 .research-test-choice-section button b {
@@ -767,7 +767,7 @@
 .research-test-choice-section button small {
   display: block;
   margin-top: 3px;
-  color: #718096;
+  color: var(--app-text-secondary);
   font-size: 11px;
   font-weight: 400;
 }

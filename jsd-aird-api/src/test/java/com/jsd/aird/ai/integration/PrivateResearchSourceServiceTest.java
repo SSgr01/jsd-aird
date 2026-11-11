@@ -57,6 +57,11 @@ class PrivateResearchSourceServiceTest {
                 await().pollInSameThread().atMost(Duration.ofSeconds(5)).until(() -> "READY".equals(service.metadata(id).path("status").asText()));
                 assertThat(service.upload(body).path("id").asText()).isEqualTo(id.toString());
                 assertThat(service.upload(body).has("parsed")).isFalse();
+                var originalVersion = UUID.fromString(created.path("version_id").asText());
+                try (var original = service.open(id, originalVersion)) {
+                    assertThat(new String(original.stream().readAllBytes(), StandardCharsets.UTF_8)).contains("Modulus: 12 kPa.");
+                }
+                assertThatThrownBy(() -> service.open(id, UUID.randomUUID())).isInstanceOf(ApiException.class);
                 var page = service.read(mapper.createObjectNode().put("document_id", id.toString()).put("conversation_id", cid.toString()));
                 var candidate = page.path("candidates").get(1);
                 service.validate(candidate.path("source"), "12 kPa");
@@ -65,6 +70,14 @@ class PrivateResearchSourceServiceTest {
                 var spy = org.mockito.Mockito.spy(service);
                 spy.authorizeAll(repeated);
                 org.mockito.Mockito.verify(spy, org.mockito.Mockito.times(1)).get(id);
+                var repeatedEvidence = mapper.createObjectNode();
+                for (int i=0; i<300; i++) repeatedEvidence.putObject("e"+i).set("source",candidate.path("source"));
+                repeatedEvidence.properties().forEach(entry -> ((com.fasterxml.jackson.databind.node.ObjectNode)entry.getValue()).put("text","12 kPa"));
+                org.mockito.Mockito.clearInvocations(spy);
+                spy.validateEvidence(repeatedEvidence);
+                org.mockito.Mockito.verify(spy, org.mockito.Mockito.times(1)).get(id);
+                ((com.fasterxml.jackson.databind.node.ObjectNode)repeatedEvidence.path("e299")).put("text","a different result");
+                assertThatThrownBy(() -> spy.validateEvidence(repeatedEvidence)).isInstanceOf(ApiException.class);
                 var forged = candidate.path("source").deepCopy();
                 ((com.fasterxml.jackson.databind.node.ObjectNode) forged).put("publication_id", UUID.randomUUID().toString());
                 assertThatThrownBy(() -> service.validate(forged, "12 kPa")).isInstanceOf(ApiException.class);
@@ -74,6 +87,7 @@ class PrivateResearchSourceServiceTest {
                     .put("conversation_id", UUID.randomUUID().toString()))).isInstanceOf(ApiException.class);
                 ActorContext.set(new Actor(actor.organizationId(), UUID.randomUUID(), "other", "USER"));
                 assertThatThrownBy(() -> service.get(id)).isInstanceOf(ApiException.class);
+                assertThatThrownBy(() -> spy.validateEvidence(repeatedEvidence)).isInstanceOf(ApiException.class);
                 var filePolicy = new PrivateSourceFileReadPolicy(database.jdbc);
                 var versionId = UUID.fromString(created.path("version_id").asText());
                 assertThatThrownBy(() -> filePolicy.requireRead(actor.organizationId(), ActorContext.required().userId(), versionId))

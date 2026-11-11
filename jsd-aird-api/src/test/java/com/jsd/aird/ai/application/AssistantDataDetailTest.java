@@ -45,7 +45,7 @@ class AssistantDataDetailTest {
         var retrieval = new RagRetrievalService.Retrieval(null, List.of(), List.of(target), detail, List.of(), null);
 
         var answerHits = RetrievalContextSupport.answerDataHits(retrieval);
-        var compressed = new ContextCompressionService().compress(List.of(), answerHits, 2_000, true);
+        var compressed = new ContextCompressionService().compress(List.of(), answerHits, 2_000);
 
         assertThat(answerHits).containsExactly(target, sameRecord, sharedSheet);
         assertThat(compressed.evidenceRefs()).containsExactly("D1", "D2", "D3");

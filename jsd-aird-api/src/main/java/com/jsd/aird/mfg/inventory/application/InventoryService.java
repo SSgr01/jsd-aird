@@ -7,7 +7,7 @@ import com.jsd.aird.iam.api.RecordDataScope;
 import com.jsd.aird.mfg.inventory.domain.InventoryModels.*;
 import com.jsd.aird.mfg.inventory.application.port.InventoryRepository;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
-import com.jsd.aird.quality.application.port.QualityDataStore;
+import com.jsd.aird.quality.api.QualityRecordLookup;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
@@ -25,9 +25,9 @@ import java.util.UUID;
 public class InventoryService {
     private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(InventoryService.class);
     private static final java.util.regex.Pattern CONSTRAINT_PATTERN=java.util.regex.Pattern.compile("constraint\\s+\"([^\"]+)\"");
-    private final InventoryRepository repository; private final AuditLogFacade audit; private final ObjectMapper mapper; private final QualityDataStore qualityData; private final AuthorizationService authorization;
-    public InventoryService(InventoryRepository repository, AuditLogFacade audit, ObjectMapper mapper, QualityDataStore qualityData){this(repository,audit,mapper,qualityData,null);}
-    @Autowired public InventoryService(InventoryRepository repository, AuditLogFacade audit, ObjectMapper mapper, QualityDataStore qualityData, AuthorizationService authorization){this.repository=repository;this.audit=audit;this.mapper=mapper;this.qualityData=qualityData;this.authorization=authorization;}
+    private final InventoryRepository repository; private final AuditLogFacade audit; private final ObjectMapper mapper; private final QualityRecordLookup qualityData; private final AuthorizationService authorization;
+    public InventoryService(InventoryRepository repository, AuditLogFacade audit, ObjectMapper mapper, QualityRecordLookup qualityData){this(repository,audit,mapper,qualityData,null);}
+    @Autowired public InventoryService(InventoryRepository repository, AuditLogFacade audit, ObjectMapper mapper, QualityRecordLookup qualityData, AuthorizationService authorization){this.repository=repository;this.audit=audit;this.mapper=mapper;this.qualityData=qualityData;this.authorization=authorization;}
 
     /** 未配置数据范围时沿用原权限；指定范围由各页面按其记录 ID 过滤。 */
     private RecordDataScope viewScope(String... permissionCodes) {

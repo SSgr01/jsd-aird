@@ -15,7 +15,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.shared.json.JsonCanonicalizer;
-import com.jsd.aird.tpl.application.port.RecognitionModelClient;
+import com.jsd.aird.tpl.api.RecognitionModelClient;
 import com.jsd.aird.tpl.application.RecognitionIdentity;
 import com.jsd.aird.tpl.domain.QualityIssueSeverity;
 import com.jsd.aird.tpl.application.port.StandardFieldRepository;
@@ -153,7 +153,7 @@ public class OpenAiCompatibleRecognitionClient implements RecognitionModelClient
             throw new IllegalArgumentException("不支持旧的全局语义识别阶段：" + request.callPhase()
                     + "；请使用 STRUCTURE_DISCOVERY、REGION_FIELDS 或 DOCX 专用阶段");
         }
-        if (request.format() == com.jsd.aird.tpl.domain.TemplateFormat.XLSX
+        if (request.format() == com.jsd.aird.tpl.api.TemplateFormat.XLSX
                 && request.structureSummary().path("structureVersion").asInt() != 6) {
             throw new IllegalArgumentException("全局 Excel 识别仅支持 structureVersion 6");
         }

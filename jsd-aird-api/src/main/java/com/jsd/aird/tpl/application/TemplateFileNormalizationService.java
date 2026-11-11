@@ -56,8 +56,9 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class TemplateFileNormalizationService implements TemplateOfficeNormalizationFacade {
-    @Autowired(required=false)
     private com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated;
+    @Autowired(required=false)
+    public void setIsolated(com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated) { this.isolated = isolated; }
 
     private static final String XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     private static final String DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";

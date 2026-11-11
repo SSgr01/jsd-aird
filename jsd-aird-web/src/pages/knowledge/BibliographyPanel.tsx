@@ -1,4 +1,5 @@
-import { Alert, App, Button, Descriptions, Form, Input, Modal, Select, Space, Spin, Typography } from 'antd';
+import { Alert, App, Button, Descriptions, Form, Input, Select, Space, Spin, Typography } from 'antd';
+import { FormModal } from '@/components/form-dialog/FormModal';
 import { useCallback, useEffect, useState } from 'react';
 import { bibliographyApi, bibliographyStatus, type Bibliography } from '@/services/knowledge/bibliography-api';
 
@@ -61,12 +62,12 @@ export function BibliographyPanel({ documentId, versionId, canUpdate = false }: 
       {items.length > 0 && <Descriptions column={{ xs: 1, md: 2 }} items={items} />}
       {value.status !== 'ACCEPTED' && <Typography.Paragraph type="secondary">{bibliographyStatus[value.status] || '部分书目信息暂未补全'}</Typography.Paragraph>}
       {value.status === 'ACCEPTED' && !items.length && <Typography.Paragraph type="secondary">暂无书目信息。</Typography.Paragraph>}
-      <Modal open={editing} title="编辑书目信息" width={760} onCancel={() => setEditing(false)} onOk={() => void save()} confirmLoading={saving} okText="保存" cancelText="取消" destroyOnHidden>
+      <FormModal form={form} open={editing} title="编辑书目信息" width={760} onCancel={() => setEditing(false)} onOk={() => save()} confirmLoading={saving} okText="保存" cancelText="取消" destroyOnHidden>
         <Form form={form} layout="vertical">
           <Form.Item name="documentType" label="资料类型" rules={[{ required: true }]}><Select options={[{ value: 'UNKNOWN', label: '其他资料' }, { value: 'PAPER', label: '公开论文' }, { value: 'PATENT', label: '专利' }, { value: 'INTERNAL', label: '客户或内部资料' }]} /></Form.Item>
           {Object.entries(labels).map(([key, label]) => <Form.Item key={key} name={key} label={label}>{key === 'abstract' ? <Input.TextArea rows={4} maxLength={10000} /> : <Input maxLength={key === 'authors' ? 5000 : 1500} />}</Form.Item>)}
         </Form>
-      </Modal>
+      </FormModal>
     </>}
   </details>;
 }

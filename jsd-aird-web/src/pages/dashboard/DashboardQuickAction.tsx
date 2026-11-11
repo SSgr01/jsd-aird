@@ -46,34 +46,35 @@ const QUICK_MENU: QuickMenuItem[] = [
     key: 'create-project',
     label: '新建项目',
     icon: <FundProjectionScreenOutlined />,
-    color: '#1f6feb',
+    color: 'var(--app-primary)',
     to: '/projects/list?create=1',
   },
   {
     key: 'create-experiment',
     label: '新建实验',
     icon: <ExperimentOutlined />,
-    color: '#1f9d55',
+    color: 'var(--app-success)',
     to: '/experiments/list?create=1',
   },
   {
     key: 'ai-qa',
     label: 'AI 问答',
     icon: <RobotOutlined />,
-    color: '#7c3aed',
+    color: 'var(--app-violet)',
     to: '/assistant',
   },
   {
     key: 'ai-prescription',
     label: 'AI 配方预测',
     icon: <BranchesOutlined />,
-    color: '#f59e0b',
+    color: 'var(--app-warning)',
     to: '/assistant/formula-prediction',
   },
 ];
 
 const FAB_SIZE = 56;
 const VIEWPORT_EDGE = 12;
+const FLOATING_ACTION_BOTTOM = 96;
 const DRAG_THRESHOLD = 6;
 
 function clamp(value: number, min: number, max: number) {
@@ -89,7 +90,7 @@ export function DashboardQuickAction() {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState(() => ({
     x: typeof window === 'undefined' ? 32 : Math.max(VIEWPORT_EDGE, window.innerWidth - FAB_SIZE - 32),
-    y: typeof window === 'undefined' ? 360 : Math.max(VIEWPORT_EDGE, window.innerHeight - FAB_SIZE - 32),
+    y: typeof window === 'undefined' ? 360 : Math.max(VIEWPORT_EDGE, window.innerHeight - FAB_SIZE - FLOATING_ACTION_BOTTOM),
   }));
   const [dragging, setDragging] = useState(false);
 
@@ -107,7 +108,7 @@ export function DashboardQuickAction() {
 
   const keepInViewport = useCallback((x: number, y: number) => {
     const maxX = window.innerWidth - FAB_SIZE - VIEWPORT_EDGE;
-    const maxY = window.innerHeight - FAB_SIZE - VIEWPORT_EDGE;
+    const maxY = window.innerHeight - FAB_SIZE - FLOATING_ACTION_BOTTOM;
     return {
       x: clamp(x, VIEWPORT_EDGE, Math.max(VIEWPORT_EDGE, maxX)),
       y: clamp(y, VIEWPORT_EDGE, Math.max(VIEWPORT_EDGE, maxY)),

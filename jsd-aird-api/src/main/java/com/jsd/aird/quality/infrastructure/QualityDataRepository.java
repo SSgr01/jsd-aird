@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.quality.application.QualityDataService;
 import com.jsd.aird.quality.application.port.QualityDataStore;
 import com.jsd.aird.quality.application.port.QualityDataStore.Category;
-import com.jsd.aird.quality.application.port.QualityDataStore.RecordView;
+import com.jsd.aird.quality.api.QualityRecordLookup.RecordView;
 import com.jsd.aird.quality.application.port.QualityDataStore.UploadView;
 import com.jsd.aird.quality.application.port.QualityDataStore.VersionView;
 import com.jsd.aird.shared.api.PageResponse;

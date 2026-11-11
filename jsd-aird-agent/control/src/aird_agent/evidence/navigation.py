@@ -3,6 +3,8 @@
 import copy
 
 from aird_agent.core.contracts import digest
+from aird_agent.evidence.delivery import covered, delivery_result, delivery_snapshot
+from aird_agent.evidence.metadata import attach_metadata
 from aird_agent.evidence.models import SourceRef
 
 
@@ -37,7 +39,7 @@ async def invalidate_search(runtime, principal, run, key):
 async def cached_host(runtime, principal, run, action, args):
     current = await runtime.store.get(principal, "run", run["id"])
     policy = current.get("retrieval_policy", {})
-    key_args = dict(args)
+    key_args = {key: value for key, value in args.items() if key != "refresh"}
     if "query" in key_args:
         key_args["query"] = " ".join(key_args["query"].lower().split())
         key_args.setdefault("match_mode", "auto")
@@ -65,7 +67,7 @@ async def cached_host(runtime, principal, run, action, args):
     entry = current.get("navigation_cache", {}).get(signature)
     # A stalled page cannot be replayed indefinitely. An unseen query/window
     # still reaches the host: it may produce new evidence and resolve the stall.
-    if entry and current.get("navigation_stalls", {}).get(progress_key, 0) >= 3:
+    if entry and not args.get("refresh") and current.get("navigation_stalls", {}).get(progress_key, 0) >= 3:
         from fastapi import HTTPException
 
         raise HTTPException(
@@ -75,6 +77,7 @@ async def cached_host(runtime, principal, run, action, args):
     # Library reuse always goes through the host to verify the authorized window revision, without re-ranking.
     if (
         entry
+        and ("outline" not in action or entry["metadata"].get("document_metadata"))
         and entry["metadata"].get("trace", {}).get("scope") != "AUTHORIZED_LIBRARY"
         and all(eid in current["evidence"] for group in entry["groups"].values() for eid in group["ids"])
     ):
@@ -85,6 +88,11 @@ async def cached_host(runtime, principal, run, action, args):
                 for eid, location in zip(group["ids"], group["locations"])
             ]
         candidates = result.get("candidates", []) + result.get("context_candidates", [])
+        if result.get("document_metadata"):
+            await runtime.host_call(principal, "authorize", {"documents": [
+                {"document_id": item["document_id"], "publication_id": item["publication_id"]}
+                for item in result["document_metadata"]
+            ]}, run["id"])
         if candidates:
             try:
                 await runtime.host_call(
@@ -117,7 +125,7 @@ async def cached_host(runtime, principal, run, action, args):
             stalls[progress_key] = stalls.get(progress_key, 0) + 1
             await runtime.store.update(principal, "run", active, conn)
         return result
-    request = dict(args)
+    request = {key: value for key, value in args.items() if key != "refresh"}
     snapshot = current.get("ranking_snapshots", {}).get(snapshot_key) if search else None
     if snapshot:
         request["ranking_snapshot"] = snapshot
@@ -152,10 +160,12 @@ async def cached_host(runtime, principal, run, action, args):
     ids = set(eid for group in groups.values() for eid in group["ids"])
     async with runtime.store.transaction(principal, run["id"]) as conn:
         current = await runtime.active(principal, run["id"], run["epoch"], conn)
+        new_content = bool(ids - known_ids) or (search and unseen_search_spans(result, args.get("query", ""), current))
         stalls = current.setdefault("navigation_stalls", {})
-        blocked = stalls.get(progress_key, 0) >= 3 and not (ids - known_ids) and "outline" not in action
+        blocked = (not args.get("refresh") and stalls.get(progress_key, 0) >= 3
+                   and not new_content and "outline" not in action)
         stalls[progress_key] = (
-            stalls.get(progress_key, 0) + 1 if not (ids - known_ids) and "outline" not in action else 0
+            stalls.get(progress_key, 0) + 1 if not new_content and "outline" not in action else 0
         )
         cache = current.setdefault("navigation_cache", {})
         cache[signature] = {
@@ -203,7 +213,7 @@ async def context_for(runtime, principal, run, candidate, before=1, after=1, cur
 
 
 def preview_context(result):
-    return {
+    return attach_metadata({
         "nodes": [
             {
                 "evidence_id": c["evidence_id"],
@@ -217,25 +227,63 @@ def preview_context(result):
         "next_cursor": result.get("next_offset"),
         "trace": result.get("trace", {}),
         "instruction": "Use evidence_read for exact source quotations; previews are not complete reading.",
-    }
+    }, result.get("document_metadata", []), 6000)
 
 
-def search_preview(result, budget):
-    """Bound search transport, retaining canonical bodies/quote handles in the ledger."""
-    import json
+def quote_window(candidate, query=""):
+    """Keep an exact sentence with its same-node context, never a rewritten fact."""
     import re
 
     from aird_agent.evidence.quotes import quotes
 
-    terms = re.findall(r"\w+", result.get("query", "").casefold())
+    spans = quotes(candidate)
+    terms = re.findall(r"\w+", query.casefold())
+    index = max(range(len(spans)),
+                key=lambda i: sum(term in spans[i]["text"].casefold() for term in terms), default=0)
+    return index, spans, spans[max(0, index - 2):index + 3]
+
+
+def unseen_search_spans(result, query, run):
+    receipts = run.get("evidence_delivery", {})
+    for candidate in result.get("candidates", []):
+        _, _, window = quote_window(candidate, query)
+        if any(not covered(receipts.get(candidate["evidence_id"], []), span["start"], span["end"])
+               for span in window):
+            return True
+    return any(not covered(receipts.get(item["evidence_id"], []), 0, len(item["text"]))
+               for item in result.get("context_candidates", []) if item.get("text"))
+
+
+def search_preview(result, budget, delivered=None):
+    """Bound search transport, retaining canonical bodies/quote handles in the ledger."""
+    import json
+
+    from aird_agent.evidence.quotes import quotes
+
+    snapshot = delivery_snapshot(delivered or {}, result)
+
+    def compact(page):
+        return delivery_result(dict(snapshot), "knowledge_search", {}, page)[0]
+
+    def size(page):
+        from aird_agent.evidence.presentation import model_result
+
+        return len(json.dumps(model_result(compact(page)), ensure_ascii=False))
+
     page = {
         "hits": [],
+        **{key: result[key] for key in ("retrieval_status", "retrieval_notice") if key in result},
         "trace": result.get("trace", {}),
         "context": result.get("context"),
         "parent_context": [],
         "next_offset": result.get("next_offset"),
         "next_cursor": result.get("next_cursor"),
-        "instruction": "Hits contain exact source quotes, not complete nodes. Use evidence_read with evidence_id and quote_offset for more; evidence_context for neighbors.",
+        "instruction": (
+            "Read matching quotes with their context; values may describe different samples or tests. "
+            "These are previews, not full-document reading. If requires_read, use evidence_read before asserting results. "
+            "Use evidence_context for missing conditions and table headers/footnotes. "
+            "Once a paper is located, scope searches with documents or read its outline and relevant sections."
+        ),
     }
     parent_used = 0
     for candidate in result.get("context_candidates", []):
@@ -246,33 +294,39 @@ def search_preview(result, budget):
             "text": candidate["text"],
             "quote_count": len(quotes(candidate)),
         }
-        size = len(json.dumps(context, ensure_ascii=False)) + 2
-        if parent_used + size > min(6000, budget // 3):
+        context_size = size({"parent_context": [context]}) + 2
+        if parent_used + context_size > min(6000, budget // 3):
             page.setdefault("parent_evidence_ids", []).append(candidate["evidence_id"])
             continue
         page["parent_context"].append(context)
-        parent_used += size
+        parent_used += context_size
     for candidate in result.get("candidates", []):
-        spans = quotes(candidate)
-        index = max(
-            range(len(spans)),
-            key=lambda i: sum(term in spans[i]["text"].casefold() for term in terms),
-            default=0,
-        )
+        index, spans, window = quote_window(candidate, result.get("query", ""))
         hit = {
             "evidence_id": candidate["evidence_id"],
             "source": candidate["source"],
             "node_offset": candidate.get("node_offset"),
             "quote_offset": index,
             "quote_count": len(spans),
-            "quote": spans[index] if spans else None,
         }
+        hit["quote"] = spans[index] if spans else None
+        hit["context_quotes"] = [span for span in window if span != spans[index]]
+        if candidate.get("table_context"):
+            hit["table_context"] = candidate["table_context"]
+            hit["requires_read"] = True
         proposed = {**page, "hits": [*page["hits"], hit]}
-        if len(json.dumps(proposed, ensure_ascii=False)) > budget - 128:
+        if size(proposed) > budget - 128:
+            # A bare matching value can lose the sample/condition that gives it
+            # meaning. Keep the window atomically or return a read handle only.
+            hit.pop("context_quotes", None)
+            hit.pop("quote", None)
+            hit["requires_read"] = True
+            proposed = {**page, "hits": [*page["hits"], hit]}
+        if size(proposed) > budget - 128:
             if not page["hits"]:
                 page.pop("context", None)
                 proposed = {**page, "hits": [hit]}
-            if len(json.dumps(proposed, ensure_ascii=False)) > budget - 128:
+            if size(proposed) > budget - 128:
                 break
         page = proposed
     total = result.get("trace", {}).get("candidate_count", 0)
@@ -285,4 +339,6 @@ def search_preview(result, budget):
             "Source metadata exceeds preview budget; use evidence_read with this evidence ID."
         )
     page["trace"] = {**page["trace"], "candidate_count": total, "preview_only": True}
-    return page
+    from aird_agent.evidence.presentation import model_result
+
+    return attach_metadata(compact(page), result.get("document_metadata", []), budget, projection=model_result)

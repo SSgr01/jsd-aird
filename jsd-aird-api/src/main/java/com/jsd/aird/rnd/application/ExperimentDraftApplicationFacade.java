@@ -95,9 +95,21 @@ public class ExperimentDraftApplicationFacade implements ExperimentDraftFacade {
         var versionId = UUID.randomUUID();
         var editModel = editModels.normalize(
                 command.editModel() == null ? json.createObjectNode() : command.editModel(), versionId);
+        if (com.jsd.aird.shared.lab.LabWorkbook.supported(command.templateSnapshot())) {
+            var sheet = com.jsd.aird.shared.lab.LabWorkbook.sheet(editModel.path("documentSnapshot"));
+            for (var column : sheet.path("columnData"))
+                if (column.path("custom").path("lab") instanceof com.fasterxml.jackson.databind.node.ObjectNode meta) meta.remove("sampleKey");
+            for (var row : sheet.path("cellData")) for (var cell : row)
+                if (cell.path("custom").path("lab") instanceof com.fasterxml.jackson.databind.node.ObjectNode meta) meta.remove("lineId");
+            var workbook = com.jsd.aird.shared.lab.LabWorkbook.prepare(json, editModel.path("documentSnapshot"),
+                    command.templateSnapshot(), id.toString());
+            editModel = com.jsd.aird.shared.lab.LabWorkbook.extract(json, workbook, editModel, id.toString());
+            editModel.putObject("templateDataReview").put("required", true).put("confirmed", false);
+        }
         var result = repository.create(new ExperimentRepository.Create(
                 id, actor.organizationId(), null, command.title().strip(), category.id(), category.name(),
-                ExperimentSourceType.MANUAL.name(), ExperimentStatus.DRAFT, command.projectId(), command.stageId(),
+                (hasTemplate ? ExperimentSourceType.TEMPLATE : ExperimentSourceType.MANUAL).name(),
+                ExperimentStatus.DRAFT, command.projectId(), command.stageId(),
                 command.taskId(), actor.userId(), blankToNull(command.ownerName()) == null
                 ? actor.username() : command.ownerName().strip(), command.plannedExperimentDate(), versionId,
                 command.templateVersionId(), hasTemplate ? command.templateSnapshotHash().strip() : null,

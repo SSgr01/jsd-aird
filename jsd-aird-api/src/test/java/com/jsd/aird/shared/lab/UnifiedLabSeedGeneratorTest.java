@@ -11,7 +11,7 @@ import java.nio.file.Path;
 class UnifiedLabSeedGeneratorTest {
     @Test void compilePortableSql()throws Exception {
         var json=new ObjectMapper();var canon=new JsonCanonicalizer(json);var sql=new StringBuilder("-- Generated from the reviewed blank XLSX assets. No experiment records are seeded.\nBEGIN;\n");
-        sql.append(Files.readString(Path.of("src/main/resources/db/migration/V82__unified_lab_template_packages.sql")));
+        sql.append(Files.readString(Path.of("src/main/resources/db/migration/V94__unified_lab_template_packages.sql")));
         for(var kind:new String[]{"test","synthesis"})try(var source=getClass().getResourceAsStream("/templates/unified/"+kind+".xlsx")) {
             var pack=new UnifiedLabTemplateCatalog(json).compile(kind.equals("test")?UnifiedLabTemplateCatalog.TEST:UnifiedLabTemplateCatalog.SYNTHESIS,new com.jsd.aird.tpl.infrastructure.XlsxStructureParser(json).parseInstance(source));
             var payload=pack.payload();payload.put("snapshotHash",pack.snapshotHash()).put("schemaHash",canon.hash(payload.path("schema"))).put("mappingHash",canon.hash(payload.path("mapping"))).put("dataHash",canon.hash(json.createObjectNode())).put("pluginHash",canon.hash(json.createObjectNode())).put("workspaceHash",pack.packageHash());

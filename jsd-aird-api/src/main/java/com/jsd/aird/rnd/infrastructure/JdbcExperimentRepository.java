@@ -168,6 +168,10 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         audit(org,id,old.currentVersionId(),"STATUS_"+target,old.editModel(),old.editModel(),actor,name);return required(org,id);
     }
     @Override public List<Version> versions(UUID org,UUID id){return jdbc.query("SELECT * FROM rnd.experiment_version WHERE organization_id=? AND experiment_id=? AND (status='COMPLETED' OR (status='VOIDED' AND published_at IS NOT NULL)) ORDER BY version_no DESC",this::version,org,id);}
+    @Override public Optional<Version> version(UUID org,UUID id,UUID versionId){
+        return jdbc.query("SELECT * FROM rnd.experiment_version WHERE organization_id=? AND experiment_id=? AND id=?",
+                this::version,org,id,versionId).stream().findFirst();
+    }
     @Override @Transactional public Detail createRevision(UUID org,UUID id,long revision,String reason,UUID actor,String name){
         var old=required(org,id); requireVersion(old,revision);if(old.summary().status()!=ExperimentStatus.COMPLETED)conflict("仅已完成实验可创建修订版本");if(!text(reason))invalid("必须填写修订原因");var vid=UUID.randomUUID();int next=old.summary().versionNo()+1;
         int n=jdbc.update("UPDATE rnd.experiment SET status='DRAFT',current_version_id=NULL,revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=? AND deleted=false",actor,org,id,revision);lock(n);
@@ -286,10 +290,6 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         var raw=model.path("sourceFileId").asText(null);
         if(raw==null||raw.isBlank())return null;
         try{return UUID.fromString(raw.trim());}catch(IllegalArgumentException ignored){return null;}
-    }
-    private String generateExperimentNo(){
-        long seq = jdbc.queryForObject("SELECT nextval('rnd.experiment_no_seq')", Long.class);
-        return "EXP-" + LocalDate.now().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE) + "-" + seq;
     }
     private void validate(Detail d,ExperimentStatus t,String comment){if(t==ExperimentStatus.PENDING_REVIEW||t==ExperimentStatus.COMPLETED){var m=d.editModel();if("FAILED".equals(m.path("conclusion").path("resultStatus").asText())&&!text(m.path("conclusion").path("failureCategory").asText()))invalid("失败实验必须填写失败原因分类");}if(t==ExperimentStatus.RETURNED&&!text(comment))invalid("退回必须填写原因");if(t==ExperimentStatus.VOIDED&&!text(comment))invalid("作废必须填写原因");}
     private Detail detailRow(ResultSet r)throws SQLException{var s=summary(r,0);var vid=r.getObject("current_version_id",UUID.class);return new Detail(s,vid,r.getObject("source_file_id",UUID.class),r.getObject("template_version_id",UUID.class),r.getString("template_snapshot_hash"),node(r,"template_snapshot_jsonb"),node(r,"edit_model_jsonb"),reviews(s.id()),attachments(s.id()));}

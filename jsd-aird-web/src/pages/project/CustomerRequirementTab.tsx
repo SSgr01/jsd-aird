@@ -1,4 +1,5 @@
-import { Button, DatePicker, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, message } from 'antd';
+import { FormModal } from '@/components/form-dialog/FormModal';
+import { Button, DatePicker, Form, Input, Popconfirm, Select, Space, Table, Tag, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { CloseCircleFilled, PlusOutlined } from '@ant-design/icons';
 import { useEffect, useMemo, useState } from 'react';
@@ -338,7 +339,7 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
         locale={{ emptyText: '暂无客户需求' }}
       />
 
-      <Modal
+      <FormModal form={form}
         title={mode === 'edit' ? '编辑客户需求' : '新建客户需求'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
@@ -436,7 +437,7 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
             </Button>
           </div>
         </Form>
-      </Modal>
+      </FormModal>
     </div>
   );
 }

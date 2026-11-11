@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import { AiConversationWorkspace } from './AiConversationWorkspace';
 
@@ -8,6 +8,94 @@ afterEach(() => {
 });
 
 describe('AiConversationWorkspace', () => {
+  it('keeps the history delete confirmation open after a failed request so it can be retried', async () => {
+    const onDeleteConversation = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue(undefined);
+    render(
+      <AiConversationWorkspace
+        conversations={[{ id: 'coating', title: '耐候性分析' }]}
+        messages={[]}
+        question=""
+        searchableHistory
+        onDeleteConversation={onDeleteConversation}
+        onNewConversation={vi.fn()}
+        onSelectConversation={vi.fn()}
+        onQuestionChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '删除对话耐候性分析' }));
+    const dialog = screen.getByRole('dialog', { name: '删除这条对话？' });
+    const confirm = within(dialog).getByRole('button', { name: '删 除' });
+    fireEvent.click(confirm);
+    await waitFor(() => expect(onDeleteConversation).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(confirm).not.toHaveClass('ant-btn-loading'));
+    expect(screen.getByRole('dialog', { name: '删除这条对话？' })).toBe(dialog);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(onDeleteConversation).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '删除这条对话？' })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('filters history, opens a result, and clears the filter for a new conversation', () => {
+    const onSelectConversation = vi.fn();
+    const onNewConversation = vi.fn();
+    render(
+      <AiConversationWorkspace
+        conversations={[
+          { id: 'coating', title: 'Coating 耐候性分析', summary: '对比样品的试验条件' },
+          { id: 'adhesive', title: '胶粘剂方法比较' },
+        ]}
+        activeConversationId="coating"
+        messages={[]}
+        question="尚未发送的草稿"
+        searchableHistory
+        historyTitle="对话历史"
+        onNewConversation={onNewConversation}
+        onSelectConversation={onSelectConversation}
+        onQuestionChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+    const search = screen.getByRole('textbox', { name: '搜索对话' });
+    fireEvent.change(search, { target: { value: ' COATING ' } });
+    expect(screen.queryByText('胶粘剂方法比较')).not.toBeInTheDocument();
+    const result = screen.getByRole('button', { name: /Coating 耐候性分析/ });
+    expect(result).toHaveAttribute('aria-current', 'true');
+    fireEvent.click(result);
+    expect(onSelectConversation).toHaveBeenCalledWith('coating');
+    expect(screen.getByRole('textbox', { name: '输入问题' })).toHaveValue('尚未发送的草稿');
+    fireEvent.change(search, { target: { value: '无匹配的会话' } });
+    expect(screen.getByText('未找到相关对话')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /新建对话/ }));
+    expect(onNewConversation).toHaveBeenCalledOnce();
+    expect(search).toHaveValue('');
+    expect(screen.getByText('胶粘剂方法比较')).toBeInTheDocument();
+  });
+
+  it('keeps conversation navigation disabled while the parent blocks it', () => {
+    const onSelectConversation = vi.fn();
+    render(
+      <AiConversationWorkspace
+        conversations={[{ id: 'coating', title: '耐候性分析' }]}
+        messages={[]}
+        question=""
+        navigationDisabled
+        onNewConversation={vi.fn()}
+        onSelectConversation={onSelectConversation}
+        onQuestionChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+    const result = screen.getByRole('button', { name: '耐候性分析' });
+    expect(result).toBeDisabled();
+    fireEvent.click(result);
+    expect(onSelectConversation).not.toHaveBeenCalled();
+  });
+
   it('hides conversation creation and sending when creation is not granted', () => {
     render(
       <AiConversationWorkspace
@@ -32,7 +120,15 @@ describe('AiConversationWorkspace', () => {
     render(
       <AiConversationWorkspace
         conversations={[]}
-        messages={[{ id: 'answer', role: 'ASSISTANT', content: <p>水约为 0.81 kg。</p>, copyText: '**任务状态**：`PARTIAL`\n水约为 0.81 kg。' }]}
+        messages={[
+          {
+            id: 'answer',
+            role: 'ASSISTANT',
+            content: <p>水约为 0.81 kg。</p>,
+            copyText:
+              '**任务状态**：`PARTIAL`\n水约为 0.81 kg [E:e123]。\n参考 [来源 1](#research-evidence-e123)、[E:e456]。',
+          },
+        ]}
         question=""
         compactComposer
         scopePlacement="composer"
@@ -50,7 +146,7 @@ describe('AiConversationWorkspace', () => {
     expect(copy.textContent).toBe('');
     fireEvent.click(copy);
     expect(await screen.findByText('已复制')).toBeInTheDocument();
-    expect(writeText).toHaveBeenCalledWith('水约为 0.81 kg。');
+    expect(writeText).toHaveBeenCalledWith('水约为 0.81 kg [1]。\n参考 [1]、[2]。');
   });
   it('opens the material selector from the composer without keeping scope controls in the sidebar', async () => {
     render(

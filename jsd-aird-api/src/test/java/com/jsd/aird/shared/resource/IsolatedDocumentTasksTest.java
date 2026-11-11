@@ -1,7 +1,7 @@
 package com.jsd.aird.shared.resource;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jsd.aird.tpl.application.port.OfficeStructureParser;
+import com.jsd.aird.tpl.api.OfficeStructureParser;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.file.Path;

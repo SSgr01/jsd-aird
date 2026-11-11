@@ -1,8 +1,8 @@
 package com.jsd.aird.mfg.inventory.application;
 
-import com.jsd.aird.mdm.application.command.PartnerCommands;
-import com.jsd.aird.mdm.application.service.BusinessPartnerService;
-import com.jsd.aird.mdm.domain.model.PartnerStatus;
+import com.jsd.aird.mdm.api.PartnerCommands;
+import com.jsd.aird.mdm.api.BusinessPartners;
+import com.jsd.aird.mdm.api.PartnerStatus;
 import com.jsd.aird.mfg.inventory.application.port.InventoryRepository;
 import com.jsd.aird.mfg.inventory.domain.InventoryModels.Scope;
 import com.jsd.aird.mfg.inventory.domain.InventoryModels.Shipment;
@@ -23,10 +23,10 @@ import java.util.UUID;
 public class ShipmentWorkbookImportService {
     private final InventoryService inventory;
     private final InventoryRepository repository;
-    private final BusinessPartnerService partners;
+    private final BusinessPartners partners;
 
     public ShipmentWorkbookImportService(InventoryService inventory, InventoryRepository repository,
-                                         BusinessPartnerService partners) {
+                                         BusinessPartners partners) {
         this.inventory = inventory;
         this.repository = repository;
         this.partners = partners;
@@ -66,7 +66,7 @@ public class ShipmentWorkbookImportService {
             }
             var customerId = customerIds.get(customerName);
             if (customerId == null) {
-                var matches = new ArrayList<com.jsd.aird.mdm.domain.model.BusinessPartner>();
+                var matches = new ArrayList<com.jsd.aird.mdm.api.BusinessPartner>();
                 var first = partners.findPage(customerName, null, null, null, null, PartnerStatus.ACTIVE, 1, 100);
                 first.items().stream().filter(item -> customerName.equals(item.name()) || customerName.equals(item.partnerCode())).forEach(matches::add);
                 for (int page = 2; page <= first.totalPages(); page++)

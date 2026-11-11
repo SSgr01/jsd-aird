@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePermission } from '@/components/auth/usePermission';
 import { dataApi, type DataPublication } from '@/services/data/data-api';
 import { publicationLabels, actionLabels, snapshotRows } from './publication-display';
+import { FormModal } from '@/components/form-dialog/FormModal';
 
 export function DataPublicationPanel({ jobId, refreshKey, canConfirm = false, disabled = false, readOnly = false, lazy = false, onChanged, onStateChange, onEdit, versionContainer, permissionPrefix = 'data.upload' }: {
   versionContainer?: HTMLElement | null;
@@ -152,8 +153,12 @@ export function DataPublicationPanel({ jobId, refreshKey, canConfirm = false, di
         </Space>,
       }))} /> : <Typography.Text type="secondary">当前资料暂无审核操作记录。</Typography.Text>}
     </Modal>
-    <Modal open={submitOpen} title="提交审核" okText="提交审核" confirmLoading={busy} okButtonProps={{ disabled: !reviewerId || reviewersLoading || Boolean(reviewersError) }}
-      onCancel={() => setSubmitOpen(false)} onOk={() => state && void run(() => dataApi.publicationAction(jobId, 'submit', state.revision, reviewerId), '已提交审核').then((ok) => { if (ok) setSubmitOpen(false); })}>
+    <FormModal draft={reviewerId} open={submitOpen} title="提交审核" okText="提交审核" confirmLoading={busy} okButtonProps={{ disabled: !reviewerId || reviewersLoading || Boolean(reviewersError) }}
+      onCancel={() => setSubmitOpen(false)} onOk={async () => {
+        if (!state) return;
+        const ok = await run(() => dataApi.publicationAction(jobId, 'submit', state.revision, reviewerId), '已提交审核');
+        if (ok) setSubmitOpen(false);
+      }}>
       <Space direction="vertical" style={{ width: '100%' }} size={16}>
         <Typography.Text>审核对象是当前已保存的导入数据。审核通过后可发布，发布后正式入库。</Typography.Text>
         <Select aria-label="发布审核人" showSearch optionFilterProp="label" placeholder="选择发布审核人" style={{ width: '100%' }} loading={reviewersLoading}
@@ -161,11 +166,15 @@ export function DataPublicationPanel({ jobId, refreshKey, canConfirm = false, di
           notFoundContent="没有可用发布审核人，请联系管理员配置数据审核权限" />
         {reviewersError && <Alert type="error" message={reviewersError} action={<Button onClick={() => void loadReviewers()}>重试</Button>} />}
       </Space>
-    </Modal>
-    <Modal open={rejectOpen} title="驳回" okText="驳回" confirmLoading={busy} okButtonProps={{ disabled: !comment.trim() }} onCancel={() => setRejectOpen(false)}
-      onOk={() => { if (activeSnapshot) void run(() => dataApi.review(jobId, activeSnapshot.id, false, state.revision, comment), '已驳回，可在原工作台修改后重新提交').then((ok) => { if (ok) setRejectOpen(false); }); }}>
+    </FormModal>
+    <FormModal draft={comment} open={rejectOpen} title="驳回" okText="驳回" confirmLoading={busy} okButtonProps={{ disabled: !comment.trim() }} onCancel={() => setRejectOpen(false)}
+      onOk={async () => {
+        if (!activeSnapshot) return;
+        const ok = await run(() => dataApi.review(jobId, activeSnapshot.id, false, state.revision, comment), '已驳回，可在原工作台修改后重新提交');
+        if (ok) setRejectOpen(false);
+      }}>
       <Input.TextArea aria-label="驳回原因" value={comment} onChange={(event) => setComment(event.target.value)} placeholder="请填写驳回原因（必填）" rows={3} />
-    </Modal>
+    </FormModal>
     <Modal open={open} title={snapshot ? `版本快照 V${snapshot.version}` : '版本记录'} width={1040} footer={null} onCancel={() => setOpen(false)} destroyOnHidden>
       <Space direction="vertical" style={{ width: '100%' }} size={16}>
         {error && <Alert type="error" showIcon message={error} action={<Button onClick={() => void load()}>重试</Button>} />}

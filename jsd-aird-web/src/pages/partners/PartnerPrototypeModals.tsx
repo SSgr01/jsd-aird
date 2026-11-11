@@ -1,5 +1,6 @@
-import { DeleteOutlined, PlusOutlined, SaveOutlined, UpOutlined } from '@ant-design/icons';
-import { App, Button, Col, DatePicker, Form, Input, Modal, Row, Select, Space } from 'antd';
+import { FormModal } from '@/components/form-dialog/FormModal';
+import { DeleteOutlined, PlusOutlined, UpOutlined } from '@ant-design/icons';
+import { App, Button, Col, DatePicker, Form, Input, Row, Select, Space } from 'antd';
 import dayjs from '@/utils/dayjs';
 import type { Dayjs } from 'dayjs';
 import { useEffect, useRef, useState } from 'react';
@@ -274,20 +275,13 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
   };
 
   return (
-    <Modal
+    <FormModal form={form}
       className="cm-prototype-modal cm-customer-modal"
       width={1200}
       open={open}
       onCancel={onClose}
       title={partner ? '编辑客户' : '新建客户'}
-      footer={
-        <>
-          <Button onClick={onClose}>取消</Button>
-          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>
-            保存
-          </Button>
-        </>
-      }
+      onOk={() => save()} confirmLoading={saving} okText="保存" cancelText="取消"
     >
       <div className="cm-modal-columns cm-customer-columns">
         <section className="cm-modal-panel">
@@ -451,7 +445,7 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
           ))}
         </section>
       </div>
-    </Modal>
+    </FormModal>
   );
 }
 
@@ -527,20 +521,13 @@ function RequirementModal({ partner, requirement, open, onClose, onSaved }: Omit
     }
   };
   return (
-    <Modal
+    <FormModal form={form}
       className="cm-prototype-modal cm-form-modal"
       width={960}
       open={open}
       onCancel={onClose}
       title={requirement ? '编辑客户需求' : '新建客户需求'}
-      footer={
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
-          <Button onClick={onClose}>取消</Button>
-          <Button type="primary" loading={saving} onClick={() => void save()}>
-            保存
-          </Button>
-        </div>
-      }
+      onOk={() => save()} confirmLoading={saving} okText="保存" cancelText="取消"
     >
       <Form form={form} layout="vertical">
         <Row className="cm-form-row" gutter={24}>
@@ -631,7 +618,7 @@ function RequirementModal({ partner, requirement, open, onClose, onSaved }: Omit
           <Button className="cm-custom-field" icon={<PlusOutlined />} onClick={() => setRequirementCustomFields([...requirementCustomFields, { key: '', value: '' }])}>新增字段</Button>
         </div>
       </Form>
-    </Modal>
+    </FormModal>
   );
 }
 const requirementStateMap: Record<string, string> = { DRAFT: '草稿', CONFIRMED: '已确认', IN_PROJECT: '已立项', COMPLETED: '已完成', CANCELLED: '已取消' };
@@ -691,20 +678,13 @@ function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<
     }
   };
   return (
-    <Modal
+    <FormModal form={form}
       className="cm-prototype-modal cm-follow-modal"
       width={820}
       open={open}
       onCancel={onClose}
       title={communication ? '编辑跟进' : '添加跟进'}
-      footer={
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
-          <Button onClick={onClose}>取消</Button>
-          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>
-            保存
-          </Button>
-        </div>
-      }
+      onOk={() => save()} confirmLoading={saving} okText="保存" cancelText="取消"
     >
       <Form form={form} layout="vertical">
         <Row className="cm-form-row" gutter={24}>
@@ -760,7 +740,7 @@ function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<
           <Button className="cm-custom-field" icon={<PlusOutlined />} onClick={() => setFollowupCustomFields([...followupCustomFields, { key: '', value: '' }])}>新增字段</Button>
         </div>
       </Form>
-    </Modal>
+    </FormModal>
   );
 }
 

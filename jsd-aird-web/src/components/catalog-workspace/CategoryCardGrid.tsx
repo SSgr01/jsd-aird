@@ -38,7 +38,7 @@ export function CategoryCardGrid({ categories, activeId, addLabel = '新增分�
   }, [categorySignature]);
 
   return (
-    <div ref={gridRef} className="catalog-category-grid" aria-label="分类列表">
+    <div ref={gridRef} className="catalog-category-grid" data-fit={categories.length + Number(Boolean(onCreate)) <= 3 || undefined} aria-label="分类列表">
       {categories.map((category) => (
         <Card
           key={category.id}

@@ -8,7 +8,7 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.tpl.application.port.TemplateImportRepository;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import org.junit.jupiter.api.Test;
 
 class TemplateRecognitionCompilerTest {

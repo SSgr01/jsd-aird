@@ -35,4 +35,14 @@ public class KnowledgeResultAssetService {
         }
         return storage.open(organizationId, assetFileId);
     }
+
+    /** The caller has authorized a publication; also bind its asset to that exact document/version. */
+    public FileStorageFacade.StoredFile openForVersion(UUID organizationId, UUID documentId, UUID versionId, UUID assetFileId) {
+        var allowed = jdbc.queryForObject("""
+                SELECT count(*) FROM kb.document_result_asset
+                WHERE organization_id = ? AND document_id = ? AND document_version_id = ? AND asset_file_id = ?
+                """, Long.class, organizationId, documentId, versionId, assetFileId);
+        if (allowed == null || allowed == 0) throw new ApiException(ApiErrorCode.NOT_FOUND, "该文献版本没有对应原图");
+        return storage.open(organizationId, assetFileId);
+    }
 }

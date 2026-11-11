@@ -35,4 +35,17 @@ spring:
 
 其他模块只能声明对 `module::api` 的依赖，不允许直接访问目标模块的 `adapter`、`application`、`domain` 或 `infrastructure`。
 
-当前脚手架没有业务用例，因此各业务模块仅包含模块声明；公开接口在首个真实用例出现时创建。
+当前已有真实业务用例。`ops.application.port` 是既有的 `ops::api` 命名接口；其他模块的可复用解析协议、业务命令和只读查询协议放在 `api`，实现类与写入仓储仍留在模块内部。
+
+主要跨模块契约：
+
+- `iam.api.DelegationIdentity` 仅提供委托校验必需的用户状态、组织和授权版本，不暴露账号存储记录。
+- `mdm.api.BusinessPartners`、`PartnerContacts` 和 `AgentProjectFacade` 提供明确业务用例；项目实验 HTTP 控制器归 `rnd` 所有，URL 不变。
+- `kb.api` 提供文档解析、OCR、文件扫描和有序文档协议；调用方不依赖 MinerU 实现。
+- `tpl.api.TemplateWordSource` 只提供导出所需的原文及快照引用，调用方不能访问模板写入仓储。
+- `tpl.api.ExperimentTemplateSource` 由实验仓储实现，模板用例仅消费所需快照，避免 `tpl` 反向依赖 `rnd`。
+- `quality.api.QualityRecordLookup` 提供现有按组织和角色过滤的业务编号查询，保留 COA 放行校验。
+- 共用 JSON 解析、图片转 PDF 和 LaTeX 文本处理位于 `shared`，不通过 `ai` 或 `rnd` 模块复用技术实现。
+- `shared.business.BusinessReadPort` 由各域提供自己的读取适配，AI 仅消费共享契约，不跨域访问仓储；`BusinessDataAccess` 为权限侧提供记录授权接点，缺失时默认拒绝。模型操作身份、来源和计算接入见 `jsd-aird-agent/docs/enterprise-business-data.md`。
+
+新增跨模块调用时必须显式声明实际使用的 `module::api`，不能通过开放整个业务模块来绕过边界。`ModuleBoundaryTest` 检查真实生产模块图，`ArchitectureRulesTest` 只导入生产类并保持全部分层规则。

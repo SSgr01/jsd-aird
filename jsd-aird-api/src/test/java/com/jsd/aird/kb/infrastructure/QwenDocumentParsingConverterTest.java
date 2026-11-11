@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.List;
 import java.util.Map;
 
-import com.jsd.aird.kb.domain.DocumentParser;
+import com.jsd.aird.kb.api.DocumentParser;
 import org.junit.jupiter.api.Test;
 
 class QwenDocumentParsingConverterTest {

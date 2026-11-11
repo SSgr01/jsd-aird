@@ -1,0 +1,60 @@
+.file-preview-header,
+.file-preview-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.file-preview-header { justify-content: space-between; }
+.file-preview-title { flex: 1; }
+.file-preview-title > .anticon { flex: none; color: var(--app-text-secondary); font-size: 18px; }
+.file-preview-title > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-preview-maximize.ant-btn { flex: none; min-height: 36px; padding-inline: 10px; font-size: 14px; font-weight: 400; }
+body .ant-modal.file-preview-modal .ant-modal-header { padding-right: 40px; }
+body .ant-modal.file-preview-modal .ant-modal-title { font-size: 17px; }
+.file-preview-video { width: 100%; max-height: 65vh; }
+.file-preview-docx-loading { display: grid; min-height: 180px; align-content: center; justify-items: center; gap: 12px; }
+.file-preview-docx .docx-wrapper { width: max-content; min-width: 100%; }
+
+/* Keep the same modal, file DOM and scroll containers in both display modes. */
+body .ant-modal-root .file-preview-modal.file-preview-modal-maximized {
+  top: 0;
+  width: 100% !important;
+  max-width: none;
+  height: 100dvh;
+  margin: 0;
+  padding: 0;
+}
+
+.file-preview-modal-maximized .file-preview-dialog { height: 100dvh; }
+body .file-preview-modal.file-preview-modal-maximized .ant-modal-content { height: 100%; max-height: none; border-radius: 0; }
+body .file-preview-modal.file-preview-modal-maximized .ant-modal-body { display: flex; flex: 1; flex-direction: column; max-height: none; }
+body .file-preview-modal.file-preview-modal-maximized .ant-modal-header { margin-bottom: 16px; }
+body .file-preview-modal.file-preview-modal-maximized .ant-modal-footer { margin-top: 16px; }
+
+.file-preview-modal-maximized :is(.file-preview-pdf-pages, .file-preview-image-wrap, .file-preview-docx, .file-preview-text, .file-preview-state, .file-preview-pdf-state) {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+
+.file-preview-modal-maximized .file-preview-pdf-pages { height: auto; }
+.file-preview-modal-maximized .file-preview-image-wrap { grid-template: minmax(0, 1fr) / minmax(0, 1fr); }
+.file-preview-modal-maximized :is(.file-preview-image, .file-preview-video) { max-height: 100%; }
+.file-preview-modal-maximized .file-preview-spreadsheet { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.file-preview-modal-maximized .file-preview-spreadsheet > :not(.ant-table-wrapper) { flex: none; }
+.file-preview-modal-maximized .file-preview-merges { max-height: min(128px, 20dvh); overflow: auto; }
+.file-preview-modal-maximized .file-preview-spreadsheet .ant-table-wrapper { flex: 1; min-height: 120px; }
+.file-preview-modal-maximized .file-preview-spreadsheet :is(.ant-spin-nested-loading, .ant-spin-container, .ant-table) { height: 100%; min-height: 0; }
+.file-preview-modal-maximized .file-preview-spreadsheet .ant-table-container { display: flex; height: 100%; min-height: 0; flex-direction: column; }
+.file-preview-modal-maximized .file-preview-spreadsheet .ant-table-header { flex: none; }
+.file-preview-modal-maximized .file-preview-spreadsheet .ant-table-body { flex: 1; min-height: 0; max-height: none !important; }
+
+@media (max-width: 767px) {
+  .file-preview-header { gap: 6px; }
+  .file-preview-maximize.ant-btn { min-height: 40px; padding-inline: 8px; }
+  body .file-preview-modal.file-preview-modal-maximized .ant-modal-content { padding: 16px 12px; }
+  body .file-preview-modal.file-preview-modal-maximized .ant-modal-header { margin-bottom: 12px; }
+  body .file-preview-modal.file-preview-modal-maximized .ant-modal-footer { margin-top: 12px; padding-top: 12px; }
+}

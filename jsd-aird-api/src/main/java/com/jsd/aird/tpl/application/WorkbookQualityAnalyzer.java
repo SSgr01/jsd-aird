@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.jsd.aird.tpl.application.port.RecognitionModelClient;
+import com.jsd.aird.tpl.api.RecognitionModelClient;
 import org.springframework.stereotype.Component;
 
 /** Finds layout/content quality problems and applies only reversible, locally safe fixes. */

@@ -7,14 +7,14 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 
-import com.jsd.aird.kb.domain.DocumentParser;
-import com.jsd.aird.kb.domain.OcrMode;
+import com.jsd.aird.kb.api.DocumentParser;
+import com.jsd.aird.kb.api.OcrMode;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 /** Routes standalone raster images through MinerU by first wrapping them as a one-page PDF. */
 @Component
-public final class MineruImageDocumentParser implements DocumentParser {
+public final class MineruImageDocumentParser implements com.jsd.aird.kb.api.ImageDocumentParser {
     private final DocumentParser pdfParser;
 
     public MineruImageDocumentParser(@Qualifier("mineruDocumentParser") DocumentParser pdfParser) {
@@ -27,9 +27,7 @@ public final class MineruImageDocumentParser implements DocumentParser {
     }
 
     public static boolean isImageSource(String fileName, String contentType) {
-        var name = fileName == null ? "" : fileName.toLowerCase(Locale.ROOT);
-        var type = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
-        return type.startsWith("image/") || name.matches(".*\\.(png|jpe?g|gif|webp|bmp|tif|tiff)$");
+        return com.jsd.aird.kb.api.ImageDocumentParser.isImageSource(fileName, contentType);
     }
 
     @Override

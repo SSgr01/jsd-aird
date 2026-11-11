@@ -1,4 +1,5 @@
 package com.jsd.aird.tpl.application;
+import com.jsd.aird.tpl.api.StandardFieldDictionary;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -14,9 +15,9 @@ import java.util.regex.Pattern;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.shared.json.JsonCanonicalizer;
-import com.jsd.aird.tpl.application.port.RecognitionModelClient;
+import com.jsd.aird.tpl.api.RecognitionModelClient;
 import com.jsd.aird.tpl.application.port.StandardFieldRepository;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -26,7 +27,7 @@ import org.springframework.stereotype.Component;
  * model and review path.
  */
 @Component
-public class RuleBasedRecognitionEngine {
+public class RuleBasedRecognitionEngine implements com.jsd.aird.tpl.api.RuleRecognition {
 
     private static final int MAX_TEMPLATE_ROWS = 200;
 

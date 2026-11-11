@@ -1,49 +1,41 @@
 import json
 
-import httpx
 import pytest
-from pydantic import SecretStr
+from fastapi import HTTPException
 
-from aird_agent.capabilities.literature.quality import ReportAuditor
+from aird_agent.capabilities.literature.quality import ReportAuditor, ReviewOutputInvalid, unavailable_review
 
 
-@pytest.mark.parametrize("thinking", [None, False])
-async def test_review_provider_switch_is_explicit_and_validated_output_remains_required(
-    settings, monkeypatch, thinking
-):
-    prepared = {
-        "units": [{"unit_id": "u1", "text": "Modulus: 12 kPa", "quotes": [{"quote_id": "q1"}]}],
-        "questions": [{"question_id": "modulus"}],
-        "report_hash": "hash",
-        "matrix_revision": 1,
-    }
-    answer = {
-        "units": [{"unit_id": "u1", "verdict": "SUPPORTED", "quote_ids": ["q1"], "reason": "Literal source"}],
-        "questions": [{"question_id": "modulus", "verdict": "COVERED", "reason": "Answered"}],
-    }
+async def test_review_requires_a_native_generation_service(settings):
+    with pytest.raises(HTTPException, match="REPORT_REVIEW_MODEL_NOT_CONFIGURED"):
+        await ReportAuditor(settings).review({"units": [], "questions": []})
 
-    def respond(request):
-        payload = json.loads(request.content)
-        assert payload["response_format"] == {"type": "json_object"}
-        if thinking is None:
-            assert "enable_thinking" not in payload
-        else:
-            assert payload["enable_thinking"] is False
-        return httpx.Response(
-            200, json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(answer)}}]}
-        )
 
-    client = httpx.AsyncClient
-    monkeypatch.setattr(
-        httpx, "AsyncClient", lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs)
-    )
-    config = settings.model_copy(
-        update={
-            "paperqa_model": "openai/synthetic",
-            "paperqa_base_url": "https://review.test/v1",
-            "paperqa_api_key": SecretStr("synthetic-key"),
-            "paperqa_enable_thinking": thinking,
-        }
-    )
-    result = await ReportAuditor(config).review(prepared)
-    assert result["passed"] and result["verification"] == "AI_REVIEW_NOT_HUMAN_VERIFICATION"
+@pytest.mark.parametrize("content", ["not json", '{"units": [', None, ""])
+async def test_invalid_output_has_one_explicit_repair_and_never_becomes_a_content_verdict(settings, content):
+    calls = []
+
+    async def generate(system, messages):
+        calls.append((system, messages))
+        return {"content": content, "model": "selected-model", "provider": "native-provider"}
+
+    prepared = {"units": [], "questions": [], "required_unit_ids": [], "required_question_ids": [],
+                "report_hash": "hash", "matrix_revision": 0}
+    auditor = ReportAuditor(settings)
+    with pytest.raises(ReviewOutputInvalid) as invalid:
+        await auditor.review(prepared, generate=generate)
+    assert len(calls) == 1
+    with pytest.raises(ReviewOutputInvalid):
+        await auditor.review(prepared, repair=invalid.value, generate=generate)
+    assert len(calls) == 2
+    assert json.loads(calls[-1][1][1]["content"]) == {}
+    failure = unavailable_review(prepared, error=invalid.value)
+    assert failure["units"] == [] and failure["review_diagnostics"]
+
+
+async def test_native_provider_failure_propagates_instead_of_marking_facts_unsupported(settings):
+    async def unavailable(system, messages):
+        raise TimeoutError("Native provider timed out")
+
+    with pytest.raises(TimeoutError):
+        await ReportAuditor(settings).review({"units": [], "questions": []}, generate=unavailable)

@@ -10,6 +10,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -19,8 +20,8 @@ public class PrivateResearchSourceController {
     public PrivateResearchSourceController(PrivateResearchSourceService sources) { this.sources = sources; }
 
     @GetMapping("/{id}/content")
-    public ResponseEntity<byte[]> content(@PathVariable UUID id) throws Exception {
-        try (var file = sources.open(id)) {
+    public ResponseEntity<byte[]> content(@PathVariable UUID id, @RequestParam(name="version_id", required=false) UUID version) throws Exception {
+        try (var file = sources.open(id, version)) {
             return ResponseEntity.ok().header(HttpHeaders.CONTENT_DISPOSITION,
                 ContentDisposition.attachment().filename(file.originalName(), StandardCharsets.UTF_8).build().toString())
                 .header("X-Content-Type-Options", "nosniff").header("Cache-Control", "private, no-store")

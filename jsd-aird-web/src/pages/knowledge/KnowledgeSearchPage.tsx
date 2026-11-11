@@ -1,9 +1,10 @@
+import { FormModal } from '@/components/form-dialog/FormModal';
 import { DatabaseOutlined, DownloadOutlined, EyeOutlined, FileAddOutlined, FileSearchOutlined, FolderOpenOutlined, LinkOutlined, SearchOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Checkbox, Empty, Input, Modal, Select, Space, Spin, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Checkbox, Empty, Input, Select, Space, Spin, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
-import { assistantApi, type FileSearchResult } from '@/services/assistant/assistant-api';
+import { fileSearchApi, type FileSearchResult } from '@/services/search/file-search-api';
 import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
 import { fetchFilePreviewBlob, fileContentUrl } from '@/services/files';
 import { dataApi, type DataCategory } from '@/services/data/data-api';
@@ -59,7 +60,7 @@ export function KnowledgeSearchPage() {
     if (!normalizedQuery) { setSearched(true); setError('请输入检索关键词'); setResult(undefined); setLoading(false); return; }
     setLoading(true); setError(undefined); setSearched(true);
     try {
-      const next = await assistantApi.fileSearch({ query: normalizedQuery, limit: 30, knowledgeCategoryIds: selectedKnowledge, dataCategoryIds: selectedData, projectId });
+      const next = await fileSearchApi.fileSearch({ query: normalizedQuery, limit: 30, knowledgeCategoryIds: selectedKnowledge, dataCategoryIds: selectedData, projectId });
       if (requestSequence === searchRequestSequence.current) setResult(next);
     } catch (reason) {
       if (requestSequence === searchRequestSequence.current) setError(reason instanceof Error ? reason.message : '检索失败，请稍后重试');
@@ -163,10 +164,10 @@ export function KnowledgeSearchPage() {
       </main>
     </div>
     <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} />
-    <Modal open={Boolean(relationEditor)} title={relationEditor?.mode === 'REFERENCE' ? '加入项目资料参考' : '维护关联项目'} width={760} okText="保存" confirmLoading={relationSaving} onCancel={() => setRelationEditor(undefined)} onOk={() => void saveRelations()}>
+    <FormModal draft={relationEditor?.targets} open={Boolean(relationEditor)} title={relationEditor?.mode === 'REFERENCE' ? '加入项目资料参考' : '维护关联项目'} width={760} okText="保存" confirmLoading={relationSaving} onCancel={() => setRelationEditor(undefined)} onOk={() => saveRelations()}>
       <Typography.Paragraph type="secondary">可一次选择多个项目，并细化到阶段或任务。加入资料参考会自动补齐普通项目关联。</Typography.Paragraph>
       {relationEditor && <ProjectRelationPicker value={relationEditor.targets} onChange={(targets) => setRelationEditor((current) => current ? { ...current, targets } : current)} />}
-    </Modal>
+    </FormModal>
   </div>;
 }
 

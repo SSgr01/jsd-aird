@@ -1,64 +1,93 @@
-:root { --app-viewport-height: 100vh; }
+:root {
+  --app-viewport-height: 100vh;
+}
 
 @supports (height: 100dvh) {
-  :root { --app-viewport-height: 100dvh; }
+  :root {
+    --app-viewport-height: 100dvh;
+  }
 }
 
 :root {
-  /* Primitive tokens: refined technology palette */
-  --color-blue-600: #315cf6;
-  --color-blue-700: #2448d8;
-  --color-blue-50: #eef3ff;
-  --color-slate-50: #f8fafd;
-  --color-slate-100: #f2f5fa;
-  --color-slate-400: #94a1b4;
-  --color-slate-500: #66738a;
-  --color-slate-900: #14213d;
-  --color-teal-300: #72d5c4;
-  --color-green-600: #18a66a;
-  --color-amber-500: #f59e0b;
-  --color-red-600: #dc2626;
+  /* SETO reference: warm whites and consistent graphite actions. */
+  --color-blue-600: #29282d;
+  --color-blue-700: #45424a;
+  --color-blue-50: #f7f5f4;
+  --color-grey-50: #faf9f8;
+  --color-grey-100: #f7f5f4;
+  --color-grey-200: #eeebed;
+  --color-grey-500: #716d76;
+  --color-grey-900: #29282d;
+  --color-green-600: #347552;
+  --color-amber-600: #92671f;
+  --color-red-600: #b84a55;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
 
   /* Semantic tokens */
   --app-primary: var(--color-blue-600);
   --app-primary-hover: var(--color-blue-700);
   --app-primary-soft: var(--color-blue-50);
+  --app-action: #29282d;
+  --app-action-hover: #45424a;
+  --app-action-active: #201f24;
   --app-accent: var(--color-blue-600);
-  --app-background: var(--color-slate-50);
-  --app-surface: #fefeff;
+  --app-background: var(--color-grey-50);
+  --app-surface: #ffffff;
   --app-surface-elevated: #ffffff;
-  --app-surface-subtle: var(--color-slate-100);
-  --app-text: var(--color-slate-900);
-  --app-text-secondary: var(--color-slate-500);
-  --app-border: #dce4ef;
-  --app-border-strong: #cbd6e6;
+  --app-surface-subtle: var(--color-grey-100);
+  --app-surface-active: var(--color-grey-200);
+  --app-surface-hover: #faf7f8;
+  --app-navigation: #fffdfc;
+  /* Keep the inspector exception on the declaration it describes. */
+  /* prettier-ignore */
+  --app-workspace-wash: radial-gradient(ellipse 70% 68% at 54% 3%, rgb(221 207 238 / 22%), transparent 80%), radial-gradient(ellipse 100% 78% at 0% 100%, rgb(247 206 176 / 34%), transparent 76%), radial-gradient(ellipse 105% 72% at 100% 100%, rgb(238 198 213 / 30%), transparent 78%); /* taste-skill-ignore: the user explicitly requests the SETO reference's warm white and pale lilac/peach workspace gradient. */
+  --app-composer-surface: rgb(255 255 255 / 42%);
+  --app-composer-border: rgb(226 211 208 / 80%);
+  --app-text: var(--color-grey-900);
+  --app-text-secondary: var(--color-grey-500);
+  --app-border: #eee9e8;
+  --app-border-strong: #dcd5dc;
+  --app-row-rule: #f2edef;
+  --app-scrollbar: #ded7df;
+  --app-focus-border: #45424a;
+  --app-focus-ring: 0 0 0 3px rgb(41 40 45 / 14%);
   --app-danger: var(--color-red-600);
-  --app-warning: var(--color-amber-500);
+  --app-warning: var(--color-amber-600);
   --app-success: var(--color-green-600);
-  --app-focus: var(--color-blue-700);
-  --app-font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
-  --app-font-size-base: 15px;
+  --app-success-soft: #f0f8f3;
+  --app-warning-soft: #fcf7ec;
+  --app-danger-soft: #fdf1f2;
+  --app-violet: #7560a3;
+  --app-violet-soft: #f5f1fa;
+  --app-focus: var(--color-blue-600);
+  --app-font-family:
+    'Noto Sans SC Variable', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif;
+  --app-font-size-base: 14px;
   --app-font-size-label: 14px;
-  --app-font-size-caption: 13px;
-  --app-line-height-base: 1.55;
+  --app-font-size-caption: 12px;
+  --app-font-size-title: 24px;
+  --app-font-size-title-mobile: 22px;
+  --app-font-size-section: 16px;
+  --app-line-height-base: 1.5714285714;
   --app-radius: var(--radius-md);
   --app-radius-control: var(--radius-sm);
   --app-radius-card: var(--radius-md);
   --app-radius-shell: var(--radius-lg);
-  --app-shadow: 0 1px 2px rgb(29 52 91 / 4%), 0 8px 24px rgb(36 72 128 / 3%);
-  --app-shadow-hover: 0 10px 28px rgb(35 74 130 / 9%);
+  --app-shadow: 0 1px 2px rgb(24 29 36 / 3%);
+  --app-shadow-hover: 0 2px 6px rgb(24 29 36 / 5%);
+  --app-text-muted: var(--color-grey-500);
+  --app-motion-duration: 160ms;
 
   /* Component tokens */
-  --iam-sidebar-background: #fbfcfe;
+  --iam-sidebar-background: var(--app-navigation);
   --iam-card-padding: var(--space-5);
-  --iam-table-header: #f7f9fc;
+  --iam-table-header: var(--app-surface);
 }

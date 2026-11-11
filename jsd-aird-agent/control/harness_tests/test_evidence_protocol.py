@@ -5,38 +5,18 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from aird_agent.capabilities.fast_qa.history import answer_context
+from aird_agent.evidence.citations import validate_generated
 from aird_agent.evidence.quotes import quotes, resolve_quote
-from aird_agent.evidence.registry import alias_map, canonical_candidate, register_candidates
+from aird_agent.evidence.registry import canonical_candidate, register_candidates
 
 
-def test_known_canonical_answer_references_project_to_display_aliases_without_guessing():
-    from aird_agent.evidence.citations import project_aliases, validate_generated
-
+def test_generated_references_validate_canonical_ids_without_guessing():
     eid = "e" + "a" * 24
-    text = '{"answer":"12 kPa [E:' + eid + ']", "usedEvidenceRefs":["' + eid + '"]}'
-    result = project_aliases(text, {"K1": eid})
-    value = json.loads(result)
-    assert value["answer"] == "12 kPa [[K1]]"
-    assert value["usedEvidenceRefs"] == ["K1"]
-    validate_generated(result, {eid: {}}, ["K1"])
+    text = '{"answer":"12 kPa [E:' + eid + ']", "usedEvidenceRefs":["K1"]}'
+    assert validate_generated(text, {eid: {"label": "K1"}}, ["K1"]) == [eid]
     unknown = "[E:e" + "b" * 24 + "]"
-    assert project_aliases(unknown, {"K1": eid}) == unknown
     with pytest.raises(HTTPException):
         validate_generated(unknown, {eid: {}}, ["K1"])
-
-
-def test_external_display_aliases_map_to_canonical_ids_without_breaking_legacy_web_labels():
-    eid = "e" + "a" * 24
-    for label in ("E1", "W1"):
-        projected = answer_context(
-            {
-                "context": "[evidenceRef=" + label + "] original",
-                "candidates": [{"label": label, "evidence_id": eid}],
-            },
-            1000,
-        )
-        assert projected == "[E:" + eid + "] original"
 
 
 def test_shared_protocol_vectors_preserve_ids_original_spans_and_aliases():
@@ -45,7 +25,6 @@ def test_shared_protocol_vectors_preserve_ids_original_spans_and_aliases():
         candidate = {key: value for key, value in case.items() if key != "quotes"}
         assert canonical_candidate(candidate) == candidate
         assert quotes(candidate) == case["quotes"]
-        assert alias_map([candidate]) == {case["label"]: case["evidence_id"]}
         registry = register_candidates({}, [candidate, candidate])
         assert len(registry) == 1
         for quote in case["quotes"]:

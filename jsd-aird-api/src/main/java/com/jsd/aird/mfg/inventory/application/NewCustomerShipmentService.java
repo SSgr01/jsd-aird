@@ -2,9 +2,9 @@ package com.jsd.aird.mfg.inventory.application;
 
 import com.jsd.aird.iam.api.AuthorizationService;
 import com.jsd.aird.iam.api.PermissionCheck;
-import com.jsd.aird.mdm.application.command.PartnerCommands;
-import com.jsd.aird.mdm.application.service.BusinessPartnerService;
-import com.jsd.aird.mdm.application.service.PartnerContactService;
+import com.jsd.aird.mdm.api.PartnerCommands;
+import com.jsd.aird.mdm.api.BusinessPartners;
+import com.jsd.aird.mdm.api.PartnerContacts;
 import com.jsd.aird.mfg.inventory.application.port.InventoryRepository;
 import com.jsd.aird.mfg.inventory.domain.InventoryModels.Shipment;
 import com.jsd.aird.shared.error.ApiErrorCode;
@@ -18,13 +18,13 @@ import java.util.UUID;
 
 @Service
 public class NewCustomerShipmentService {
-    private final BusinessPartnerService partners;
-    private final PartnerContactService contacts;
+    private final BusinessPartners partners;
+    private final PartnerContacts contacts;
     private final InventoryService inventory;
     private final InventoryRepository inventoryRepository;
     private final AuthorizationService authorization;
 
-    public NewCustomerShipmentService(BusinessPartnerService partners, PartnerContactService contacts,
+    public NewCustomerShipmentService(BusinessPartners partners, PartnerContacts contacts,
                                       InventoryService inventory, InventoryRepository inventoryRepository,
                                       AuthorizationService authorization) {
         this.partners = partners;

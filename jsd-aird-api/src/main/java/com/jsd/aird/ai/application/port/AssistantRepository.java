@@ -12,6 +12,11 @@ public interface AssistantRepository {
 
     boolean conversationExists(UUID organizationId, UUID conversationId);
 
+    /** Private conversations are never shared just because users share an organization. */
+    default boolean conversationOwned(UUID organizationId, UUID conversationId, UUID actorId) { return false; }
+
+    default List<ConversationMeta> listOwnedConversations(UUID organizationId, UUID actorId, int limit) { return List.of(); }
+
     void insertMessage(UUID conversationId, String role, String content, JsonNode citations);
 
     default void insertMessage(UUID conversationId, String role, String content, JsonNode citations,

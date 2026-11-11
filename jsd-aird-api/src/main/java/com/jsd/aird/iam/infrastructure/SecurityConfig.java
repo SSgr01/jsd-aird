@@ -73,7 +73,7 @@ public class SecurityConfig {
                         // SessionAuthenticationFilter authenticates from an opaque cookie on every request.
                         // Spring must not treat that as a new login each time and clear the double-submit token.
                         .sessionAuthenticationStrategy(new NullAuthenticatedSessionStrategy())
-                        .ignoringRequestMatchers(request -> developmentMode || "/internal/v1/agent-tools".equals(request.getRequestURI())))
+                        .ignoringRequestMatchers(request -> developmentMode || java.util.Set.of("/internal/v1/agent-tools", "/internal/v1/agent-identity", "/internal/v1/agent-identity/automation").contains(request.getRequestURI())))
                 .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .requestCache(cache -> cache.disable())
@@ -98,7 +98,7 @@ public class SecurityConfig {
                     auth.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();
                     // This single service endpoint validates a signed, expiring delegation
                     // and rechecks the current user and data permissions in its controller.
-                    auth.requestMatchers(HttpMethod.POST, "/internal/v1/agent-tools").permitAll();
+                    auth.requestMatchers(HttpMethod.POST, "/internal/v1/agent-tools", "/internal/v1/agent-identity", "/internal/v1/agent-identity/automation").permitAll();
                     auth.requestMatchers("/api/v1/auth/csrf", "/api/v1/auth/login", "/api/v1/auth/session-policy", "/actuator/health").permitAll();
                     auth.requestMatchers("/actuator/metrics", "/actuator/metrics/**").access((authentication,context)->new org.springframework.security.authorization.AuthorizationDecision(java.util.Set.of("127.0.0.1","0:0:0:0:0:0:0:1","::1").contains(context.getRequest().getRemoteAddr())));
                     if (developmentMode) auth.anyRequest().permitAll();

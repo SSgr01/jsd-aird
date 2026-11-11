@@ -28,7 +28,12 @@ def settings(tmp_path):
         runtime_secret="runtime-" + "r" * 32,
         storage_root=tmp_path,
         _env_file=None,
-    )
+    ).model_copy(update={
+        # This shared test database retains earlier synthetic runs as evidence;
+        # admission capacity is tested with an explicit limit in its own tests.
+        "max_running_runs": 100000,
+        "max_running_runs_per_user": 100000,
+    })
 
 
 @pytest.fixture

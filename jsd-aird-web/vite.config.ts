@@ -11,6 +11,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const rootEnv = loadEnv(mode, fileURLToPath(new URL('..', import.meta.url)), '');
   const apiTarget = env.VITE_DEV_API_TARGET || 'http://localhost:8080';
+  const agentTarget = env.VITE_DEV_AGENT_TARGET || process.env.VITE_DEV_AGENT_TARGET || 'http://127.0.0.1:8092';
   const appVersion = rootEnv.VITE_APP_VERSION || '';
 
   return {
@@ -18,6 +19,9 @@ export default defineConfig(({ mode }) => {
     define: { 'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion) },
     css: { postcss: { plugins: [browserCssCompat()] } },
     resolve: {
+      // Keep linked dependency assets on the checkout's drive. Vite's raw-file
+      // middleware otherwise drops the drive letter on cross-drive junctions.
+      preserveSymlinks: true,
       // Univer declares RxJS as a peer dependency. Keep every Univer package
       // on the same modern RxJS build; otherwise pnpm may resolve a nested
       // 7.0.0 copy whose ESM entry does not expose the operators Univer uses.
@@ -37,6 +41,7 @@ export default defineConfig(({ mode }) => {
         ],
       },
       proxy: {
+        '/agent': { target: agentTarget, ws: true, changeOrigin: false, timeout: 180000, proxyTimeout: 180000 },
         '/api': createDevProxy(apiTarget),
         '/actuator': createDevProxy(apiTarget),
         '/v3/api-docs': createDevProxy(apiTarget),

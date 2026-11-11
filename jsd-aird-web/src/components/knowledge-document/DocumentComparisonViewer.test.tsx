@@ -1,9 +1,10 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { DocumentComparisonViewer } from './DocumentComparisonViewer';
 
 let observedWidth = 1200;
+let resizeContainer: (width: number) => void = () => undefined;
 
 describe('DocumentComparisonViewer', () => {
   beforeEach(() => {
@@ -14,7 +15,8 @@ describe('DocumentComparisonViewer', () => {
         private readonly callback: ResizeObserverCallback;
         constructor(callback: ResizeObserverCallback) { this.callback = callback; }
         observe(target: Element) {
-          this.callback([{ target, contentRect: { width: observedWidth } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+          resizeContainer = (width: number) => this.callback([{ target, contentRect: { width } } as ResizeObserverEntry], this);
+          resizeContainer(observedWidth);
         }
         disconnect() {}
         unobserve() {}
@@ -35,9 +37,23 @@ describe('DocumentComparisonViewer', () => {
     render(<DocumentComparisonViewer original={<div>原文件证据</div>} result={<div>完整确认内容</div>} />);
 
     expect(screen.getByText('完整确认内容')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('原文件'));
+    fireEvent.click(screen.getByRole('radio', { name: /原文件/ }));
     expect(await screen.findByText('原文件证据')).toBeInTheDocument();
-    expect(screen.queryByText('完整确认内容')).not.toBeInTheDocument();
+    expect(screen.getByText('完整确认内容').closest('section')).toHaveAttribute('hidden');
+  });
+
+  it('keeps both document instances and edits when resizing across the single-pane breakpoint', () => {
+    render(<DocumentComparisonViewer original={<textarea aria-label="原文" defaultValue="原始记录" />} result={<textarea aria-label="校对内容" defaultValue="初始草稿" />} />);
+    const source = screen.getByRole('textbox', { name: '原文' });
+    const result = screen.getByRole('textbox', { name: '校对内容' });
+    fireEvent.change(result, { target: { value: '未保存的校对修改' } });
+    act(() => resizeContainer(790));
+    expect(screen.getByRole('textbox', { name: '校对内容' })).toBe(result);
+    fireEvent.click(screen.getByRole('radio', { name: /原文件/ }));
+    expect(screen.getByRole('textbox', { name: '原文' })).toBe(source);
+    act(() => resizeContainer(1200));
+    expect(screen.getByRole('textbox', { name: '校对内容' })).toBe(result);
+    expect(result).toHaveValue('未保存的校对修改');
   });
 
   it('supports keyboard resizing and resets to the default split with Home', () => {

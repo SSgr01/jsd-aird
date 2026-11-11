@@ -6,6 +6,7 @@ import { markPerformance, measurePerformance } from '@/services/performance/metr
 
 import { useAuthStore } from '@/stores/auth-store';
 import { HttpError } from '@/services/http/errors';
+import { workbenchReturn } from './workbench-return';
 import { loginDestination } from './login-redirect';
 import './auth.css';
 
@@ -26,6 +27,11 @@ export function LoginPage() {
   const onFinish = async (values: LoginForm) => {
     try {
       await login(values);
+      const workbench = workbenchReturn(location.search, location.hash);
+      if (workbench) {
+        window.location.replace(workbench);
+        return;
+      }
       const requestedFrom = (location.state as { from?: string } | null)?.from;
       navigate(loginDestination(requestedFrom), { replace: true });
     } catch (error) {

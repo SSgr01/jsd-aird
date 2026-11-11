@@ -1,3 +1,4 @@
+import { WorkspaceFrame, WorkspaceMaximizeButton } from '@/components/workspace/WorkspaceFrame';
 import { ArrowLeftOutlined, CloudUploadOutlined, DownloadOutlined, EyeOutlined, HistoryOutlined, SaveOutlined } from '@ant-design/icons';
 import { Button, Result, Skeleton, Space, Tabs, Tag, Typography, message } from 'antd';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
@@ -218,12 +219,12 @@ export function ProjectDocumentWorkspacePage() {
   if (!document || !snapshot) return <Skeleton active paragraph={{ rows: 12 }} />;
   const word = document.format === 'DOCX';
   const editable = canUpdate && document.status !== 'ARCHIVED' && view === 'edit' && !selectedVersion;
-  return <section className="workspace-shell template-business-workspace">
+  return <WorkspaceFrame maximizable className="workspace-shell template-business-workspace project-document-workspace">
     <header className="workspace-header"><div className="workspace-identity">
       <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate(`/projects/${projectId}?section=documents`)}>返回</Button>
-      <span className="workspace-title-block"><Typography.Text type="secondary" className="workspace-breadcrumb">项目管理 / 项目文档</Typography.Text><Typography.Text strong>{document.title}</Typography.Text></span>
+      <div className="workspace-title-block"><Typography.Text type="secondary" className="workspace-breadcrumb">项目管理 / 项目文档</Typography.Text><h1 className="workspace-document-title" title={document.title}>{document.title}</h1></div>
       <Tag color="blue">{versions.length ? `V${versions[0]?.versionNo ?? ''}` : '未发布'}</Tag>
-    </div><Space wrap><SaveStateBadge state={saveState} /><Can permission="project.document.view"><Button icon={<DownloadOutlined />} onClick={() => void exportDocument()}>导出</Button></Can>{document.status !== 'ARCHIVED' && <WorkspaceReviewActions type="PROJECT_DOCUMENT" id={documentId} saved={saveState === 'SAVED'} enabled={!selectedVersion} onStatusChange={setReviewStatus} />}{document.status !== 'ARCHIVED' && <Can permission="project.document.update"><Button type="primary" className="workspace-save-button" icon={<SaveOutlined />} loading={saveState === 'SAVING'} disabled={!editable} onClick={() => void save()}>保存草稿</Button></Can>}{document.status !== 'ARCHIVED' && <Can permission="project.document.publish"><Button type="primary" className="workspace-publish-button" icon={<CloudUploadOutlined />} loading={saveState === 'SAVING'} disabled={view !== 'edit' || Boolean(selectedVersion) || saveState !== 'SAVED' || reviewStatus !== 'APPROVED'} onClick={() => void publish()}>发布</Button></Can>}</Space></header>
+    </div><Space wrap><SaveStateBadge state={saveState} /><Can permission="project.document.view"><Button icon={<DownloadOutlined />} onClick={() => void exportDocument()}>导出</Button></Can>{document.status !== 'ARCHIVED' && <WorkspaceReviewActions type="PROJECT_DOCUMENT" id={documentId} saved={saveState === 'SAVED'} enabled={!selectedVersion} onStatusChange={setReviewStatus} />}{document.status !== 'ARCHIVED' && <Can permission="project.document.update"><Button type="primary" className="workspace-save-button" icon={<SaveOutlined />} loading={saveState === 'SAVING'} disabled={!editable} onClick={() => void save()}>保存草稿</Button></Can>}{document.status !== 'ARCHIVED' && <Can permission="project.document.publish"><Button type="primary" className="workspace-publish-button" icon={<CloudUploadOutlined />} loading={saveState === 'SAVING'} disabled={view !== 'edit' || Boolean(selectedVersion) || saveState !== 'SAVED' || reviewStatus !== 'APPROVED'} onClick={() => void publish()}>发布</Button></Can>}<WorkspaceMaximizeButton /></Space></header>
     <nav className="workspace-view-tabs"><Tabs activeKey={view} onChange={(key) => changeView(key as 'preview' | 'edit' | 'versions')} items={[{ key: 'preview', label: <><EyeOutlined /> 预览</> }, { key: 'edit', label: '编辑', disabled: !canUpdate || document.status === 'ARCHIVED' }, { key: 'versions', label: <><HistoryOutlined /> 版本记录</> }]} /></nav>
     <div className="workspace-main-stage">
       {view === 'versions' ? (
@@ -247,7 +248,7 @@ export function ProjectDocumentWorkspacePage() {
         </main>
       ) : (
         <div className={`template-workspace-grid prototype-workspace-grid ${word ? 'word-workspace-grid project-word-workspace' : ''}`}>
-            {word && <DocumentOutlinePanel structure={documentStructure} onSelect={(node) => editorRef.current?.focusNode?.(node)} />}
+            {word && <DocumentOutlinePanel collapsible structure={documentStructure} onSelect={(node) => editorRef.current?.focusNode?.(node)} />}
             <main className={`workspace-canvas ${view === 'preview' ? 'is-preview' : ''}`}><Suspense fallback={<Skeleton active />}>
               {word ? <div className={!editable ? 'document-readonly' : undefined}><DocsEditor ref={editorRef} snapshot={snapshot} editable={editable} onDirty={() => setSaveState('DIRTY')} /></div>
                 : <div className={!editable ? 'document-readonly' : undefined}><SheetsEditor ref={editorRef} snapshot={snapshot} editable={editable} bindings={mapping} onEditorValue={() => undefined} onDirty={() => setSaveState('DIRTY')} /></div>}
@@ -255,7 +256,7 @@ export function ProjectDocumentWorkspacePage() {
           </div>
       )}
     </div>
-  </section>;
+  </WorkspaceFrame>;
 }
 
 function HistoricalProjectVersion({ version, word, onBack }: { version: ProjectDocumentVersion; word: boolean; onBack: () => void }) {

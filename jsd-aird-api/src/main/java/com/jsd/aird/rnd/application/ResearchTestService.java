@@ -14,7 +14,7 @@ import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;

@@ -1,3 +1,4 @@
+import { WorkspaceFrame, WorkspaceMaximizeButton } from '@/components/workspace/WorkspaceFrame';
 import {
   CheckCircleFilled,
   EditOutlined,
@@ -33,6 +34,7 @@ const SheetsEditor = lazy(async () => {
 });
 
 interface ShellProps {
+  maximizable?: boolean;
   rootRef?: Ref<HTMLElement>;
   panelClassName?: string;
   panelTitle?: string;
@@ -52,21 +54,21 @@ interface ShellProps {
   children?: ReactNode;
 }
 
-export function DataWorkbenchShell({ rootRef, panelClassName, panelTitle = '字段数据', panelExtra, breadcrumb, title, canvasLabel = 'Excel 工作区', leading, meta, actions, navigation, content, notice, canvas, panel, footer, children }: ShellProps) {
+export function DataWorkbenchShell({ maximizable = false, rootRef, panelClassName, panelTitle = '字段数据', panelExtra, breadcrumb, title, canvasLabel = 'Excel 工作区', leading, meta, actions, navigation, content, notice, canvas, panel, footer, children }: ShellProps) {
   return (
-    <section ref={rootRef} className="data-workbench" aria-label={`${title}数据工作台`}>
+    <WorkspaceFrame maximizable={maximizable} ref={rootRef} className="data-workbench" aria-label={`${title}数据工作台`}>
       <header className="data-workbench-header">
         <div className="data-workbench-header-main">
           {leading ? <div className="data-workbench-leading">{leading}</div> : null}
           <div className="data-workbench-identity">
             <Typography.Text type="secondary" className="data-workbench-breadcrumb">{breadcrumb}</Typography.Text>
             <div className="data-workbench-title-row">
-              <Typography.Title level={2}>{title}</Typography.Title>
+              <Typography.Title level={1} title={title}>{title}</Typography.Title>
               {meta}
             </div>
           </div>
         </div>
-        <Space wrap>{actions}</Space>
+        <Space wrap>{actions}<WorkspaceMaximizeButton /></Space>
       </header>
       {navigation}
       {notice ? <div className="data-workbench-notice">{notice}</div> : null}
@@ -76,7 +78,7 @@ export function DataWorkbenchShell({ rootRef, panelClassName, panelTitle = '字�
       </div>}
       {footer ? <footer className="data-workbench-footer">{footer}</footer> : null}
       {children}
-    </section>
+    </WorkspaceFrame>
   );
 }
 

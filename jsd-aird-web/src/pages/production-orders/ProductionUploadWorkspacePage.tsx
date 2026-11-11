@@ -1,3 +1,4 @@
+import { FormModal } from '@/components/form-dialog/FormModal';
 import { ArrowLeftOutlined, DownloadOutlined, SaveOutlined } from '@ant-design/icons';
 import {
   Alert,
@@ -1122,9 +1123,9 @@ export function ProductionUploadWorkspacePage() {
         )}
         </div>
       </div>
-      <Modal title="另存为模板" open={templateDraftOpen} okText="生成模板草稿"
+      <FormModal form={templateDraftForm} title="另存为模板" open={templateDraftOpen} okText="生成模板草稿"
         confirmLoading={templateDraftSaving} onCancel={() => setTemplateDraftOpen(false)}
-        onOk={() => void createTemplateDraft()} destroyOnClose>
+        onOk={() => createTemplateDraft()} destroyOnClose>
         <Form form={templateDraftForm} layout="vertical" preserve={false}>
           <Form.Item name="name" label="模板名称" rules={[{ required: true, whitespace: true, message: '请输入模板名称' }]}>
             <Input maxLength={160} showCount />
@@ -1133,7 +1134,7 @@ export function ProductionUploadWorkspacePage() {
             <Select options={templateCategories.map((item) => ({ value: item.id, label: item.name }))} placeholder="请选择模板分类" />
           </Form.Item>
         </Form>
-      </Modal>
+      </FormModal>
     </section>
   );
 }

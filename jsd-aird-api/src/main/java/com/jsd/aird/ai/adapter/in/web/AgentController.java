@@ -47,7 +47,7 @@ public class AgentController {
     @GetMapping("/capabilities")
     public Object capabilities() {
         artifacts.requireUse();
-        var value = mapper.createObjectNode().put("enabled", enabled).put("engine", "pi-v1").put("available", false);
+        var value = mapper.createObjectNode().put("enabled", enabled).put("engine", "dsh-v1").put("available", false);
         if (enabled) try {
             var request = HttpRequest.newBuilder(URI.create(controlUrl + "/internal/v1/harness/capabilities"))
                 .timeout(Duration.ofSeconds(5)).header("X-Jsd-Agent-Ticket", delegation.issue(ActorContext.required())).GET().build();
@@ -102,19 +102,8 @@ public class AgentController {
             && !suffix.matches("/runs/[0-9a-f-]{36}/operations/[A-Za-z0-9_%-]{1,600}/reconcile")
             && !suffix.matches("/conversations/[0-9a-f-]{36}/sources/[0-9a-f-]{36}"))
             throw new ApiException(ApiErrorCode.BAD_REQUEST);
-        if ("/runs".equals(suffix) && "POST".equals(request.getMethod()) && body != null && !body.hasNonNull("topic_id") && !body.hasNonNull("profile")) {
-            var task = body.path("request").asText().strip();
-            var key = request.getHeader("Idempotency-Key");
-            if (task.isBlank() || task.length() > 12000 || key == null || key.length() > 90 || body.hasNonNull("conversation_id"))
-                throw new ApiException(ApiErrorCode.BAD_REQUEST);
-            var topic = research.create("topic", mapper.createObjectNode().put("title", task.substring(0, Math.min(48, task.length())))
-                .put("goal", task).put("scope_mode", "AUTOMATIC").set("documents", mapper.createArrayNode()), "task-topic:" + key);
-            var runBody = (ObjectNode) body.deepCopy();
-            runBody.put("topic_id", topic.path("id").asText());
-            body = runBody;
-        }
         var builder = HttpRequest.newBuilder(URI.create(controlUrl + "/internal/v1/harness" + suffix))
-            .timeout(Duration.ofSeconds(30)).header("X-Jsd-Agent-Ticket", delegation.issue(ActorContext.required()));
+            .timeout(Duration.ofSeconds(150)).header("X-Jsd-Agent-Ticket", delegation.issue(ActorContext.required()));
         var key = request.getHeader("Idempotency-Key");
         if (key != null) builder.header("Idempotency-Key", key);
         builder.header("Content-Type", "application/json").method(request.getMethod(), body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body.toString()));

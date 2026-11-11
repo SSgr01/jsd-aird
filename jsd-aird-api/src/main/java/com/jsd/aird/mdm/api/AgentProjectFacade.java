@@ -8,4 +8,5 @@ public interface AgentProjectFacade {
     boolean available();
     ObjectNode read(String action, ObjectNode arguments);
     void authorizeSource(JsonNode source);
+    void validateSource(JsonNode source, String excerpt);
 }

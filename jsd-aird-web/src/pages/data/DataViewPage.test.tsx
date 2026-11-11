@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 import { AppProviders } from '@/app/providers/AppProviders';
@@ -90,15 +90,13 @@ describe('DataViewPage source-file list', () => {
     expect(screen.getByRole('button',{name:/全部来源文件/})).toHaveTextContent('23');
   });
 
-  it('retains cached rows without a banner or retry button after a background read fails', async () => {
-    const first=render(<AppProviders><MemoryRouter future={testRouterFuture}><DataViewPage /></MemoryRouter></AppProviders>);
-    await screen.findByText('检测报告.xlsx'); first.unmount();
-    listSourceFilesMock.mockRejectedValue(new HttpError('offline','NETWORK'));
+  it('retains cached rows and offers a retry after a background read fails', async () => {
     render(<AppProviders><MemoryRouter future={testRouterFuture}><DataViewPage /></MemoryRouter></AppProviders>);
-    expect(screen.getByText('检测报告.xlsx')).toBeInTheDocument();
-    await waitFor(()=>expect(listSourceFilesMock).toHaveBeenCalledTimes(3),{timeout:4000});
-    expect(screen.getByText('检测报告.xlsx')).toBeInTheDocument();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(screen.queryByText(/更新失败|加载失败|网络不可用|正在更新|重试/)).not.toBeInTheDocument();
+    const originalRow = await screen.findByText('检测报告.xlsx');
+    listSourceFilesMock.mockRejectedValue(new HttpError('offline', 'NETWORK'));
+    await act(async () => { await queryClient.refetchQueries(); });
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('列表更新失败'));
+    expect(screen.getByText('检测报告.xlsx')).toBe(originalRow);
+    expect(screen.getByRole('button', { name: /重\s*试/ })).toBeEnabled();
   });
 });

@@ -64,7 +64,7 @@ public class AssistantController {
 
     @GetMapping("/conversations")
     public ApiResponse<List<AssistantRepository.ConversationMeta>> conversations() {
-        return success(memory.list(ActorContext.required().organizationId(), 100));
+        return success(assistant.listConversations());
     }
 
     @PatchMapping("/conversations/{id}")
@@ -79,13 +79,6 @@ public class AssistantController {
     public ApiResponse<Void> delete(@PathVariable UUID id) {
         requireConversation(id);
         memory.delete(ActorContext.required().organizationId(), id);
-        return success(null);
-    }
-
-    @PostMapping("/conversations/{id}/summarize")
-    public ApiResponse<Void> summarize(@PathVariable UUID id) {
-        requireConversation(id);
-        memory.summarize(ActorContext.required().organizationId(), id);
         return success(null);
     }
 

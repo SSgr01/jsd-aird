@@ -2,15 +2,12 @@ import asyncio
 import contextlib
 import hmac
 import json
-import time
 from contextlib import asynccontextmanager
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from aird_agent.capabilities.fast_qa.generation import PreparedQa
-from aird_agent.capabilities.fast_qa.generation import create as create_prepared_qa
 from aird_agent.capabilities.literature.private_sources import (
     OaRequest,
     Upload,
@@ -20,20 +17,21 @@ from aird_agent.capabilities.literature.private_sources import (
     list_sources,
     upload,
 )
+from aird_agent.core.stage_timing import StageTimingMiddleware, fields
 from aird_agent.core.store import Store
 from aird_agent.evidence.citations import normalize_citations
 from aird_agent.hosts.jsd.composition import Service
-from aird_agent.hosts.jsd.operations import list_operations, monitor, reconcile
+from aird_agent.hosts.jsd.operations import list_operations, monitor, reconcile, reconcile_cancelled_execution
 from aird_agent.server.contracts import (
     HarnessSettings,
     MessageRequest,
-    Principal,
     QueueRequest,
     RunRequest,
     retryable_failure,
 )
 from aird_agent.server.event_stream import EventNotifications, stream_events
 from aird_agent.server.security import verify
+from aird_agent.server.task_entry import TaskRequest, create_task
 
 PREFIX = "/internal/v1/harness"
 
@@ -43,41 +41,46 @@ def create_app(settings=None, store=None, service=None):
     store = store or Store(settings.database_url.get_secret_value())
     service = service or Service(settings, store)
     notifications = EventNotifications()
+    cancellations = {}
 
     @asynccontextmanager
     async def lifespan(app):
         await store.pool.open(wait=True, timeout=10)
-        worker = asyncio.create_task(service.worker())
+        await store.migrate()
+        admission = asyncio.create_task(service.admission.run())
         listener = asyncio.create_task(notifications.listen(settings.database_url.get_secret_value()))
         try:
             yield
         finally:
-            worker.cancel()
+            admission.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await admission
             listener.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await worker
-            with contextlib.suppress(asyncio.CancelledError):
                 await listener
+            for task in cancellations.values():
+                task.cancel()
+            await asyncio.gather(*list(cancellations.values()), return_exceptions=True)
             await service.http.aclose()
             await store.pool.close()
 
-    app = FastAPI(title="JSD pi Harness", lifespan=lifespan)
+    app = FastAPI(title="JSD DeepSeek business service", lifespan=lifespan)
+    app.add_middleware(StageTimingMiddleware, enabled=settings.stage_timing)
 
-    def principal(x_jsd_agent_ticket: str = Header(default="")):
-        return verify(settings.shared_secret.get_secret_value(), x_jsd_agent_ticket, "control")[0]
+    async def principal(request: Request, x_jsd_agent_ticket: str = Header(default="")):
+        user = verify(settings.shared_secret.get_secret_value(), x_jsd_agent_ticket, "control")[0]
+        if user.automation_grant_id:
+            if not request.url.path.startswith(PREFIX + "/dsh/"):
+                raise HTTPException(403, "BACKGROUND_SCOPE_DENIED")
+            await service.briefings.check(user)
+        return user
 
     @app.get(PREFIX + "/capabilities")
     async def capabilities(user=Depends(principal)):
-        import importlib.util
-
         available = False
         try:
-            response = await service.http.get(
-                settings.runtime_url + "/health",
-                headers={"Authorization": "Bearer " + settings.runtime_secret.get_secret_value()},
-                timeout=3,
-            )
-            available = response.status_code == 200 and response.json().get("modelConfigured") is True
+            models = await service.dsh_command(user, "models", {})
+            available = models.get("available") is True
         except Exception:
             pass
         sandbox = False
@@ -92,16 +95,12 @@ def create_app(settings=None, store=None, service=None):
             except Exception:
                 pass
         return {
-            "engine": "pi-v1",
+            "engine": "dsh-v1",
             "available": available,
             "sandbox": sandbox,
-            "rcs": bool(
-                settings.paperqa_model
-                and settings.paperqa_api_key.get_secret_value()
-                and importlib.util.find_spec("paperqa")
-            ),
+            "rcs": available,
             "protocol_version": 1,
-            "profiles": ["agent", "fast_qa"],
+            "profiles": ["agent"],
             "source_kinds": ["KB_PUBLICATION", "BUSINESS_RECORD", "DATA_SOURCE_FILE", "WEB_RESULT"],
             "subagents": False,
             "simulated": False,
@@ -128,9 +127,9 @@ def create_app(settings=None, store=None, service=None):
             if row.get("visibility") != "HOST_MANAGED"
         ]
 
-    @app.post(PREFIX + "/prepared-qa", status_code=202)
-    async def prepared_qa(body: PreparedQa, user=Depends(principal), idempotency_key: str = Header()):
-        return await create_prepared_qa(service, user, body, idempotency_key)
+    @app.post(PREFIX + "/tasks", status_code=202)
+    async def task(body: TaskRequest, user=Depends(principal), idempotency_key: str = Header()):
+        return public_run(await create_task(service, user, body, idempotency_key))
 
     @app.post(PREFIX + "/conversations", status_code=201)
     async def new_conversation(user=Depends(principal)):
@@ -179,7 +178,7 @@ def create_app(settings=None, store=None, service=None):
                     key: output[key] for key in ("id", "kind", "title", "path") if key in output
                 }
         result["registered_outputs"] = list(outputs.values())
-        return {k: v for k, v in result.items() if k not in {"checkpoint", "evidence"}}
+        return {k: v for k, v in result.items() if k != "evidence"}
 
     @app.post(PREFIX + "/conversations/{cid}/messages", status_code=202)
     async def message(
@@ -201,6 +200,8 @@ def create_app(settings=None, store=None, service=None):
     @app.get(PREFIX + "/runs/{rid}")
     async def get_run(rid: UUID, user=Depends(principal)):
         run = await store.get(user, "run", str(rid))
+        if run.get("session_deleted"):
+            raise HTTPException(410, "SESSION_DELETED")
         await service.authorized_topic(user, run, execution=False)
         return public_run(run)
 
@@ -229,101 +230,11 @@ def create_app(settings=None, store=None, service=None):
 
     @app.post(PREFIX + "/runs/{rid}/cancel")
     async def cancel(rid: UUID, user=Depends(principal)):
-        async with store.transaction(user, str(rid)) as conn:
-            run = await store.get(user, "run", str(rid), conn)
-            conversation = await store.get(user, "conversation", run["conversation_id"], conn)
-            conversation["queue_paused"] = True
-            if run["status"] not in {"RUNNING", "QUEUED", "WAITING_APPROVAL"} and conversation.get(
-                "active_run"
-            ):
-                successor = await store.get(user, "run", conversation["active_run"], conn)
-                if successor.get("queued_from_run_id") == str(rid):
-                    run = successor
-            if run["status"] in {"RUNNING", "QUEUED", "WAITING_APPROVAL"}:
-                if run["status"] == "RUNNING" and run.get("started_at"):
-                    run["active_seconds"] += time.time() - run["started_at"]
-                run["status"] = "CANCELLED"
-                conversation["last_run"] = run["id"]
-                conversation["checkpoint"] = run.get("checkpoint")
-                conversation["evidence"] = run.get("evidence", {})
-                from aird_agent.core.messages import record_replies, requeue_unconsumed
-
-                requeue_unconsumed(run, conversation)
-                record_replies(run, conversation)
-                if conversation.get("active_run") == run["id"]:
-                    conversation["active_run"] = None
-                run.pop("pending_approval", None)
-                await store.update(user, "run", run, conn)
-                await store.event(user, run["id"], "run.cancelled", {}, conn)
-                await conn.execute(
-                    "UPDATE agent_runtime.harness_calls SET status='UNKNOWN',updated_at=now() WHERE run_id=%s AND status='RUNNING'",
-                    (run["id"],),
-                )
-            await store.update(user, "conversation", conversation, conn)
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(service.runtime(run["id"], "abort"), timeout=3)
-        await service.bindings.cancel_execution(user, run)
-        return {"status": run["status"], "run_id": run["id"]}
+        return await service.cancel(user, str(rid))
 
     @app.post(PREFIX + "/runs/{rid}/resume", status_code=202)
-    async def resume(rid: UUID, request: Request, user=Depends(principal)):
-        body = await request.json()
-        await service.authorized_topic(user, await store.get(user, "run", str(rid)))
-        # Allow the original runtime to flush its tool result before a new epoch.
-        for _ in range(50):
-            snapshot = await store.get(user, "run", str(rid))
-            if (
-                snapshot["status"] != "WAITING_APPROVAL"
-                or snapshot.get("pause_ready")
-                or snapshot["lease_until"] < time.time()
-            ):
-                break
-            await asyncio.sleep(0.1)
-        async with store.transaction(user, str(rid)) as conn:
-            run = await store.get(user, "run", str(rid), conn)
-            if run["status"] == "WAITING_APPROVAL":
-                approval = run.get("pending_approval", {})
-                if (
-                    body.get("approval_id") != approval.get("id")
-                    or approval.get("expires_at", 0) <= time.time()
-                ):
-                    raise HTTPException(409, "Approval expired or parameters changed")
-                if body.get("decision") not in {"APPROVED", "REJECTED"}:
-                    raise HTTPException(422, "Explicit decision required")
-                if not run.get("pause_ready") and run["lease_until"] >= time.time():
-                    raise HTTPException(409, "Checkpoint is still being saved; retry shortly")
-                run["approvals"][approval["id"]] = {
-                    **approval,
-                    "decision": body["decision"],
-                    "actor_id": str(user.actor_id),
-                }
-                run.pop("pending_approval", None)
-                run["request"] = (
-                    "继续此前研究。外部检索的正式决策为 " + body["decision"] + "；仅在允许时调用原检索工具。"
-                )
-            elif run["status"] == "FAILED" and body.get("retry") is True:
-                if not retryable_failure(run):
-                    raise HTTPException(409, "Run requires review, not automatic replay")
-                run.setdefault("original_request", run["request"])
-                run["request"] = (
-                    "从已保存进度继续原任务；先核对执行账本和现有产物，避免重复执行结果未知的操作。"
-                )
-            else:
-                raise HTTPException(409, "Run cannot resume; stopped runs require a new linked run")
-            run["status"] = "QUEUED"
-            run["error"] = None
-            run.pop("completion", None)
-            run["principal"] = user.model_dump(mode="json")
-            await store.update(user, "run", run, conn)
-            await store.event(user, str(rid), "run.queued", {"resumed": True}, conn)
-        return {"run_id": str(rid), "status": "QUEUED"}
-
-    @app.get(PREFIX + "/runs/{rid}/workspace")
-    async def workspace(rid: UUID, user=Depends(principal)):
-        from aird_agent.core.workspace import Workspace
-
-        await service.authorized_topic(user, await store.get(user, "run", str(rid)), execution=False)
-        return Workspace(settings.storage_root / "workspaces", str(user.organization_id), str(rid)).manifest()
+    async def resume(rid: UUID, user=Depends(principal)):
+        return await service.resume(user, str(rid))
 
     @app.get(PREFIX + "/runs/{rid}/events")
     async def events(
@@ -343,39 +254,208 @@ def create_app(settings=None, store=None, service=None):
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    @app.post(PREFIX + "/runtime/{rid}/{action}")
-    async def callback(rid: UUID, action: str, request: Request, authorization: str = Header(default="")):
+    @app.post(PREFIX + "/background/{action}")
+    async def background(action: str, request: Request, authorization: str = Header(default="")):
+        if not hmac.compare_digest(("Bearer " + settings.runtime_secret.get_secret_value()).encode(), authorization.encode()):
+            raise HTTPException(401, "Invalid runtime credential")
+        body = await request.json()
+        if action == "owners":
+            return await service.briefings.owners(body.get("offset", 0))
+        if action == "ticket":
+            return await service.briefings.ticket(str(UUID(body["owner_id"])))
+        raise HTTPException(404, "Unknown background operation")
+
+    @app.post(PREFIX + "/dsh/{action}")
+    async def dsh(action: str, request: Request, authorization: str = Header(default=""), user=Depends(principal)):
         expected = "Bearer " + settings.runtime_secret.get_secret_value()
         if not hmac.compare_digest(expected.encode(), authorization.encode()):
             raise HTTPException(401, "Invalid runtime credential")
         raw = await request.body()
         if len(raw) > 20 * 1024 * 1024:
             raise HTTPException(413, "Runtime payload too large")
-        # Principal is retrieved from the owned run, never accepted from a tool call.
-        async with store.pool.connection() as conn:
-            row = await (
-                await conn.execute(
-                    "SELECT payload FROM agent_runtime.harness_records WHERE kind='run' AND id=%s",
-                    (str(rid),),
-                )
-            ).fetchone()
-        if not row:
-            raise HTTPException(404, "Run not found")
-        user = Principal.model_validate(row["payload"]["principal"])
-        return await service.callback(user, str(rid), action, json.loads(raw))
+        body = json.loads(raw)
+        fields(session_id=body.get("session_id"), run_id=body.get("run_id"), turn=body.get("turn"),
+               request_bytes=len(raw), event_type=(body.get("event") or {}).get("type"))
+        if action == "session-delete":
+            from aird_agent.core.session_deletion import delete_session
+            return await delete_session(store, user, body)
+        if body.get("session_id") and action in {"register", "admit", "admission-state", "admission-renew", "admission-release", "run-state", "run-diagnostics", "ownership", "restore", "auxiliary-admit", "gate", "tool", "native-tool"}:
+            from aird_agent.core.session_deletion import require_session_available
+            await require_session_available(store, user, body["session_id"])
+        if user.automation_grant_id and body.get("session_id"):
+            owner = await service.briefings.owner(user)
+            if not any(task["session_id"] == body["session_id"] and task["status"] in {"active", "paused", "ended", "INSTALLING"} for task in owner["tasks"].values()):
+                raise HTTPException(403, "BACKGROUND_SESSION_DENIED")
+        if action == "builtin-plan":
+            return await service.briefings.install(user)
+        if action == "builtin-state":
+            return await service.briefings.owner(user)
+        if action == "builtin-pending":
+            return await service.briefings.pending(user)
+        if action == "builtin-sync":
+            return await service.briefings.reconcile(user, body)
+        if action == "builtin-start":
+            return await service.briefings.begin_creation(user, body)
+        if action == "builtin-revoke":
+            return await service.briefings.revoke(user)
+        if action in {"context", "resource"}:
+            return await service.session_view(user, action, body)
+        if action == "catalog":
+            context = await service.java(user, "runtime_context", {"profile": body["profile"], "context_refs": []})
+            packs = context["pack_ids"]
+            return {"tools": service.packs.tools(packs),
+                "instructions": "你是企业研发助手。只使用当前用户授权的资料。", "max_output_tokens": settings.model_output_tokens,
+                "max_tool_characters": service.tool_character_budget,
+                "web_search_available": (await service.host_call(user, "web_search_status")).get("available", False)}
+        if action == "bind":
+            return await service.bind_session(user, body["run_id"], body["session_id"])
+        if action == "admit":
+            return await service.register_step(user, {**body, "admission_only": True})
+        if action in {"admission-state", "admission-renew", "admission-release"}:
+            run = await store.get(user, "run", body["run_id"])
+            if run.get("dsh_session_id") != body.get("session_id"):
+                raise HTTPException(403, "SESSION_NOT_OWNED")
+            if action == "admission-state":
+                return await service.admission.state(user, run["id"])
+            if action == "admission-renew":
+                return await service.admission.renew(user, run["id"], body["epoch"])
+            return await service.admission.release(user, run["id"], body.get("epoch"),
+                cancelled=body.get("cancelled",False), stopped=body.get("stopped",False))
+        if action in {"run-cancel", "run-retry"}:
+            run=await store.get(user,"run",body["run_id"])
+            if run.get("dsh_session_id") != body.get("session_id"):
+                raise HTTPException(403,"SESSION_NOT_OWNED")
+            return await (service.cancel(user,run["id"]) if action=="run-cancel" else service.resume(user,run["id"]))
+        if action in {"run-state", "run-diagnostics"}:
+            conversation = await service.session_conversation(user, body["session_id"])
+            if not conversation:
+                return {"run": None}
+            await service.authorize_conversation(user, conversation)
+            rid = conversation.get("active_run") or conversation.get("last_run")
+            if not rid:
+                return {"run": None}
+            run = await store.get(user,"run",rid)
+            await service.authorized_topic(user,run,execution=False)
+            value = await service.admission.state(user,rid)
+            value.update(message=public_failure(run.get("error")), retryable=retryable_failure(run))
+            if action == "run-diagnostics":
+                if user.role.upper() not in {"ADMIN", "SUPER_ADMIN", "SYSTEM_ADMIN"}:
+                    raise HTTPException(403,"ADMIN_REQUIRED")
+                async with store.pool.connection() as conn:
+                    row=await(await conn.execute("SELECT state,epoch,lease_until,attempts,diagnostic FROM agent_runtime.harness_admission WHERE run_id=%s",(rid,))).fetchone()
+                value["diagnostic"]={"error":run.get("error"),"details":run.get("failure_diagnostic"),"admission":row}
+            return {"run":value,"admin":user.role.upper() in {"ADMIN","SUPER_ADMIN","SYSTEM_ADMIN"}}
+        if action == "register":
+            return await service.register_step(user, body)
+        if action == "output-repair":
+            return await service.begin_output_repair(user, body)
+        if action in {"restore", "ownership"}:
+            conversation = await service.session_conversation(user, body["session_id"])
+            if not conversation:
+                if action in {"restore", "ownership"}:
+                    return {"run": None}
+                raise HTTPException(404, "Session not found")
+            if conversation["profile"] != body["profile"]:
+                raise HTTPException(403, "SESSION_PROFILE_CHANGED")
+            await service.authorize_conversation(user, conversation)
+            snapshots = await service.authorize_history(user, conversation)
+            rid = conversation.get("active_run") or conversation.get("last_run")
+            if not rid:
+                return {"run": None}
+            run = snapshots.get(rid) or await store.get(user, "run", rid)
+            await service.authorized_topic(user, run, execution=False)
+            if action == "ownership":
+                return {"allowed": True}
+            return {"run": {**run, "tools": service.tools_for(run), "active_tools": run.get("active_tools", service.bindings.initial_tools(run)),
+                "instructions": service.instructions_for(run)}}
+        if action == "gate":
+            return await service.gate_dsh(user, body)
+        if action == "auxiliary-admit":
+            return await service.admit_auxiliary(user, body)
+        if action in {"model-result", "auxiliary-result"}:
+            return await service.model_result(user, body, auxiliary=action == "auxiliary-result")
+        if action == "native-output":
+            from aird_agent.hosts.jsd.native_files import native_output
+            return await native_output(service, user, body)
+        if action == "native-cancel":
+            from aird_agent.core.contracts import digest
+            run = await service.session_run(user, body)
+            await service.authorized_topic(user, run, execution=False)
+            call_id = body.get("call_id")
+            if not isinstance(call_id, str) or not 1 <= len(call_id) <= 200:
+                raise HTTPException(422, "INVALID_CALL_ID")
+            async with store.pool.connection() as conn:
+                operation = await (await conn.execute(
+                    "SELECT tool_name,execution_epoch FROM agent_runtime.harness_calls WHERE run_id=%s AND call_id=%s",
+                    (run["id"], call_id))).fetchone()
+            if operation and operation["tool_name"] != "dsh_execute":
+                raise HTTPException(403, "NATIVE_EXECUTION_REQUIRED")
+            epoch = operation["execution_epoch"] if operation else run["epoch"]
+            result = await service.bindings.sandbox.cancel(digest([run["id"], epoch, call_id])[:32])
+            key = (user.key, run["id"], body["call_id"])
+            if key not in cancellations:
+                task = asyncio.create_task(reconcile_cancelled_execution(service, user, run["id"], body["call_id"]))
+                cancellations[key] = task
+                task.add_done_callback(lambda task: cancellations.pop(key, None))
+            return {"accepted": True, "status": result.get("status", "UNKNOWN"),
+                "pending": result.get("status") in {"UNKNOWN", "RUNNING", "QUEUED", "CANCELLING"}}
+        if action == "native-tool":
+            run = await service.session_run(user, body)
+            await service.authorized_topic(user, run)
+            if body["name"] == "artifact_save" and not body["arguments"].get("source_quotes"):
+                async with store.pool.connection() as conn:
+                    prior = await (await conn.execute(
+                        "SELECT result FROM agent_runtime.harness_calls WHERE run_id=%s AND tool_name='artifact_save' AND status='SUCCEEDED' "
+                        "AND arguments->>'path'=%s AND arguments->>'sha256'=%s ORDER BY updated_at DESC LIMIT 1",
+                        (run["id"], body["arguments"]["path"], body["arguments"]["sha256"]))).fetchone()
+                if prior:
+                    return prior["result"]
+            return await service.tool(user, run["id"], run["epoch"], body["call_id"], body["name"], body["arguments"], native=True)
+        if action == "tool":
+            run = await service.session_run(user, body)
+            return await service.tool(user, run["id"], run["epoch"], body["call_id"], body["name"], body["arguments"])
+        if action == "event":
+            return await service.project_event(user, body)
+        if action == "stream":
+            return await service.project_stream(user, body)
+        if action == "complete":
+            return await service.complete_dsh(user, body)
+        if action == "failure":
+            run = await service.session_run(user, body)
+            async with store.transaction(user, run["id"]) as conn:
+                run = await store.get(user, "run", run["id"], conn)
+                if body.get("epoch") is not None and body["epoch"] != run["epoch"]:
+                    raise HTTPException(409, "STALE_EXECUTION_EPOCH")
+                # A native stopping error must preserve the business validation diagnosis.
+                if body.get("cancelled"):
+                    run.update(status="CANCELLED", error="DSH_EXECUTION_INTERRUPTED")
+                elif not (run.get("status") == "FAILED" and run.get("dsh_completed_turn") == run.get("dsh_turn")):
+                    code = body.get("error_code")
+                    known = {"TOKEN_BUDGET_EXCEEDED", "BUDGET_EXCEEDED", "SIDE_EFFECT_RECONCILIATION_REQUIRED", "CITATION_REPAIR_BUDGET_EXCEEDED"}
+                    run.update(status="FAILED", error=code if code in known else "DSH_EXECUTION_INTERRUPTED")
+                run["failure_diagnostic"] = body.get("diagnostic", {})
+                from aird_agent.core.admission import RunAdmission
+                RunAdmission.settle_time(run)
+                await store.update(user, "run", run, conn)
+                await service.briefings.finish(user, run, conn)
+                await store.event(user, run["id"], "run." + run["status"].lower(), {"error": run["error"]}, conn)
+                await conn.execute("UPDATE agent_runtime.harness_calls SET status='UNKNOWN',updated_at=now() WHERE run_id=%s AND status='RUNNING'", (run["id"],))
+            return {"accepted": True}
+        raise HTTPException(404, "Unknown DeepSeek adapter operation")
 
     return app
 
 
 def public_run(run):
+    from aird_agent.evidence.links import public_answer, public_citations
     return {
         **{
             k: v
             for k, v in run.items()
-            if k not in {"checkpoint", "principal", "answer_context", "prepared_qa"}
+            if k not in {"principal", "failure_diagnostic", "admission_resume"}
         },
         **{
-            key: normalize_citations(run[key], run.get("evidence", {}))
+            key: public_answer(normalize_citations(run[key], run.get("evidence", {})), run.get("evidence", {}))
             for key in ("result", "last_text")
             if isinstance(run.get(key), str)
         },
@@ -383,5 +463,16 @@ def public_run(run):
             {**message, "text": normalize_citations(message["text"], run.get("evidence", {}))}
             for message in run.get("assistant_messages", [])
         ],
+        "error": public_failure(run.get("error")),
         "retryable": retryable_failure(run),
+        "citations": public_citations(run.get("result", ""), run.get("evidence", {})),
     }
+
+
+def public_failure(error):
+    if not error:
+        return None
+    return {"SIDE_EFFECT_RECONCILIATION_REQUIRED":"执行结果需要管理员核对后才能重试",
+            "DSH_SESSION_LOST":"原会话记录已不可用，请新建对话并重新提交原请求",
+            "OUTPUT_LIMIT_EXCEEDED":"回答较长，已达到本轮输出上限，可以继续",
+            "AUTHORIZATION_REQUIRED":"权限已变化，请重新登录并重试"}.get(str(error),"本轮任务未完成，可以重试")

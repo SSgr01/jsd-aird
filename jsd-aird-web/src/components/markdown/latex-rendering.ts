@@ -1,4 +1,5 @@
 import katex from 'katex';
+import 'katex/dist/contrib/mhchem.mjs';
 import 'katex/dist/katex.min.css';
 
 export function normalizeMineruLatex(value: string) {

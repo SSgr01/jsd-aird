@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-import com.jsd.aird.kb.domain.DocumentParser;
+import com.jsd.aird.kb.api.DocumentParser;
 import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.extractor.WordExtractor;
 import org.apache.poi.ss.usermodel.DataFormatter;
@@ -21,8 +21,9 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class OfficeDocumentParser implements DocumentParser {
-    @org.springframework.beans.factory.annotation.Autowired(required=false)
     private com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void setIsolated(com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated) { this.isolated = isolated; }
 
     private static final int INLINE_MAX_ROWS = 500;
     private static final int INLINE_MAX_COLUMNS = 50;

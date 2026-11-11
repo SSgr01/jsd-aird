@@ -10,8 +10,8 @@ import java.util.stream.Collectors;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.shared.json.JsonCanonicalizer;
 import com.jsd.aird.tpl.application.RuleBasedRecognitionEngine;
-import com.jsd.aird.tpl.application.port.RecognitionModelClient;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.RecognitionModelClient;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import org.junit.jupiter.api.Test;
 
 class WordThreeRegionRecognitionGoldenTest {

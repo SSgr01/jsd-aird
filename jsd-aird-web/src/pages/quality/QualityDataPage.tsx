@@ -1,3 +1,5 @@
+import { ListFeedback } from '@/components/loading/ListQueryFeedback';
+import { FormModal } from '@/components/form-dialog/FormModal';
 import { useRequestGuard } from '@/services/query/use-request-guard';
 import {
   AppstoreOutlined,
@@ -22,8 +24,8 @@ import {
   Empty,
   Form,
   Input,
-  message,
   Modal,
+  message,
   Pagination,
   Popconfirm,
   Select,
@@ -206,10 +208,14 @@ export function QualityDataPage() {
     setCategories(cs);
     setCategoryId((v) => (cs.some((c) => c.id === v) ? v : cs[0]?.id));
   }, [beginCategoryRequest, typeId]);
-  const beginRowsRequest = useRequestGuard(JSON.stringify([typeId,categoryId,keyword,projectId,formatFilter,page,size]));
+  const beginRowsRequest = useRequestGuard(JSON.stringify([typeId,categoryId,keyword,projectId,page,size]));
+  const [listError, setListError] = useState<string>();
+  const [listLoaded, setListLoaded] = useState(false);
+  const [rowLoading, setRowLoading] = useState(false);
   const loadRows = useCallback(async () => {
     if (!categoryId) return;
     const request = beginRowsRequest();
+    setRowLoading(true);
     try {
       const r = await qualityApi.records({
         type: typeId,
@@ -222,10 +228,15 @@ export function QualityDataPage() {
       }, request.signal);
       if (!request.current()) return;
       setRows(r.items);
+      setListError(undefined);
+      setListLoaded(true);
       setTotal(r.total);
       setSelected(new Set());
-    } catch {
+    } catch (listFailure) {
+      if (request.current()) setListError(listFailure instanceof Error ? listFailure.message : '列表加载失败');
       if (request.current()) msg.error('品管数据加载失败');
+    } finally {
+      if (request.current()) setRowLoading(false);
     }
   }, [beginRowsRequest, typeId, categoryId, keyword, projectId, page, size, msg]);
   useEffect(() => {
@@ -1211,6 +1222,7 @@ export function QualityDataPage() {
           </Button>
         </Space>
       </Card>
+      <ListFeedback loading={rowLoading} hasData={listLoaded} error={listError} onRetry={() => void loadRows()} />
       <Card className="content-card quality-record-list-card" styles={{ body: { padding: 0 } }}>
         {view === 'card' ? (
           <div className="quality-record-card-view">
@@ -1231,7 +1243,7 @@ export function QualityDataPage() {
                 <div className="quality-record-card-grid">{visibleRows.map(renderQualityCard)}</div>
               </>
             ) : (
-              <Empty description="当前分类暂无符合条件的数据" />
+              !listError && !rowLoading && <Empty description={keyword || projectId || Object.values(filters).some(Boolean) ? '没有符合筛选条件的数据' : '当前分类暂无数据'} />
             )}
           </div>
         ) : (
@@ -1443,7 +1455,7 @@ export function QualityDataPage() {
                 </tbody>
               </table>
             ) : (
-              <Empty style={{ marginTop: 100 }} description="当前分类暂无符合条件的数据" />
+              !listError && !rowLoading && <Empty description={keyword || projectId || Object.values(filters).some(Boolean) ? '没有符合筛选条件的数据' : '当前分类暂无数据'} />
             )}
           </div>
         )}
@@ -1462,7 +1474,7 @@ export function QualityDataPage() {
           />
         </div>
       </Card>
-      <Modal
+      <FormModal form={createForm}
         rootClassName="quality-create-modal"
         open={createOpen}
         title="新增品管数据"
@@ -1472,7 +1484,7 @@ export function QualityDataPage() {
         confirmLoading={createSaving}
         okButtonProps={{ disabled: createSaving }}
         onCancel={() => setCreateOpen(false)}
-        onOk={() => void submitCreate()}
+        onOk={() => submitCreate()}
       >
         <Form form={createForm} layout="vertical" className="quality-create-form">
           <div className="quality-create-context">
@@ -1632,8 +1644,8 @@ export function QualityDataPage() {
             />
           )}
         </Form>
-      </Modal>
-      <Modal
+      </FormModal>
+      <FormModal draft={[renameName, renameBusinessNo, renameProjectId, renameStageId, renameTaskId]}
         open={renameOpen}
         rootClassName="quality-rename-modal"
         title="编辑品管数据"
@@ -1642,7 +1654,7 @@ export function QualityDataPage() {
         okText="保存"
         cancelText="取消"
         onCancel={() => setRenameOpen(false)}
-        onOk={() => void saveRename()}
+        onOk={() => saveRename()}
       >
         <div className="quality-rename-grid">
           <div>
@@ -1740,7 +1752,7 @@ export function QualityDataPage() {
             </div>
           </div>
         </div>
-      </Modal>
+      </FormModal>
       <Modal
         open={moveOpen}
         title="移动到分类"

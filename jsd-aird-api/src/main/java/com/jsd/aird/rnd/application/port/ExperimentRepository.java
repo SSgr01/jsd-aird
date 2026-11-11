@@ -7,7 +7,13 @@ import java.time.LocalDate;
 import java.time.Instant;
 import java.util.*;
 
-public interface ExperimentRepository {
+public interface ExperimentRepository extends com.jsd.aird.tpl.api.ExperimentTemplateSource {
+    @Override default Optional<com.jsd.aird.tpl.api.ExperimentTemplateSource.Snapshot> templateSource(UUID organizationId, UUID experimentId) {
+        return detail(organizationId, experimentId).map(d -> new com.jsd.aird.tpl.api.ExperimentTemplateSource.Snapshot(
+            new com.jsd.aird.tpl.api.ExperimentTemplateSource.SourceSummary(d.summary().id(), d.summary().experimentNo(), d.summary().title(), d.summary().status() == ExperimentStatus.VOIDED),
+            d.editModel(), d.templateSnapshot(), d.templateVersionId(), d.sourceFileId()));
+    }
+
     record Search(String keyword, String status, String sourceType, UUID projectId, UUID stageId, UUID taskId,
                   UUID categoryId, String ownerName, LocalDate dateFrom, LocalDate dateTo, String format, int page, int size,
                   DataScopeFilter scope) {
@@ -75,6 +81,8 @@ public interface ExperimentRepository {
     Detail transition(UUID organizationId, UUID id, long revision, ExperimentStatus target, String comment,
                       UUID actorId, String actorName);
     List<Version> versions(UUID organizationId, UUID id);
+    /** Explicit, owner-scoped version read, including the current editable draft. */
+    Optional<Version> version(UUID organizationId, UUID id, UUID versionId);
     Detail createRevision(UUID organizationId, UUID id, long revision, String reason, UUID actorId, String actorName);
     Detail rollback(UUID organizationId, UUID id, long revision, int targetVersion, String reason, UUID actorId, String actorName);
     JsonNode compare(UUID organizationId, UUID id, int from, int to);

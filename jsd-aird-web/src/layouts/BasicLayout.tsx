@@ -30,7 +30,8 @@ import {
 import { ProLayout, type MenuDataItem } from '@ant-design/pro-components';
 import { App, Avatar, Button, Dropdown, Input, Modal, Result, Tooltip, Typography, type InputRef, type MenuProps } from 'antd';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSidebarAutoCollapse } from './use-sidebar-auto-collapse';
 
 import { ContentBoundary } from '@/components/loading/ContentBoundary';
 import { PrefetchLink } from '@/components/loading/PrefetchLink';
@@ -139,7 +140,7 @@ const route = {
       icon: <RobotOutlined />,
       routes: [
         { path: '/knowledge/search', name: '文件检索', icon: <FileSearchOutlined /> },
-        { path: '/assistant', name: 'AI问答', icon: <RobotOutlined /> },
+        { path: '/assistant', name: 'AI工作台', icon: <RobotOutlined /> },
         { path: '/assistant/formula-prediction', name: 'AI配方预测', icon: <AimOutlined /> },
         { path: '/assistant/performance-prediction', name: '性能预测', icon: <LineChartOutlined /> },
         { path: '/assistant/experiment-optimization', name: 'AI实验优化', icon: <ExperimentOutlined /> },
@@ -304,6 +305,11 @@ export function BasicLayout() {
   const isAssistant = location.pathname === '/assistant';
   const [assistantNavExpanded, setAssistantNavExpanded] = useState(false);
   const layoutCollapsed = isAssistant ? !assistantNavExpanded : collapsed;
+  const changeNavigationCollapsed = useCallback((next: boolean) => {
+    if (isAssistant) setAssistantNavExpanded(!next);
+    else setCollapsed(next);
+  }, [isAssistant, setCollapsed]);
+  useSidebarAutoCollapse(layoutCollapsed, changeNavigationCollapsed);
   const user = useAuthStore((state) => state.user);
   const permissions = user?.permissions ?? [];
   const menuKeys = user?.menuKeys;
@@ -319,12 +325,13 @@ export function BasicLayout() {
       <ProLayout
         title={appEnv.title}
         logo={<AppstoreOutlined />}
+        menuHeaderRender={(logo) => <>{logo}<span className="app-brand-title">{appEnv.title}</span></>}
         route={visibleRoute}
         location={{ pathname: location.pathname }}
         selectedKeys={[location.pathname.startsWith('/assistant/model-center') ? '/assistant/model-center' : location.pathname]}
         collapsed={layoutCollapsed}
-        onCollapse={isAssistant ? () => undefined : setCollapsed}
-        collapsedButtonRender={isAssistant ? () => <Tooltip title={layoutCollapsed ? '展开导航' : '收起导航'}><Button type="text" aria-label={layoutCollapsed ? '展开导航' : '收起导航'} icon={<UnorderedListOutlined />} onClick={(event) => { event.stopPropagation(); setAssistantNavExpanded((value) => !value); }} /></Tooltip> : undefined}
+        onCollapse={changeNavigationCollapsed}
+        collapsedButtonRender={() => <Tooltip title={layoutCollapsed ? '展开导航' : '收起导航'}><Button data-sidebar-toggle type="text" aria-expanded={!layoutCollapsed} aria-label={layoutCollapsed ? '展开导航' : '收起导航'} icon={<UnorderedListOutlined />} onClick={(event) => { event.stopPropagation(); changeNavigationCollapsed(!layoutCollapsed); }} /></Tooltip>}
         layout="side"
         fixedHeader
         fixSiderbar
@@ -333,7 +340,14 @@ export function BasicLayout() {
         actionsRender={false}
         rightContentRender={() => null}
         contentStyle={{ minHeight: 'calc(var(--app-viewport-height, 100vh) - 64px)', padding: 0 }}
-        menuItemRender={(item: MenuDataItem & { isUrl: boolean; onClick: () => void }, dom: React.ReactNode, menuProps: { isMobile?: boolean }) => (item.path ? <PrefetchLink to={item.path} onClick={menuProps.isMobile ? item.onClick : undefined}>{dom}</PrefetchLink> : dom)}
+        menuItemRender={(item: MenuDataItem & { isUrl: boolean; onClick: () => void }, dom: React.ReactNode, menuProps: { isMobile?: boolean }) => (item.path ? <PrefetchLink to={item.path} onClick={() => {
+          if (item.path === '/assistant' && location.pathname !== '/assistant') {
+            try {
+              sessionStorage.setItem('jsd.ai-workbench.return', location.pathname + location.search + location.hash);
+            } catch { /* Returning to the system homepage remains available without browser storage. */ }
+          }
+          if (menuProps.isMobile) item.onClick();
+        }}>{dom}</PrefetchLink> : dom)}
       >
         <main
           className={`app-content${isAssistant ? ' app-content-assistant' : ''}${isWorkspace ? ' app-content-workspace' : ''}${isProjectDocumentWorkspace ? ' app-content-project-document-workspace' : ''}${isKnowledgeWorkbench ? ' app-content-knowledge-workbench' : ''}${isPermissionManagement ? ' app-content-permission-management' : ''}`}

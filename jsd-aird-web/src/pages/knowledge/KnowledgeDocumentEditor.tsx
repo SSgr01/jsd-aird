@@ -1,4 +1,5 @@
-import { App, Form, Input, Modal, Select } from 'antd';
+import { FormModal } from '@/components/form-dialog/FormModal';
+import { App, Form, Input, Select } from 'antd';
 import { useEffect, useState } from 'react';
 import { usePermission } from '@/components/auth/usePermission';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
@@ -59,8 +60,8 @@ export function KnowledgeDocumentEditor({ item, tagOptions, onCancel, onSaved }:
     finally { setSaving(false); }
   };
 
-  return <Modal open title="编辑知识文档" width={760} okText="保存" cancelText="取消" confirmLoading={saving}
-    onCancel={onCancel} onOk={() => { void save().catch(() => undefined); }}>
+  return <FormModal form={form} open title="编辑知识文档" width={760} okText="保存" cancelText="取消" confirmLoading={saving}
+    onCancel={onCancel} onOk={save}>
     <Form form={form} layout="vertical" initialValues={{
       title: item.title, libraryScope: item.libraryScope, categoryId: item.categoryId,
       tags: item.tags || [], description: item.sourceInfo?.description || '',
@@ -75,5 +76,5 @@ export function KnowledgeDocumentEditor({ item, tagOptions, onCancel, onSaved }:
       {canAssign && <Form.Item name="projectRelations" label="关联项目 / 阶段 / 任务"><ProjectRelationsField /></Form.Item>}
       <Form.Item name="visibility" label="权限可见" rules={[{ required: true }]}><Select options={knowledgeVisibilityOptions} /></Form.Item>
     </Form>
-  </Modal>;
+  </FormModal>;
 }

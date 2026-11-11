@@ -1,7 +1,7 @@
 package com.jsd.aird.rnd.application;
 
-import com.jsd.aird.kb.domain.DocumentParser;
-import com.jsd.aird.kb.domain.OrderedDocumentProjector;
+import com.jsd.aird.kb.api.DocumentParser;
+import com.jsd.aird.kb.api.OrderedDocumentProjector;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;

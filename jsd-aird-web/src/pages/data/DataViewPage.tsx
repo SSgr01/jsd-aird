@@ -1,8 +1,10 @@
+import { FormModal } from '@/components/form-dialog/FormModal';
+import { ListQueryFeedback } from '@/components/loading/ListQueryFeedback';
 import { useListPageBounds } from '@/services/query/use-list-page-bounds';
 import { useBusinessQuery } from '@/services/query/use-business-query';
 import { useListKeyword, useListUrl } from '@/services/query/use-list-url';
 import { DatabaseOutlined, DownloadOutlined, EyeOutlined, LinkOutlined, RedoOutlined, ReloadOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
-import { App, Button, Dropdown, Empty, Input, Modal, Progress, Select, Space, Table, Tag, Typography } from 'antd';
+import { App, Button, Dropdown, Empty, Input, Progress, Select, Space, Table, Tag, Typography } from 'antd';
 import { DataPublicationPanel } from '@/features/data-workbench/DataPublicationPanel';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -144,8 +146,9 @@ export function DataViewPage() {
       onDelete={canCategoryDelete ? (item) => { const category = categories.find((candidate) => candidate.id === item.id); if (category?.allowedActions?.includes('DELETE')) setDeleteItem(category); } : undefined} />
     <div className="catalog-sync-note"><ReloadOutlined /> 处理完成后需确认数据、提交审核，通过后发布。可在“审核与版本记录”查看版本和审核意见。</div>
     <CatalogListPanel title={cards.find((item) => item.id === categoryId)?.name || '来源文件'} count={page.total}
+      feedback={listQuery.data !== undefined ? <ListQueryFeedback query={listQuery} /> : undefined}
       filters={<Space wrap><Input allowClear prefix={<SearchOutlined />} placeholder="搜索来源文件名" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} /><Select allowClear showSearch optionFilterProp="label" popupMatchSelectWidth={false} classNames={{ popup: { root: 'project-relation-picker-dropdown' } }} placeholder="全部项目" value={projectId} onChange={(value) => { setProjectId(value); setPage((current) => ({ ...current, current: 1 })); }} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={[{ label: '审核发布状态', options: ['DRAFT', 'CONFIRMED', 'PENDING_REVIEW', 'RETURNED', 'APPROVED', 'PUBLISHED', 'DISABLED'].map((value) => ({ value: `PUB_${value}`, label: formalStatusLabels[value]?.[0] || value })) }, { label: '文件处理状态', options: Object.entries(statusLabels).map(([value, item]) => ({ value, label: item[0] })) }]} /><Button icon={<RedoOutlined />} onClick={resetFilters}>重置</Button></Space>}
-      loading={loading}>
+      loading={loading} error={listQuery.isError && !listQuery.data ? (listQuery.error instanceof Error ? listQuery.error.message : '请稍后重试') : undefined} onRetry={() => void load()}>
       <Table className="catalog-data-table" scroll={{ x: 1660 }} rowKey="importJobId" dataSource={items} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <Empty description="暂无来源文件" /> }} onRow={(record) => ({ onDoubleClick: () => navigate(sourceRoute(record)) })} columns={[
         { title: '来源文件', dataIndex: 'originalName', width: 280, ellipsis: true, render: (value: string, record: DataSourceFile) => <Space><DatabaseOutlined /><Typography.Text strong ellipsis={{ tooltip: value }}>{value}</Typography.Text><Typography.Text type="secondary">{record.sourceFormat}</Typography.Text></Space> },
         { title: '数据核对', dataIndex: 'formalStatus', width: 150, render: (value: string) => <Tag color={formalStatusLabels[value]?.[1]}>{formalStatusLabels[value]?.[0] || value}</Tag> },
@@ -192,6 +195,6 @@ export function DataViewPage() {
       onConfirm={() => void removeCategory()}
     />}
     <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} showSpreadsheetMerges={false} />
-    <Modal open={Boolean(relationEditor)} title="维护数据任务关联项目" width={760} okText="保存" confirmLoading={saving} onCancel={() => setRelationEditor(undefined)} onOk={() => void saveRelations()}>{relationEditor && <ProjectRelationPicker value={relationEditor.targets} onChange={(targets) => setRelationEditor((current) => current ? { ...current, targets } : current)} />}</Modal>
+    <FormModal draft={relationEditor?.targets} open={Boolean(relationEditor)} title="维护数据任务关联项目" width={760} okText="保存" confirmLoading={saving} onCancel={() => setRelationEditor(undefined)} onOk={() => saveRelations()}>{relationEditor && <ProjectRelationPicker value={relationEditor.targets} onChange={(targets) => setRelationEditor((current) => current ? { ...current, targets } : current)} />}</FormModal>
   </div>;
 }

@@ -54,3 +54,39 @@ def resolve_quote(evidence, ref):
             if quote["quote_id"] == ref.get("quote_id"):
                 return {**quote, "source": candidate["source"]}
     raise HTTPException(422, "QUOTE_HANDLE_INVALID_OR_WRONG_EVIDENCE")
+
+
+def table_headers(evidence, candidate):
+    """Only the trusted host's confirmed table relation can join independent rows."""
+    table = candidate.get("table_context") or {}
+    wanted = table.get("header_node_keys", [])
+    if not wanted:
+        return [], []
+    source = candidate["source"]
+    identity = ("kind", "document_id", "publication_id", "version_id")
+    headers = {
+        item["source"]["source_node_key"]: item
+        for item in evidence.values()
+        if all(item["source"].get(k) == source.get(k) for k in identity)
+        and item["source"].get("source_node_key") in wanted
+        and (item.get("table_context") or {}).get("table_key") == table.get("table_key")
+    }
+    return [headers[key] for key in wanted if key in headers], [key for key in wanted if key not in headers]
+
+
+def review_quotes(evidence, candidate):
+    headers, missing = table_headers(evidence, candidate)
+    if missing:
+        raise HTTPException(422, "REPORT_TABLE_HEADER_REQUIRED: read evidence_context for " + candidate["evidence_id"])
+    result = {}
+    for item in [*headers, candidate]:
+        table = item.get("table_context")
+        for span in quotes(item):
+            value = {**span, "source": item["source"]}
+            if table:
+                value["table_row"] = {
+                    "table_key": table["table_key"], "row_index": table["row_index"],
+                    "is_header": item["source"]["source_node_key"] in table["header_node_keys"],
+                }
+            result[span["quote_id"]] = value
+    return list(result.values())

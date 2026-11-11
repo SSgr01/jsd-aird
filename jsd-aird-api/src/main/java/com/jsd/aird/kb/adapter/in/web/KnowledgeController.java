@@ -7,7 +7,7 @@ import java.util.UUID;
 
 import com.jsd.aird.kb.application.KnowledgeService;
 import com.jsd.aird.kb.application.KnowledgeUploadTaskService;
-import com.jsd.aird.kb.domain.FileSafetyScanner;
+import com.jsd.aird.kb.api.FileSafetyScanner;
 import com.jsd.aird.platform.web.HttpContentDisposition;
 import com.jsd.aird.kb.application.KnowledgeGovernanceService;
 import com.jsd.aird.kb.api.KnowledgeSearchFacade;

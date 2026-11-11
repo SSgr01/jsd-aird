@@ -1,3 +1,4 @@
+import { FormModal } from '@/components/form-dialog/FormModal';
 import { App, Button, DatePicker, Form, Input, Modal, Popconfirm, Space, Tag } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined, TeamOutlined, EyeOutlined, FileTextOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -212,7 +213,7 @@ export function MeetingMinutesTab({ projectId }: Props) {
         </ul>
       )}
 
-      <Modal
+      <FormModal form={form}
         title={editing ? '编辑会议纪要' : '新增会议纪要'}
         open={modalOpen}
         onCancel={closeModal}
@@ -237,7 +238,7 @@ export function MeetingMinutesTab({ projectId }: Props) {
             <Input.TextArea rows={5} placeholder="请输入会议总结" />
           </Form.Item>
         </Form>
-      </Modal>
+      </FormModal>
 
       <Modal
         title="会议纪要详情"

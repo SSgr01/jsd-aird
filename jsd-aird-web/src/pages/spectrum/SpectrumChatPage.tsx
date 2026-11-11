@@ -1062,9 +1062,18 @@ export function SpectrumChatPage() {
     load: () => spectrumApi.previewBlob(chart.id),
     downloadUrl: spectrumApi.contentUrl(chart.id),
   });
-  const previewById = (chartId: string) => {
-    const chart = charts.find((item) => item.id === chartId);
-    if (chart) setPreviewFile(descriptor(chart));
+  const previewById = async (chartId: string) => {
+    let chart = chartItemsRef.current.find((item) => item.id === chartId);
+    if (!chart) {
+      try {
+        chart = await spectrumApi.chart(chartId);
+        cacheCharts([chart]);
+      } catch {
+        void toast.error('无法读取这张图谱，请检查访问权限或稍后重试。');
+        return;
+      }
+    }
+    setPreviewFile(descriptor(chart));
   };
 
   const conversationItems: ConversationItem[] = sessions.map((item) => ({
@@ -1135,7 +1144,9 @@ export function SpectrumChatPage() {
           fallbackContent={item.content}
           warnings={item.warnings}
           citations={item.citations}
-          onPreview={previewById}
+          onPreview={(chartId) => {
+            void previewById(chartId);
+          }}
         />
       ) : item.content ? (
         <Alert

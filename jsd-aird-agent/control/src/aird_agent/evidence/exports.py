@@ -27,8 +27,22 @@ def export_sources(run, explicit_quotes, inputs, input_contents):
         for candidate in evidence.values()
         for q in quotes(candidate)
     }
-    if mentioned - available.keys():
-        raise HTTPException(422, "ANALYSIS_SOURCE_QUOTES_REQUIRED: use registered quotes from selected inputs")
+    missing = mentioned - available.keys()
+    if missing:
+        locations = []
+        files = inputs.get("files", [])
+        for index, content in enumerate(input_contents):
+            text = content.decode("utf8", errors="ignore")
+            path = files[index].get("path", "input") if index < len(files) else "output"
+            for match in re.finditer(r"(?<![a-zA-Z0-9_-])q[0-9a-f]{24}(?![a-zA-Z0-9_-])", text):
+                if match[0] in missing and len(locations) < 8:
+                    line = text.count("\n", 0, match.start()) + 1
+                    locations.append(f"{path}:{line} {match[0]}")
+        detail = "; ".join(locations) or ", ".join(sorted(missing)[:8])
+        raise HTTPException(422, "ANALYSIS_SOURCE_QUOTES_REQUIRED: unknown quote handles: " + detail
+                            + ". Replace with supporting quotes registered in this run. "
+                            "Remove obsolete handles even from change notes or code spans; "
+                            "describe removed citations in plain words. Then save and present the corrected file.")
     for ref in explicit_quotes:
         if available[ref["quote_id"]]["evidence_id"] != ref["evidence_id"]:
             raise HTTPException(422, "QUOTE_HANDLE_INVALID_OR_WRONG_EVIDENCE")

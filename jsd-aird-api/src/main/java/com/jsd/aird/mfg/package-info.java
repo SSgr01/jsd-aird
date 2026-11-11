@@ -1,6 +1,6 @@
 @ApplicationModule(
         displayName = "生产与库存",
-        allowedDependencies = {"shared", "ops::api", "tpl::api"}
+        allowedDependencies = {"quality::api", "mdm::api", "kb::api", "iam::api", "shared", "ops::api", "tpl::api"}
 )
 package com.jsd.aird.mfg;
 

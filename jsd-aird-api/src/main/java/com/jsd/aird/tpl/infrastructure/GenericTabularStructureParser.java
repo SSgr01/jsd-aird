@@ -29,8 +29,9 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class GenericTabularStructureParser implements TabularStructureParser {
-    @org.springframework.beans.factory.annotation.Autowired(required=false)
     private com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void setIsolated(com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated) { this.isolated = isolated; }
 
     private static final int MAX_ROWS = 10_000;
     private static final int HEADER_SCAN_ROWS = 30;

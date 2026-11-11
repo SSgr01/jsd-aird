@@ -20,14 +20,6 @@ public class ContextCompressionService {
     private static final Pattern BUSINESS_RECORD_PATTERN = Pattern.compile("(?:^|[；;])\\s*记录\\s*[=:：]\\s*([^；;\\s]+)");
     private static final Pattern EXPERIMENT_NUMBER_PATTERN = Pattern.compile("(?:^|[；;])\\s*实验编号\\s*[=:：]\\s*([^；;\\s]+)");
 
-    /** Backward-compatible entry point; context allocation is now source-neutral. */
-    @Deprecated(forRemoval = false)
-    public Context compress(List<KnowledgeSearchFacade.SearchHit> knowledge,
-                            List<DataSourceFileSearchFacade.SourceFileHit> dataFiles,
-                            int maxChars, boolean ignoredPrioritizeStructuredData) {
-        return compress(knowledge, dataFiles, maxChars);
-    }
-
     public Context compress(List<KnowledgeSearchFacade.SearchHit> knowledge,
                             List<DataSourceFileSearchFacade.SourceFileHit> dataFiles, int maxChars) {
         return compress(knowledge, dataFiles, maxChars, List.of());

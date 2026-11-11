@@ -9,7 +9,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import com.jsd.aird.kb.domain.DocumentParser;
+import com.jsd.aird.kb.api.DocumentParser;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;

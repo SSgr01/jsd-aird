@@ -9,7 +9,7 @@ import java.util.Set;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.jsd.aird.tpl.application.port.RecognitionModelClient;
+import com.jsd.aird.tpl.api.RecognitionModelClient;
 
 /**
  * Checks completeness against physical structure instead of treating any

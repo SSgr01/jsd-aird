@@ -14,11 +14,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.tpl.application.RecognitionIdentity;
-import com.jsd.aird.tpl.application.port.OfficeStructureParser;
+import com.jsd.aird.tpl.api.OfficeStructureParser;
 import com.jsd.aird.tpl.application.port.TemplateImportRepository;
 import com.jsd.aird.tpl.application.TemplateQualityIssueCategory;
 import com.jsd.aird.tpl.domain.QualityIssueSeverity;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.slf4j.Logger;
@@ -595,7 +595,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     @Override
     public void saveRecognitionCall(
             UUID recognitionRunId,
-            com.jsd.aird.tpl.application.port.RecognitionModelClient.CallTrace trace
+            com.jsd.aird.tpl.api.RecognitionModelClient.CallTrace trace
     ) {
         jdbcTemplate.update("""
                         INSERT INTO tpl.recognition_call (
@@ -656,7 +656,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     public void replaceModelSuggestions(
             UUID importJobId,
             UUID recognitionRunId,
-            com.jsd.aird.tpl.application.port.RecognitionModelClient.RecognitionBatch batch
+            com.jsd.aird.tpl.api.RecognitionModelClient.RecognitionBatch batch
     ) {
         replaceSuggestions(importJobId, recognitionRunId, "MODEL", batch);
     }
@@ -664,7 +664,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     @Override
     public void appendModelSuggestions(
             UUID importJobId, UUID recognitionRunId,
-            com.jsd.aird.tpl.application.port.RecognitionModelClient.RecognitionBatch batch
+            com.jsd.aird.tpl.api.RecognitionModelClient.RecognitionBatch batch
     ) {
         persistSuggestions(importJobId, recognitionRunId, "MODEL", batch);
     }
@@ -739,7 +739,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     public void replacePhysicalSuggestions(
             UUID importJobId,
             UUID recognitionRunId,
-            com.jsd.aird.tpl.application.port.RecognitionModelClient.RecognitionBatch batch
+            com.jsd.aird.tpl.api.RecognitionModelClient.RecognitionBatch batch
     ) {
         replaceSuggestions(importJobId, recognitionRunId, "PHYSICAL", batch);
     }
@@ -748,7 +748,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     public void replaceRuleSuggestions(
             UUID importJobId,
             UUID recognitionRunId,
-            com.jsd.aird.tpl.application.port.RecognitionModelClient.RecognitionBatch batch
+            com.jsd.aird.tpl.api.RecognitionModelClient.RecognitionBatch batch
     ) {
         replaceSuggestions(importJobId, recognitionRunId, "RULE", batch);
     }
@@ -757,7 +757,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     public void appendRuleSuggestions(
             UUID importJobId,
             UUID recognitionRunId,
-            com.jsd.aird.tpl.application.port.RecognitionModelClient.RecognitionBatch batch
+            com.jsd.aird.tpl.api.RecognitionModelClient.RecognitionBatch batch
     ) {
         persistSuggestions(importJobId, recognitionRunId, "RULE", batch);
     }
@@ -766,7 +766,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     public void replaceQualityIssues(
             UUID importJobId,
             UUID recognitionRunId,
-            List<com.jsd.aird.tpl.application.port.RecognitionModelClient.QualityIssueSuggestion> issues,
+            List<com.jsd.aird.tpl.api.RecognitionModelClient.QualityIssueSuggestion> issues,
             String beforeSnapshotHash,
             String afterSnapshotHash
     ) {
@@ -862,7 +862,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
             UUID importJobId,
             UUID recognitionRunId,
             String source,
-            com.jsd.aird.tpl.application.port.RecognitionModelClient.RecognitionBatch batch
+            com.jsd.aird.tpl.api.RecognitionModelClient.RecognitionBatch batch
     ) {
         jdbcTemplate.update(
                 "DELETE FROM tpl.recognition_suggestion WHERE recognition_run_id = ? AND source = ?",
@@ -876,7 +876,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
             UUID importJobId,
             UUID recognitionRunId,
             String source,
-            com.jsd.aird.tpl.application.port.RecognitionModelClient.RecognitionBatch batch
+            com.jsd.aird.tpl.api.RecognitionModelClient.RecognitionBatch batch
     ) {
         var persisted = new ArrayList<PersistedSuggestion>();
         var identities = new LinkedHashMap<String, UUID>();
@@ -1105,7 +1105,7 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
 
     private record PersistedSuggestion(
             UUID id,
-            com.jsd.aird.tpl.application.port.RecognitionModelClient.ModelSuggestion suggestion,
+            com.jsd.aird.tpl.api.RecognitionModelClient.ModelSuggestion suggestion,
             String relationId,
             UUID parentSuggestionId,
             JsonNode payload

@@ -17,7 +17,7 @@ import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
-import com.jsd.aird.tpl.application.port.WordOoxmlPatcher;
+import com.jsd.aird.tpl.api.WordOoxmlPatcher;
 import org.springframework.stereotype.Component;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
@@ -32,8 +32,9 @@ import javax.xml.transform.stream.StreamResult;
 
 @Component
 public class WordOoxmlPatchService implements WordOoxmlPatcher {
-    @org.springframework.beans.factory.annotation.Autowired(required=false)
     private IsolatedOfficeProcess isolated;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void setIsolated(IsolatedOfficeProcess isolated) { this.isolated = isolated; }
     private static final String W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     private final WordDocumentSnapshotExporter snapshotExporter = new WordDocumentSnapshotExporter();
 

@@ -639,59 +639,67 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
-    public List<SearchRow> searchPublishedMetadata(UUID organizationId, List<String> queries, boolean aiOnly,
-                                                   List<UUID> categoryIds, java.util.Set<UUID> allowedDocumentIds,
-                                                   int limit) {
-        var terms = queries == null ? List.<String>of() : queries.stream().filter(value -> value != null && !value.isBlank())
+    public List<SearchRow> searchPublishedMetadata(UUID org, List<String> queries, boolean aiOnly,
+                                                   List<UUID> categories, java.util.Set<UUID> allowed, int limit) {
+        return publishedDiscovery(org, queries, aiOnly, categories, allowed, limit, false);
+    }
+
+    @Override
+    public List<SearchRow> searchPublishedTags(UUID org, List<String> queries, boolean aiOnly,
+                                               List<UUID> categories, java.util.Set<UUID> allowed, int limit) {
+        return publishedDiscovery(org, queries, aiOnly, categories, allowed, limit, true);
+    }
+
+    private List<SearchRow> publishedDiscovery(UUID organizationId, List<String> queries, boolean aiOnly,
+                                               List<UUID> categoryIds, java.util.Set<UUID> allowedDocumentIds,
+                                               int limit, boolean tags) {
+        var terms = queries == null ? List.<String>of() : queries.stream().filter(v -> v != null && !v.isBlank())
                 .map(String::strip).distinct().limit(16).toList();
         if (terms.isEmpty() || allowedDocumentIds != null && allowedDocumentIds.isEmpty()) return List.of();
         var aiClause = aiOnly ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g"
-                + " WHERE g.organization_id = d.organization_id AND g.document_id = d.id AND g.status = 'APPROVED')" : "";
+                + " WHERE g.organization_id=d.organization_id AND g.document_id=d.id AND g.status='APPROVED')" : "";
+        var match = tags ? """
+                EXISTS (SELECT 1 FROM jsonb_array_elements_text(coalesce(p.metadata_snapshot_jsonb->'tags','[]'::jsonb)) AS tag(name)
+                  WHERE lower(regexp_replace(normalize(tag.name,NFKC),'[^a-z0-9一-龥]','','g'))=search_terms.normalized
+                    OR (tag.name ~ '[一-龥]' AND length(tag.name)>=2 AND position(lower(regexp_replace(normalize(tag.name,NFKC),
+                          '[^a-z0-9一-龥]','','g')) in search_terms.normalized)>0)
+                    OR position(' ' || lower(tag.name) || ' ' in
+                         (' ' || regexp_replace(lower(normalize(search_terms.raw,NFKC)),'[^a-z0-9一-龥]+',' ','g') || ' '))>0)
+                """ : """
+                search_terms.normalized=lower(regexp_replace(normalize(coalesce(p.metadata_snapshot_jsonb->>'title',d.title),NFKC),'[^a-z0-9一-龥]','','g'))
+                OR search_terms.normalized=lower(regexp_replace(normalize(v.original_name,NFKC),'[^a-z0-9一-龥]','','g'))
+                OR search_terms.normalized=lower(regexp_replace(regexp_replace(normalize(v.original_name,NFKC),'\\.[^.]+$',''),'[^a-z0-9一-龥]','','g'))
+                OR EXISTS (SELECT 1 FROM kb.document_bibliography b WHERE b.organization_id=d.organization_id AND b.version_id=v.id
+                  AND lower(regexp_replace(normalize(concat_ws(' ',b.accepted_jsonb->>'title',b.accepted_jsonb->>'authors',
+                    b.accepted_jsonb->>'doi',b.accepted_jsonb->>'patent_number'),NFKC),'[^a-z0-9一-龥]','','g')) LIKE '%' || search_terms.normalized || '%')
+                """;
         var sql = """
                 WITH search_terms AS (
-                    SELECT DISTINCT lower(regexp_replace(regexp_replace(normalize(term, NFKC), '\\.[^.]+$', ''),
-                           '[^a-z0-9一-龥]', '', 'g')) AS normalized
+                    SELECT DISTINCT term AS raw,lower(regexp_replace(normalize(term,NFKC),'[^a-z0-9一-龥]','','g')) AS normalized
                     FROM unnest(?::text[]) AS input(term)
-                    WHERE length(regexp_replace(normalize(term, NFKC), '[^a-zA-Z0-9一-龥]', '', 'g')) >= 2
-                )
-                SELECT c.id, c.document_id, c.document_version_id,
-                       coalesce(p.metadata_snapshot_jsonb->>'title', d.title) AS title, v.original_name,
-                       c.page_no, c.section, c.content, c.chunk_no,
-                       max(CASE WHEN lower(regexp_replace(normalize(coalesce(p.metadata_snapshot_jsonb->>'title', d.title), NFKC),
-                                '[^a-z0-9一-龥]', '', 'g')) = search_terms.normalized THEN 12.0 ELSE 10.0 END) AS score
-                FROM kb.document d
-                JOIN kb.document_version v ON v.document_id = d.id AND v.version_no = d.current_version_no
-                JOIN ops.file_object f ON f.id = v.file_object_id
-                    AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
-                JOIN kb.publication p ON p.id = d.current_publication_id
-                    AND p.document_version_id = v.id AND p.status = 'CURRENT'
-                JOIN kb.document_chunk c ON c.document_id = d.id AND c.document_version_id = v.id
-                    AND c.review_revision_id = p.review_revision_id AND c.chunk_role = 'CHILD'
-                JOIN search_terms ON search_terms.normalized = lower(regexp_replace(
-                       normalize(coalesce(p.metadata_snapshot_jsonb->>'title', d.title), NFKC), '[^a-z0-9一-龥]', '', 'g'))
-                    OR search_terms.normalized = lower(regexp_replace(regexp_replace(normalize(v.original_name, NFKC),
-                       '\\.[^.]+$', ''), '[^a-z0-9一-龥]', '', 'g'))
-                    OR search_terms.normalized = lower(regexp_replace(normalize(v.original_name, NFKC), '[^a-z0-9一-龥]', '', 'g'))
-                    OR EXISTS (SELECT 1 FROM kb.document_bibliography b
-                        WHERE b.organization_id=d.organization_id AND b.version_id=v.id
-                          AND lower(regexp_replace(normalize(concat_ws(' ', b.accepted_jsonb->>'title',
-                              b.accepted_jsonb->>'authors',b.accepted_jsonb->>'doi',b.accepted_jsonb->>'patent_number'), NFKC),
-                              '[^a-z0-9一-龥]', '', 'g')) LIKE '%' || search_terms.normalized || '%')
-                WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
-                """ + aiClause + categoryClause(categoryIds) + documentClause(allowedDocumentIds) + """
-                GROUP BY c.id, c.document_id, c.document_version_id,
-                         coalesce(p.metadata_snapshot_jsonb->>'title', d.title), v.original_name,
-                         c.page_no, c.section, c.content, c.chunk_no
-                ORDER BY score DESC, c.chunk_no, c.id
-                LIMIT ?
+                    WHERE length(regexp_replace(normalize(term,NFKC),'[^a-zA-Z0-9一-龥]','','g'))>=2
+                ), matches AS (
+                    SELECT DISTINCT c.id,c.document_id,c.document_version_id,
+                      coalesce(p.metadata_snapshot_jsonb->>'title',d.title) AS title,v.original_name,
+                      c.page_no,c.section,c.content,c.chunk_no,10.0 AS score
+                    FROM kb.document d
+                    JOIN kb.document_version v ON v.document_id=d.id AND v.version_no=d.current_version_no
+                    JOIN ops.file_object f ON f.id=v.file_object_id AND f.organization_id=d.organization_id AND f.status<>'DELETED'
+                    JOIN kb.publication p ON p.id=d.current_publication_id AND p.document_version_id=v.id AND p.status='CURRENT'
+                    JOIN kb.document_chunk c ON c.document_id=d.id AND c.document_version_id=v.id
+                      AND c.review_revision_id=p.review_revision_id AND c.chunk_role='CHILD'
+                    JOIN search_terms ON (
+                """ + match + ") WHERE d.organization_id=? AND d.lifecycle_status='ACTIVE' "
+                + aiClause + categoryClause(categoryIds) + documentClause(allowedDocumentIds) + """
+                ), documents AS (
+                    SELECT DISTINCT ON (document_id) * FROM matches ORDER BY document_id,chunk_no,id
+                ) SELECT * FROM documents ORDER BY score DESC,chunk_no,id LIMIT ?
                 """;
-        var args = new java.util.ArrayList<Object>();
-        args.add(terms.toArray(String[]::new));
-        args.add(organizationId);
+        var args = new java.util.ArrayList<Object>(); args.add(terms.toArray(String[]::new)); args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
         if (allowedDocumentIds != null) args.addAll(allowedDocumentIds);
-        args.add(Math.min(100, Math.max(1, limit)));
-        return jdbc.query(sql, this::mapSearch, args.toArray());
+        args.add(Math.min(100,Math.max(1,limit)));
+        return jdbc.query(sql,this::mapSearch,args.toArray());
     }
 
     @Override
@@ -966,6 +974,13 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     @Override
     public List<RankedChunk> batchBm25Rank(UUID organizationId, List<AnalyzedQuery> queries,
                                            boolean aiOnly, List<UUID> categoryIds, int limit) {
+        return batchBm25Rank(organizationId, queries, aiOnly, categoryIds, null, limit);
+    }
+
+    @Override
+    public List<RankedChunk> batchBm25Rank(UUID organizationId, List<AnalyzedQuery> queries,
+            boolean aiOnly, List<UUID> categoryIds, java.util.Set<UUID> documentIds, int limit) {
+        if (documentIds != null && documentIds.isEmpty()) return List.of();
         var safeQueries = queries == null ? List.<AnalyzedQuery>of() : queries.stream()
                 .filter(query -> query != null && query.terms() != null && !query.terms().isEmpty()).toList();
         if (safeQueries.isEmpty()) return List.of();
@@ -989,7 +1004,10 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 WITH query_terms AS (
                     SELECT DISTINCT * FROM unnest(?::int[], ?::int[], ?::text[], ?::text[])
                         AS q(query_ordinal, family_ordinal, analyzer_version, term)
-                ), eligible_chunks AS (
+                ), matching_terms AS MATERIALIZED (
+                    SELECT q.*, t.chunk_id, t.term_frequency
+                    FROM query_terms q JOIN kb.chunk_term t ON t.term = q.term
+                ), eligible_chunks AS MATERIALIZED (
                     SELECT c.id, c.analyzer_version, c.token_length
                     FROM kb.document_chunk c
                     JOIN kb.document d ON d.id = c.document_id
@@ -1000,35 +1018,34 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                         AND p.document_version_id = c.document_version_id
                         AND p.review_revision_id = c.review_revision_id AND p.status = 'CURRENT'
                     WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE' AND c.chunk_role = 'CHILD'
-                """ + aiClause + categoryClause(categoryIds) + """
+                """ + aiClause + categoryClause(categoryIds) + documentClause(documentIds) + """
                 ), corpus AS (
                     SELECT analyzer_version, count(*)::double precision AS document_count,
                            avg(token_length)::double precision AS average_document_length
                     FROM eligible_chunks GROUP BY analyzer_version
                 ), family_matches AS (
                     SELECT q.query_ordinal, q.family_ordinal, q.analyzer_version, c.id AS chunk_id,
-                           sum(t.term_frequency)::double precision AS family_tf
+                           sum(q.term_frequency)::double precision AS family_tf,
+                           max(c.token_length) AS token_length
                     FROM eligible_chunks c
-                    JOIN kb.chunk_term t ON t.chunk_id = c.id
-                    JOIN query_terms q ON q.term = t.term AND q.analyzer_version = c.analyzer_version
+                    JOIN matching_terms q ON q.chunk_id = c.id AND q.analyzer_version = c.analyzer_version
                     GROUP BY q.query_ordinal, q.family_ordinal, q.analyzer_version, c.id
                 ), family_stats AS (
-                    SELECT query_ordinal, family_ordinal, analyzer_version,
-                           count(DISTINCT chunk_id)::double precision AS document_frequency
-                    FROM family_matches GROUP BY query_ordinal, family_ordinal, analyzer_version
+                    SELECT *, count(*) OVER (
+                        PARTITION BY query_ordinal, family_ordinal, analyzer_version
+                    )::double precision AS document_frequency
+                    FROM family_matches
                 ), version_scores AS (
                     SELECT m.query_ordinal, m.analyzer_version, m.chunk_id,
                            sum(
-                               ln(((c.document_count - s.document_frequency + 0.5) /
-                                  (s.document_frequency + 0.5)) + 1)
+                               ln(((c.document_count - m.document_frequency + 0.5) /
+                                  (m.document_frequency + 0.5)) + 1)
                                * ((m.family_tf * 2.2) /
-                                  (m.family_tf + 1.2 * (1 - 0.75 + 0.75 * e.token_length /
+                                  (m.family_tf + 1.2 * (1 - 0.75 + 0.75 * m.token_length /
                                   nullif(c.average_document_length, 0))))
                            ) AS score
-                    FROM family_matches m
-                    JOIN family_stats s USING (query_ordinal, family_ordinal, analyzer_version)
+                    FROM family_stats m
                     JOIN corpus c USING (analyzer_version)
-                    JOIN eligible_chunks e ON e.id = m.chunk_id
                     GROUP BY m.query_ordinal, m.analyzer_version, m.chunk_id
                 ), version_ranked AS (
                     SELECT query_ordinal, analyzer_version, chunk_id, score,
@@ -1053,6 +1070,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         args.add(terms.toArray(String[]::new));
         args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
+        if (documentIds != null) args.addAll(documentIds);
         args.add(limit);
         args.add(limit);
         return jdbc.query(sql, (rs, ignored) -> new RankedChunk(rs.getInt("query_ordinal"),
@@ -1062,6 +1080,13 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     @Override
     public List<RankedChunk> batchVectorRank(UUID organizationId, List<VectorQuery> queries,
                                             boolean aiOnly, List<UUID> categoryIds, int limit, int dimension) {
+        return batchVectorRank(organizationId, queries, aiOnly, categoryIds, null, limit, dimension);
+    }
+
+    @Override
+    public List<RankedChunk> batchVectorRank(UUID organizationId, List<VectorQuery> queries,
+            boolean aiOnly, List<UUID> categoryIds, java.util.Set<UUID> documentIds, int limit, int dimension) {
+        if (documentIds != null && documentIds.isEmpty()) return List.of();
         var safeQueries = queries == null ? List.<VectorQuery>of() : queries.stream()
                 .filter(query -> query != null && org.springframework.util.StringUtils.hasText(query.vector())).toList();
         if (safeQueries.isEmpty()) return List.of();
@@ -1070,7 +1095,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 : "";
         var dimensionClause = dimension > 0 ? " AND vector_dims(c.embedding) = ?\n" : "";
         var sql = """
-                WITH query_vectors AS (
+                WITH query_vectors AS MATERIALIZED (
                     SELECT query_ordinal, CAST(vector_text AS vector) AS embedding
                     FROM unnest(?::int[], ?::text[]) AS q(query_ordinal, vector_text)
                 ), scored AS (
@@ -1087,7 +1112,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                             AND p.document_version_id = c.document_version_id
                             AND p.review_revision_id = c.review_revision_id AND p.status = 'CURRENT'
                         WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
-                """ + aiClause + categoryClause(categoryIds)
+                """ + aiClause + categoryClause(categoryIds) + documentClause(documentIds)
                 + " AND c.chunk_role = 'CHILD' AND c.embedding IS NOT NULL\n" + dimensionClause + """
                         ORDER BY c.embedding <=> q.embedding, c.id
                         LIMIT ?
@@ -1105,6 +1130,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         args.add(safeQueries.stream().map(VectorQuery::vector).toArray(String[]::new));
         args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
+        if (documentIds != null) args.addAll(documentIds);
         if (dimension > 0) args.add(dimension);
         args.add(limit);
         return jdbc.query(sql, (rs, ignored) -> new RankedChunk(rs.getInt("query_ordinal"),

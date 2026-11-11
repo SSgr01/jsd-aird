@@ -100,6 +100,10 @@ public interface KnowledgeRepository {
                                                     int limit) {
         return List.of();
     }
+      default List<SearchRow> searchPublishedTags(UUID organizationId, List<String> queries, boolean aiOnly,
+                                                List<UUID> categoryIds, Set<UUID> allowedDocumentIds, int limit) {
+          return List.of();
+      }
     default List<SearchRow> fullTextSearch(UUID organizationId, String query, boolean aiOnly,
                                            List<UUID> categoryIds, int limit) {
         return fullTextSearch(organizationId, query, aiOnly, limit);
@@ -168,6 +172,32 @@ public interface KnowledgeRepository {
                 var row = rows.get(index);
                 result.add(new RankedChunk(query.ordinal(), row.chunkId(), row.score(), index + 1));
             }
+        }
+        return List.copyOf(result);
+    }
+
+    default List<RankedChunk> batchBm25Rank(UUID organizationId, List<AnalyzedQuery> queries,
+            boolean aiOnly, List<UUID> categoryIds, Set<UUID> documentIds, int limit) {
+        if (documentIds == null) return batchBm25Rank(organizationId, queries, aiOnly, categoryIds, limit);
+        if (documentIds.isEmpty() || queries == null) return List.of();
+        var result = new java.util.ArrayList<RankedChunk>();
+        for (var query : queries) {
+            com.jsd.aird.shared.resource.OperationBudget.check();
+            var rows = bm25Search(organizationId, query.terms(), aiOnly, categoryIds, documentIds, limit);
+            for (var i = 0; i < rows.size(); i++) result.add(new RankedChunk(query.ordinal(), rows.get(i).chunkId(), rows.get(i).score(), i+1));
+        }
+        return List.copyOf(result);
+    }
+
+    default List<RankedChunk> batchVectorRank(UUID organizationId, List<VectorQuery> queries,
+            boolean aiOnly, List<UUID> categoryIds, Set<UUID> documentIds, int limit, int dimension) {
+        if (documentIds == null) return batchVectorRank(organizationId, queries, aiOnly, categoryIds, limit, dimension);
+        if (documentIds.isEmpty() || queries == null) return List.of();
+        var result = new java.util.ArrayList<RankedChunk>();
+        for (var query : queries) {
+            com.jsd.aird.shared.resource.OperationBudget.check();
+            var rows = vectorSearch(organizationId, query.vector(), aiOnly, categoryIds, documentIds, limit, dimension);
+            for (var i = 0; i < rows.size(); i++) result.add(new RankedChunk(query.ordinal(), rows.get(i).chunkId(), rows.get(i).score(), i+1));
         }
         return List.copyOf(result);
     }

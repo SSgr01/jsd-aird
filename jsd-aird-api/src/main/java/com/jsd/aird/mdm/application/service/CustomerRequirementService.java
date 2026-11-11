@@ -1,7 +1,7 @@
 package com.jsd.aird.mdm.application.service;
 
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import com.jsd.aird.mdm.application.command.PartnerCommands;
+import com.jsd.aird.mdm.api.PartnerCommands;
 import com.jsd.aird.mdm.application.port.CustomerRequirementRepository;
 import com.jsd.aird.mdm.domain.model.*;
 import com.jsd.aird.ops.application.port.AuditLogFacade;

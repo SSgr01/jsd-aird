@@ -11,12 +11,12 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
-import com.jsd.aird.rnd.application.ExperimentImportService;
+import com.jsd.aird.rnd.api.ExperimentSourceParser;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.tpl.api.TemplateDataImportFacade;
 import com.jsd.aird.ops.application.port.TemplateOfficeNormalizationFacade;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -24,15 +24,16 @@ import org.springframework.stereotype.Component;
 /** Projects Word and OCR observations into the staged shape used by template imports. */
 @Component
 final class ExperimentDocumentDataParser {
-    @Autowired(required=false)
     private com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated;
+    @Autowired(required=false)
+    public void setIsolated(com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated) { this.isolated = isolated; }
     private final FileStorageFacade files;
-    private final ExperimentImportService sourceParser;
+    private final ExperimentSourceParser sourceParser;
     private final ObjectMapper json;
     private final TemplateOfficeNormalizationFacade officeNormalization;
 
     @Autowired
-    ExperimentDocumentDataParser(FileStorageFacade files, ExperimentImportService sourceParser, ObjectMapper json,
+    ExperimentDocumentDataParser(FileStorageFacade files, ExperimentSourceParser sourceParser, ObjectMapper json,
                                  TemplateOfficeNormalizationFacade officeNormalization) {
         this.files = files;
         this.sourceParser = sourceParser;
@@ -40,7 +41,7 @@ final class ExperimentDocumentDataParser {
         this.officeNormalization = officeNormalization;
     }
 
-    ExperimentDocumentDataParser(FileStorageFacade files, ExperimentImportService sourceParser, ObjectMapper json) {
+    ExperimentDocumentDataParser(FileStorageFacade files, ExperimentSourceParser sourceParser, ObjectMapper json) {
         this(files, sourceParser, json, null);
     }
 

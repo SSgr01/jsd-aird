@@ -53,6 +53,8 @@ public class OpenAiCompatibleSpectrumVisionClient implements SpectrumVisionClien
         this.maxOutputTokens = Math.max(1000, maxOutputTokens);
         this.readTimeout = readTimeout == null ? Duration.ofMinutes(10) : readTimeout;
         this.httpClient = HttpClient.newBuilder()
+                // Compatible gateways may reject HTTP/2 ALPN; SSE also works over HTTP/1.1.
+                .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(connectTimeout == null ? Duration.ofSeconds(10) : connectTimeout)
                 .build();
     }

@@ -30,8 +30,8 @@ import com.jsd.aird.kb.api.KnowledgeEmbeddingFacade;
 import com.jsd.aird.kb.api.KnowledgeSearchFacade;
 import com.jsd.aird.kb.application.port.KnowledgeGovernanceRepository;
 import com.jsd.aird.kb.application.port.KnowledgeRepository;
-import com.jsd.aird.kb.domain.DocumentParser;
-import com.jsd.aird.kb.domain.FileSafetyScanner;
+import com.jsd.aird.kb.api.DocumentParser;
+import com.jsd.aird.kb.api.FileSafetyScanner;
 import com.jsd.aird.kb.domain.LexicalAnalyzer;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
@@ -243,8 +243,19 @@ class KnowledgeServiceIndexingTest {
                 mock(FileSafetyScanner.class), embeddingProvider, List.of(), "embedding-model", 1024,
                 Duration.ofMinutes(15), new BlockAwareChunker(objectMapper), testAnalyzer());
 
+        var transactions = mock(org.springframework.transaction.PlatformTransactionManager.class);
+        var transaction = mock(org.springframework.transaction.TransactionStatus.class);
+        when(transactions.getTransaction(org.mockito.ArgumentMatchers.any())).thenReturn(transaction);
+        service.publicationTransaction(transactions);
+
         var result = service.buildAndPublish(organizationId, actorId, documentId, versionId,
                 reviewRevisionId, 3);
+
+        var transactionOrder = org.mockito.Mockito.inOrder(governance, transactions, repository);
+        transactionOrder.verify(governance).largeTableRows(organizationId, reviewRevisionId);
+        transactionOrder.verify(transactions).getTransaction(org.mockito.ArgumentMatchers.any());
+        transactionOrder.verify(repository).replaceChunks(eq(documentId), eq(versionId), eq(reviewRevisionId), org.mockito.ArgumentMatchers.anyList());
+        transactionOrder.verify(transactions).commit(transaction);
 
         assertThat(result).isEqualTo(publication);
         @SuppressWarnings("unchecked")

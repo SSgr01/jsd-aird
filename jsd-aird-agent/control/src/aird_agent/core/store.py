@@ -1,6 +1,6 @@
 """Owned records and ordered durable events; all changes use database transactions."""
 
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,6 +10,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from .contracts import Principal, digest
+from .stage_timing import measure
 
 
 class Store:
@@ -24,29 +25,38 @@ class Store:
             await conn.execute(Path(__file__).with_name("schema.sql").read_text(encoding="utf-8"))
 
     @asynccontextmanager
+    async def connection(self):
+        async with AsyncExitStack() as stack:
+            with measure("db_pool_ms"):
+                conn = await stack.enter_async_context(self.pool.connection())
+            yield conn
+
+    @asynccontextmanager
     async def transaction(self, principal: Principal, key: str):
-        async with self.pool.connection() as conn, conn.transaction():
+        async with self.connection() as conn, conn.transaction():
             # Serialize short mutations for an owner, even when operations use different
             # idempotency/run keys. No remote work is performed while holding this lock.
-            await conn.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(%s,16))", (":".join(principal.key),)
-            )
-            await conn.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(%s,17))", (":".join((*principal.key, key)),)
-            )
+            with measure("db_lock_ms"):
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s,16))", (":".join(principal.key),)
+                )
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s,17))", (":".join((*principal.key, key)),)
+                )
             yield conn
 
     async def get(self, principal: Principal, kind: str, rid: str, conn=None):
         if conn is None:
-            async with self.pool.connection() as conn:
+            async with self.connection() as conn:
                 return await self.get(principal, kind, rid, conn)
-        row = await (
-            await conn.execute(
-                "SELECT id,revision,payload,created_at,updated_at FROM agent_runtime.harness_records "
-                "WHERE kind=%s AND id=%s AND organization_id=%s AND actor_id=%s",
-                (kind, rid, *principal.key),
-            )
-        ).fetchone()
+        with measure("db_read_ms"):
+            row = await (
+                await conn.execute(
+                    "SELECT id,revision,payload,created_at,updated_at FROM agent_runtime.harness_records "
+                    "WHERE kind=%s AND id=%s AND organization_id=%s AND actor_id=%s",
+                    (kind, rid, *principal.key),
+                )
+            ).fetchone()
         if not row:
             raise HTTPException(404, "Resource not found")
         return {
@@ -62,7 +72,7 @@ class Store:
             rows = await (
                 await conn.execute(
                     "SELECT id FROM agent_runtime.harness_records WHERE kind=%s AND organization_id=%s "
-                    "AND actor_id=%s ORDER BY updated_at DESC LIMIT %s",
+                    "AND actor_id=%s AND coalesce(payload->>'session_deleted','false') <> 'true' ORDER BY updated_at DESC LIMIT %s",
                     (kind, *principal.key, min(limit, 200)),
                 )
             ).fetchall()
@@ -79,11 +89,12 @@ class Store:
 
     async def update(self, principal: Principal, kind: str, record: dict, conn):
         payload = {k: v for k, v in record.items() if k not in {"id", "revision", "created_at", "updated_at"}}
-        result = await conn.execute(
-            "UPDATE agent_runtime.harness_records SET payload=%s,revision=revision+1,updated_at=now() "
-            "WHERE kind=%s AND id=%s AND organization_id=%s AND actor_id=%s AND revision=%s",
-            (Jsonb(payload), kind, record["id"], *principal.key, record["revision"]),
-        )
+        with measure("db_write_ms"):
+            result = await conn.execute(
+                "UPDATE agent_runtime.harness_records SET payload=%s,revision=revision+1,updated_at=now() "
+                "WHERE kind=%s AND id=%s AND organization_id=%s AND actor_id=%s AND revision=%s",
+                (Jsonb(payload), kind, record["id"], *principal.key, record["revision"]),
+            )
         if result.rowcount != 1:
             raise HTTPException(409, "Resource revision changed")
         return await self.get(principal, kind, record["id"], conn)
@@ -118,21 +129,6 @@ class Store:
             (run_id, *principal.key, key or str(uuid4()), kind, Jsonb(payload)),
         )
         await conn.execute("SELECT pg_notify('aird_harness_events', %s)", (str(run_id),))
-
-    async def checkpoint(self, principal, reference):
-        if reference is None or isinstance(reference, str):
-            return reference
-        async with self.pool.connection() as conn:
-            row = await (
-                await conn.execute(
-                    "SELECT content FROM agent_runtime.harness_checkpoints "
-                    "WHERE organization_id=%s AND actor_id=%s AND sha256=%s",
-                    (*principal.key, reference["sha256"]),
-                )
-            ).fetchone()
-        if not row:
-            raise HTTPException(409, "CHECKPOINT_UNAVAILABLE")
-        return row["content"]
 
     async def events(self, principal, run_id, after=0):
         await self.get(principal, "run", run_id)

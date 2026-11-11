@@ -4,7 +4,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.LinkedHashSet;
 
-import com.jsd.aird.kb.domain.OcrMode;
+import com.jsd.aird.kb.api.OcrMode;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.text.PDFTextStripper;
 

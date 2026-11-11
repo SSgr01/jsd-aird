@@ -26,7 +26,8 @@ public class JdbcResearchTestRepository implements ResearchTestRepository {
     public JdbcResearchTestRepository(JdbcTemplate jdbc,ObjectMapper json){this.jdbc=jdbc;this.json=json;}
 
     @Override public PageResponse<Summary> search(UUID org,Search q){
-        var w=new StringBuilder(" WHERE r.organization_id=? AND r.record_type=? AND r.deleted=false");var a=new ArrayList<Object>(List.of(org,q.type().name()));
+        var w=new StringBuilder(" WHERE r.organization_id=? AND r.deleted=false");var a=new ArrayList<Object>(List.of(org));
+        if(q.type()!=null){w.append(" AND r.record_type=?");a.add(q.type().name());}
         if(text(q.keyword())){w.append(" AND (lower(r.name) LIKE ? OR lower(r.business_no) LIKE ?)");var k="%"+q.keyword().toLowerCase()+"%";a.add(k);a.add(k);}
         if(text(q.category())){w.append(" AND r.category=?");a.add(q.category());}if(text(q.status())){w.append(" AND r.status=?");a.add(q.status());}
         if(text(q.format())){w.append(" AND r.document_format=?");a.add(q.format());}

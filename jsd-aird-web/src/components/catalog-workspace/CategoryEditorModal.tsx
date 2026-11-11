@@ -1,4 +1,5 @@
-import { Form, Input, Modal, Select } from 'antd';
+import { FormModal } from '@/components/form-dialog/FormModal';
+import { Form, Input, Select } from 'antd';
 import { useEffect } from 'react';
 
 export interface CategoryEditorValue {
@@ -24,7 +25,7 @@ export function CategoryEditorModal({ open, title, initialValue, scopeOptions, c
     else form.resetFields();
   }, [form, initialValue, open]);
   return (
-    <Modal open={open} forceRender title={title} okText="保存" cancelText="取消" confirmLoading={confirmLoading} onCancel={onCancel} onOk={() => void form.validateFields().then(onSubmit)}>
+    <FormModal form={form} open={open} forceRender title={title} okText="保存" cancelText="取消" confirmLoading={confirmLoading} onCancel={onCancel} onOk={() => form.validateFields().then(onSubmit)}>
       <Form form={form} layout="vertical">
         <Form.Item name="name" label="分类名称" rules={[{ required: true, whitespace: true, message: '请输入分类名称' }]}>
           <Input autoFocus maxLength={120} />
@@ -34,6 +35,6 @@ export function CategoryEditorModal({ open, title, initialValue, scopeOptions, c
         </Form.Item>
         {scopeOptions && <Form.Item name="scope" label="资料范围" rules={[{ required: true, message: '请选择资料范围' }]}><Select options={scopeOptions} /></Form.Item>}
       </Form>
-    </Modal>
+    </FormModal>
   );
 }

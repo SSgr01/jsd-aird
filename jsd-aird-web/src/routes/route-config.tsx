@@ -9,7 +9,8 @@ import { AuthorizedHomeRedirect, PageAnyPermissionGate, PagePermissionGate } fro
 
 const BasicLayout = routePage(async () => ({ default: (await import('@/layouts/BasicLayout')).BasicLayout }));
 
-const AssistantPage = routePage(async () => ({ default: (await import('@/pages/assistant/AssistantHubPage')).AssistantHubPage }));
+const AssistantPage = routePage(async () => ({ default: (await import('@/pages/agents/DeepSeekEntry')).DeepSeekEntry }));
+const EnterpriseResultPage = routePage(async () => ({default:(await import('@/pages/agents/EnterpriseResultPage')).EnterpriseResultPage}));
 const FormulaPredictionPage = routePage(async () => ({ default: (await import('@/pages/formula-research/FormulaPredictionPage')).FormulaPredictionPage }));
 const ExperimentOptimizationPage = routePage(async () => ({ default: (await import('@/pages/formula-research/HistoricalOptimizationWorkbench')).HistoricalOptimizationWorkbench }));
 const ModelCenterPage = routePage(async () => ({ default: (await import('@/pages/model-center/ModelCenterPage')).ModelCenterPage }));
@@ -94,6 +95,7 @@ const applicationRoutes: RouteObject[] = [
       { path: 'knowledge/review/:documentId/:versionId', element: <PagePermissionGate permission="knowledge.view.update"><KnowledgeReviewPage /></PagePermissionGate> },
       { path: 'knowledge/documents/:id', element: <KnowledgeDocumentPage /> },
       { path: 'assistant', element: <AssistantPage /> },
+      { path: 'assistant/reports/:id', element: <PagePermissionGate permission="ai.use"><EnterpriseResultPage /></PagePermissionGate> },
       { path: 'assistant/research', element: <PagePermissionGate permission="ai.use"><Navigate to="/assistant?mode=research" replace /></PagePermissionGate> },
       { path: 'assistant/formula-prediction', element: <PagePermissionGate permission="ai.formula.predict"><FormulaPredictionPage /></PagePermissionGate> },
       { path: 'assistant/performance-prediction', element: <PagePermissionGate permission="ai.performance.predict"><PerformancePredictionPage /></PagePermissionGate> },

@@ -1,3 +1,4 @@
+import { FormModal } from '@/components/form-dialog/FormModal';
 import {
   CopyOutlined,
   DeleteOutlined,
@@ -397,21 +398,21 @@ export function TemplatesPage() {
         columns={columns} />
     </CatalogListPanel>
 
-    <Modal title="新建模板" open={createOpen} confirmLoading={creating} okText={createMode === 'BLANK' ? '创建并进入工作台' : '前往文件导入'} onOk={() => void create()} onCancel={() => setCreateOpen(false)} destroyOnHidden>
+    <FormModal form={createMode === 'BLANK' ? form : undefined} title="新建模板" open={createOpen} confirmLoading={creating} okText={createMode === 'BLANK' ? '创建并进入工作台' : '前往文件导入'} onOk={() => create()} onCancel={() => setCreateOpen(false)} destroyOnHidden>
       <Radio.Group value={createMode} onChange={(event) => setCreateMode(event.target.value as CreateMode)} optionType="button" buttonStyle="solid" options={[{ value: 'BLANK', label: '空白新建' }, { value: 'IMPORT', label: '文件导入' }]} style={{ marginBottom: 20 }} />
       {createMode === 'BLANK' ? <Form form={form} layout="vertical" initialValues={{ format: 'XLSX' }}>
         <Form.Item name="name" label="模板名称" rules={[{ required: true, whitespace: true, message: '请输入模板名称' }]}><Input autoFocus maxLength={160} /></Form.Item>
         <Form.Item name="format" label="编辑格式" rules={[{ required: true }]}><Select options={[{ value: 'XLSX', label: 'Excel 模板' }, { value: 'DOCX', label: 'Word 模板' }]} /></Form.Item>
         <Form.Item name="category" label="分类"><Select allowClear options={categoryItems.map((item) => ({ value: item.name, label: item.name }))} /></Form.Item>
       </Form> : <Typography.Paragraph type="secondary">选择分类并上传 XLSX 或 DOCX 模板文件。</Typography.Paragraph>}
-    </Modal>
+    </FormModal>
 
-    <Modal title={categoryEditor === 'NEW' ? '新建分类' : '编辑分类'} open={Boolean(categoryEditor)} confirmLoading={savingCategory} onOk={() => categoryForm.submit()} onCancel={() => { setCategoryEditor(undefined); categoryForm.resetFields(); }} forceRender>
+    <FormModal form={categoryForm} title={categoryEditor === 'NEW' ? '新建分类' : '编辑分类'} open={Boolean(categoryEditor)} confirmLoading={savingCategory} onOk={async () => saveCategory(await categoryForm.validateFields())} onCancel={() => { setCategoryEditor(undefined); categoryForm.resetFields(); }} forceRender>
       <Form form={categoryForm} layout="vertical" onFinish={(values) => void saveCategory(values)}>
         <Form.Item name="name" label="分类名称" rules={[{ required: true, whitespace: true, message: '请输入分类名称' }]}><Input maxLength={120} /></Form.Item>
         <Form.Item name="description" label="分类简介"><Input.TextArea rows={3} maxLength={240} showCount /></Form.Item>
       </Form>
-    </Modal>
+    </FormModal>
 
     <CategoryDeleteModal
       open={Boolean(deletingCategory)}
@@ -429,10 +430,10 @@ export function TemplatesPage() {
 
     <Modal title={movingTemplate ? `移动“${movingTemplate.name}”` : '移动模板'} open={Boolean(movingTemplate)} footer={null} onCancel={() => setMovingTemplate(undefined)}><Space direction="vertical" style={{ width: '100%' }}><Button block onClick={() => void moveTemplate(undefined)}>移到未分类</Button>{categoryItems.map((item) => <Button block key={item.id} onClick={() => void moveTemplate(item.id)}>{item.name}</Button>)}</Space></Modal>
 
-    <Modal title={operation?.type === 'COPY' ? '复制模板' : '重命名模板'} open={Boolean(operation)} confirmLoading={operating} onOk={() => void submitOperation()} onCancel={() => setOperation(undefined)} destroyOnHidden>
+    <FormModal draft={[operationName, operationCategoryId]} title={operation?.type === 'COPY' ? '复制模板' : '重命名模板'} open={Boolean(operation)} confirmLoading={operating} onOk={() => submitOperation()} onCancel={() => setOperation(undefined)} destroyOnHidden>
       <Space direction="vertical" style={{ width: '100%' }}><Typography.Text>模板名称</Typography.Text><Input value={operationName} maxLength={160} onChange={(event) => setOperationName(event.target.value)} />{operation?.type === 'COPY' ? <><Typography.Text>副本分类</Typography.Text><Select allowClear value={operationCategoryId} onChange={setOperationCategoryId} options={categoryItems.map((item) => ({ value: item.id, label: item.name }))} style={{ width: '100%' }} /></> : null}</Space>
-    </Modal>
+    </FormModal>
 
-    <Modal title="批量移动分类" open={batchMoveOpen} confirmLoading={batchOperating} onOk={() => void runBatch('MOVE', batchCategoryId)} onCancel={() => setBatchMoveOpen(false)}><Select allowClear placeholder="未分类" value={batchCategoryId} onChange={setBatchCategoryId} options={categoryItems.map((item) => ({ value: item.id, label: item.name }))} style={{ width: '100%' }} /></Modal>
+    <FormModal draft={batchCategoryId} title="批量移动分类" open={batchMoveOpen} confirmLoading={batchOperating} onOk={() => runBatch('MOVE', batchCategoryId)} onCancel={() => setBatchMoveOpen(false)}><Select allowClear placeholder="未分类" value={batchCategoryId} onChange={setBatchCategoryId} options={categoryItems.map((item) => ({ value: item.id, label: item.name }))} style={{ width: '100%' }} /></FormModal>
   </div>;
 }

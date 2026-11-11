@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
+<title>化学结构</title><link rel="stylesheet" href="viewer.css">
+<main><p id="status" role="status">正在绘制结构…</p><button id="retry" type="button" hidden>重试</button><section id="cards" aria-label="分子结构卡片"></section></main>
+<template id="card-template">
+<article class="card">
+<header><h2></h2><details class="actions"><summary aria-label="结构选项" title="结构选项">⋯</summary><div class="menu">
+<button type="button" data-action="zoom" hidden>放大查看</button><button type="button" data-action="source">查看 SMILES</button><button type="button" data-action="copy">复制 SMILES</button><a data-action="download" hidden>下载 SVG</a>
+</div></details></header>
+<div class="drawing"><img hidden alt="由输入 SMILES 绘制的化学结构"></div>
+<div class="source" hidden><code></code></div>
+</article>
+</template><script src="input.js"></script><script src="viewer.js"></script>
+</html>

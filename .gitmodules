@@ -1,4 +1,4 @@
-[submodule "vendor/pi"]
-	path = vendor/pi
-	url = https://github.com/earendil-works/pi.git
-	branch = main
+[submodule "vendor/deepseek-harness"]
+	path = vendor/deepseek-harness
+	url = https://github.com/SSgr01/md-harness.git
+	branch = master

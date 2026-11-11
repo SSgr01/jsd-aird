@@ -40,7 +40,8 @@ class RetrievalPipelineTest {
         var pipeline=new RetrievalPipeline(new RagRetrievalService(null,null,rewrite,ranker),new ContextCompressionService());pipeline.sources(knowledge,null);
         ActorContext.set(new Actor(UUID.randomUUID(),UUID.randomUUID(),"test","USER"));
         try {
-            var args=mapper.createObjectNode().put("query","frequency");
+            var query="Preparation Characterization and Properties of UV-Curable Coating Doped with Nano-SiO2";
+            var args=mapper.createObjectNode().put("query","  "+query.replace("Coating Doped","Coating\nDoped")+"  ");
             var first=pipeline.research(scope,args,false);
             assertThat(first.path("candidates").get(0).path("node_offset").asInt()).isEqualTo(20);
             assertThat(first.path("candidates").size()).isEqualTo(12);
@@ -50,7 +51,7 @@ class RetrievalPipelineTest {
             var ids=new HashSet<String>();first.path("candidates").forEach(c->ids.add(c.path("source").path("source_node_key").asText()));
             second.path("candidates").forEach(c->assertThat(ids.add(c.path("source").path("source_node_key").asText())).isTrue());
             assertThat(second.path("trace").path("rerank_calls").asInt()).isZero();
-            verify(knowledge,times(1)).recall(anyList(),anyString(),anyString(),any());verify(ranker,times(1)).rerank(anyString(),anyList());verifyNoInteractions(rewrite);
+            verify(knowledge,times(1)).recall(anyList(),eq(query),eq("auto"),any());verify(ranker,times(1)).rerank(eq(query),anyList());verifyNoInteractions(rewrite);
             ((com.fasterxml.jackson.databind.node.ObjectNode)args.path("ranking_snapshot")).put("policy_hash","stale");
             assertThatThrownBy(()->pipeline.research(scope,args,false)).isInstanceOf(ApiException.class).hasMessageContaining("SNAPSHOT_CHANGED");
         } finally {ActorContext.clear();}
@@ -77,5 +78,24 @@ class RetrievalPipelineTest {
         assertThatThrownBy(()->pipeline.retrieve(UUID.randomUUID(),"question",List.of(),List.of(UUID.randomUUID()),List.of(),false,
             com.jsd.aird.data.api.DataSourceFileSearchFacade.RetrievalAccessScope.denied())).isInstanceOf(ApiException.class);
         verifyNoInteractions(rewrite,ranker);
+    }
+
+    @Test void nativeAgentQueriesNeverUseTheSeparatelyConfiguredRewriteModel() {
+        var kb = mock(KnowledgeSearchFacade.class);
+        var data = mock(com.jsd.aird.data.api.DataSourceFileSearchFacade.class);
+        when(kb.search(any(KnowledgeSearchFacade.SearchRequest.class))).thenReturn(
+            new KnowledgeSearchFacade.SearchResult(List.of(), new KnowledgeSearchFacade.RetrievalTrace("test", 0, 0, 0, List.of())));
+        var query = "目标材料的测试条件";
+        var plan = new QueryRewriteService.QueryPlan(query, query, List.of(), List.of(), List.of(), Map.of(), "", List.of());
+        when(rewrite.original(eq(query), anyList(), eq(false))).thenReturn(new QueryRewriteService.Result(plan, "ORIGINAL", "", false));
+        var pipeline = new RetrievalPipeline(new RagRetrievalService(kb, data, rewrite, ranker), new ContextCompressionService());
+        for (var categories : List.of(List.<UUID>of(), List.of(UUID.randomUUID()))) {
+            var result = pipeline.retrieveAgentQuery(UUID.randomUUID(), query, List.of(), categories, List.of(), false,
+                com.jsd.aird.data.api.DataSourceFileSearchFacade.RetrievalAccessScope.denied());
+            assertThat(result.knowledgeHits()).isEmpty();
+            assertThat(result.trace().rewriteStatus()).isEqualTo("ORIGINAL");
+        }
+        verify(rewrite, times(2)).original(eq(query), anyList(), eq(false));
+        verify(rewrite, never()).rewrite(anyString(), anyList(), anyBoolean());
     }
 }

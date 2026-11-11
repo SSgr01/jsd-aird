@@ -10,7 +10,12 @@ public final class DeadlineInterrupt implements AutoCloseable {
     private final ScheduledFuture<?> alarm;
     private boolean expired,closed;
     public DeadlineInterrupt(long milliseconds){this(milliseconds,()->{});}
-    public DeadlineInterrupt(long milliseconds,Runnable cancelInput){alarm=CLOCK.schedule(()->{synchronized(this){if(!closed){expired=true;owner.interrupt();cancelInput.run();}}},Math.max(1,milliseconds),TimeUnit.MILLISECONDS);}
+    public DeadlineInterrupt(long milliseconds,Runnable cancelInput){alarm=CLOCK.schedule(()->{
+        synchronized(this){if(closed)return;expired=true;owner.interrupt();}
+        // Closing a servlet stream may wait for its reader. Never hold the
+        // deadline monitor while doing so: the reader must inspect expiry and exit.
+        Thread.ofVirtual().name("aird-deadline-cancel").start(cancelInput);
+    },Math.max(1,milliseconds),TimeUnit.MILLISECONDS);}
     public synchronized boolean expired(){return expired;}
     @Override public synchronized void close(){closed=true;alarm.cancel(false);if(expired && Thread.currentThread()==owner)Thread.interrupted();}
 }

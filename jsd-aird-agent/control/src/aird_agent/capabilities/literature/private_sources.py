@@ -36,6 +36,7 @@ async def create_conversation(service, principal):
             "conversation",
             {
                 "profile": "agent",
+                "engine_version": "dsh-v1",
                 "topic_id": None,
                 "context_refs": [],
                 "retrieval_scope": {},
@@ -45,7 +46,6 @@ async def create_conversation(service, principal):
                 "messages": [],
                 "notes": [],
                 "queued": [],
-                "checkpoint": None,
                 "private_source_ids": [],
             },
             conn,
@@ -89,8 +89,7 @@ async def upload(service, principal, cid, request, key, *, provenance=None):
             dict.fromkeys([*(current.get("private_source_ids") or []), result["id"]])
         )
         if "private-literature" not in current["pack_ids"]:
-            # Explicit source attachment enables only its new read capability. Existing pins
-            # remain unchanged; the source-scope change invalidates any old checkpoint on start.
+            # Source ownership registration adds only the corresponding read capability.
             current["pack_ids"] = [*current["pack_ids"], "private-literature"]
             current["pack_versions"] = {
                 **current["pack_versions"],
@@ -137,13 +136,18 @@ def private_pack():
         runtime = context.runtime
         sid = str(UUID(args["document_id"]))
         if sid not in (context.run.get("private_source_ids") or []):
-            raise HTTPException(403, "PRIVATE_SOURCE_NOT_IN_CONVERSATION")
+            # An earlier native attachment remains readable when a later message
+            # refers to it. Ownership is availability, never a retrieval filter
+            # or a requirement to read every attachment on each turn.
+            conversation = await runtime.store.get(context.principal, "conversation", context.run["conversation_id"])
+            if sid not in (conversation.get("private_source_ids") or []):
+                raise HTTPException(403, "PRIVATE_SOURCE_NOT_IN_CONVERSATION")
         signature = digest([mode, sid, args])
         async with runtime.store.transaction(context.principal, context.run["id"]) as conn:
             current = await runtime.active(context.principal, context.run["id"], context.run["epoch"], conn)
             history = current.setdefault("navigation_attempts", {})
             last = current.get("navigation_last", {}).get(sid, {})
-            if mode != "search" and (
+            if mode != "search" and not args.get("refresh") and (
                 history.get(signature, {}).get("stalled", 0) >= 1
                 or (
                     last.get("mode") == mode
@@ -175,7 +179,8 @@ def private_pack():
             source = SourceRef.model_validate(candidate["source"])
             candidate["evidence_id"] = "e" + digest(source.model_dump(mode="json"))[:24]
         if mode == "read":
-            result = bound_document_page(result, args, runtime.tool_character_budget)
+            result = bound_document_page(result, args, runtime.tool_character_budget,
+                                         delivered=await runtime.store.get(context.principal, "run", context.run["id"]))
         await runtime.remember_sources(context.principal, context.run, result)
         async with runtime.store.transaction(context.principal, context.run["id"]) as conn:
             current = await runtime.active(context.principal, context.run["id"], context.run["epoch"], conn)
@@ -228,19 +233,21 @@ def private_pack():
         ),
         tool(
             "private_document_search",
-            "跨全文搜短词/词组，最多8个有效词、256字符；用match_mode，不支持OR/AND语法。offset是排序结果位置，node_offset用于阅读；query变化时offset归零，不计全文覆盖。",
+            "跨全文检索，支持256字符内的完整标题、词组和自然语言；用match_mode，不解析OR/AND语法。offset是排序结果位置，node_offset用于阅读；query变化时offset归零，不计全文覆盖。",
             {
                 "document_id": STRING,
                 "query": {"type": "string", "minLength": 1, "maxLength": 256},
                 "offset": INTEGER,
+                "limit": {"type": "integer", "minimum": 1, "maximum": 12},
                 "match_mode": {"type": "string", "enum": ["auto", "phrase", "all", "any"]},
             },
             ["document_id", "query"],
         ),
         tool(
             "private_document_read",
-            "按节点偏移顺序读取原文，不接受query；从目录/搜索返回的node_offset定位，按next_offset继续。",
-            {"document_id": STRING, "offset": INTEGER},
+            "按节点偏移顺序读取原文，每次最多12个节点；从目录/搜索返回的node_offset定位，按next_offset继续。已返回节点只回句柄，refresh=true重新显示。独立范围可在同一步并列调用。",
+            {"document_id": STRING, "offset": INTEGER, "limit": {"type": "integer", "minimum": 1, "maximum": 12},
+             "refresh": {"type": "boolean"}},
             ["document_id"],
         ),
     )

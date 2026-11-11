@@ -6,7 +6,7 @@ import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.rnd.application.QuotationImportService;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;

@@ -24,6 +24,7 @@ class ExecutionContext:
     scope: dict
     host: Callable[..., Awaitable[dict]]
     runtime: Any = None
+    call_id: str | None = None
 
 
 Handler = Callable[[ExecutionContext, dict], Awaitable[dict]]

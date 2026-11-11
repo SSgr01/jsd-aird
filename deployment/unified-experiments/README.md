@@ -1,6 +1,6 @@
 # 统一实验模板部署
 
-先部署本次后端和前端代码，执行到 V83 数据库迁移，再用 UTF-8 执行同目录 `install.sql`。脚本包含 V82 的幂等建表与安装函数；V83 的 `data.import_workbook_draft` 由增量迁移创建，用于两个导入核对入口的完整工作簿草稿。
+先部署本次后端和前端代码，执行到 V95 数据库迁移，再用 UTF-8 执行同目录 `install.sql`。脚本包含 V94 的幂等建表与安装函数；V95 的 `data.import_workbook_draft` 由增量迁移创建，用于两个导入核对入口的完整工作簿草稿。
 
 ```powershell
 psql -X -v ON_ERROR_STOP=1 -f deployment/unified-experiments/install.sql

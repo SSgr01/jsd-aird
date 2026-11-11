@@ -1,6 +1,8 @@
 import { memo, type ReactNode } from 'react';
 
 import { latexHtml, normalizeMineruLatex } from './latex-rendering';
+import { ChemistryFrame } from './ChemistryFrame';
+import { chemistryList } from './chemistry-input';
 
 interface MarkdownContentProps {
   value?: string | null;
@@ -146,7 +148,7 @@ function renderBlocks(value: string): ReactNode[] {
       continue;
     }
 
-    const fence = /^\s*```\s*([\w-]+)?\s*$/.exec(line);
+    const fence = /^\s*```\s*([\w-]+)?(?:\s+(.*))?\s*$/.exec(line);
     if (fence) {
       const codeLines: string[] = [];
       index += 1;
@@ -154,7 +156,20 @@ function renderBlocks(value: string): ReactNode[] {
         codeLines.push(lines[index] ?? '');
         index += 1;
       }
-      if (index < lines.length) index += 1;
+      const closed = index < lines.length;
+      if (closed) index += 1;
+      const kind = fence[1]?.toLowerCase();
+      const source = codeLines.join('\n').trim();
+      const namedList = (kind === 'yaml' || kind === 'yml') && chemistryList(source) !== null;
+      if (closed && source && (kind === 'smiles' || kind === 'reaction-smiles' || namedList)) {
+        const parameters = new URLSearchParams({ source, kind: kind === 'reaction-smiles' ? kind : 'smiles' });
+        // A fence with one raw structure keeps all SMILES colons. YAML explicitly declares labels.
+        const labelled = namedList || (source.includes('\n') && chemistryList(source, false) !== null);
+        parameters.set('format', labelled ? 'labels' : 'raw');
+        for (const meta of (fence[2] || '').matchAll(/\b(name|review)="([^"\n]+)"/g)) parameters.set(meta[1]!, meta[2]!);
+        blocks.push(<ChemistryFrame key={`code-${blockStart}`} title={kind === 'reaction-smiles' ? '化学反应结构' : '分子结构'} src={`/chemistry/viewer.html#${parameters}`} />);
+        continue;
+      }
       blocks.push(<pre key={`code-${blockStart}`} className="ai-markdown-code"><code data-language={fence[1] || undefined}>{codeLines.join('\n')}</code></pre>);
       continue;
     }

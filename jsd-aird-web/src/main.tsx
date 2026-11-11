@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 
 import '@/utils/dayjs';
 import '@/styles/global.css';
+import '@/styles/ui-refinement.css';
 import { useAuthStore } from '@/stores/auth-store';
 import { installBuildRecovery } from '@/services/release/build-recovery';
 import { markPerformance } from '@/services/performance/metrics';

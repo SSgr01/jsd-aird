@@ -32,9 +32,10 @@ import org.springframework.stereotype.Component;
  * tell the user what stayed in the original file.</p>
  */
 @Component
-public class DocxTableWorkbookConverter {
-    @org.springframework.beans.factory.annotation.Autowired(required=false)
+public class DocxTableWorkbookConverter implements com.jsd.aird.mfg.upload.application.port.DocxWorkbookConverter {
     private com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void setIsolated(com.jsd.aird.shared.resource.IsolatedDocumentTasks isolated) { this.isolated = isolated; }
 
     /**
      * The sheet workspace needs somewhere to type, so a converted form keeps the
@@ -53,8 +54,7 @@ public class DocxTableWorkbookConverter {
     }
 
     /** A snapshot ready to persist, plus the facts worth showing to the user. */
-    public record ConvertedWorksheet(JsonNode snapshot, JsonNode summary) {
-    }
+
 
     /**
      * Returns {@code null} when the document has no non-empty table, because then

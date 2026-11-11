@@ -3,7 +3,7 @@ package com.jsd.aird.kb.infrastructure;
 import java.io.InputStream;
 import java.util.Locale;
 
-import com.jsd.aird.kb.domain.DocumentParser;
+import com.jsd.aird.kb.api.DocumentParser;
 import org.springframework.stereotype.Component;
 
 /** Knowledge presentations always use the token-authenticated MinerU precise API. */

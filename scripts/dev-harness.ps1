@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('api', 'web', 'node', 'control', 'migrate-control')][string]$Service,
+    [Parameter(Mandatory)][ValidateSet('api', 'web', 'gateway', 'control', 'migrate-control')][string]$Service,
     [Parameter(Mandatory)][string]$EnvFile
 )
 $ErrorActionPreference = 'Stop'
@@ -51,10 +51,9 @@ if ($env:JSD_AIRD_HARNESS_SANDBOX_ENABLED -eq 'true') {
     $env:JSD_AIRD_HARNESS_SANDBOX_URL = 'http://127.0.0.1:8094'
 }
 $env:JSD_AIRD_HARNESS_MAX_STEPS = '64'
-$env:JSD_AIRD_HARNESS_PAPERQA_MODEL = 'openai/' + $env:JSD_AIRD_MODEL_NAME
-$env:JSD_AIRD_HARNESS_PAPERQA_BASE_URL = $env:JSD_AIRD_MODEL_BASE_URL
-$env:JSD_AIRD_HARNESS_PAPERQA_API_KEY = $env:JSD_AIRD_MODEL_API_KEY
-$env:JSD_AIRD_PI_SESSION_ROOT = Join-Path $runtimeRoot 'pi-sessions'
+$env:JSD_AIRD_DSH_ROOT = Join-Path $runtimeRoot 'dsh'
+$env:JSD_AIRD_DSH_EXECUTION_ROOT = Join-Path $runtimeRoot 'execution'
+$env:JSD_AIRD_PUBLIC_URL = 'http://127.0.0.1:5184'
 $env:APP_AI_HARNESS_SHARED_SECRET = $secrets.delegation
 $env:APP_AI_HARNESS_CONTROL_URL = 'http://127.0.0.1:8093'
 $env:APP_AI_HARNESS_ENABLED = 'true'
@@ -62,19 +61,19 @@ if (-not (Test-Path Env:APP_AI_HARNESS_QA_ENABLED)) { $env:APP_AI_HARNESS_QA_ENA
 $env:PYTHONUTF8 = '1'
 
 switch ($Service) {
-    'node' {
-        Push-Location (Join-Path $repoRoot 'jsd-aird-agent/pi-worker')
-        try { & node src/server.mjs } finally { Pop-Location }
+    'gateway' {
+        $taskNode = $env:JSD_AIRD_DSH_NODE
+        if (-not $taskNode) { $taskNode = Join-Path $repoRoot '.runtime/deepseek-migration/toolchain/node_modules/node-win-x64/bin/node.exe' }
+        if (-not (Test-Path -LiteralPath $taskNode -PathType Leaf)) { throw 'Set JSD_AIRD_DSH_NODE to the dedicated Node 24 executable.' }
+        $taskVersion = & $taskNode -p 'process.versions.node'
+        if ($taskVersion -notmatch '^24\.' -or [version]$taskVersion -lt [version]'24.9.0') { throw 'DeepSeek requires its dedicated Node 24 runtime.' }
+        $env:JSD_AIRD_DSH_NODE = $taskNode
+        Push-Location (Join-Path $repoRoot 'jsd-aird-agent/deepseek')
+        try { & $taskNode src/server.mjs } finally { Pop-Location }
     }
     { $_ -in 'control', 'migrate-control' } {
         $agentsRoot = Join-Path $repoRoot 'jsd-aird-agent/control'
         $env:PYTHONPATH = Join-Path $agentsRoot 'src'
-        # Reuse the locally verified optional PaperQA environment when available.
-        $sourceRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $repoRoot))
-        $researchPackages = Join-Path $sourceRoot '.runtime/paperqa/venv/Lib/site-packages'
-        if (Test-Path -LiteralPath (Join-Path $researchPackages 'paperqa')) {
-            $env:PYTHONPATH += ';' + $researchPackages
-        }
         Push-Location $agentsRoot
         try {
             $pythonCommand = Join-Path $agentsRoot '.venv/Scripts/python.exe'
@@ -85,11 +84,13 @@ switch ($Service) {
     }
     'web' {
         $env:VITE_DEV_API_TARGET = 'http://127.0.0.1:8180'
+        $env:VITE_DEV_AGENT_TARGET = 'http://127.0.0.1:8092'
         Push-Location (Join-Path $repoRoot 'jsd-aird-web')
         try { & node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5184 --strictPort }
         finally { Pop-Location }
     }
     'api' {
+        $env:SPRING_FLYWAY_ENABLED = 'false'
         if ($env:JSD_AIRD_JAVA_HOME) {
             $env:JAVA_HOME = $env:JSD_AIRD_JAVA_HOME
             $env:Path = (Join-Path $env:JAVA_HOME 'bin') + ';' + $env:Path

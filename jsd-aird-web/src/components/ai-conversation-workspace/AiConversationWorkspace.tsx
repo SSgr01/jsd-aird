@@ -7,6 +7,7 @@ import {
   MessageOutlined,
   PlusOutlined,
   RobotOutlined,
+  SearchOutlined,
   SendOutlined,
 } from '@ant-design/icons';
 import { Button, Drawer, Empty, Input, List, Modal, Popconfirm, Space, Typography } from 'antd';
@@ -31,6 +32,7 @@ import {
 export interface ConversationItem {
   id: string;
   title: string;
+  summary?: string;
   updatedAt?: string;
 }
 
@@ -69,6 +71,10 @@ interface AiConversationWorkspaceProps {
   welcomeTitle?: string;
   welcomeDescription?: string;
   welcomeContent?: ReactNode;
+  welcomeMark?: ReactNode;
+  searchableHistory?: boolean;
+  historyTitle?: string;
+  scopeButtonText?: string;
   inputLabel?: string;
   inputPlaceholder?: string;
   inputMaxLength?: number;
@@ -122,6 +128,10 @@ export function AiConversationWorkspace({
   welcomeTitle = '从研发资料开始提问',
   welcomeDescription = '提出问题，我会结合所选资料帮你解答。',
   welcomeContent,
+  welcomeMark,
+  searchableHistory = false,
+  historyTitle = '最近对话',
+  scopeButtonText,
   inputLabel = '输入问题',
   inputPlaceholder = '输入你的问题…',
   inputMaxLength = 2000,
@@ -139,12 +149,20 @@ export function AiConversationWorkspace({
   const [editingConversation, setEditingConversation] = useState<ConversationItem>();
   const [editingTitle, setEditingTitle] = useState('');
   const [renameLoading, setRenameLoading] = useState(false);
+  const [deletingConversation, setDeletingConversation] = useState<ConversationItem>();
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [sideOpen, setSideOpen] = useState(false);
   const [scopeOpen, setScopeOpen] = useState(false);
   const [editingMessage, setEditingMessage] = useState<ConversationMessage>();
   const [editingValue, setEditingValue] = useState('');
   const [confirmEditOpen, setConfirmEditOpen] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const [historyQuery, setHistoryQuery] = useState('');
+  const historySearch = historyQuery.trim().toLocaleLowerCase();
+  const visibleConversations =
+    searchableHistory && historySearch
+      ? conversations.filter((item) => item.title.toLocaleLowerCase().includes(historySearch))
+      : conversations;
   const messagesRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
   const customSubmit = Boolean(submitAction);
@@ -184,6 +202,19 @@ export function AiConversationWorkspace({
       setEditingConversation(undefined);
     } finally {
       setRenameLoading(false);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deletingConversation || !onDeleteConversation || deleteLoading) return;
+    setDeleteLoading(true);
+    try {
+      await onDeleteConversation(deletingConversation);
+      setDeletingConversation(undefined);
+    } catch {
+      // The caller reports the request error; keep this confirmation available for retry.
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -337,7 +368,10 @@ export function AiConversationWorkspace({
 
   return (
     <div className={`ai-conversation-workspace${sideOpen ? ' is-side-open' : ''}`}>
-      <aside className="ai-conversation-side">
+      <aside
+        className={`ai-conversation-side${searchableHistory ? ' has-history-search' : ''}`}
+        aria-label={historyTitle}
+      >
         <div className="ai-conversation-side-head">
           {canCreate && <Button
             type="primary"
@@ -347,6 +381,7 @@ export function AiConversationWorkspace({
             disabled={navigationDisabled}
             onClick={() => {
               onNewConversation();
+              setHistoryQuery('');
               setSideOpen(false);
             }}
           >
@@ -361,31 +396,51 @@ export function AiConversationWorkspace({
           />
         </div>
         <Typography.Text strong className="ai-conversation-section-title">
-          最近对话
+          {historyTitle}
         </Typography.Text>
+        {searchableHistory && (
+          <Input
+            className="ai-conversation-history-search"
+            aria-label="搜索对话"
+            placeholder="搜索对话…"
+            prefix={<SearchOutlined />}
+            allowClear
+            value={historyQuery}
+            onChange={(event) => setHistoryQuery(event.target.value)}
+          />
+        )}
         <div className="ai-conversation-history">
-          {conversations.length ? (
+          {visibleConversations.length ? (
             <List
               className="ai-conversation-list"
-              dataSource={conversations}
+              dataSource={visibleConversations}
               renderItem={(item) => (
-                <List.Item
-                  className={item.id === activeConversationId ? 'is-active' : ''}
-                  onClick={() => {
-                    if (navigationDisabled) return;
-                    onSelectConversation(item.id);
-                    setSideOpen(false);
-                  }}
-                >
+                <List.Item className={item.id === activeConversationId ? 'is-active' : ''}>
                   <MessageOutlined />
-                  <span className="ai-conversation-name" title={item.title}>
-                    {item.title}
-                  </span>
-                  {item.updatedAt && (
-                    <Typography.Text type="secondary" className="ai-conversation-date">
-                      {new Date(item.updatedAt).toLocaleDateString('zh-CN')}
-                    </Typography.Text>
-                  )}
+                  <button
+                    type="button"
+                    className="ai-conversation-select"
+                    aria-current={item.id === activeConversationId ? 'true' : undefined}
+                    disabled={navigationDisabled}
+                    onClick={() => {
+                      onSelectConversation(item.id);
+                      setSideOpen(false);
+                    }}
+                  >
+                    <span className="ai-conversation-name" title={item.title}>
+                      {item.title}
+                    </span>
+                    {searchableHistory && item.summary && (
+                      <span className="ai-conversation-summary" title={item.summary}>
+                        {item.summary}
+                      </span>
+                    )}
+                    {item.updatedAt && (
+                      <Typography.Text type="secondary" className="ai-conversation-date">
+                        {new Date(item.updatedAt).toLocaleDateString('zh-CN')}
+                      </Typography.Text>
+                    )}
+                  </button>
                   <Space size={0} className="ai-conversation-actions">
                     {onRenameConversation && (
                       <Button
@@ -399,32 +454,48 @@ export function AiConversationWorkspace({
                         }}
                       />
                     )}
-                    {onDeleteConversation && (
-                      <Popconfirm
-                        title={`确认删除“${item.title}”？`}
-                        description="删除后对话内容将一并移除。"
-                        okText="删除"
-                        cancelText="取消"
-                        onConfirm={() => {
-                          void Promise.resolve(onDeleteConversation(item)).catch(() => undefined);
-                        }}
-                      >
+                    {onDeleteConversation &&
+                      (searchableHistory ? (
                         <Button
                           type="text"
                           danger
                           size="small"
                           icon={<DeleteOutlined />}
                           aria-label={`删除对话${item.title}`}
-                          onClick={(event) => event.stopPropagation()}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setDeletingConversation(item);
+                          }}
                         />
-                      </Popconfirm>
-                    )}
+                      ) : (
+                        <Popconfirm
+                          title={`确认删除“${item.title}”？`}
+                          description="删除后对话内容将一并移除。"
+                          okText="删除"
+                          cancelText="取消"
+                          onConfirm={() => {
+                            void Promise.resolve(onDeleteConversation(item)).catch(() => undefined);
+                          }}
+                        >
+                          <Button
+                            type="text"
+                            danger
+                            size="small"
+                            icon={<DeleteOutlined />}
+                            aria-label={`删除对话${item.title}`}
+                            onClick={(event) => event.stopPropagation()}
+                          />
+                        </Popconfirm>
+                      ))}
                   </Space>
                 </List.Item>
               )}
             />
           ) : (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无历史对话" />
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={historySearch ? '未找到相关对话' : '暂无历史对话'}
+            />
           )}
         </div>
         {scopeContent && scopePlacement === 'sidebar' && (
@@ -471,7 +542,7 @@ export function AiConversationWorkspace({
           {!messages.length && !loading && (
             <div className="ai-conversation-welcome">
               <span className="ai-conversation-welcome-mark" aria-hidden="true">
-                <RobotOutlined />
+                {welcomeMark ?? <RobotOutlined />}
               </span>
               <Typography.Title level={3}>{welcomeTitle}</Typography.Title>
               <Typography.Paragraph type="secondary">{welcomeDescription}</Typography.Paragraph>
@@ -510,7 +581,7 @@ export function AiConversationWorkspace({
                         <>
                           <div className="ai-message-assistant-heading">
                             <span className="ai-message-assistant-icon" aria-hidden="true">
-                              ✦
+                              <RobotOutlined />
                             </span>
                             <Typography.Text strong className="ai-message-meta">
                               {assistantLabel}
@@ -643,13 +714,24 @@ export function AiConversationWorkspace({
             />
             {compactComposer && (
               <div className="ai-conversation-composer-tools">
-                {scopeContent && scopePlacement === 'composer' && (
-                  <ConversationIconButton
-                    label="选择资料"
-                    name="sources"
-                    onClick={() => setScopeOpen(true)}
-                  />
-                )}
+                {scopeContent &&
+                  scopePlacement === 'composer' &&
+                  (scopeButtonText ? (
+                    <Button
+                      className="ai-composer-scope-button"
+                      type="text"
+                      icon={<ConversationIcon name="sources" />}
+                      onClick={() => setScopeOpen(true)}
+                    >
+                      {scopeButtonText}
+                    </Button>
+                  ) : (
+                    <ConversationIconButton
+                      label="选择资料"
+                      name="sources"
+                      onClick={() => setScopeOpen(true)}
+                    />
+                  ))}
                 {composerActions}
               </div>
             )}
@@ -689,6 +771,24 @@ export function AiConversationWorkspace({
           当前问题将被修改，它原来的回答以及后续 {followingMessageCount} 条消息将从本会话中删除。
         </Typography.Paragraph>
         <Typography.Text type="secondary">此操作不会删除已有的模型调用审计记录。</Typography.Text>
+      </Modal>
+      <Modal
+        title="删除这条对话？"
+        open={Boolean(deletingConversation)}
+        okText="删除"
+        cancelText="取消"
+        confirmLoading={deleteLoading}
+        okButtonProps={{ danger: true }}
+        closable={!deleteLoading}
+        maskClosable={!deleteLoading}
+        keyboard={!deleteLoading}
+        onCancel={() => {
+          if (!deleteLoading) setDeletingConversation(undefined);
+        }}
+        onOk={() => void confirmDelete()}
+      >
+        <Typography.Paragraph>{deletingConversation?.title}</Typography.Paragraph>
+        <Typography.Text type="secondary">删除后对话内容将一并移除。</Typography.Text>
       </Modal>
       <Modal
         title="编辑会话标题"

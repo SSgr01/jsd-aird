@@ -7,8 +7,9 @@
 - `jsd-aird-web`：React 管理端基础外壳。
 - `jsd-aird-api`：Java/Spring Boot 模块化单体。
 - `jsd-aird-ai`：T07-PRE 独立 Python 配方模型计算服务，已完成A.2～A.5算法门禁、适用域、实验优化与分类目标Pipeline。
-- `jsd-aird-agent/control`：原生 Python Harness 控制服务，提供可插拔业务能力包、受控技能读取与工具发现、统一调度、运行预算、审批约束、检查点恢复和 SSE。宿主无关控制层位于 `src/aird_agent/core`，JSD 权限、文献及问答策略通过 `src/aird_agent/hosts/jsd` 与能力包接入；任务账本使用独立 PostgreSQL。Java 宿主负责真实业务权限、检索与成果存储，业务写入仍需相应工具和正式审批接入，不能将旧模拟闭环视为已具备的业务能力。参见 [平台说明](jsd-aird-agent/README.md)与[控制服务说明](jsd-aird-agent/control/README.md)。
-- `jsd-aird-agent/pi-worker`：从固定 `vendor/pi` 子模块源码构建的 Node.js 原生模型执行循环，由 Python Harness 调度，当前不再使用 LangGraph 循环。普通问答可通过现有开关切换 pi 固定生成并保留 Java 历史与消息 ID；文献研究按需调用授权工具，两种策略共用底座但保留独立会话。私有资料及成果回执依赖对应数据库结构和存储配置；Docker 仅用于启用后的隔离沙箱计算，问答与普通工具调用不要求 Docker。参见 [pi 执行器说明](jsd-aird-agent/pi-worker/README.md)、[证据协议](jsd-aird-agent/docs/evidence-protocol.md)、[检索链路说明](jsd-aird-agent/docs/retrieval-pipeline.md)。
+- `vendor/deepseek-harness`：固定 `fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159`（0.2.2-rc.1）的原生模型循环和网页工作台，管理会话、Inbox、计划、文件、附件、预览、压缩及恢复。
+- `jsd-aird-agent/deepseek` 与 `enterprise-plugin`：企业登录网关和独立扩展，在同域 `/agent/` 提供原版工作台，逐次校验身份、权限、版本和预算；原生文件与命令接入现有隔离沙箱及成果服务。
+- `jsd-aird-agent/control`：Python 业务服务，保留 Registry、证据、专业核查、成果登记、操作账本与回执投影；不维护第二套模型循环、队列、计划或检查点。Java 仍负责业务权限、检索、实验草稿与成果存储。参见[架构与启动说明](jsd-aird-agent/README.md)和[接入及验收记录](jsd-aird-agent/docs/deepseek-migration.md)。
 - `compose.yaml`：提供 PostgreSQL 18/pgvector、MinIO、Worker 与 AI 计算服务的容器编排。
 
 T07-A 仅新增算法、适用域、不可变制品和跨语言契约，不接入 T03–T06 尚未合并的客户接口和数据库结构。
@@ -17,7 +18,7 @@ T07-A 仅新增算法、适用域、不可变制品和跨语言契约，不接�
 
 - Java 21
 - Python 3.12（仅在本机运行 `jsd-aird-ai` 时需要）
-- Node.js 22.23.2 或更高版本
+- 普通前端 Node.js 22.23.2 或更高版本；dsh 使用独立 Node 24.11.1、pnpm 11.28.5
 - npm 10+
 - Windows：本机 PostgreSQL 16、17 或 18，以及匹配版本的 pgvector 扩展（推荐 PostgreSQL 18）
 - Linux/CI：Docker Engine 与 Docker Compose v2（可选，不是 Windows 本地开发前置条件）

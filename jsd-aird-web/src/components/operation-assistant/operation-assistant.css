@@ -11,10 +11,16 @@
   height: 48px;
   padding: 0;
   border-radius: 50%;
+  background: #315cf6;
+  color: #ffffff;
   font-weight: 600;
   box-shadow: 0 6px 20px rgb(49 92 246 / 20%);
   cursor: grab;
   touch-action: none;
+}
+.operation-assistant-launcher.ant-btn:not(:disabled):is(:hover, :focus-visible, :active) {
+  background: #315cf6;
+  color: #ffffff;
 }
 .operation-assistant-root.is-dragging,
 .operation-assistant-root.is-dragging * {
@@ -125,7 +131,7 @@
   margin: 0 0 10px;
   font-size: 21px;
   font-weight: 600;
-  letter-spacing: -0.4px;
+  letter-spacing: normal;
   line-height: 1.5;
 }
 .operation-assistant-welcome > p {

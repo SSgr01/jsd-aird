@@ -15,5 +15,8 @@ management:
       show-details: always
 
 app:
+  ai:
+    harness:
+      business-local-access: ${JSD_AIRD_BUSINESS_LOCAL_ACCESS:false}
   worker:
     enabled: ${JSD_AIRD_WORKER_ENABLED:true}

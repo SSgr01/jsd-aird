@@ -257,8 +257,15 @@ public class OptimizationService {
         } catch(IllegalArgumentException ignored) { return false; }
     }
 
-    private JsonNode mergedHistoryDataset(List<UUID> datasetIds) {
-        return mergeHistoryDatasets(datasetIds.stream().map(this::historyDataset).toList());
+    private JsonNode mergedHistoryDataset(List<UUID> datasetIds, JsonNode expectedHashes) {
+        var sources = new ArrayList<JsonNode>();
+        for (var id : datasetIds) {
+            var dataset = historyDataset(id);
+            if (expectedHashes.isObject() && !hashing.hash(dataset).equals(expectedHashes.path(id.toString()).asText()))
+                throw new ApiException(ApiErrorCode.VERSION_CONFLICT, "实验数据在授权读取后发生变化，请重新读取后再提交计算");
+            sources.add(dataset);
+        }
+        return mergeHistoryDatasets(sources);
     }
 
     private List<UUID> requestedHistoryDatasetIds(JsonNode body) {
@@ -330,7 +337,7 @@ public class OptimizationService {
         require(actor,"experiment.view","EXPERIMENT",null,"READ");
         var datasetIds=requestedHistoryDatasetIds(body);var datasetId=datasetIds.getFirst();
         boolean useFrozenRows=previous!=null;
-        var dataset=useFrozenRows?previous.request().path("datasetSnapshot"):mergedHistoryDataset(datasetIds);
+        var dataset=useFrozenRows?previous.request().path("datasetSnapshot"):mergedHistoryDataset(datasetIds,body.path("expectedDatasetHashes"));
         if(!dataset.path("rows").isArray())throw validation("本任务没有保存样品数据，请重新选择数据开始优化");
         var selectedRows=selectedHistoryRows(dataset,body);
         if(selectedRows.isEmpty())throw validation("请至少勾选一条实验记录");

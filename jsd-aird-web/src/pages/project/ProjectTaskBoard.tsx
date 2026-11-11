@@ -1,4 +1,5 @@
-import { Button, DatePicker, Empty, Form, Input, Modal, Popconfirm, Select, Space, Table, message } from 'antd';
+import { FormModal } from '@/components/form-dialog/FormModal';
+import { Button, DatePicker, Empty, Form, Input, Popconfirm, Select, Space, Table, message } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from '@/utils/dayjs';
@@ -276,12 +277,10 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
     </button>)}</div>
     {selected ? <><div className="pm-stage-work-head"><b>当前任务：{selected.name}</b><Can permission="eln.create.create"><Button type="primary" onClick={showExperiment}>＋ 新增实验</Button></Can></div><Table rowKey="id" pagination={false} dataSource={experiments} columns={[{ title: '实验编号', dataIndex: 'experimentNo' }, { title: '实验名称', dataIndex: 'title' }, { title: '日期', dataIndex: 'experimentDate' }, { title: '负责人', dataIndex: 'ownerName' }, { title: '状态', dataIndex: 'status', render: (status: string) => formatExperimentStatus(status) }, { title: '操作', key: 'action', width: 120, fixed: 'right', render: (_, experiment) => <Space className="management-table-actions" size={0}><Button type="link" size="small" onClick={() => nav(`/experiments/${experiment.id}`, { state: { returnTo: `${location.pathname}${location.search}` } })}>查看</Button><Can permission="eln.view.delete"><Popconfirm title="确认删除该实验？" description="删除后实验记录将从列表中移除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true, loading: deletingExperimentId === experiment.id }} onConfirm={() => void deleteExperiment(experiment)}><Button type="link" danger size="small">删除</Button></Popconfirm></Can></Space> }]} /></> : <Empty description="当前阶段暂无任务" />}
 
-    <Modal rootClassName="eln-create-modal" width={598} centered title="新增实验" open={open} closable
+    <FormModal form={form} draft={[createMode, format]} rootClassName="eln-create-modal" width={598} centered title="新增实验" open={open} closable
       styles={{ body: { maxHeight: 'calc(100vh - 240px)', overflowY: 'auto' } }}
-      onCancel={() => setOpen(false)} destroyOnClose footer={<div className="pm-experiment-footer">
-        <Button onClick={() => setOpen(false)}>取消</Button>
-        <Button type="primary" loading={saving} onClick={() => void saveExperiment()}>创建</Button>
-      </div>}>
+      onCancel={() => setOpen(false)} onOk={() => saveExperiment()} confirmLoading={saving} okText="创建" cancelText="取消" destroyOnClose
+      footer={(_, { OkBtn, CancelBtn }) => <div className="pm-experiment-footer"><CancelBtn /><OkBtn /></div>}>
       <div>
         <Form form={form} layout="vertical" requiredMark>
           <div className="eln-create-grid">
@@ -317,13 +316,11 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
           </>
         </Form>
       </div>
-    </Modal>
+    </FormModal>
 
-    <Modal rootClassName="pm-task-modal" width="min(560px,92vw)" title={editingTask ? '编辑项目任务' : '新增项目任务'} open={taskOpen}
-      onCancel={() => setTaskOpen(false)} destroyOnHidden footer={<div className="pm-experiment-footer">
-        <Button onClick={() => setTaskOpen(false)}>取消</Button>
-        <Button type="primary" loading={taskSaving} onClick={() => void saveTask()}>{editingTask ? '保存' : '创建'}</Button>
-      </div>}>
+    <FormModal form={taskForm} rootClassName="pm-task-modal" width="min(560px,92vw)" title={editingTask ? '编辑项目任务' : '新增项目任务'} open={taskOpen}
+      onCancel={() => setTaskOpen(false)} onOk={() => saveTask()} confirmLoading={taskSaving} okText={editingTask ? '保存' : '创建'} cancelText="取消" destroyOnHidden
+      footer={(_, { OkBtn, CancelBtn }) => <div className="pm-experiment-footer"><CancelBtn /><OkBtn /></div>}>
       <div className="pm-task-form-body">
         <Form form={taskForm} layout="vertical" requiredMark={false}>
           <Form.Item name="name" label={<FieldLabel text="任务名称" required />} rules={[{ required: true, message: '请输入任务名称' }, { max: 300 }]}>
@@ -346,7 +343,7 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
           </Form.Item>
         </Form>
       </div>
-    </Modal>
+    </FormModal>
   </div>;
 }
 

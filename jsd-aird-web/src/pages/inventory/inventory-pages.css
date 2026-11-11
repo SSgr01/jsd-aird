@@ -14,7 +14,7 @@
 }
 .inventory-page.pm-unified-list-page .inventory-table-card {
   overflow: hidden;
-  border: 1px solid #e1e7ef;
+  border: 1px solid var(--app-border);
   border-radius: 10px;
   box-shadow: 0 1px 3px rgb(15 23 42 / 4%);
 }
@@ -26,7 +26,7 @@
   padding: 14px 16px;
 }
 .inventory-page.pm-unified-list-page .inventory-table-card .ant-table-wrapper {
-  border-top: 1px solid #e1e7ef;
+  border-top: 1px solid var(--app-border);
 }
 .inventory-heading {
   display: flex;
@@ -58,7 +58,7 @@
   margin: 0 0 6px;
 }
 .inventory-heading p {
-  color: #667085;
+  color: var(--app-text-secondary);
   margin: 0;
 }
 .inventory-summary {
@@ -221,7 +221,7 @@
 
 .shipment-sheet-pagination {
   justify-content: flex-end;
-  color: #475467;
+  color: var(--app-text-secondary);
 }
 .shipment-sheet-scroll {
   max-width: 100%;

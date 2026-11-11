@@ -124,8 +124,8 @@ async def test_stalled_search_allows_new_evidence_but_rejects_fruitless_replays(
     with pytest.raises(HTTPException, match="READ_NO_PROGRESS"):
         await cached_host(runtime, principal, run, "knowledge_search", {"query": "mechanical result"})
     assert runtime.host_call.await_count == count
-    # A different query with the same known evidence is still rejected after
-    # checking its actual result; changing words alone does not establish progress.
+    # The full body has already been returned; renaming the query adds no text.
+    run["evidence_delivery"] = {eid: [[0, len(item["text"])]] for eid, item in run["evidence"].items()}
     with pytest.raises(HTTPException, match="READ_NO_PROGRESS"):
         await cached_host(runtime, principal, run, "knowledge_search", {"query": "same result renamed"})
     runtime.host_call.return_value = {"candidates": [new], "trace": {}}
@@ -154,30 +154,20 @@ async def test_stale_replay_clears_only_navigation_indexes_and_can_restart(princ
     assert "ranking_snapshot" not in runtime.host_call.call_args.args[2]
 
 
-def test_authorized_recovery_retains_handle_indexes_and_policy_without_body_copies():
-    from aird_agent.hosts.jsd.bindings import JsdBindings
 
-    prior = {
-        "ranking_snapshots": {"key": {"handles": []}},
-        "retrieval_policy": {"fingerprint": "one"},
-        "navigation_cache": {},
-    }
-    assert JsdBindings().inherit(prior) == prior
-
-
-async def test_host_query_limit_error_is_actionable_without_forwarding_arbitrary_details(settings, principal):
+async def test_host_forwards_complete_titles_without_a_term_limit(settings, principal):
     import httpx
 
     from aird_agent.hosts.jsd.host import JsdHostGateway
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(
-                400, json={"message": "Use at most eight search terms", "internal": "must not escape"}
-            )
-        )
-    ) as client:
+    query = "Optimization of UV-Curable Polyurethane Acrylate Coatings with Hexagonal Boron Nitride hBN"
+
+    def respond(request):
+        import json
+
+        assert json.loads(request.content)["arguments"]["query"] == query
+        return httpx.Response(200, json={"candidates": []})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         host = JsdHostGateway(settings, client)
-        with pytest.raises(HTTPException, match="RETRIEVAL_QUERY_LIMIT") as caught:
-            await host.call(principal, "knowledge_search", {"query": "long query"})
-        assert "must not escape" not in str(caught.value.detail)
+        assert await host.call(principal, "knowledge_search", {"query": query}) == {"candidates": []}

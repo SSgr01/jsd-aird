@@ -2,10 +2,10 @@
 
 import hashlib
 import json
-from typing import Any, Literal
+from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 
 def digest(value: Any) -> str:
@@ -24,20 +24,9 @@ class Principal(Contract):
     auth_version: int
     username: str
     role: str
+    automation_grant_id: str | None = None
+    scope: str | None = None
 
     @property
     def key(self) -> tuple[str, str]:
         return str(self.organization_id), str(self.actor_id)
-
-
-class ExecutionRequest(Contract):
-    request: str = Field(min_length=1, max_length=12000)
-    conversation_id: UUID | None = None
-    profile: Literal["agent", "fast_qa"] = "agent"
-    pack_ids: list[str] | None = Field(default=None, min_length=1, max_length=16)
-    scope: dict = Field(default_factory=dict)
-    expected_revision: int | None = None
-    resume_from_run_id: UUID | None = None
-    resume_context: Literal["checkpoint", "rebuild"] = "checkpoint"
-    upgrade_capabilities: bool = False
-    resume_queue: bool = False

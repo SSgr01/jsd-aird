@@ -82,22 +82,13 @@ export function DocumentComparisonViewer({ original, result, originalTitle = '�
     setSourceRatio((current) => clamp(current + (event.key === 'ArrowLeft' ? -amount : amount), ratioBounds.min, ratioBounds.max));
   };
 
-  if (narrow) {
-    const showingSource = active === 'source';
-    return <div ref={containerRef} className="knowledge-comparison knowledge-comparison--narrow">
-      <Segmented block value={active} onChange={(value) => setActive(value as Pane)} options={[{ value: 'source', label: '原文件', icon: <FileTextOutlined /> }, { value: 'result', label: '解析结果', icon: <FormOutlined /> }]} />
-      <ComparisonPane title={showingSource ? originalTitle : resultTitle} icon={showingSource ? <FileTextOutlined /> : <FormOutlined />} extra={showingSource ? undefined : resultExtra}>
-        {showingSource ? original : result}
-      </ComparisonPane>
-    </div>;
-  }
-
   const style = {
     '--knowledge-source-fr': `${sourceRatio}fr`,
     '--knowledge-result-fr': `${100 - sourceRatio}fr`,
   } as CSSProperties;
   const rootClassName = [
     'knowledge-comparison',
+    narrow ? 'knowledge-comparison--narrow' : '',
     focusedPane ? `knowledge-comparison--solo-${focusedPane}` : '',
     dragging ? 'knowledge-comparison--dragging' : '',
   ].filter(Boolean).join(' ');
@@ -105,15 +96,19 @@ export function DocumentComparisonViewer({ original, result, originalTitle = '�
 
   const bounds = getRatioBounds(containerWidth);
   return <div ref={containerRef} className={rootClassName} style={style}>
+    <div className="knowledge-comparison-switch" hidden={!narrow}>
+      <Segmented block value={active} onChange={(value) => setActive(value as Pane)} options={[{ value: 'source', label: '原文件', icon: <FileTextOutlined /> }, { value: 'result', label: '解析结果', icon: <FormOutlined /> }]} />
+    </div>
     <ComparisonPane
       id="knowledge-comparison-source"
       title={originalTitle}
       icon={<FileTextOutlined />}
-      hidden={focusedPane === 'result'}
-      focusAction={focusedPane ? restoreAction : <Tooltip title="仅看解析结果"><Button size="small" type="text" aria-label="仅看解析结果" icon={<RightOutlined />} onClick={() => setFocusedPane('result')} /></Tooltip>}
+      hidden={narrow ? active !== 'source' : focusedPane === 'result'}
+      focusAction={narrow ? undefined : focusedPane ? restoreAction : <Tooltip title="仅看解析结果"><Button size="small" type="text" aria-label="仅看解析结果" icon={<RightOutlined />} onClick={() => setFocusedPane('result')} /></Tooltip>}
     >{original}</ComparisonPane>
-    {!focusedPane && <div
+    <div
       className="knowledge-comparison-divider"
+      hidden={narrow || Boolean(focusedPane)}
       role="separator"
       aria-label="调整原文件与解析结果的宽度"
       aria-orientation="vertical"
@@ -130,14 +125,14 @@ export function DocumentComparisonViewer({ original, result, originalTitle = '�
       onLostPointerCapture={() => setDragging(false)}
       onDoubleClick={() => setSourceRatio(clamp(DEFAULT_SOURCE_RATIO, bounds.min, bounds.max))}
       onKeyDown={handleResizeKey}
-    />}
+    />
     <ComparisonPane
       id="knowledge-comparison-result"
       title={resultTitle}
       icon={<FormOutlined />}
       extra={resultExtra}
-      hidden={focusedPane === 'source'}
-      focusAction={focusedPane ? restoreAction : <Tooltip title="仅看原文件"><Button size="small" type="text" aria-label="仅看原文件" icon={<LeftOutlined />} onClick={() => setFocusedPane('source')} /></Tooltip>}
+      hidden={narrow ? active !== 'result' : focusedPane === 'source'}
+      focusAction={narrow ? undefined : focusedPane ? restoreAction : <Tooltip title="仅看原文件"><Button size="small" type="text" aria-label="仅看原文件" icon={<LeftOutlined />} onClick={() => setFocusedPane('source')} /></Tooltip>}
     >{result}</ComparisonPane>
   </div>;
 }

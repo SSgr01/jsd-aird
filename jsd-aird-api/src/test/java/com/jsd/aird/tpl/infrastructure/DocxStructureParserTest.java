@@ -10,7 +10,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jsd.aird.tpl.domain.TemplateFormat;
+import com.jsd.aird.tpl.api.TemplateFormat;
 import org.docx4j.openpackaging.packages.WordprocessingMLPackage;
 import org.junit.jupiter.api.Test;
 

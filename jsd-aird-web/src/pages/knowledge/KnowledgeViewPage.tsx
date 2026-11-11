@@ -1,9 +1,10 @@
+import { FormModal } from '@/components/form-dialog/FormModal';
 import { useListPageBounds } from '@/services/query/use-list-page-bounds';
 import { selectionSnapshot } from '@/services/query/selection-snapshot';
 import { useBusinessQuery } from '@/services/query/use-business-query';
 import { useListKeyword, useListUrl } from '@/services/query/use-list-url';
 import { DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined, FilePdfOutlined, FileWordOutlined, FileExcelOutlined, FolderOpenOutlined, LinkOutlined, RedoOutlined, SearchOutlined, SafetyCertificateOutlined, StopOutlined, TagsOutlined, UndoOutlined, UploadOutlined } from '@ant-design/icons';
-import { App, Button, Dropdown, Empty, Input, Modal, Select, Space, Table, Tag, Tooltip, Typography } from 'antd';
+import { App, Button, Dropdown, Empty, Input, Select, Space, Table, Tag, Tooltip, Typography } from 'antd';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -254,7 +255,7 @@ export function KnowledgeViewPage() {
     />}
     {editingDocument && <KnowledgeDocumentEditor key={editingDocument.id} item={editingDocument} tagOptions={tagOptions} onCancel={() => setEditingDocument(undefined)} onSaved={() => { setEditingDocument(undefined); void load(); }} />}
     {batchTagsOpen && <KnowledgeBatchTagsModal documents={selectedDocuments} tagOptions={tagOptions} onCancel={() => setBatchTagsOpen(false)} onSaved={() => { setBatchTagsOpen(false); void load(); }} />}
-    <Modal open={Boolean(relationEditor)} title="维护知识文档关联项目" width={760} okText="保存" confirmLoading={saving} onCancel={() => setRelationEditor(undefined)} onOk={() => void saveRelations()}>{relationEditor && <ProjectRelationPicker value={relationEditor.targets} onChange={(targets) => setRelationEditor((current) => current ? { ...current, targets } : current)} />}</Modal>
+    <FormModal draft={relationEditor?.targets} open={Boolean(relationEditor)} title="维护知识文档关联项目" width={760} okText="保存" confirmLoading={saving} onCancel={() => setRelationEditor(undefined)} onOk={() => saveRelations()}>{relationEditor && <ProjectRelationPicker value={relationEditor.targets} onChange={(targets) => setRelationEditor((current) => current ? { ...current, targets } : current)} />}</FormModal>
     </> : canReview ? <KnowledgeReviewQueuePage embedded initialStatus={reviewStatus} /> : <Empty description="没有查看或审核知识库的权限" />}
   </div>;
 }

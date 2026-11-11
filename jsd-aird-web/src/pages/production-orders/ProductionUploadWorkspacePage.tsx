@@ -851,7 +851,7 @@ export function ProductionUploadWorkspacePage() {
         className={`workspace-main-stage ${['material', 'attachments'].includes(view) ? 'is-business-tab' : ''}`}
       >
         {isPhoto && !record.selectedTemplateVersionId && !selectedVersion && (
-          <section style={{ padding: 16, borderBottom: '1px solid #f0f0f0' }}>
+          <section style={{ padding: 16, borderBottom: '1px solid var(--app-border)' }}>
             <Alert
               type="info"
               showIcon

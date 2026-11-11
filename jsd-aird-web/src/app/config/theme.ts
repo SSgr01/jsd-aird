@@ -94,5 +94,6 @@ export const appTheme: ThemeConfig = {
     Modal: { borderRadiusLG: 16, titleFontSize: 20, titleLineHeight: 1.4 },
     Form: { labelFontSize: 14, verticalLabelPadding: '0 0 8px', itemMarginBottom: 20 },
     Tag: { defaultBg: '#f7f5f4', defaultColor: '#716d76', borderRadiusSM: 6 },
+    Progress: { defaultColor: '#29282d', remainingColor: '#eeebed' },
   },
 };

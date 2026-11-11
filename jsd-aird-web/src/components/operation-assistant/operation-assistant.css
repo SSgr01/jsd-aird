@@ -11,16 +11,19 @@
   height: 48px;
   padding: 0;
   border-radius: 50%;
-  background: #315cf6;
-  color: #ffffff;
+  border: 1px solid var(--oa-text);
+  background: var(--oa-text);
+  color: var(--oa-surface);
   font-weight: 600;
-  box-shadow: 0 6px 20px rgb(49 92 246 / 20%);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--oa-text) 12%, transparent);
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
   cursor: grab;
   touch-action: none;
 }
 .operation-assistant-launcher.ant-btn:not(:disabled):is(:hover, :focus-visible, :active) {
-  background: #315cf6;
-  color: #ffffff;
+  border-color: var(--oa-muted);
+  background: var(--oa-muted);
+  color: var(--oa-surface);
 }
 .operation-assistant-root.is-dragging,
 .operation-assistant-root.is-dragging * {
@@ -43,8 +46,8 @@
   border-radius: 16px;
   background: var(--oa-surface);
   box-shadow:
-    0 16px 54px rgb(20 33 61 / 15%),
-    0 2px 8px rgb(20 33 61 / 5%);
+    0 16px 54px color-mix(in srgb, var(--oa-text) 12%, transparent),
+    0 2px 8px color-mix(in srgb, var(--oa-text) 4%, transparent);
 }
 
 .operation-assistant-header {

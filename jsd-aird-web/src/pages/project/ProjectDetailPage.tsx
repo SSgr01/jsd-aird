@@ -1,3 +1,4 @@
+import { StatusTag } from '@/components/status/StatusTag';
 import {
   ArrowLeftOutlined,
   BookOutlined,
@@ -20,7 +21,6 @@ import {
   Select,
   Skeleton,
   Tabs,
-  Tag,
   message,
 } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
@@ -353,7 +353,7 @@ export function ProjectDetailPage() {
       <div className="pm-detail-title">
         <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate(returnTo)}>返回</Button>
         <h2>{project.name}</h2>
-        <Tag color="blue">{formatProjectStatus(project.status)}</Tag>
+        <StatusTag status={project.status} label={formatProjectStatus(project.status)} />
         <span className="pm-detail-partner">关联客户：{project.partnerName ?? '—'}</span>
       </div>
 

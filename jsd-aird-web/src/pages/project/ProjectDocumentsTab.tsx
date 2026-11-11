@@ -499,7 +499,7 @@ function NewDocumentModal({ open, projectLabel, projectId, onCancel, onCreate, o
               </Button>
             </Upload>
             {file ? (
-              <div style={{ marginTop: 8, color: uploading ? '#1459d9' : '#52637a' }}>
+              <div style={{ marginTop: 8, color: uploading ? 'var(--app-primary)' : 'var(--app-text-secondary)' }}>
                 {uploading ? '上传中…' : `已选择：${file.name}`}
               </div>
             ) : (

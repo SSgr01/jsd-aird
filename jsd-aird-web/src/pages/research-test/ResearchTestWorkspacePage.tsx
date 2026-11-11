@@ -1,3 +1,4 @@
+import { StatusTag } from '@/components/status/StatusTag';
 import { DocsEditor, SheetsEditor } from '@/features/template-workspace/editor-runtime';
 import { ContentLoading } from '@/components/loading/ContentLoading';
 import { trackSnapshot, useWorkspaceLoadGeneration } from '@/features/template-workspace/workspace-loading';
@@ -415,7 +416,7 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
           <Tag color={versions.length > 0 ? 'blue' : 'default'}>
             {versions.length > 0 ? `V${versions[0]?.versionNo ?? detail.summary.versionNo}` : '未发布'}
           </Tag>
-          <Tag className="research-test-status-tag">{text[detail.summary.status]}</Tag>
+          <StatusTag status={detail.summary.status} label={text[detail.summary.status]} />
         </div>
         <Space className="research-test-workspace-actions" wrap>
           <SaveStateBadge state={saveState} />

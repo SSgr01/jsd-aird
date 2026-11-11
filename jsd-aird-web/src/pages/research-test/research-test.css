@@ -52,7 +52,7 @@
   overflow: hidden;
   border: 1px solid var(--app-border);
   border-radius: 12px;
-  background: #fff;
+  background: var(--app-surface);
 }
 .research-test-batch-row {
   display: flex;
@@ -164,7 +164,7 @@
 .research-test-report-card.is-selected {
   border-color: var(--app-primary);
   background: var(--app-primary-soft);
-  box-shadow: inset 0 0 0 1px rgb(53 111 200 / 8%), var(--app-shadow);
+  box-shadow:var(--app-shadow);
 }
 .research-test-card-head {
   display: flex;
@@ -435,7 +435,7 @@
 }
 .file-preview-list {
   min-height: 110px;
-  border: 1px dashed #d9e2ef;
+  border: 1px dashed var(--app-border);
   border-radius: 10px;
   padding: 6px 14px;
 }
@@ -445,7 +445,7 @@
 .research-test-page .ant-table-wrapper {
   min-width: 0;
   max-width: 100%;
-  background: #fff;
+  background: var(--app-surface);
   border-radius: 12px;
   overflow: hidden;
 }
@@ -585,9 +585,9 @@
   margin-top: 16px;
 }
 .research-test-report-modal .ant-modal-content {
-  border: 1px solid #dbe5f3;
+  border: 1px solid var(--app-border);
   border-radius: 14px;
-  box-shadow: 0 18px 55px rgb(31 62 108 / 18%);
+  box-shadow:var(--app-shadow);
 }
 .research-test-report-modal .ant-modal-header {
   padding: 18px 24px;
@@ -642,25 +642,25 @@
 .research-test-report-modal .research-test-choice-section button {
   min-height: 72px;
   padding: 13px 15px;
-  border-color: #d5e0ef;
+  border-color: var(--app-border);
   border-radius: 10px;
   transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
 }
 .research-test-report-modal .research-test-choice-section button:hover {
-  border-color: #8eaff5;
+  border-color: var(--app-primary);
   background: var(--app-surface-subtle);
 }
 .research-test-report-modal .research-test-choice-section button.active {
   border: 2px solid var(--app-primary);
-  background: #f2f6ff;
-  box-shadow: 0 4px 12px rgb(52 120 246 / 12%);
+  background: var(--app-surface-subtle);
+  box-shadow:var(--app-shadow);
 }
 .research-test-report-modal .research-test-choice-section button > span {
   width: 36px;
   height: 36px;
   margin-right: 12px;
   border-radius: 9px;
-  background: #eaf1ff;
+  background: var(--app-surface-subtle);
   color: var(--app-primary);
   font-size: 15px;
 }
@@ -727,7 +727,7 @@
   font-weight: 600;
 }
 .research-test-choice-section > label i {
-  color: #e5484d;
+  color: var(--app-danger);
   font-style: normal;
 }
 .research-test-choice-section > div {
@@ -741,14 +741,14 @@
   align-items: center;
   min-height: 64px;
   padding: 12px;
-  border: 1px solid #d6e0ef;
+  border: 1px solid var(--app-border);
   border-radius: 9px;
-  background: #fff;
+  background: var(--app-surface);
   text-align: left;
   cursor: pointer;
 }
 .research-test-choice-section button.active {
-  border: 2px solid #678bff;
+  border: 2px solid var(--app-primary);
   background: var(--app-surface-subtle);
 }
 .research-test-choice-section button > span {

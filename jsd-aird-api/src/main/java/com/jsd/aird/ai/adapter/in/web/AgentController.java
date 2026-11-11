@@ -92,12 +92,13 @@ public class AgentController {
         return ResponseFactory.success(research.verify(id, body.path("revision").asLong(), body.path("name").asText(), body.path("status").asText()), RequestIdHolder.currentOrUnknown());
     }
 
-    @RequestMapping(value={"/packs", "/monitor", "/runs", "/runs/{id}", "/runs/{id}/{operation}", "/runs/{id}/operations/{callId}/reconcile", "/conversations", "/conversations/{id}", "/conversations/{id}/messages", "/conversations/{id}/queue", "/conversations/{id}/sources", "/conversations/{id}/sources/oa", "/conversations/{id}/sources/{sid}"},
+    @RequestMapping(value={"/briefings", "/packs", "/monitor", "/runs", "/runs/{id}", "/runs/{id}/{operation}", "/runs/{id}/operations/{callId}/reconcile", "/conversations", "/conversations/{id}", "/conversations/{id}/messages", "/conversations/{id}/queue", "/conversations/{id}/sources", "/conversations/{id}/sources/oa", "/conversations/{id}/sources/{sid}"},
         method={RequestMethod.GET, RequestMethod.POST, RequestMethod.DELETE})
     public Object proxy(HttpServletRequest request, @RequestBody(required=false) JsonNode body) throws Exception {
         requireEnabled();
         var suffix = request.getRequestURI().substring("/api/v1/agents".length());
-        if (!suffix.equals("/packs") && !suffix.equals("/monitor")
+        if (suffix.equals("/briefings") && !"GET".equals(request.getMethod())) throw new ApiException(ApiErrorCode.BAD_REQUEST);
+        if (!suffix.equals("/briefings") && !suffix.equals("/packs") && !suffix.equals("/monitor")
             && !suffix.matches("/(runs|conversations)(/[0-9a-f-]{36})?(/(messages|queue|resume|cancel|workspace|operations|sources)(/oa)?)?")
             && !suffix.matches("/runs/[0-9a-f-]{36}/operations/[A-Za-z0-9_%-]{1,600}/reconcile")
             && !suffix.matches("/conversations/[0-9a-f-]{36}/sources/[0-9a-f-]{36}"))
@@ -108,6 +109,10 @@ public class AgentController {
         if (key != null) builder.header("Idempotency-Key", key);
         builder.header("Content-Type", "application/json").method(request.getMethod(), body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body.toString()));
         var response = http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+        if (suffix.equals("/briefings")) return ResponseEntity.status(response.statusCode())
+            .header(HttpHeaders.CACHE_CONTROL, "no-store")
+            .body(response.statusCode() >= 400 ? mapper.readTree(response.body())
+                : ResponseFactory.success(mapper.readTree(response.body()), RequestIdHolder.currentOrUnknown()));
         if (response.statusCode() >= 400) return ResponseEntity.status(response.statusCode()).body(mapper.readTree(response.body()));
         return ResponseFactory.success(mapper.readTree(response.body()), RequestIdHolder.currentOrUnknown());
     }

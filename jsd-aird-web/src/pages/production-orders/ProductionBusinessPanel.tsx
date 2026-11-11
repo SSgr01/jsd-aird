@@ -409,7 +409,7 @@ export function ProductionBusinessPanel({ value, editable, onChange, onAttachmen
     </Card>}
 
     {showAll && <Card size="small" title="操作留痕">
-      {value.audit.length ? value.audit.slice().reverse().map((item) => <div key={item.id} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}><Typography.Text strong>{item.action}</Typography.Text><Typography.Text type="secondary"> · {item.operator} · {new Date(item.createdAt).toLocaleString('zh-CN')}</Typography.Text><div><Typography.Text type="secondary">{item.detail}</Typography.Text></div></div>) : <Typography.Text type="secondary">暂无业务操作留痕。</Typography.Text>}
+      {value.audit.length ? value.audit.slice().reverse().map((item) => <div key={item.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--app-border)' }}><Typography.Text strong>{item.action}</Typography.Text><Typography.Text type="secondary"> · {item.operator} · {new Date(item.createdAt).toLocaleString('zh-CN')}</Typography.Text><div><Typography.Text type="secondary">{item.detail}</Typography.Text></div></div>) : <Typography.Text type="secondary">暂无业务操作留痕。</Typography.Text>}
     </Card>}
   </Space>;
 }

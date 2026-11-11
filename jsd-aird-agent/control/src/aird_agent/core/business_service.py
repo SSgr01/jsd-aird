@@ -909,6 +909,9 @@ class BusinessService:
             run["active_seconds"] += max(0, time.time() - (run.get("started_at") or time.time()))
             run["started_at"] = None
             run["dsh_completed_turn"] = body.get("turn")
+            if run.get("automation"):
+                from datetime import datetime, timezone
+                run["briefing_completed_at"] = datetime.now(timezone.utc).isoformat()
             await self.store.update(principal, "run", run, conn)
             if hasattr(self, "briefings"):
                 await self.briefings.finish(principal, run, conn)

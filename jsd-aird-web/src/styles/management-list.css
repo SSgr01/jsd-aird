@@ -365,51 +365,6 @@
   color: #595959;
 }
 
-/* Reuse the project list status palette for phase and task status tags. */
-.pm-unified-list-page .ant-tag.pm-status-tag {
-  display: inline-flex;
-  min-height: 24px;
-  align-items: center;
-  margin-inline-end: 0;
-  padding: 0 7px;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  font-size: var(--app-font-size-label);
-  font-weight: 400;
-  line-height: 22px;
-  white-space: nowrap;
-}
-
-.pm-unified-list-page .ant-tag.pm-status-tag.status-cancelled {
-  background: var(--app-danger-soft);
-  border-color: var(--app-border);
-  color: var(--app-danger);
-}
-
-.pm-unified-list-page .ant-tag.pm-status-tag.status-in_progress {
-  background: var(--app-primary-soft);
-  border-color: var(--app-focus-border);
-  color: var(--app-primary);
-}
-
-.pm-unified-list-page .ant-tag.pm-status-tag.status-completed {
-  background: var(--app-success-soft);
-  border-color: var(--app-border);
-  color: var(--app-success);
-}
-
-.pm-unified-list-page .ant-tag.pm-status-tag.status-paused {
-  background: var(--app-warning-soft);
-  border-color: var(--app-border);
-  color: var(--app-warning);
-}
-
-.pm-unified-list-page .ant-tag.pm-status-tag.status-not_started {
-  background: var(--app-surface-active);
-  border-color: var(--app-border-strong);
-  color: var(--app-text-secondary);
-}
-
 .cm-partner-detail-page .pm-tag.status-custom,
 .pm-cr-tab .pm-tag.status-custom {
   background: #f9f0ff;
@@ -963,7 +918,7 @@
 .pm-unified-list-page :is(.pm-table, .cm-table, .quality-grid) tbody > tr[aria-selected='true'] > td,
 .pm-unified-list-page :is(.pm-table, .cm-table, .quality-grid) tbody > tr:has(input[type='checkbox']:checked) > td { background: var(--app-primary-soft); }
 .pm-unified-list-page :is(.pm-table, .cm-table) :is(th, td):first-child { width: 48px; padding-inline: 16px 8px; }
-.pm-unified-list-page :is(.pm-tag, .pm-status-tag, .eln-status, .eln-source-tag, .ant-tag) {
+.pm-unified-list-page :is(.pm-tag, .eln-status, .eln-source-tag, .ant-tag) {
   display: inline-flex;
   min-height: 24px;
   flex: none;
@@ -976,11 +931,11 @@
   line-height: 20px;
   white-space: nowrap;
 }
-.pm-unified-list-page :is(.pm-tag, .pm-status-tag).status-not_started { background: var(--app-row-rule); color: var(--app-text-secondary); }
-.pm-unified-list-page :is(.pm-tag, .pm-status-tag).status-in_progress { background: var(--app-primary-soft); color: var(--app-primary); }
-.pm-unified-list-page :is(.pm-tag, .pm-status-tag).status-completed { background: var(--app-success-soft); color: var(--app-success); }
-.pm-unified-list-page :is(.pm-tag, .pm-status-tag).status-blocked { background: #fff0ee; color: #a3342b; }
-.pm-unified-list-page :is(.pm-tag, .pm-status-tag).priority-medium { background: var(--app-surface-subtle); color: var(--app-text-secondary); }
+.pm-unified-list-page .pm-tag.status-not_started { background: var(--app-row-rule); color: var(--app-text-secondary); }
+.pm-unified-list-page .pm-tag.status-in_progress { background: var(--app-primary-soft); color: var(--app-primary); }
+.pm-unified-list-page .pm-tag.status-completed { background: var(--app-success-soft); color: var(--app-success); }
+.pm-unified-list-page .pm-tag.status-blocked { background: var(--app-warning-soft); color: var(--app-warning); }
+.pm-unified-list-page :is(.pm-tag).priority-medium { background: var(--app-surface-subtle); color: var(--app-text-secondary); }
 .pm-unified-list-page :is(.management-table-actions, .cm-row-actions) { gap: 8px; flex-wrap: nowrap; }
 .pm-unified-list-page :is(.management-table-actions, .cm-row-actions) .ant-btn-link { min-height: 32px; padding-inline: 4px; }
 .pm-unified-list-page :is(.pm-name-link, .cm-name-link) { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }

@@ -1,0 +1,22 @@
+.app-shell .app-status-tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  min-height: 24px;
+  box-sizing: border-box;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--app-text-secondary);
+  background: var(--app-surface-active);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.app-shell .app-status-tag.is-active { color: var(--app-primary); background: var(--app-primary-soft); }
+.app-shell .app-status-tag.is-success { color: var(--app-success); background: var(--app-success-soft); }
+.app-shell .app-status-tag.is-warning { color: var(--app-warning); background: var(--app-warning-soft); }
+.app-shell .app-status-tag.is-danger { color: var(--app-danger); background: var(--app-danger-soft); }
+.app-status-empty { color: var(--app-text-secondary); }

@@ -7,7 +7,7 @@
   height: 74px;
   margin: 0;
   padding: 25px 24px;
-  border-bottom: 1px solid #dfe7f1;
+  border-bottom: 1px solid var(--app-border);
 }
 .cm-prototype-modal .ant-modal-title {
   font-size: 20px;
@@ -19,14 +19,14 @@
   max-height: 696px;
   padding: 20px 24px;
   overflow: auto;
-  background: #f5f8fc;
+  background: var(--app-surface-subtle);
 }
 .cm-prototype-modal .ant-modal-footer {
   height: 64px;
   margin: 0;
   padding: 14px 24px;
-  border-top: 1px solid #dfe7f1;
-  background: #fff;
+  border-top: 1px solid var(--app-border);
+  background: var(--app-surface);
 }
 .cm-modal-columns {
   display: grid;
@@ -36,10 +36,10 @@
 .cm-modal-panel {
   min-width: 0;
   padding: 18px;
-  background: #fff;
-  border: 1px solid #d7e2ef;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
   border-radius: 10px;
-  box-shadow: 0 2px 6px rgba(40, 65, 95, 0.04);
+  box-shadow:var(--app-shadow);
 }
 .cm-modal-panel h3 {
   margin: 0;
@@ -47,7 +47,7 @@
 }
 .cm-modal-panel p {
   margin: 3px 0 15px;
-  color: #61738b;
+  color: var(--app-text-secondary);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -67,7 +67,7 @@
   margin-bottom: 15px;
   padding: 15px;
   background: var(--app-surface-subtle);
-  border: 1px solid #dbe5f1;
+  border: 1px solid var(--app-border);
   border-radius: 9px;
 }
 .cm-related-empty {
@@ -75,9 +75,9 @@
   min-height: 66px;
   align-items: center;
   justify-content: center;
-  color: #8b9bb0;
+  color: var(--app-text-secondary);
   font-size: 13px;
-  border: 1px dashed #d5e2f2;
+  border: 1px dashed var(--app-border);
   border-radius: 9px;
 }
 .cm-repeat-title {
@@ -87,7 +87,7 @@
 .cm-repeat-card label {
   display: block;
   margin-bottom: 12px;
-  color: #51657e;
+  color: var(--app-text-secondary);
   font-size: 12px;
 }
 .cm-repeat-card label .ant-input,
@@ -112,12 +112,12 @@
 .cm-form-modal .ant-modal-body,
 .cm-follow-modal .ant-modal-body {
   padding: 24px;
-  background: #fff;
+  background: var(--app-surface);
 }
 .cm-form-modal h4 {
   margin: 0 0 12px;
   padding-bottom: 10px;
-  border-bottom: 1px solid #dbe4ef;
+  border-bottom: 1px solid var(--app-border);
 }
 .cm-form-modal h4:not(:first-child) {
   margin-top: 6px;
@@ -141,7 +141,7 @@
 }
 .cm-required::before {
   content: '*';
-  color: #ff4d4f;
+  color: var(--app-danger);
   margin-right: 4px;
   font-weight: bold;
 }
@@ -151,7 +151,7 @@
 .cm-prototype-modal .ant-input,
 .cm-prototype-modal .ant-select-selector,
 .cm-prototype-modal .ant-picker {
-  border-color: #cbdbee;
+  border-color: var(--app-border);
   border-radius: 7px;
 }
 .cm-customer-columns {
@@ -169,12 +169,12 @@
   cursor: pointer;
 }
 .cm-customer-modal .cm-repeat-subtitle {
-  color: #8b9bb0;
+  color: var(--app-text-secondary);
   font-size: 12px;
 }
 .cm-customer-modal .cm-repeat-chevron {
   margin-left: 4px;
-  color: #8b9bb0;
+  color: var(--app-text-secondary);
   font-size: 12px;
   transition: transform 0.2s;
 }
@@ -189,7 +189,7 @@
   display: block;
   min-width: 0;
   margin-bottom: 12px;
-  color: #51657e;
+  color: var(--app-text-secondary);
   font-size: 12px;
 }
 .cm-modal-panel > label .ant-input,
@@ -200,19 +200,19 @@
   width: 100%;
 }
 .cm-customer-modal .cm-modal-panel .ant-select-selector {
-  border-color: #cbdbee;
+  border-color: var(--app-border);
   border-radius: 7px;
 }
 .cm-repeat-card .cm-repeat-title-text {
   cursor: pointer;
 }
 .cm-repeat-subtitle {
-  color: #8b9bb0;
+  color: var(--app-text-secondary);
   font-size: 12px;
 }
 .cm-repeat-chevron {
   margin-left: 6px;
-  color: #8b9bb0;
+  color: var(--app-text-secondary);
   font-size: 12px;
   transition: transform 0.2s;
 }
@@ -226,7 +226,7 @@
 }
 .cm-repeat-caret {
   margin-left: 4px;
-  color: #8b9bb0;
+  color: var(--app-text-secondary);
   font-size: 12px;
 }
 .cm-repeat-card .cm-form-grid {

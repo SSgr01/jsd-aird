@@ -93,7 +93,7 @@ export function QuotationEditForm({ detail, saving, onCancel, onSave, cellChange
       Array.isArray(value) && value.length > 0
         ? Promise.resolve()
         : Promise.reject(new Error('至少保留一条报价明细')) }]}>{(fields, { add, remove }, { errors }) => <>
-      {fields.map((field, index) => <div key={field.key} style={{ borderTop: '1px solid #ddd', paddingTop: 12, marginTop: 12 }}>
+      {fields.map((field, index) => <div key={field.key} style={{ borderTop: '1px solid var(--app-border)', paddingTop: 12, marginTop: 12 }}>
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
           <Typography.Text strong>第 {index + 1} 条</Typography.Text>
           <Button icon={<DeleteOutlined />} aria-label="删除明细" onClick={() => remove(field.name)} />

@@ -1,3 +1,4 @@
+import { StatusTag } from '@/components/status/StatusTag';
 import { AppstoreOutlined, ReloadOutlined, SearchOutlined, UnorderedListOutlined } from '@ant-design/icons';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -56,16 +57,6 @@ function priorityColor(value?: ProjectPriority) {
   return value === 'HIGH' ? 'red' : value === 'MEDIUM' ? 'gold' : value === 'LOW' ? 'green' : 'default';
 }
 
-function statusTagClass(value?: string) {
-  const normalized = value === 'COMPLETED'
-    ? 'completed'
-    : value === 'IN_PROGRESS'
-      ? 'in_progress'
-      : value === 'CANCELLED'
-        ? 'cancelled'
-        : 'not_started';
-  return `pm-status-tag status-${normalized}`;
-}
 
 export default function TaskPage() {
   const navigate = useNavigate();
@@ -254,7 +245,7 @@ export default function TaskPage() {
       width: 110,
       render: (value: string) => {
         const label = formatTaskStatus(value);
-        return <Tag className={statusTagClass(value)}>{label}</Tag>;
+        return <StatusTag status={value} label={label} />;
       },
     },
     {
@@ -390,7 +381,7 @@ export default function TaskPage() {
                     </div>
                     <div className="pm-card-tags">
                       {task.priority && <Tag color={priorityColor(task.priority)}>{formatProjectPriority(task.priority)}</Tag>}
-                      <Tag className={statusTagClass(task.status)}>{formatTaskStatus(task.status)}</Tag>
+                      <StatusTag status={task.status} label={formatTaskStatus(task.status)} />
                     </div>
                   </div>
                   <div className="pm-card-info-grid">

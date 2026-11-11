@@ -1,3 +1,4 @@
+import { StatusTag } from '@/components/status/StatusTag';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import {
   CopyOutlined,
@@ -16,7 +17,7 @@ import {
 } from '@ant-design/icons';
 import {
   App, Button, DatePicker, Dropdown, Empty, Form, Input, Modal, Radio,
-  Select, Space, Table, Tag, Typography,
+  Select, Space, Table, Typography,
 } from 'antd';
 import type { TableColumnsType, TablePaginationConfig } from 'antd';
 import type { RangePickerProps } from 'antd/es/date-picker';
@@ -48,10 +49,9 @@ function templateStatus(record: TemplateListItem) {
   const hasUnpublishedChanges = record.hasDraft && record.status !== 'DRAFT';
   const reviewStatus = record.hasDraft ? record.draftReviewStatus : undefined;
   const reviewLabel = reviewStatus === 'SUBMITTED' ? '待审核' : reviewStatus === 'APPROVED' ? '审核通过' : reviewStatus === 'REJECTED' ? '已退回' : '草稿';
-  const reviewColor = reviewStatus === 'SUBMITTED' ? 'processing' : reviewStatus === 'APPROVED' ? 'success' : reviewStatus === 'REJECTED' ? 'error' : 'gold';
   return <Space size={4} wrap>
-    {record.status !== 'DRAFT' && <Tag color={statusLabels[record.status].color}>{statusLabels[record.status].label}</Tag>}
-    {(record.status === 'DRAFT' || hasUnpublishedChanges) && <Tag color={reviewColor}>{reviewLabel}</Tag>}
+    {record.status !== 'DRAFT' && <StatusTag status={record.status} label={statusLabels[record.status].label} />}
+    {(record.status === 'DRAFT' || hasUnpublishedChanges) && <StatusTag status={reviewStatus || 'DRAFT'} label={reviewLabel} />}
   </Space>;
 }
 

@@ -1,3 +1,4 @@
+import { StatusTag } from '@/components/status/StatusTag';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { DocsEditor, SheetsEditor } from '@/features/template-workspace/editor-runtime';
 import { ContentLoading } from '@/components/loading/ContentLoading';
@@ -444,9 +445,8 @@ export function ProductionWorkspacePage() {
             <small className="binding-path">{workspace.templateName}</small>
           </span>
           <Tag color={workspace.format === 'XLSX' ? 'green' : 'blue'}>{workspace.format === 'XLSX' ? 'Excel' : 'Word'}</Tag>
-          <Tag color={workspace.status === 'DRAFT' ? 'processing' : workspace.status === 'SUBMITTED' ? 'success' : 'default'}>
-            {workspace.status === 'DRAFT' ? '填写中' : workspace.status === 'SUBMITTED' ? '已提交' : '已取消'}
-          </Tag>
+          <StatusTag status={workspace.status} tone={workspace.status === 'DRAFT' ? 'active' : workspace.status === 'SUBMITTED' ? 'success' : 'neutral'}
+            label={workspace.status === 'DRAFT' ? '填写中' : workspace.status === 'SUBMITTED' ? '已提交' : '已取消'} />
         </Space>
         <Space className="production-workspace-actions" wrap>
           {dirty && <Typography.Text type="warning">有未保存内容</Typography.Text>}

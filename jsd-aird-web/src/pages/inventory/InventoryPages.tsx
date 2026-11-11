@@ -1,3 +1,4 @@
+import { StatusTag } from '@/components/status/StatusTag';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { ArrowLeftOutlined, CheckOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
 import {
@@ -1575,7 +1576,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
               </Button>
             ) },
             { title: '状态', dataIndex: 'status', render: (status: string) =>
-              <Tag color={status === 'COMPLETED' ? 'success' : 'processing'}>{status === 'COMPLETED' ? '已完成' : '未完成'}</Tag> },
+              <StatusTag status={status} label={status === 'COMPLETED' ? '已完成' : '未完成'} /> },
             { title: '产品名称', dataIndex: 'productName' },
             { title: '总数量（KG）', dataIndex: 'quantityKg', align: 'right', render: (v?: number) => kgNumber(v) },
             {
@@ -1618,7 +1619,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
               </Button>
             ) },
             { title: '状态', dataIndex: 'status', render: (v: string) =>
-              <Tag color={v === 'COMPLETED' ? 'success' : 'processing'}>{v === 'COMPLETED' ? '已完成' : '未完成'}</Tag> },
+              <StatusTag status={v} label={v === 'COMPLETED' ? '已完成' : '未完成'} /> },
             {
               title: '库存类型',
               dataIndex: 'scope',

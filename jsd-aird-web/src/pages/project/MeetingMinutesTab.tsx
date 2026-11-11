@@ -168,7 +168,7 @@ export function MeetingMinutesTab({ projectId }: Props) {
         <div className="pm-mm-empty">加载中…</div>
       ) : sortedItems.length === 0 ? (
         <div className="pm-mm-empty">
-          <FileTextOutlined style={{ fontSize: 28, color: '#bfbfbf' }} />
+          <FileTextOutlined style={{ fontSize: 28, color: 'var(--app-text-secondary)' }} />
           <div>暂无会议纪要</div>
         </div>
       ) : (
@@ -188,7 +188,7 @@ export function MeetingMinutesTab({ projectId }: Props) {
 
               {(item.attendees ?? []).length > 0 ? (
                 <div className="pm-mm-attendees">
-                  <TeamOutlined style={{ marginRight: 6, color: '#8c8c8c' }} />
+                  <TeamOutlined style={{ marginRight: 6, color: 'var(--app-text-secondary)' }} />
                   {item.attendees.join('、')}
                 </div>
               ) : null}

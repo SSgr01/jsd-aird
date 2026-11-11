@@ -1,3 +1,4 @@
+import { StatusTag } from '@/components/status/StatusTag';
 import { ListFeedback } from '@/components/loading/ListQueryFeedback';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import {
@@ -675,9 +676,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         dataIndex: 'status',
         width: report ? 110 : 105,
         render: (v: string) => (
-          <Tag color={v === 'PUBLISHED' ? 'green' : v === 'PENDING_REVIEW' ? 'orange' : 'blue'}>
-            {statusText[v] || v}
-          </Tag>
+          <StatusTag status={v} label={statusText[v]} />
         ),
       },
       {
@@ -947,7 +946,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
                   title={<span title={r.name}>{r.name}</span>}
                   extra={
                     <Space size={8}>
-                      <Tag>{statusText[r.status]}</Tag>
+                      <StatusTag status={r.status} label={statusText[r.status]} />
                       <Checkbox
                         checked={selected.includes(r.id)}
                         onChange={() =>
@@ -1445,17 +1444,7 @@ function ResearchTestReportCard({
         </div>
       </div>
       <div className="research-test-card-tags">
-        <Tag
-          color={
-            row.status === 'PUBLISHED'
-              ? 'green'
-              : row.status === 'PENDING_REVIEW'
-                ? 'orange'
-                : 'blue'
-          }
-        >
-          {statusText[row.status] || row.status}
-        </Tag>
+        <StatusTag status={row.status} label={statusText[row.status]} />
         <Tag>{row.documentFormat === 'EXCEL' ? 'Excel' : 'Word'}</Tag>
       </div>
       <div className="research-test-card-actions">

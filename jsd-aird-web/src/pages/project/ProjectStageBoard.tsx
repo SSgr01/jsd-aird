@@ -1,3 +1,4 @@
+import { StatusTag } from '@/components/status/StatusTag';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { ArrowLeftOutlined, ArrowRightOutlined, DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import { Alert, Button, DatePicker, Empty, Form, Input, Popconfirm, Select, Skeleton, Space, Tag, message } from 'antd';
@@ -242,10 +243,7 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
                   <Tag>阶段{stage.orderNo}</Tag>
                 </div>
                 <div className="pm-stage-card-body">
-                  <span className="pm-stage-status">
-                    <span className={`pm-dot pm-dot-${stage.status.toLowerCase()}`} />
-                    {formatStageStatus(stage.status)}
-                  </span>
+                  <StatusTag status={stage.status} label={formatStageStatus(stage.status)} />
                   <b>{stage.taskCount}任务</b>
                 </div>
                 <div className="pm-stage-card-stats">

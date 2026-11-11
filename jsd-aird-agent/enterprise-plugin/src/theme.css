@@ -370,3 +370,10 @@ body[data-jsd-workbench] .jsd-cited-answer a[data-jsd-citation] {
 }
 body[data-jsd-workbench] .jsd-cited-answer a[data-jsd-citation] > svg { display: none; }
 body[data-jsd-workbench] .jsd-cited-answer a[data-jsd-citation]:hover { color: var(--dsw-alias-label-primary, inherit); text-decoration: none; }
+body[data-jsd-workbench] .jsd-briefing-period,
+body[data-jsd-workbench] .jsd-briefing-entry-error {
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

@@ -212,6 +212,11 @@ def create_app(settings=None, store=None, service=None):
         await service.authorized_topic(user, run, execution=False)
         return public_run(run)
 
+    @app.get(PREFIX + "/briefings")
+    async def briefing_cards(user=Depends(principal)):
+        from aird_agent.hosts.jsd.briefing_cards import cards
+        return await cards(service, user)
+
     @app.get(PREFIX + "/monitor")
     async def runtime_monitor(user=Depends(principal)):
         return await monitor(service, user)
@@ -304,6 +309,11 @@ def create_app(settings=None, store=None, service=None):
             return await service.briefings.install(user)
         if action == "builtin-state":
             return await service.briefings.owner(user)
+        if action == "briefing-open":
+            if user.automation_grant_id:
+                raise HTTPException(403, "INTERACTIVE_AUTHORIZATION_REQUIRED")
+            from aird_agent.hosts.jsd.briefing_cards import open_result
+            return await open_result(service, user, body.get("kind"), body.get("run_id"))
         if action == "builtin-pending":
             return await service.briefings.pending(user)
         if action == "builtin-sync":

@@ -1,16 +1,7 @@
 import {
   AppstoreOutlined,
-  BellOutlined,
-  DatabaseOutlined,
-  FileTextOutlined,
-  FolderOutlined,
-  HistoryOutlined,
   ProjectOutlined,
-  ScheduleOutlined,
-  UnorderedListOutlined,
 } from '@ant-design/icons';
-import { Button, Tooltip } from 'antd';
-import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useMemo } from 'react';
 import { useBusinessQuery } from '@/services/query/use-business-query';
@@ -18,16 +9,13 @@ import { useBusinessQuery } from '@/services/query/use-business-query';
 import { inventoryApi } from '@/services/inventory/inventory-api';
 import { listExperiments, type ExperimentSummary } from '@/services/experiments/experiment-api';
 import { getProjects, getTasks } from '@/services/project/project-api';
-import { DashboardQuickAction } from './DashboardQuickAction';
+import { ResearchBriefings } from './ResearchBriefings';
 import './dashboard-prototype.css';
 
 interface StatMetric {
   key: string;
   label: string;
   value: number;
-  icon: ReactNode;
-  tint: string;
-  bg: string;
   to: string;
 }
 
@@ -54,54 +42,36 @@ const DASHBOARD_STATS: StatMetric[] = [
     label: '我的项目',
     value: 0,
     to: '/projects/list',
-    icon: <FolderOutlined />,
-    tint: 'var(--app-primary)',
-    bg: 'var(--app-primary-soft)',
   },
   {
     key: 'tasks',
     label: '我的任务',
     value: 0,
     to: '/projects/tasks',
-    icon: <UnorderedListOutlined />,
-    tint: 'var(--app-violet)',
-    bg: 'var(--app-violet-soft)',
   },
   {
     key: 'experiments',
     label: '最近实验',
     value: 0,
     to: '/experiments/list',
-    icon: <HistoryOutlined />,
-    tint: 'var(--app-primary)',
-    bg: 'var(--app-primary-soft)',
   },
   {
     key: 'pending-review',
     label: '待审核',
     value: 0,
     to: '/experiments/list?status=PENDING_REVIEW',
-    icon: <ScheduleOutlined />,
-    tint: 'var(--app-warning)',
-    bg: 'var(--app-warning-soft)',
   },
   {
     key: 'to-be-filled',
     label: '待完善',
     value: 0,
     to: '/experiments/list?status=RETURNED',
-    icon: <FileTextOutlined />,
-    tint: 'var(--app-success)',
-    bg: 'var(--app-success-soft)',
   },
   {
     key: 'inventory',
     label: '库存/复用',
     value: 0,
     to: '/inventory/query',
-    icon: <DatabaseOutlined />,
-    tint: 'var(--app-text-secondary)',
-    bg: 'var(--app-surface-subtle)',
   },
 ];
 
@@ -172,11 +142,10 @@ function experimentItem(item: ExperimentSummary): DashboardModuleItem {
 
 function MetricCard({ metric }: { metric: StatMetric }) {
   return (
-    <Link to={metric.to} className="dashboard-stat" style={{ ['--stat-tint' as string]: metric.tint, ['--stat-bg' as string]: metric.bg }}>
-      <div className="dashboard-stat-icon">{metric.icon}</div>
+    <Link to={metric.to} className="dashboard-stat">
       <div className="dashboard-stat-body">
-        <div className="dashboard-stat-value">{fmtNumber(metric.value)}</div>
         <div className="dashboard-stat-label">{metric.label}</div>
+        <div className="dashboard-stat-value">{fmtNumber(metric.value)}</div>
       </div>
     </Link>
   );
@@ -277,16 +246,10 @@ export function DashboardPage() {
       <header className="dashboard-page-head">
         <div>
           <h2 className="dashboard-page-title">工作台</h2>
-          <p className="dashboard-page-desc">聚合我的研发事项，所有处理均在原业务模块完成。</p>
+          <p className="dashboard-page-desc">看清今天的重点，把研判接到行动。</p>
         </div>
         <div className="dashboard-page-extra">
-          <span className="dashboard-page-username">张伟 · 研发工程师</span>
-          <Tooltip title="通知中心">
-            <Button shape="circle" icon={<BellOutlined />} aria-label="通知" />
-          </Tooltip>
-          <Tooltip title="近期活动">
-            <Button shape="circle" icon={<HistoryOutlined />} aria-label="近期活动" />
-          </Tooltip>
+          <time className="dashboard-page-date">{new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())}</time>
         </div>
       </header>
 
@@ -296,23 +259,19 @@ export function DashboardPage() {
         ))}
       </section>
 
+      <ResearchBriefings />
+
       <section className="dashboard-modules">
         <div className="dashboard-modules-row dashboard-modules-row-primary">
-          <ModuleCard module={dashboardModules[0]!} />
+          {[dashboardModules[0]!, dashboardModules[4]!, dashboardModules[5]!].map(module => <ModuleCard key={module.key} module={module} />)}
         </div>
         <div className="dashboard-modules-row dashboard-modules-row-secondary">
           {dashboardModules.slice(1, 4).map((m) => (
             <ModuleCard key={m.key} module={m} />
           ))}
         </div>
-        <div className="dashboard-modules-row dashboard-modules-row-tertiary">
-          {dashboardModules.slice(4).map((m) => (
-            <ModuleCard key={m.key} module={m} />
-          ))}
-        </div>
       </section>
 
-      <DashboardQuickAction />
 
       <div className="dashboard-page-footer" aria-hidden="true">
         <ProjectOutlined /> <span>研发数据中台 · 一站式工作台</span>

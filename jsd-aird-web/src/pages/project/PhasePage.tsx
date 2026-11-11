@@ -1,5 +1,6 @@
+import { StatusTag } from '@/components/status/StatusTag';
 import { AppstoreOutlined, ReloadOutlined, SearchOutlined, UnorderedListOutlined } from '@ant-design/icons';
-import { Button, DatePicker, Empty, Input, Pagination, Popconfirm, Progress, Select, Space, Spin, Table, Tag, Tooltip, message } from 'antd';
+import { Button, DatePicker, Empty, Input, Pagination, Popconfirm, Progress, Select, Space, Spin, Table, Tooltip, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -17,10 +18,6 @@ const PAGE_SIZE_OPTIONS = [10, 20, 30, 50];
 type RangeValue = Parameters<NonNullable<React.ComponentProps<typeof DatePicker.RangePicker>['onChange']>>[0];
 type ViewMode = 'card' | 'list';
 
-function statusTagClass(status: StageStatus) {
-  const normalized = status === 'PENDING' ? 'not_started' : status.toLowerCase();
-  return `pm-status-tag status-${normalized}`;
-}
 
 export function PhasePage() {
   const navigate = useNavigate();
@@ -88,9 +85,9 @@ export function PhasePage() {
     { title: '进度', key: 'progress', width: 160, render: (_, row) => {
       const completed = Math.max(0, row.taskCount - row.openTaskCount);
       const percent = row.taskCount > 0 ? Math.round((completed / row.taskCount) * 100) : 0;
-      return <Progress percent={percent} size="small" strokeColor="#1677ff" />;
+      return <Progress percent={percent} size="small" />;
     } },
-    { title: '状态', dataIndex: 'status', width: 110, render: (value: StageStatus) => <Tag className={statusTagClass(value)}>{formatStageStatus(value)}</Tag> },
+    { title: '状态', dataIndex: 'status', width: 110, render: (value: StageStatus) => <StatusTag status={value} label={formatStageStatus(value)} /> },
     { title: '操作', key: 'actions', width: 120, render: (_, row) => (
       <Space className="management-table-actions" size={0}>
         <Button type="link" onClick={() => navigate(`/projects/${row.projectId}?section=stages&stageId=${row.id}`)}>查看</Button>
@@ -165,7 +162,7 @@ export function PhasePage() {
                         </h4>
                         <div className="pm-card-code">{row.stageCode}</div>
                       </div>
-                      <Tag className={statusTagClass(row.status)}>{formatStageStatus(row.status)}</Tag>
+                      <StatusTag status={row.status} label={formatStageStatus(row.status)} />
                     </div>
                     <div className="pm-card-info-grid">
                       <div className="pm-card-info-item">
@@ -187,7 +184,7 @@ export function PhasePage() {
                     </div>
                     <div className="pm-phase-card-progress">
                       <div><span>任务进度</span><strong>{completed} / {row.taskCount}</strong></div>
-                      <Progress percent={percent} size="small" strokeColor="#1677ff" />
+                      <Progress percent={percent} size="small" />
                     </div>
                     <div className="pm-card-actions">
                       <Button type="link" onClick={() => navigate(`/projects/${row.projectId}?section=stages&stageId=${row.id}`)}>查看</Button>

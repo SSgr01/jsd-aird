@@ -1,0 +1,45 @@
+.research-briefings { margin: 24px 0 28px; }
+.research-briefings-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
+.research-briefings-heading h2 { margin: 0; font-size: 17px; font-weight: 600; }
+.research-briefings-heading > span { font-size: 12px; color: var(--app-text-secondary); }
+.research-briefings-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: 18px; }
+.research-briefings-secondary { display: grid; grid-template-rows: repeat(2, auto); border: 1px solid var(--app-border); border-radius: var(--app-radius-card); overflow: hidden; }
+.research-briefings-secondary > article + article { border-top: 1px solid var(--app-row-rule); }
+.research-briefing { min-width: 0; display: flex; flex-direction: column; padding: 22px; background: var(--app-surface); }
+.research-briefing-main { background: var(--app-surface-subtle); border-radius: var(--app-radius-card); padding: 26px; }
+.research-briefing-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; font-size: 12px; color: var(--app-text-secondary); }
+.research-briefing-meta > span:first-child { color: var(--app-text); }
+.research-briefing h3 { margin: 14px 0 8px; font-size: 16px; line-height: 1.7; font-weight: 500; text-wrap: pretty; overflow-wrap: anywhere; }
+.research-briefing-main h3 { font-size: 22px; letter-spacing: -.3px; }
+.research-briefing-summary { margin: 0; color: var(--app-text-secondary); font-size: 13px; line-height: 1.9; overflow-wrap: anywhere; }
+.research-briefing-status { margin: 12px 0 0; color: var(--app-warning); font-size: 12px; line-height: 1.7; }
+.research-briefing-actions { list-style: none; padding: 0; margin: 20px 0 0; }
+.research-briefing-actions li { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid var(--app-row-rule); padding: 13px 0; font-size: 13px; line-height: 1.8; }
+.research-briefing-actions li > span { min-width: 0; overflow-wrap: anywhere; }
+.research-briefing-actions a { flex-shrink: 0; font-size: 12px; color: var(--app-text); }
+.research-briefing-footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 14px; margin-top: auto; padding-top: 20px; }
+.research-briefing-footer time, .research-briefing-pending { color: var(--app-text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.research-briefing-primary, .research-briefing-link { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; }
+.research-briefing-primary { background: var(--app-text); color: var(--app-surface); border-radius: var(--app-radius-control); padding: 8px 14px; transition: opacity .15s ease; }
+.research-briefing-primary:hover { opacity: .85; color: var(--app-surface); }
+.research-briefing-link { color: var(--app-text); }
+.research-briefing-link:hover, .research-briefing-actions a:hover { color: var(--app-primary); text-decoration: underline; text-underline-offset: 4px; }
+.research-briefing a:focus-visible { outline: 2px solid var(--app-primary); outline-offset: 4px; }
+.research-briefings-loading, .research-briefings-error { padding: 24px; background: var(--app-surface-subtle); border-radius: var(--app-radius-card); }
+.research-briefings-error { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; color: var(--app-text-secondary); }
+@media (max-width: 1000px) {
+  .research-briefings-grid { grid-template-columns: minmax(0, 1fr); }
+  .research-briefings-secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto; }
+  .research-briefings-secondary > article + article { border-top: 0; border-left: 1px solid var(--app-row-rule); }
+}
+@media (max-width: 580px) {
+  .research-briefings-heading { align-items: flex-start; }
+  .research-briefings-heading > span { padding-top: 3px; white-space: nowrap; font-size: 11px; }
+  .research-briefings-heading h2 { font-size: 16px; }
+  .research-briefing, .research-briefing-main { padding: 18px; }
+  .research-briefing-main h3 { font-size: 19px; }
+  .research-briefings-secondary { grid-template-columns: minmax(0, 1fr); }
+  .research-briefings-secondary > article + article { border-left: 0; border-top: 1px solid var(--app-row-rule); }
+  .research-briefing-actions li { gap: 10px; }
+}
+@media (prefers-reduced-motion: reduce) { .research-briefing-primary { transition: none; } }

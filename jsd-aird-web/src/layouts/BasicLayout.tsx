@@ -13,6 +13,7 @@ import {
   BankOutlined,
   CheckSquareOutlined,
   SafetyCertificateOutlined,
+  ReconciliationOutlined,
   PartitionOutlined,
   ProjectOutlined,
   UnorderedListOutlined,
@@ -89,7 +90,7 @@ const route = {
     {
       path: '/research-test-root',
       name: '研发测试中心',
-      icon: <SafetyCertificateOutlined />,
+      icon: <ReconciliationOutlined />,
       routes: [
         { path: '/research-test/upload', name: '报告上传', icon: <UploadOutlined /> },
         { path: '/research-test/reports', name: '报告查看', icon: <EyeOutlined /> },

@@ -4,6 +4,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
   const enterpriseTheme = /* @enterprise-theme */ null;
   const sourceLinks = /* @source-links */ null;
   const memoryUI = /* @memory-ui */ null;
+  const briefingEntry = /* @briefing-entry */ null;
   const base = '/agent/';
   async function api(action, body, signal) {
     const response = await fetch(base + 'business/' + action, { method: 'POST',
@@ -15,6 +16,39 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
     return response.json();
   }
   const button = (label, onClick, more = {}) => h('button', { type: 'button', onClick, ...more }, label);
+  function registerBriefingNavigation(scope) {
+    const request=briefingEntry.readBriefingEntry(location.href);
+    let entry=null;
+    const listeners=new Set();
+    const subscribe=callback=>{listeners.add(callback);return ()=>listeners.delete(callback);};
+    const snapshot=()=>entry;
+    function Launch() {
+      const [error,setError]=useState(false);
+      useEffect(()=>{
+        if(!request)return;
+        const controller=new AbortController();
+        api('briefing-open',request,controller.signal).then(value=>{
+          if(controller.signal.aborted)return;
+          entry=value;listeners.forEach(callback=>callback());
+          scope.uiWorkspace.openSession(value.session_id);
+        }).catch(()=>{if(!controller.signal.aborted)setError(true);});
+        return ()=>controller.abort();
+      },[]);
+      return h('div',null,h('h1',{className:'jsd-page-title'},'AI工作台'),
+        error && h('span',{role:'alert',className:'jsd-briefing-entry-error'},'该期简报暂不可用，请返回工作台刷新。'));
+    }
+    function Period({useSession}) {
+      const selected=useSession(value=>value.sessionId);
+      const value=React.useSyncExternalStore(subscribe,snapshot,snapshot);
+      if(!value || selected!==value.session_id)return null;
+      const date=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'numeric',day:'numeric'}).format(new Date(value.window.end));
+      // Native Chat owns the turn rail; no second reader or DOM-driven scrolling.
+      return h('span',{className:'jsd-briefing-period',role:'status'},
+        '所选'+value.title+' · '+date+' · 请通过会话轮次导航查看第 '+value.turn+' 轮');
+    }
+    scope.slots.inject('conversation.header.leading',()=>scope.slots.register({name:'conversation.header.leading',id:'enterprise-page-title',order:-10},Launch));
+    scope.slots.inject('conversation.input.right',()=>scope.slots.register({name:'conversation.input.right',id:'enterprise-briefing-period'},Period));
+  }
   function returnDestination() {
     try {
       const value = sessionStorage.getItem('jsd.ai-workbench.return') || document.referrer;
@@ -554,8 +588,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
     ctx.slots.inject('sidebar.brand.mark',()=>ctx.slots.register({name:'sidebar.brand.mark'},BrandMark));
     ctx.slots.inject('sidebar.brand.name',()=>ctx.slots.register({name:'sidebar.brand.name'},()=>h('span',{className:'jsd-brand-name'},'AI工作台')));
     ctx.slots.inject('conversation.hero.brand.mark',()=>ctx.slots.register({name:'conversation.hero.brand.mark'},BrandMark));
-    ctx.slots.inject('conversation.header.leading',()=>ctx.slots.register({name:'conversation.header.leading',id:'enterprise-page-title',order:-10},
-      ()=>h('h1',{className:'jsd-page-title'},'AI工作台')));
+    ctx.inject(['uiWorkspace'],registerBriefingNavigation);
     ctx.slots.inject('sidebar.footer.action',()=>ctx.slots.register({name:'sidebar.footer.action',id:'enterprise-navigation'},Navigation));
     ctx.inject(['inputTriggers','uiConversation','sidebarRight','sidebarRightTabs'],registerInputs);
     ctx.inject(['sidebarRight','sidebarRightTabs'],registerOriginals);

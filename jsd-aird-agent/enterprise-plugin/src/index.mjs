@@ -570,7 +570,7 @@ export async function apply(ctx) {
     const denied = ctx.connection.requestRejection({ method: req.method, headers: req.headers });
     if (denied) { res.writeHead(denied); res.end(); return; }
     const action = new URL(req.url, 'http://local').pathname.slice('/business/'.length);
-    if (!['context','resource','inbox','run-state','run-diagnostics','run-cancel','run-retry','memory'].includes(action)) {res.writeHead(404);res.end();return;}
+    if (!['context','resource','inbox','run-state','run-diagnostics','run-cancel','run-retry','memory','briefing-open'].includes(action)) {res.writeHead(404);res.end();return;}
     try {
       const body = await readBody(req);
       let value;

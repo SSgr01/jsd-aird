@@ -1,3 +1,4 @@
+import { StatusTag } from '@/components/status/StatusTag';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { Button, DatePicker, Empty, Form, Input, Popconfirm, Select, Space, Table, message } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -15,9 +16,9 @@ import '../experiments/experiments.css';
 import '../experiments/experiment-create-relations.css';
 import '@/styles/management-list.css';
 
-const taskStatuses: Record<string, string> = { PENDING: '待开始', IN_PROGRESS: '进行中', COMPLETED: '已完成', CANCELLED: '已取消' };
+const taskStatuses: Record<string, string> = { PENDING: '待开始', IN_PROGRESS: '进行中', COMPLETED: '已完成', CANCELLED: '已取消', BLOCKED: '受阻', PAUSED: '已暂停' };
 const formatTaskStatus = (s: string) => taskStatuses[s] ?? s;
-const experimentStatuses: Record<string, string> = { DRAFT: '草稿', PENDING: '待开始', IN_PROGRESS: '进行中', PENDING_REVIEW: '待审核', RETURNED: '已退回', COMPLETED: '已发布', VOIDED: '已作废', CANCELLED: '已取消' };
+const experimentStatuses: Record<string, string> = { DRAFT: '草稿', PENDING: '待开始', IN_PROGRESS: '进行中', PENDING_REVIEW: '待审核', RETURNED: '已退回', COMPLETED: '已发布', VOIDED: '已作废', CANCELLED: '已取消', BLOCKED: '受阻', PAUSED: '已暂停' };
 const formatExperimentStatus = (s: string) => experimentStatuses[s] ?? s;
 
 interface ExperimentFormValues {
@@ -268,7 +269,7 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
       <div className="pm-task-card-body"><span>{task.owner || '未设置'}</span><span className="pm-task-card-experiments">{task.experimentCount}实验</span></div>
       <div className="pm-task-card-status">
         <span className={`pm-dot pm-dot-${task.status.toLowerCase()}`} />
-        <span className="pm-task-card-status-label">{formatTaskStatus(task.status)}</span>
+        <StatusTag status={task.status} label={formatTaskStatus(task.status)} />
         <div className="pm-task-card-actions" onClick={(e) => e.stopPropagation()}>
           <Can permission="project.task.update"><span className="pm-task-card-edit" onClick={() => void openEditTask(task.id)}>编辑</span></Can>
           <Can permission="project.task.delete"><Popconfirm title="确认删除该任务？" description="任务下存在实验时不能删除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true, loading: deletingTaskId === task.id }} onConfirm={() => void deleteTask(task)}><span className="pm-task-card-delete" role="button" tabIndex={0} aria-label={`删除任务${task.name}`}>删除</span></Popconfirm></Can>

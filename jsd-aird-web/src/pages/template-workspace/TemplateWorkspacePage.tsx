@@ -1,3 +1,4 @@
+import { StatusTag } from '@/components/status/StatusTag';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { WorkspaceFrame, WorkspaceMaximizeButton } from '@/components/workspace/WorkspaceFrame';
 import { updateFieldDefinition } from '@/features/template-workspace/field-editing';
@@ -1804,9 +1805,10 @@ export function TemplateWorkspacePage() {
               </>
             )}
           </span>
-          <Tag color={workspace.status === 'PUBLISHED' ? 'success' : workspace.status === 'RETIRED' ? 'default' : templateReview?.status === 'APPROVED' ? 'success' : templateReview?.status === 'SUBMITTED' ? 'processing' : templateReview?.status === 'REJECTED' ? 'error' : 'gold'}>
-            {workspace.status === 'PUBLISHED' ? '已发布' : workspace.status === 'RETIRED' ? '已停用' : templateReview?.status === 'APPROVED' ? '审核通过' : templateReview?.status === 'SUBMITTED' ? '待审核' : templateReview?.status === 'REJECTED' ? '已退回' : '草稿'}
-          </Tag>
+          <StatusTag
+            status={['PUBLISHED', 'RETIRED'].includes(workspace.status) ? workspace.status : templateReview?.status || 'DRAFT'}
+            label={workspace.status === 'PUBLISHED' ? '已发布' : workspace.status === 'RETIRED' ? '已停用' : templateReview?.status === 'APPROVED' ? '审核通过' : templateReview?.status === 'SUBMITTED' ? '待审核' : templateReview?.status === 'REJECTED' ? '已退回' : '草稿'}
+          />
         </div>
         <Space wrap className="workspace-header-actions">
           {canUpdate && ['PUBLISHED', 'RETIRED'].includes(workspace.status) && (

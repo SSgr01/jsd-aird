@@ -29,26 +29,26 @@
   padding: 0 16px;
   border-radius: 8px;
   font-weight: 600;
-  box-shadow: 0 6px 14px rgba(22, 119, 255, 0.22);
+  box-shadow:var(--app-shadow);
 }
 .cm-page-head h3 {
   margin: 0 0 4px;
   font-size: 20px;
   line-height: 28px;
-  color: #11233f;
+  color: var(--app-text);
 }
 .cm-page-head p {
   font-size: 13px;
-  color: #55708f;
+  color: var(--app-text-secondary);
 }
 .cm-filter {
   display: flex;
   flex-wrap: nowrap;
   min-height: 67px;
   padding: 14px;
-  border-color: #d7e2f0;
+  border-color: var(--app-border);
   border-radius: 10px;
-  box-shadow: 0 5px 16px rgba(42, 72, 110, 0.08);
+  box-shadow:var(--app-shadow);
 }
 .cm-filter > * {
   min-width: 0;
@@ -64,7 +64,7 @@
 .cm-filter .ant-select-selector,
 .cm-filter > .ant-btn {
   height: 38px !important;
-  border-color: #ccdaeb !important;
+  border-color: var(--app-border) !important;
   border-radius: 7px !important;
 }
 .cm-filter .ant-select-selection-item,
@@ -73,7 +73,7 @@
 }
 .cm-filter .ant-input-prefix {
   margin-right: 9px;
-  color: #7f92ab;
+  color: var(--app-text-secondary);
 }
 .cm-filter .cm-filter-reset {
   width: 82px;
@@ -86,9 +86,9 @@
   justify-self: start;
 }
 .cm-table-card {
-  border-color: #d6e2ef;
+  border-color: var(--app-border);
   border-radius: 10px;
-  box-shadow: 0 7px 20px rgba(42, 72, 110, 0.08);
+  box-shadow:var(--app-shadow);
 }
 .cm-table {
   min-width: 1430px;
@@ -97,23 +97,23 @@
 .cm-table th {
   height: 42px;
   padding: 0 14px;
-  background: #f5f8fc;
-  border-color: #d7e2ef;
-  color: #516984;
+  background: var(--app-surface-subtle);
+  border-color: var(--app-border);
+  color: var(--app-text-secondary);
   font-size: 12px;
 }
 .cm-table td {
   height: 61px;
   padding: 8px 14px;
   border-color: var(--app-border);
-  color: #14243a;
+  color: var(--app-text);
 }
 .cm-customer-link {
-  color: #075ee8;
+  color: var(--app-primary);
 }
 .cm-muted {
   margin-top: 2px;
-  color: #647790;
+  color: var(--app-text-secondary);
 }
 .cm-row-actions {
   display: flex;
@@ -143,7 +143,7 @@
 .cm-pagination {
   min-height: 48px;
   align-items: center;
-  background: #fff;
+  background: var(--app-surface);
 }
 .cm-empty {
   min-height: 220px;
@@ -153,7 +153,7 @@
   align-items: center;
   justify-content: center;
   min-height: 220px;
-  background: #fff;
+  background: var(--app-surface);
 }
 
 /* 跟进记录竖版时间轴视图 */
@@ -179,7 +179,7 @@
   margin-top: 4px;
   border-radius: 50%;
   background: var(--app-primary);
-  box-shadow: 0 0 0 4px #eaf1ff;
+  box-shadow: 0 0 0 4px var(--app-text-secondary);
   z-index: 1;
 }
 .cm-timeline-line {
@@ -228,7 +228,7 @@
   white-space: nowrap;
 }
 .cm-timeline-name {
-  color: #1f2937;
+  color: var(--app-text);
   font-weight: 600;
   font-size: 14px;
 }
@@ -243,7 +243,7 @@
 }
 .cm-timeline-method,
 .cm-timeline-owner {
-  color: #1f2937;
+  color: var(--app-text);
   font-weight: 600;
   font-size: 14px;
 }
@@ -263,7 +263,7 @@
   white-space: pre-wrap;
   word-break: break-word;
   padding: 8px 10px;
-  background: #fff;
+  background: var(--app-surface);
   border: 1px solid var(--app-surface-subtle);
   border-radius: 8px;
 }
@@ -275,7 +275,7 @@
 }
 .cm-timeline-actions .cm-followup-edit,
 .cm-timeline-actions .cm-followup-edit:hover {
-  color: #1677ff;
+  color: var(--app-primary);
 }
 
 /* 视图切换按钮 */
@@ -306,21 +306,21 @@
   position: relative;
   min-width: 0;
   container-type: inline-size;
-  background: #fff;
-  border: 1px solid #e6ecf4;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
   border-radius: 10px;
   padding: 16px 16px 14px;
   transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  box-shadow:var(--app-shadow);
 }
 .cm-customer-card:hover {
-  border-color: #bfd4ef;
-  box-shadow: 0 6px 16px rgba(22, 94, 175, 0.09);
+  border-color: var(--app-border);
+  box-shadow:var(--app-shadow);
   transform: translateY(-1px);
 }
 .cm-customer-card.is-selected {
   border-color: var(--app-primary);
-  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.16);
+  box-shadow:var(--app-shadow);
 }
 .cm-customer-card-check {
   position: absolute;
@@ -349,7 +349,7 @@
   display: block;
   min-width: 0;
   font-size: 15px;
-  color: #11233f;
+  color: var(--app-text);
   font-weight: 600;
   text-decoration: none;
   overflow: hidden;
@@ -367,11 +367,11 @@
   gap: 6px;
   min-width: 0;
   flex-wrap: wrap;
-  color: #7b8ba5;
+  color: var(--app-text-secondary);
   font-size: 12px;
 }
 .cm-customer-card-dot {
-  color: #c4cfdf;
+  color: var(--app-text-secondary);
 }
 .cm-customer-card-owner {
   display: flex;
@@ -383,7 +383,7 @@
 }
 .cm-customer-card-owner-value {
   min-width: 0;
-  color: #1f2937;
+  color: var(--app-text);
   font-weight: 600;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -395,19 +395,19 @@
   gap: 8px 10px;
   margin-bottom: 12px;
   padding: 8px 10px;
-  background: #f7fafd;
+  background: var(--app-surface-subtle);
   border-radius: 8px;
   font-size: 12px;
 }
 .cm-customer-card-stat {
-  color: #44546f;
+  color: var(--app-text-secondary);
 }
 .cm-customer-card-foot {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding-top: 10px;
-  border-top: 1px dashed #edf1f7;
+  border-top: 1px dashed var(--app-border);
   font-size: 12px;
 }
 .cm-customer-card-foot .cm-link-button {
@@ -662,7 +662,7 @@
 .pm-unified-list-page.cm-customer-list-page .cm-customer-card.is-selected {
   border-color: var(--app-primary);
   background: var(--app-primary-soft);
-  box-shadow: inset 0 0 0 1px rgb(53 111 200 / 8%), var(--app-shadow);
+  box-shadow:var(--app-shadow);
 }
 
 .pm-unified-list-page.cm-customer-list-page .cm-customer-card-name {

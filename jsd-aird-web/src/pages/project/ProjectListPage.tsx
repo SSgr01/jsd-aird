@@ -1,3 +1,4 @@
+import { StatusTag } from '@/components/status/StatusTag';
 import { ListQueryFeedback } from '@/components/loading/ListQueryFeedback';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { ListFilterBar } from '@/components/list-controls/ListFilterBar';
@@ -110,9 +111,6 @@ function priorityClass(value: ProjectPriority) {
   return `pm-tag priority-${value.toLowerCase()}`;
 }
 
-function statusClass(value: ProjectStatus) {
-  return `pm-tag status-${value.toLowerCase()}`;
-}
 
 export function ProjectListPage() {
   const url = useListUrl();
@@ -612,7 +610,7 @@ export function ProjectListPage() {
                   </div>
                   <div className="pm-card-tags">
                     <span className={priorityClass(row.priority)}>{formatProjectPriority(row.priority)}</span>
-                    <span className={statusClass(row.status)}>{formatProjectStatus(row.status)}</span>
+                    <StatusTag status={row.status} label={formatProjectStatus(row.status)} />
                   </div>
                   <div className="pm-card-actions">
                     <Link to={`/projects/${row.id}`} state={{ returnTo: `/projects/list?${searchParams.toString()}` }}>查看</Link>
@@ -673,7 +671,7 @@ export function ProjectListPage() {
                       </span>
                     </td>
                     <td>
-                      <span className={statusClass(row.status)}>{formatProjectStatus(row.status)}</span>
+                      <StatusTag status={row.status} label={formatProjectStatus(row.status)} />
                     </td>
                     <td className="app-numeric">{(row.teamMembers ?? []).length} 人</td>
                     <td>
@@ -869,7 +867,7 @@ export function ProjectListPage() {
               </span>
             </Descriptions.Item>
             <Descriptions.Item label="状态">
-              <span className={statusClass(detail.status)}>{formatProjectStatus(detail.status)}</span>
+              <StatusTag status={detail.status} label={formatProjectStatus(detail.status)} />
             </Descriptions.Item>
             <Descriptions.Item label="团队">{detail.teamSize} 人</Descriptions.Item>
             <Descriptions.Item label="项目背景">{detail.background || '—'}</Descriptions.Item>

@@ -47,26 +47,33 @@
 .dashboard-stats {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 0;
+  padding: 17px 0;
+  border-top: 1px solid var(--app-row-rule);
+  border-bottom: 1px solid var(--app-row-rule);
+  margin-bottom: 22px;
 }
 
 .dashboard-stat {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 16px;
-  background: var(--app-surface);
+  padding: 0 18px;
+  background: transparent;
   border: 0;
-  border-radius: var(--app-radius-card);
-  box-shadow: var(--app-shadow);
-  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  border-right: 1px solid var(--app-row-rule);
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .dashboard-stat:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--app-shadow-hover);
+  background: var(--app-surface-subtle);
 }
+
+.dashboard-stat:first-child { padding-left: 0; }
+.dashboard-stat:last-child { border-right: 0; }
+.dashboard-stat:focus-visible { outline: 2px solid var(--app-primary); outline-offset: 3px; }
+.dashboard-page-date { font-size: 12px; color: var(--app-text-secondary); white-space: nowrap; }
 
 .dashboard-stat-icon {
   display: inline-flex;
@@ -88,13 +95,14 @@
 }
 
 .dashboard-stat-value {
+  margin-top: 8px;
   font-size: 24px;
   font-weight: 500;
   color: var(--app-text);
+  font-variant-numeric: tabular-nums;
 }
 
 .dashboard-stat-label {
-  margin-top: 4px;
   font-size: 12px;
   color: var(--app-text-secondary);
 }
@@ -112,7 +120,7 @@
 }
 
 .dashboard-modules-row-primary {
-  grid-template-columns: minmax(0, 2fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .dashboard-modules-row-secondary {
@@ -284,7 +292,10 @@ a.dashboard-module-item-main:hover .dashboard-module-item-title {
 @media (max-width: 1280px) {
   .dashboard-stats {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: 18px;
   }
+  .dashboard-stat:nth-child(3n) { border-right: 0; }
+  .dashboard-stat:nth-child(4) { padding-left: 0; }
   .dashboard-modules-row-secondary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -299,7 +310,7 @@ a.dashboard-module-item-main:hover .dashboard-module-item-title {
     padding: 18px 16px 56px;
   }
   .dashboard-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .dashboard-modules-row-primary,
   .dashboard-modules-row-secondary {
@@ -308,6 +319,11 @@ a.dashboard-module-item-main:hover .dashboard-module-item-title {
   .dashboard-page-username {
     display: none;
   }
+}
+
+@media (max-width: 580px) {
+  .dashboard-page-head { flex-direction: column; gap: 8px; }
+  .dashboard-stat { padding: 0 10px; }
 }
 
 @media (max-width: 767px) {

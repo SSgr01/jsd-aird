@@ -5,7 +5,7 @@ import postcss, { type Declaration, type Plugin, type Rule } from 'postcss';
 const colors: Record<string, string> = {
   'app-primary': '#29282d', 'app-success': '#347552', 'app-danger': '#b84a55', 'app-focus': '#29282d',
   'app-surface': '#ffffff', 'app-border': '#eee9e8',
-  'oa-accent': '#315cf6', 'oa-surface': '#ffffff', 'oa-border': '#e8edf4',
+  'oa-accent': '#29282d', 'oa-text': '#29282d', 'oa-surface': '#ffffff', 'oa-border': '#eee9e8',
 };
 const supportsColorMix = '(color: color-mix(in srgb, red, blue))';
 

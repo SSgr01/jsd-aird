@@ -1,3 +1,4 @@
+import { StatusTag } from '@/components/status/StatusTag';
 import { ListFeedback } from '@/components/loading/ListQueryFeedback';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { useRequestGuard } from '@/services/query/use-request-guard';
@@ -119,7 +120,7 @@ const workflowLabels: Record<string, string> = {
 };
 function workflowTag(status?: QualityRecord['workflowStatus']) {
   const value = status || 'NOT_SUBMITTED';
-  return <Tag color={value === 'PUBLISHED' ? 'green' : value === 'APPROVED' ? 'success' : value === 'SUBMITTED' ? 'processing' : value === 'REJECTED' ? 'error' : 'default'}>{workflowLabels[value]}</Tag>;
+  return <StatusTag status={value} label={workflowLabels[value]} />;
 }
 
 export function QualityDataPage() {

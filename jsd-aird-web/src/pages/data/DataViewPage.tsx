@@ -1,3 +1,4 @@
+import { StatusTag } from '@/components/status/StatusTag';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { ListQueryFeedback } from '@/components/loading/ListQueryFeedback';
 import { useListPageBounds } from '@/services/query/use-list-page-bounds';
@@ -151,11 +152,11 @@ export function DataViewPage() {
       loading={loading} error={listQuery.isError && !listQuery.data ? (listQuery.error instanceof Error ? listQuery.error.message : '请稍后重试') : undefined} onRetry={() => void load()}>
       <Table className="catalog-data-table" scroll={{ x: 1660 }} rowKey="importJobId" dataSource={items} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <Empty description="暂无来源文件" /> }} onRow={(record) => ({ onDoubleClick: () => navigate(sourceRoute(record)) })} columns={[
         { title: '来源文件', dataIndex: 'originalName', width: 280, ellipsis: true, render: (value: string, record: DataSourceFile) => <Space><DatabaseOutlined /><Typography.Text strong ellipsis={{ tooltip: value }}>{value}</Typography.Text><Typography.Text type="secondary">{record.sourceFormat}</Typography.Text></Space> },
-        { title: '数据核对', dataIndex: 'formalStatus', width: 150, render: (value: string) => <Tag color={formalStatusLabels[value]?.[1]}>{formalStatusLabels[value]?.[0] || value}</Tag> },
+        { title: '数据核对', dataIndex: 'formalStatus', width: 150, render: (value: string) => <StatusTag status={value} label={formalStatusLabels[value]?.[0]} /> },
         { title: '归档分类', dataIndex: 'categoryName', width: 150, ellipsis: true, render: (value?: string) => value || '未分类' },
         { title: '关联项目', width: 260, render: (_: unknown, record: DataSourceFile) => <Space size={[0, 4]} wrap>{record.relatedProjects?.length ? record.relatedProjects.map((relation) => <Tag color="blue" key={`${relation.projectId}-${relation.stageId || ''}-${relation.taskId || ''}`} onClick={() => navigate(`/projects/${relation.projectId}`)} style={{ cursor: 'pointer' }}>{relation.projectName}{relation.stageName ? ` / ${relation.stageName}` : ''}{relation.taskName ? ` / ${relation.taskName}` : ''}</Tag>) : '—'}</Space> },
         { title: '识别方式', dataIndex: 'templateVersionId', width: 320, ellipsis: true, render: (value: string | undefined, record: DataSourceFile) => { if (record.recognitionMode === 'FREEFORM') return '历史自由识别（只读）'; const item = templates.find((candidate) => candidate.versionId === value); return item ? `${item.name} · ${item.templateCode} · V${item.versionNo}` : value ? `版本 ${value.slice(0, 8)}` : '—'; } },
-        { title: '导入任务', dataIndex: 'status', width: 130, render: (value: string) => <Tag color={statusLabels[value]?.[1]}>{statusLabels[value]?.[0] || value}</Tag> },
+        { title: '导入任务', dataIndex: 'status', width: 130, render: (value: string) => <StatusTag status={value} label={statusLabels[value]?.[0]} /> },
         { title: '解析进度', dataIndex: 'progress', width: 170, render: (_: number, record: DataSourceFile) => { const percent = dataParseProgress(record); return <Progress percent={percent} size="small" status={record.status === 'FAILED' ? 'exception' : percent === 100 ? 'success' : 'active'} format={(value) => `${value ?? 0}%`} />; } },
         { title: '最近更新', dataIndex: 'updatedAt', width: 180, render: (value: string) => new Date(value).toLocaleString('zh-CN') },
         { title: '操作', width: 500, render: (_: unknown, record: DataSourceFile) => {

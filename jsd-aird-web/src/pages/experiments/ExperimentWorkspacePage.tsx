@@ -1,3 +1,4 @@
+import { StatusTag } from '@/components/status/StatusTag';
 import { WorkspaceFrame, WorkspaceMaximizeButton } from '@/components/workspace/WorkspaceFrame';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { instanceWorkbookView } from '@/features/data-workbench/instance-workbook-view';
@@ -1197,9 +1198,7 @@ export function ExperimentWorkspacePage({
           <FileExcelOutlined /> Excel
         </span>
       ) : null}
-      <Tag color={status === 'COMPLETED' ? 'green' : status === 'VOIDED' ? 'default' : 'blue'}>
-        {STATUS_TEXT[status] ?? status}
-      </Tag>
+      <StatusTag status={status} label={STATUS_TEXT[status]} />
       {showExcelRecognition ? (
         <Tag color="blue">
           审核：{pendingFieldCount || pendingRegionCount ? '待确认' : '已确认'}

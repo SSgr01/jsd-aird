@@ -13,7 +13,6 @@ vi.mock('@/services/experiments/experiment-api', () => ({
   listExperiments: vi.fn().mockResolvedValue({ items: [], total: 0 }),
 }));
 vi.mock('@/services/inventory/inventory-api', () => ({ inventoryApi: { balances: vi.fn() } }));
-vi.mock('./DashboardQuickAction', () => ({ DashboardQuickAction: () => null }));
 
 describe('dashboard independent module loading', () => {
   beforeEach(() => {

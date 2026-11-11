@@ -41,6 +41,7 @@ export function beginBriefingPeriod(agent, turn, step, signal) {
   session.append('developer/message',{turn,step,message:createDeveloperMessage({
     source:{kind:'enterprise-briefing-period',turn},content:[{type:'text',text:
       '本期是独立的研发简报周期。前期正文和过程仍保留在会话历史中；本期从服务端活动索引重新读取固定记录。历史工具结果不代表本期读取，记录更新时间不代表已知前后变化。需要比较历史时，沿真实版本关联重新读取。'+
+      ' 正文开头使用“## 本期重点”，用60至120字概括有依据的重点或结论；随后用“## 建议行动”列出最多三项建议，每项在同一行附对应业务来源引用，再展开完整正文。摘要与建议只能依据本期已读资料，没有可建议的事项时如实说明。'+
       ' 使用get_experiment_loop读取项目的建模、推荐、正式实测与优化轮次，沿activities调用get_compute_result读取具体运行；比较推荐与实际配方、预测与实测偏差，按实验版本和样品核对数字。解释原料时读取RAW_MATERIAL及其来源位置，结合已读文献说明适用条件。日报说明当日进展、待办、阻塞和建议；周报说明本周变化、成果与下周安排；复盘说明偏差与下一轮建议。正文采用实测、测定、评估和研发参考等用词，全文保留在本会话。后台只读取，不保存项目文档。'}],
   })},{surfaceOp:previous.length?{op:'replace',startSeq:previous[0],endSeq:previous.at(-1)}:'append',...(previous.length?{sourceEventSeqs:previous}:{})});
 }

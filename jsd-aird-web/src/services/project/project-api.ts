@@ -266,7 +266,7 @@ export const stageStatuses = (Object.entries(stageStatusLabels) as [StageStatus,
 );
 
 export function formatStageStatus(value?: StageStatus) {
-  return value ? stageStatusLabels[value] : '—';
+  return value ? ({ ...stageStatusLabels, BLOCKED: '受阻', PAUSED: '已暂停' } as Record<string, string>)[value] ?? value : '—';
 }
 
 const taskStatusLabels: Record<TaskStatus, string> = {
@@ -282,7 +282,7 @@ export const taskStatuses = (Object.entries(taskStatusLabels) as [TaskStatus, st
 
 export function formatTaskStatus(value?: TaskStatus | string | null) {
   if (!value) return '—';
-  return (taskStatusLabels as Record<string, string>)[value] ?? value;
+  return ({ ...taskStatusLabels, BLOCKED: '受阻', PAUSED: '已暂停' } as Record<string, string>)[value] ?? value;
 }
 
 export function formatProjectPriority(value?: ProjectPriority) {

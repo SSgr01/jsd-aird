@@ -1,3 +1,4 @@
+import { StatusTag } from '@/components/status/StatusTag';
 import { ListFeedback } from '@/components/loading/ListQueryFeedback';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { selectionSnapshot } from '@/services/query/selection-snapshot';
@@ -28,7 +29,6 @@ import {
   Space,
   Spin,
   Table,
-  Tag,
   Typography,
 } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
@@ -64,7 +64,7 @@ const statusOptions = [
 const reviewLabels: Record<string, string> = { NOT_SUBMITTED: '草稿', SUBMITTED: '待审核', APPROVED: '审核通过', REJECTED: '已退回', PUBLISHED: '已发布' };
 const reviewTag = (item: ProductionUpload) => {
   const status = item.workflowStatus || (item.status === 'PUBLISHED' ? 'PUBLISHED' : 'NOT_SUBMITTED');
-  return <Tag color={status === 'PUBLISHED' ? 'green' : status === 'APPROVED' ? 'success' : status === 'SUBMITTED' ? 'processing' : status === 'REJECTED' ? 'error' : 'default'}>{reviewLabels[status]}</Tag>;
+  return <StatusTag status={status} label={reviewLabels[status]} />;
 };
 
 type ViewMode = 'card' | 'list';

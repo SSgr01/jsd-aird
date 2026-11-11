@@ -152,6 +152,14 @@ class HarnessSettings(BaseSettings):
     max_total_tokens: int = Field(default=2000000, ge=1024)
     max_active_seconds: int = Field(default=1800, ge=10)
     stage_timing: bool = False
+    memory_enabled: bool = False
+    memory_url: str = "http://127.0.0.1:8888"
+    memory_api_token: SecretStr = SecretStr("")
+    memory_recall_timeout_seconds: float = Field(default=8, ge=0.1, le=30)
+    memory_request_timeout_seconds: float = Field(default=15, ge=1, le=120)
+    memory_daily_calls: int = Field(default=100, ge=1, le=10000)
+    memory_daily_tokens: int = Field(default=200000, ge=1024)
+    memory_workers: int = Field(default=2, ge=1, le=4)
     citation_repair_model_calls: int = Field(default=2, ge=1, le=2)
     citation_repair_tool_calls: int = Field(default=2, ge=0, le=2)
     parallelism: int = Field(default=4, ge=1, le=8)
@@ -187,7 +195,7 @@ class HarnessSettings(BaseSettings):
             or self.sandbox_secret in {self.shared_secret, self.runtime_secret}
         ):
             raise ValueError("Sandbox requires a third independent service secret")
-        for endpoint in (self.runtime_url, self.java_url, self.sandbox_url):
+        for endpoint in (self.runtime_url, self.java_url, self.sandbox_url, self.memory_url):
             parsed = urlsplit(endpoint)
             if (
                 parsed.scheme not in {"http", "https"}

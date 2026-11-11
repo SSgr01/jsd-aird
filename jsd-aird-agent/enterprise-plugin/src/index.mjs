@@ -1,6 +1,7 @@
 import { readFile as readChemistryAsset } from 'node:fs/promises';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { NativeBriefings, beginBriefingPeriod } from './briefings.mjs';
+import { NativeMemory } from './memory.mjs';
 import { installNativeRuntime, nativeTools } from './native-runtime.mjs';
 import { randomUUID, createHash } from 'node:crypto';
 import { timingSafeEqual } from 'node:crypto';
@@ -24,7 +25,7 @@ import { installAdmission, inputSignature, previewTurnInput } from './admission.
 import { createUserMessage, createAssistantMessage, BlockAssembler } from '../../../vendor/deepseek-harness/packages/llm/llm/lib/index.js';
 
 export const name = 'jsd-enterprise';
-export const inject = ['tools', 'agents', 'sessions', 'sessionProjectionCache', 'systemPrompt', 'webServer', 'sessionController', 'llm', 'agentDefaultModel', 'connection', 'workspaceRegistry', 'agentPresets', 'workingDirectory', 'attachments', 'fs', 'web', 'schedule', 'tokenMeter'];
+export const inject = ['tools', 'agents', 'sessions', 'sessionQuery', 'sessionProjectionCache', 'systemPrompt', 'webServer', 'sessionController', 'llm', 'agentDefaultModel', 'connection', 'workspaceRegistry', 'agentPresets', 'workingDirectory', 'attachments', 'fs', 'web', 'schedule', 'tokenMeter'];
 
 /** Host-owned adapter. Identity and tool-call keys never come from model arguments. */
 export async function apply(ctx) {
@@ -165,6 +166,8 @@ export async function apply(ctx) {
   // Hold activation and model admission until all guards and projections exist.
   let initialized;
   const ready = new Promise(resolve => { initialized = resolve; });
+  const memory = new NativeMemory(ctx,{business,ready,runs});
+  ctx.on('agent/created', ({agent}) => { void memory.recover(agent); });
   let scheduleSync;
   ctx.on('schedule/changed', () => {
     clearTimeout(scheduleSync);
@@ -333,7 +336,8 @@ export async function apply(ctx) {
         beginBriefingPeriod(payload.agent,payload.turn,payload.step,payload.signal);
         preparedBriefingTurns.set(payload.agent.id,payload.turn);
       }
-      return await next();
+      const decision = await next();
+      return await memory.prepare(payload,decision,bound);
     } finally { preparedBindings.delete(payload.agent.id); }
   });
   // All native provider calls share enterprise admission and metering. Title
@@ -348,6 +352,7 @@ export async function apply(ctx) {
       ...(!title ? { run_id: bound.id, epoch:bound.epoch, turn: bound.dsh_turn, kind: 'model' } : {}),
       purpose: options.purpose || 'conversation', provider: options.provider, model: options.model };
     await business(title ? 'auxiliary-admit' : 'gate', request, options.signal);
+    if(!title) await memory.guardRequest(options);
     const assembler = new BlockAssembler();
     let completed = false;
     try {
@@ -417,6 +422,7 @@ export async function apply(ctx) {
       }
       const result = await business('complete', input, signal);
       if (result.status === 'FAILED') throw deliveryError(result);
+      if (result.status === 'SUCCEEDED') await memory.capture(agent,bound);
     }
   });
   ctx.on('agent/error', ({ agent, error }) => {
@@ -476,6 +482,9 @@ export async function apply(ctx) {
         } catch {
           value = { available: false, ...selected };
         }
+      }
+      else if (action === 'memory-history') {
+        value = await memory.history(body);
       }
       else if (action === 'create') {
         const profile = body.profile || 'agent';
@@ -561,11 +570,16 @@ export async function apply(ctx) {
     const denied = ctx.connection.requestRejection({ method: req.method, headers: req.headers });
     if (denied) { res.writeHead(denied); res.end(); return; }
     const action = new URL(req.url, 'http://local').pathname.slice('/business/'.length);
-    if (!['context','resource','inbox','run-state','run-diagnostics','run-cancel','run-retry'].includes(action)) {res.writeHead(404);res.end();return;}
+    if (!['context','resource','inbox','run-state','run-diagnostics','run-cancel','run-retry','memory'].includes(action)) {res.writeHead(404);res.end();return;}
     try {
       const body = await readBody(req);
       let value;
-      if (action.startsWith('run-')) {
+      if (action === 'memory') {
+        // Browser callers cannot impersonate trusted lifecycle capture/validation.
+        if (!['initialize','settings','set-settings','list','search','remember','correct','forget','status','source',
+          'session-settings','set-session'].includes(body.action)) throw new Error('MEMORY_ACTION_DENIED');
+        value = await business('memory',body);
+      } else if (action.startsWith('run-')) {
         if (action === 'run-cancel' || action === 'run-retry') {
           const state = await business('run-state',body);
           if (!state.run) throw new Error('RUN_NOT_FOUND');
@@ -581,7 +595,7 @@ export async function apply(ctx) {
       } else value = await business(action, body);
       res.writeHead(200, {'content-type':'application/json','cache-control':'no-store'});
       res.end(JSON.stringify(value));
-    } catch {res.writeHead(409);res.end(JSON.stringify({error:'BUSINESS_ACCESS_REFUSED'}));}
+    } catch(error) {res.writeHead(action==='memory' ? error.status || 409 : 409);res.end(JSON.stringify({error:error.code || 'BUSINESS_ACCESS_REFUSED'}));}
   }}));
   if(backgroundIdentity) await asBackground(()=>briefings.sync());
   else {

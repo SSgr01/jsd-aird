@@ -36,9 +36,11 @@ python deployment/hindsight/manage.py stop
 
 ## 接入 dsh 的边界
 
-个人 dsh 可按官方方式安装 `@vectorize-io/hindsight-coding-agents@0.8.6`，指定 `self-hosted` 和上述 API。企业工作台的用户 Host 使用服务端配置，不能执行面向个人机器的全局安装命令。配置应关闭 Git/代码库自动采集、自动更新，记忆库由组织、用户和授权版本确定，不能由模型或执行目录决定。
+个人 dsh 可按官方方式安装 `@vectorize-io/hindsight-coding-agents@0.8.6`，指定 `self-hosted` 和上述 API。企业工作台通过企业插件与 Python Control 调用官方 HTTP API，不安装全局 coding-agent 插件，不采集代码库。组织、用户绑定稳定私有 bank，授权版本单独校验，模型与执行目录不能改变归属。
 
-仅部署成功不表示企业长期记忆已经启用。企业接入仍需确保自动召回和写回经过当前身份、预算和来源校验；默认编程提示词不能直接作为研发专业流程。授权、来源、遗忘和计量的接入边界见 `jsd-aird-agent/docs/hindsight-memory-evaluation.md`。本部署不自动采集任何已有业务数据或会话。
+仅部署成功不表示企业长期记忆已经启用。企业入口由 Control 的 `JSD_AIRD_HARNESS_MEMORY_ENABLED` 控制，示例默认关闭；隔离验收后启用并重启 Java、Control、网关及用户 Host。当前接入、开关及回执见 [个人记忆一期](../../jsd-aird-agent/docs/personal-memory.md)。本部署不导入已有业务数据或历史会话。
+
+Compose 设置 `HINDSIGHT_API_LLM_TRACE_DELETE_WITH_DOCUMENT=true`，使遗忘时文档关联调用正文一并删除；不要只更新文件而不重建容器。升级后按 `/health` 和隔离往返核对，保持原镜像摘要和数据库。Control 在删除前取得实际用量，保留计数及操作身份，不保留已遗忘正文。
 
 密钥、数据库凭据、日志和实际运行材料均在忽略目录 `.runtime/hindsight/`，不提交或推送。数据库备份由现有 PG 运维策略覆盖该专用库。
 
@@ -54,4 +56,4 @@ python deployment/hindsight/manage.py stop
 
 以上是实际页面缺陷，未通过注入脚本、替换原生页面或修改官方镜像来掩盖。完整步骤、截图、实际模型用量及未覆盖事项保存在忽略目录 `.runtime/hindsight/ui-acceptance/report.md`。语言、主题和浏览器尺寸已恢复。
 
-这份结果只覆盖运维管理页。客户工作台尚未注册 Hindsight 生命周期与工具接入，因此“新会话自动记住和召回”、企业来源授权、撤权及遗忘均未记为通过。不可把管理页的可用性作为企业长期记忆已交付的结论。
+上述 2026-11-09 结果只覆盖运维管理页。2026-11-10 的客户工作台生命周期、原生设置、来源跳转、后台整理及更正遗忘结果另见 [一期验收记录](../../jsd-aird-agent/docs/personal-memory-acceptance.md)，不能混用两份验收范围。

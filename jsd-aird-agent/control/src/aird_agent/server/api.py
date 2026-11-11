@@ -48,10 +48,14 @@ def create_app(settings=None, store=None, service=None):
         await store.pool.open(wait=True, timeout=10)
         await store.migrate()
         admission = asyncio.create_task(service.admission.run())
+        memory = asyncio.create_task(service.memory.run())
         listener = asyncio.create_task(notifications.listen(settings.database_url.get_secret_value()))
         try:
             yield
         finally:
+            memory.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await memory
             admission.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await admission
@@ -72,7 +76,10 @@ def create_app(settings=None, store=None, service=None):
         if user.automation_grant_id:
             if not request.url.path.startswith(PREFIX + "/dsh/"):
                 raise HTTPException(403, "BACKGROUND_SCOPE_DENIED")
-            await service.briefings.check(user)
+            if user.scope == "personal-memory":
+                await service.memory.check(user)
+            else:
+                await service.briefings.check(user)
         return user
 
     @app.get(PREFIX + "/capabilities")
@@ -274,11 +281,18 @@ def create_app(settings=None, store=None, service=None):
         if len(raw) > 20 * 1024 * 1024:
             raise HTTPException(413, "Runtime payload too large")
         body = json.loads(raw)
+        if user.scope == "personal-memory":
+            # Memory workers operate from durable jobs, never from arbitrary runtime requests.
+            raise HTTPException(403, "MEMORY_BACKGROUND_SCOPE_DENIED")
+        if action == "memory":
+            return await service.memory.handle(user, body)
         fields(session_id=body.get("session_id"), run_id=body.get("run_id"), turn=body.get("turn"),
                request_bytes=len(raw), event_type=(body.get("event") or {}).get("type"))
         if action == "session-delete":
             from aird_agent.core.session_deletion import delete_session
-            return await delete_session(store, user, body)
+            result = await delete_session(store, user, body)
+            await service.memory.forget_session(user, body["session_id"])
+            return result
         if body.get("session_id") and action in {"register", "admit", "admission-state", "admission-renew", "admission-release", "run-state", "run-diagnostics", "ownership", "restore", "auxiliary-admit", "gate", "tool", "native-tool"}:
             from aird_agent.core.session_deletion import require_session_available
             await require_session_available(store, user, body["session_id"])
@@ -301,6 +315,8 @@ def create_app(settings=None, store=None, service=None):
         if action in {"context", "resource"}:
             return await service.session_view(user, action, body)
         if action == "catalog":
+            if settings.memory_enabled and not user.automation_grant_id:
+                await service.memory.preferences(user, initialize=True)
             context = await service.java(user, "runtime_context", {"profile": body["profile"], "context_refs": []})
             packs = context["pack_ids"]
             return {"tools": service.packs.tools(packs),

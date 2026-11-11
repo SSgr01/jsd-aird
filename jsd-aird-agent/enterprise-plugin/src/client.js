@@ -3,11 +3,15 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
   const { useEffect, useState, useRef } = React;
   const enterpriseTheme = /* @enterprise-theme */ null;
   const sourceLinks = /* @source-links */ null;
+  const memoryUI = /* @memory-ui */ null;
   const base = '/agent/';
   async function api(action, body, signal) {
     const response = await fetch(base + 'business/' + action, { method: 'POST',
       headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
-    if (!response.ok) throw new Error('暂时无法读取，请检查登录和资料权限。');
+    if (!response.ok) {
+      const value=await response.json().catch(()=>({}));
+      throw Object.assign(new Error(response.status===409 ? '内容或设置已变化，请刷新后重试。' : '暂时无法读取，请检查登录和资料权限。'),{code:value.error});
+    }
     return response.json();
   }
   const button = (label, onClick, more = {}) => h('button', { type: 'button', onClick, ...more }, label);
@@ -332,7 +336,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
   }
   function registerBusinessToolViews(scope) {
     const {DisclosureRow,IconSearchOutlineRegular} = require('@deepseek-ai/dsh-client-ui-primitives');
-    const titles = {tool_search:'查找企业能力',retrieve_context:'检索研发资料',knowledge_search:'检索文献',
+    const titles = {memory_search:'查找个人记忆',memory_manage:'管理个人记忆',tool_search:'查找企业能力',retrieve_context:'检索研发资料',knowledge_search:'检索文献',
       document_outline:'查看文献目录',document_read:'阅读文献',table_read:'读取表格',evidence_read:'核对原文',
       private_document_outline:'查看附件目录',private_document_read:'阅读附件',private_document_search:'检索附件',
       bibliography_lookup:'查询书目信息',literature_search:'检索论文',literature_expand:'查找相关论文',
@@ -349,6 +353,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
       evidence_score:'筛选证据',evidence_save:'保存证据',matrix_record:'整理研究依据',note_save:'保存研究笔记'};
     function BusinessTool({block,toolName,phase,useDisclosure}) {
       const {expanded,toggle} = useDisclosure();
+      const [sourceError,setSourceError]=useState('');
       const meta = block.meta?.enterprise ? block.meta : {};
       let value;
       try {value = JSON.parse(block.content?.filter(part=>part.type==='text').map(part=>part.text).join('') || '{}');}
@@ -359,10 +364,17 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
       const query = businessText(block.args?.text('query'));
       const failed = block.isError || meta.failed || Boolean(value.error);
       const summary = failed ? '操作未完成' : phase !== 'result' ? query || '处理中' :
+        toolName==='memory_manage' ? value.summary || '结果待核对' : toolName==='memory_search' ? rows.length+' 条记忆' :
         meta.count !== undefined ? meta.count+' 条结果' : businessText(meta.summary) || '已完成';
       const content = rows.slice(0,8).map((row,index)=>h('section',{key:index},
         h('strong',null,row.title || row.name || row.source?.title || '结果 '+(index+1)),
-        h('p',{style:{whiteSpace:'pre-wrap'}},String(row.text || row.snippet || row.quote?.text || '').slice(0,1800))));
+        h('p',{style:{whiteSpace:'pre-wrap'}},String(row.text || row.snippet || row.quote?.text || '').slice(0,1800)),
+        toolName==='memory_search' && row.source?.session_id && button('查看原始会话'+(row.source.turn?' · 第 '+row.source.turn+' 轮':''),async()=>{
+          try {
+            const {source}=await api('memory',{action:'source',entry_id:row.id,content_revision:row.content_revision});
+            await scope.uiWorkspace.openSession(source.session_id);
+          } catch(error){setSourceError(error.message);}
+        })));
       const errorText = businessText(meta.summary || value.error || '业务请求未完成，请稍后继续。')
         .replace(/^[A-Z][A-Z_0-9]+:\s*/, '');
       return h(DisclosureRow,{className:'jsd-business-tool',contentClassName:'jsd-tool-header',
@@ -371,7 +383,9 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
         open:expanded,expandable:phase==='result',onToggle:toggle,expandOnRowClick:true,
         running:phase!=='result',collapsedContent:h('span',{className:'jsd-tool-summary',title:summary},' · '+summary)},
         h('div',{className:'jsd-tool-content'},
-          failed ? h('p',{role:'status'},errorText) : content.length ? content : h('p',null,businessText(meta.summary) || '业务结果已返回'),
+          failed ? h('p',{role:'status'},errorText) : content.length ? content : h('p',null,
+            toolName.startsWith('memory_') ? value.summary || meta.summary || '业务结果已返回' : businessText(value.summary || meta.summary) || '业务结果已返回'),
+          sourceError && h('p',{role:'alert'},sourceError),
           (meta.sources || []).map((source,index)=>h('p',{key:'source-'+index},h('a',{href:source.url,className:'jsd-source-link',title:source.label},
             sourceLinks.sourceLinkLabel(source.label,new URL(source.url,location.origin)))))));
     }
@@ -548,9 +562,13 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
     ctx.inject(['resources'],registerAdmissionLabel);
     ctx.inject(['conversation','sessions'],registerContinuation);
     ctx.inject(['uiWorkspace'],registerDeletedSessionNavigation);
+    ctx.inject(['uiWorkspace','contextMenus'],scope=>{
+      const {Switch,Modal,Toast}=require('@deepseek-ai/dsh-client-ui-primitives');
+      memoryUI.registerMemoryUI(scope,{React,api,Switch,Modal,Toast});
+    });
     ctx.inject(['contextMenus'],registerPluginMenuPolicy);
     ctx.inject(['conversation','sessions'],registerWelcomeCards);
     registerSourceMarkdown(ctx);
-    registerBusinessToolViews(ctx);
+    ctx.inject(['uiWorkspace'],registerBusinessToolViews);
   }};
 }});

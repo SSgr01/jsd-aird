@@ -20,9 +20,13 @@ class AgentAutomationDelegationTest {
     final AgentDelegation service = new AgentDelegation(secret, json, iam);
 
     String token(String audience, long authVersion) throws Exception {
+        return token(audience, authVersion, "research-briefings");
+    }
+
+    String token(String audience, long authVersion, String scope) throws Exception {
         long now = Instant.now().getEpochSecond();
         var claims = Map.of("organization_id", org, "actor_id", user, "auth_version", authVersion,
-            "automation_grant_id", UUID.randomUUID(), "scope", "research-briefings", "aud", audience, "iat", now, "exp", now+60);
+            "automation_grant_id", UUID.randomUUID(), "scope", scope, "aud", audience, "iat", now, "exp", now+60);
         String body = Base64.getUrlEncoder().withoutPadding().encodeToString(json.writeValueAsBytes(claims));
         var mac = Mac.getInstance("HmacSHA256");mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
         return body + "." + Base64.getUrlEncoder().withoutPadding().encodeToString(mac.doFinal(body.getBytes(StandardCharsets.US_ASCII)));
@@ -56,5 +60,19 @@ class AgentAutomationDelegationTest {
             assertThatThrownBy(()->service.automationIdentity(token("automation-exchange",7))).isInstanceOf(ApiException.class);
             assertThatThrownBy(()->service.verify(token("java-tools",7))).isInstanceOf(ApiException.class);
         }
+    }
+
+    @Test void personalMemoryCanOnlyValidateItsOwnSources() throws Exception {
+        when(iam.delegationUser(user)).thenReturn(new DelegationIdentity.Identity(user,org,"lin.chen","RND_MANAGER","ACTIVE",7));
+        var identity = service.automationIdentity(token("automation-exchange",7,"personal-memory"));
+        var claims = json.readTree(Base64.getUrlDecoder().decode(((String)identity.get("ticket")).split("\\.")[0]));
+        assertThat(claims.path("scope").asText()).isEqualTo("personal-memory");
+        var ticket = token("java-tools",7,"personal-memory");
+        for (var action : List.of("runtime_context","authorize_sources","validate_cached_evidence"))
+            service.requireAction(ticket,action);
+        for (var action : List.of("get_research_briefing_context","business_read","business_search","create_experiment_draft",
+                "report_save","artifact_save","research_topic_ensure"))
+            assertThatThrownBy(()->service.requireAction(ticket,action)).isInstanceOf(ApiException.class);
+        assertThatThrownBy(()->service.requireInteractive(ticket)).isInstanceOf(ApiException.class);
     }
 }

@@ -78,6 +78,36 @@ class Store:
             ).fetchall()
             return [await self.get(principal, kind, str(row["id"]), conn) for row in rows]
 
+    async def page(self, principal: Principal, kind: str, *, cursor=None, limit=50):
+        """Owner-bound keyset pagination; callers can walk the entire collection."""
+        import base64
+        import json
+
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise HTTPException(422, "INVALID_PAGE_LIMIT")
+        after = None
+        if cursor:
+            try:
+                value = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+                if value["owner"] != list(principal.key) or value["kind"] != kind:
+                    raise ValueError()
+                from uuid import UUID
+                after = str(UUID(value["id"]))
+            except (ValueError, KeyError, TypeError, AttributeError):
+                raise HTTPException(400, "INVALID_RECORD_CURSOR") from None
+        async with self.connection() as conn:
+            rows = await (await conn.execute(
+                "SELECT id FROM agent_runtime.harness_records WHERE kind=%s AND organization_id=%s "
+                "AND actor_id=%s AND (%s::uuid IS NULL OR id>%s::uuid) ORDER BY id LIMIT %s",
+                (kind, *principal.key, after, after, limit + 1),
+            )).fetchall()
+            items = [await self.get(principal, kind, str(row["id"]), conn) for row in rows[:limit]]
+        next_cursor = None
+        if len(rows) > limit:
+            value = {"owner": list(principal.key), "kind": kind, "id": items[-1]["id"]}
+            next_cursor = base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip("=")
+        return {"items": items, "next_cursor": next_cursor}
+
     async def create(self, principal: Principal, kind: str, payload: dict, conn, rid=None):
         rid = rid or str(uuid4())
         await conn.execute(

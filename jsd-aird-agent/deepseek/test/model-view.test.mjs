@@ -8,6 +8,17 @@ test('optimization candidates retain identities, inputs and predictions on the m
   assert.deepEqual(modelResult(raw),raw);
 });
 
+test('personal memory history retains authorized native locations and content revisions in model projection',()=>{
+  const value={memory_context:true,entries:[{id:'entry',content_revision:2,revision:4,text:'以后先注明单位。',
+    source:{kind:'session',session_id:'original',turn:1,event_seq:9,hash:'digest',bank_id:'never-export'}}]};
+  const shown=JSON.parse(renderModelResult(value)[0].text);
+  assert.equal(shown.entries[0].source.session_id,'original');
+  assert.equal(shown.entries[0].source.event_seq,9);
+  assert.equal(shown.entries[0].content_revision,2);
+  assert.equal(shown.entries[0].source.bank_id,undefined);
+  assert.match(modelResult({error:'MEMORY_USER_STATEMENT_REQUIRED',access_denied:true}).error,/逐字取自用户/);
+});
+
 test('enterprise metadata is lossless JSON for discovery, empty results and actual sources', () => {
   for (const value of [{activate_tools:['get_experiment_record']},{candidates:[]},
     {candidates:[{text:'actual source'}],citation_links:{e1:{url:'/fixed-version',label:'原文·第3页'}}}]) {

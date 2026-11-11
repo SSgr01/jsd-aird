@@ -2,9 +2,9 @@
 
 import httpx
 
-from aird_agent.evidence.retrieval_context import qa_history
 from aird_agent.capabilities.registry import default_registry
 from aird_agent.core.business_service import BusinessService
+from aird_agent.evidence.retrieval_context import qa_history
 from aird_agent.hosts.jsd.bindings import JsdBindings
 from aird_agent.hosts.jsd.host import JsdHostGateway
 from aird_agent.hosts.jsd.session_views import SessionViews
@@ -26,6 +26,8 @@ class Service(SessionViews, BusinessService):
 
         from aird_agent.hosts.jsd.briefings import Briefings
         self.briefings = Briefings(self)
+        from aird_agent.memory.service import Memory
+        self.memory = Memory(self)
 
     async def java(self, principal, action, arguments=None, run_id=None):
         return await self.host_call(principal, action, arguments, run_id)

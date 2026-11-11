@@ -21,7 +21,7 @@ DSH Workspace 管目录和会话，企业资料随任务通过原生附件或 `@
 
 分支按钮显示不可用原因、创建进度及分阶段重试；同一请求复用原生持久分支。化学 Markdown 使用共享分子卡片，区分 RDKit 语法及价态有效、同组重复结构与原图核对。本次不核对或更正论文分子结构，也不追加更正历史回答。
 
-长期记忆选用自托管 Hindsight，复用现有 PostgreSQL 实例，使用独立数据库和专用账号。固定镜像、准备脚本及后台启动见 [记忆服务部署](../deployment/hindsight/README.md)。服务部署与企业记忆启用分别记录，部署脚本不会自动采集已有会话或业务数据；身份、来源与管理边界见 [Hindsight 接入评估](docs/hindsight-memory-evaluation.md)。
+长期记忆已接入自托管 Hindsight 0.8.6，提供本人私有偏好、新会话召回、来源核验、后台整理、更正遗忘及原生设置。Control 复用现有记录结构保存控制信息，正文由 Hindsight 保存；不导入启用前历史。默认配置保留部署开关，先隔离验收再启用企业入口。接入及开关见 [个人记忆一期](docs/personal-memory.md)，固定镜像及后台启动见 [记忆服务部署](../deployment/hindsight/README.md)，实际结果见 [验收记录](docs/personal-memory-acceptance.md)。
 
 网页外观通过企业插件的 `src/theme.mjs` 和 `src/theme.css` 适配 UI-opz 系统设计，使用原生 `theme.overrideTokens` 与品牌、导航插槽；不复制旧问答页面或上游组件。浅色、深色、字号和自选字体继续由 dsh 原生设置管理，网关仅允许其显示字段。修改样式后执行 `node jsd-aird-agent/enterprise-plugin/build.mjs` 并重启网关及其 Host；生成的 `lib/client.js` 包含主题资源，不需要额外样式请求。
 

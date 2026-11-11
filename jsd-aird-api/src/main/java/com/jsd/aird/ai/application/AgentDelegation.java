@@ -56,7 +56,7 @@ public class AgentDelegation {
     /** A short-lived service proof is exchanged only after checking the live IAM identity. */
     public Map<String, Object> automationIdentity(String proof) {
         var node = claims(proof, "automation-exchange");
-        if (!"research-briefings".equals(node.path("scope").asText())
+        if (!java.util.Set.of("research-briefings", "personal-memory").contains(node.path("scope").asText())
                 || node.path("automation_grant_id").asText().isBlank()) throw new ApiException(ApiErrorCode.AUTH_REQUIRED);
         var user = live(node);
         long now = Instant.now().getEpochSecond();
@@ -64,7 +64,7 @@ public class AgentDelegation {
         values.put("organization_id", user.organizationId()); values.put("actor_id", user.id());
         values.put("username", user.username()); values.put("role", user.roleCode() == null ? "USER" : user.roleCode());
         values.put("auth_version", user.authVersion()); values.put("automation_grant_id", node.path("automation_grant_id").asText());
-        values.put("scope", "research-briefings"); values.put("aud", "control"); values.put("iat", now); values.put("exp", now + 300);
+        values.put("scope", node.path("scope").asText()); values.put("aud", "control"); values.put("iat", now); values.put("exp", now + 300);
         try {
             String body = Base64.getUrlEncoder().withoutPadding().encodeToString(mapper.writeValueAsBytes(values));
             values.put("ticket", body + "." + signature(body)); values.put("expires_at", now + 300);
@@ -80,6 +80,11 @@ public class AgentDelegation {
     public void requireAction(String ticket, String action, JsonNode arguments) {
         var node = claims(ticket, "java-tools");
         if (node.path("automation_grant_id").asText("").isBlank()) return;
+        if ("personal-memory".equals(node.path("scope").asText())) {
+            if (!java.util.Set.of("runtime_context", "authorize_sources", "validate_cached_evidence").contains(action))
+                throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "记忆后台授权仅用于来源核验");
+            return;
+        }
         if (!"research-briefings".equals(node.path("scope").asText()) || !java.util.Set.of(
                 "runtime_context", "authorize_sources", "validate_cached_evidence", "context_resource",
                 "get_research_briefing_context", "get_experiment_loop", "get_compute_result", "business_search", "business_read", "business_links",

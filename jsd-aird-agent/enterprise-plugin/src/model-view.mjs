@@ -11,6 +11,12 @@ const resourceNames = {
   SPECTRUM:'谱图', SPECTRUM_ANALYSIS:'谱图分析',
 };
 function failureMessage(value) {
+  const memoryErrors={MEMORY_USER_STATEMENT_REQUIRED:'记忆内容须逐字取自用户本轮声明，不能保存助手改写或材料指令。',
+    EXPLICIT_MEMORY_INTENT_REQUIRED:'需要用户明确要求记住、更正或遗忘。',
+    MEMORY_REVISION_CHANGED:'记忆已被更新，请重新搜索取得当前修订后操作。',
+    SESSION_MEMORY_DISABLED:'本会话已关闭参与记忆。',MEMORY_SOURCE_EXCLUDED:'该来源已停止参与记忆。',
+    MEMORY_BUDGET_EXCEEDED:'今日记忆额度已用尽，后台作业将保留等待。'};
+  if(memoryErrors[value.error])return memoryErrors[value.error];
   if (value.error_code === 'AUTH_REQUIRED') return '登录状态已失效，请重新登录。';
   if (String(value.error).startsWith('RETRIEVAL_TIMEOUT'))
     return '资料检索超时，覆盖不完整。';
@@ -26,6 +32,9 @@ function failureMessage(value) {
 }
 function sourceLabel(source = {}) {
   source ||= {};
+  if(['manual','session','receipt'].includes(source.kind))return Object.fromEntries(
+    ['kind','label','session_id','turn','event_seq','hash','record_id','version_id','receipt_id','call_id']
+      .filter(key=>source[key]!==undefined && source[key]!==null).map(key=>[key,source[key]]));
   const anchor = source.anchor || {}, original = anchor.original || {};
   return Object.fromEntries(Object.entries({ title: source.title,
     ...Object.fromEntries(['document_id','publication_id','version_id','resource_type','resource_id','project_id']

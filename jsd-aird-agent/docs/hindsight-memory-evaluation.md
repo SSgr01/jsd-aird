@@ -1,6 +1,6 @@
 # Hindsight 原生 dsh 记忆集成评估
 
-核对日期：2026-11-09。Hindsight 已被用户选定，部署复用现有 PostgreSQL 实例并使用独立数据库及专用账号。服务配置、准备脚本和启动方式见 [部署说明](../../deployment/hindsight/README.md)。下文保留集成评估；服务部署与企业长期记忆启用分别记录，不能把后者视为已完成。
+核对日期：2026-11-09。下文保留选型时的集成评估。2026-11-10 已通过企业插件和 Control 调用官方 API 完成一期；当前身份、来源、后台授权及管理设置见 [个人记忆一期](personal-memory.md)，实际结果见 [验收记录](personal-memory-acceptance.md)。服务配置、准备脚本和启动方式见 [部署说明](../../deployment/hindsight/README.md)。
 
 评估的上游源码固定至 `vectorize-io/hindsight@0bd55015393d224deec1073d63b24bcc0faad164`，其中 `@vectorize-io/hindsight-coding-agents` 包版本为 `0.8.6`。插件包版本与后端服务版本需要分别固定。
 

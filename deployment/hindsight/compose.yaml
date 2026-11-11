@@ -5,6 +5,8 @@ services:
     # Server and coding-agent integration have independent release versions.
     image: ghcr.io/vectorize-io/hindsight:0.8.6@sha256:ffa391a77284e49f6b55e32c86f33529ac4257831407b14038a72b6a0a232039
     restart: unless-stopped
+    environment:
+      HINDSIGHT_API_LLM_TRACE_DELETE_WITH_DOCUMENT: "true"
     stop_grace_period: 40s
     env_file:
       - path: ../../.runtime/hindsight/service.env

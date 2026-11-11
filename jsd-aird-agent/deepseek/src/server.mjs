@@ -49,7 +49,7 @@ export function gateway(config) {
         const user = await identity(config, { 'x-jsd-agent-ticket': body.ticket || '' });
         const host = await hosts.ensure(user);
         const action = url.pathname.slice('/internal/'.length);
-        if (!['create', 'prompt', 'cancel', 'queue', 'resume', 'wake', 'state', 'review', 'models'].includes(action)) return json(res, 404, { error: 'NOT_FOUND' });
+        if (!['create', 'prompt', 'cancel', 'queue', 'resume', 'wake', 'state', 'review', 'models', 'memory-history'].includes(action)) return json(res, 404, { error: 'NOT_FOUND' });
         return json(res, 200, { ...await hosts.call(host, action, { ...body, identity: undefined, ticket: user.ticket }), workspace_url: host.path });
       }
       if (!url.pathname.startsWith('/agent/')) return json(res, 404, { error: 'NOT_FOUND' });

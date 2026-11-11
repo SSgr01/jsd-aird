@@ -211,8 +211,9 @@ export function ExperimentWorkspacePage({
   const [editRevision, setEditRevision] = useState(0);
   const [loadError, setLoadError] = useState<string>();
   const [reviewOpen, setReviewOpen] = useState(false);
-  const [returnOpen, setReturnOpen] = useState(false);
-  const [returnReason, setReturnReason] = useState('');
+  const [reviewAction, setReviewAction] = useState<'return' | 'void'>();
+  const [reviewReason, setReviewReason] = useState('');
+  const voiding = reviewAction === 'void';
   const [reviewTrigger, setReviewTrigger] = useState(0);
   const [importPanelTab, setImportPanelTab] = useState<'data' | 'recognition'>('data');
   const [coordinatePicking, setCoordinatePicking] = useState<{
@@ -966,21 +967,21 @@ export function ExperimentWorkspacePage({
     }
   };
 
-  const returnForChanges = async () => {
-    if (!detail) return;
-    if (!returnReason.trim()) {
-      void message.warning('请填写退回修改原因');
+  const applyReviewAction = async () => {
+    if (!detail || !reviewAction) return;
+    if (!reviewReason.trim()) {
+      void message.warning(voiding ? '请填写作废原因' : '请填写退回修改原因');
       return;
     }
     setBusy(true);
     try {
-      await actExperiment(id, 'return', detail.summary.revision, returnReason.trim());
-      setReturnOpen(false);
-      setReturnReason('');
-      void message.success('实验已退回修改');
+      await actExperiment(id, reviewAction, detail.summary.revision, reviewReason.trim());
+      setReviewAction(undefined);
+      setReviewReason('');
+      void message.success(voiding ? '实验已作废' : '实验已退回修改');
       await load();
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : '退回修改失败');
+      void message.error(error instanceof Error ? error.message : voiding ? '作废失败' : '退回修改失败');
     } finally {
       setBusy(false);
     }
@@ -1259,6 +1260,13 @@ export function ExperimentWorkspacePage({
           </Button>
         </Can>
       )}
+      {status === 'COMPLETED' && (!requestedVersion || requestedVersion === detail.currentVersionId) && (
+        <Can permission="experiment.review">
+          <Button danger loading={busy} onClick={() => { setReviewReason(''); setReviewAction('void'); }}>
+            作废实验
+          </Button>
+        </Can>
+      )}
       {editable && <Button onClick={openMetadataEditor}>编辑基本信息</Button>}
       <Can permission="template.create">
         <Button
@@ -1296,8 +1304,8 @@ export function ExperimentWorkspacePage({
             <Button
               loading={busy}
               onClick={() => {
-                setReturnReason('');
-                setReturnOpen(true);
+                setReviewReason('');
+                setReviewAction('return');
               }}
             >
               退回修改
@@ -1440,7 +1448,7 @@ export function ExperimentWorkspacePage({
             label="实验目的"
             rules={[{ required: true, whitespace: true, message: '请填写实验目的' }]}
           >
-            <Input.TextArea rows={3} placeholder="说明本次实验需要验证的目标" />
+            <Input.TextArea rows={3} placeholder="说明本次实验的目标" />
           </Form.Item>
           <Form.Item
             name="mainConclusion"
@@ -1451,25 +1459,26 @@ export function ExperimentWorkspacePage({
           </Form.Item>
         </Form>
       </FormModal>
-      <FormModal draft={returnReason}
-        title="退回修改"
-        open={returnOpen}
-        okText="确认退回"
+      <FormModal draft={reviewReason}
+        title={voiding ? '作废实验' : '退回修改'}
+        open={Boolean(reviewAction)}
+        okText={voiding ? '确认作废' : '确认退回'}
         cancelText="取消"
         confirmLoading={busy}
-        onCancel={() => setReturnOpen(false)}
-        onOk={() => returnForChanges()}
+        onCancel={() => setReviewAction(undefined)}
+        onOk={() => applyReviewAction()}
         destroyOnHidden
       >
+        {voiding && <Typography.Paragraph type="secondary">本次读数将退出后续优化，原实验版本与已有轮次保留。</Typography.Paragraph>}
         <Form layout="vertical">
-          <Form.Item label="退回原因" required>
+          <Form.Item label={voiding ? '作废原因' : '退回原因'} required>
             <Input.TextArea
               rows={4}
               maxLength={500}
               showCount
-              value={returnReason}
-              onChange={(event) => setReturnReason(event.target.value)}
-              placeholder="请说明需要补充或修改的内容"
+              value={reviewReason}
+              onChange={(event) => setReviewReason(event.target.value)}
+              placeholder={voiding ? '请说明作废原因' : '请说明需要补充或修改的内容'}
             />
           </Form.Item>
         </Form>

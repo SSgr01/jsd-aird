@@ -30,6 +30,19 @@ test('each period retains the native transcript but cannot reuse stale evidence 
   assert.equal(JSON.stringify(restored.deriveMessages()),context);
 });
 
+test('existing schedules receive current research guidance on their first period without changing the schedule',()=>{
+  const session=Session.create('existing-briefing');
+  session.append('turn/start',{turn:1});
+  session.append('user/message',createUserMessage({source:{kind:'schedule'},content:[{type:'text',text:'原有日报内容'}]}),{surfaceOp:'append'});
+  beginBriefingPeriod({session},1,0,new AbortController().signal);
+  const context=JSON.stringify(session.deriveMessages());
+  assert.match(context,/原有日报内容/);assert.match(context,/get_experiment_loop/);assert.match(context,/get_compute_result/);
+  const restored=Session.create(session.id,session.snapshotEvents());
+  const count=restored.snapshotEvents().length;
+  beginBriefingPeriod({session:restored},1,1,new AbortController().signal);
+  assert.equal(restored.snapshotEvents().length,count);
+});
+
 test('reconciliation keeps native edits, pauses and deletions without matching titles',()=>{
   const plan={tasks:{morning:{builtin_id:'project-morning',native_id:'native-morning',session_id:'session-morning'},
     weekly:{builtin_id:'research-weekly',native_id:'native-weekly',session_id:'session-weekly'},

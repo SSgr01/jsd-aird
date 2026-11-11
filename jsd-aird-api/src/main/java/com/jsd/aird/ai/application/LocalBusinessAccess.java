@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 @Profile("local & !prod")
 @ConditionalOnProperty(prefix = "app.ai.harness", name = "business-local-access", havingValue = "true")
 public class LocalBusinessAccess {
-    private static final Set<String> COMPUTE_TYPES = Set.of("AI_PREDICTION", "AI_FORMULA_DESIGN", "AI_EXPERIMENT_OPTIMIZATION");
+    private static final Set<String> COMPUTE_TYPES = Set.of("AI_PREDICTION", "AI_FORMULA_DESIGN", "AI_EXPERIMENT_OPTIMIZATION", "AI_MODEL_TRAINING");
     private final Set<String> readTypes;
 
     public LocalBusinessAccess(List<BusinessReadPort> readers) {

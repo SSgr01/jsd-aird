@@ -12,6 +12,8 @@ import { bindingCursor, mergeBinding } from './binding-state.mjs';
 import { EventProjection, StreamProjection } from './event-projection.mjs';
 import { updateNativeInbox } from './inbox-actions.mjs';
 import { citationStream } from './citation-stream.mjs';
+import { researchWordingStream } from './research-wording.mjs';
+import { approveLiterature } from './literature-approval.mjs';
 import { modelResult, renderModelResult, presentation } from './model-view.mjs';
 import { repairInstruction } from './citation-repair.mjs';
 import { StageTiming } from './stage-timing.mjs';
@@ -205,6 +207,7 @@ export async function apply(ctx) {
         if (!bound || !bound.tools.some(tool => tool.name === spec.name)) throw new Error('CAPABILITY_NOT_AUTHORIZED');
         await business('gate', { run_id: bound.id, epoch:bound.epoch, session_id: execution.agent.id, turn: bound.dsh_turn,
           kind: 'tool', call_id: execution.callId }, execution.signal);
+        await approveLiterature(ctx,business,bound,spec.name,args,execution);
         if(spec.name==='artifact_save')return native.register(execution,args.path,0,args.source_quotes||[]);
         let result = await business('tool', { run_id: bound.id, epoch:bound.epoch, session_id: execution.agent.id,
           turn: bound.dsh_turn, call_id: execution.callId, name: spec.name, arguments: args }, execution.signal);
@@ -349,7 +352,7 @@ export async function apply(ctx) {
     let completed = false;
     try {
       const stream = ['report-review', 'evidence-score'].includes(options.purpose) || title
-        ? next() : citationStream(next(), bound.citation_links || {});
+        ? next() : citationStream(researchWordingStream(next()), bound.citation_links || {});
       for await (const chunk of stream) { assembler.push(chunk); yield chunk; }
       completed = true;
     } finally {

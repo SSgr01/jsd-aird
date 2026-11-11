@@ -41,12 +41,13 @@ class WorkbenchModelRegistrationPostgresTest {
                         materialA,"WB-TEST-"+materialA,"测试树脂",actor.userId().toString(),actor.userId().toString(),
                         materialB,"WB-TEST-"+materialB,"测试助剂",actor.userId().toString(),actor.userId().toString());
                 var a="formula:"+materialA;var b="formula:"+materialB;var id=UUID.randomUUID();
-                var request=json.createObjectNode();var xs=request.putArray("xColumns");
+                var request=json.createObjectNode().put("dataNature","SYNTHETIC");var xs=request.putArray("xColumns");
                 xs.addObject().put("code",a).put("name","树脂 A比例").put("kind","NUMERIC").put("unit","%")
                         .put("semanticType","MATERIAL_RATIO").put("mappingStatus","MAPPED").put("materialId",a.substring(8)).put("materialCode","R-1").put("compositionBasis","MASS_PERCENT");
                 xs.addObject().put("code",b).put("name","树脂 B比例").put("kind","NUMERIC").put("unit","%")
                         .put("semanticType","MATERIAL_RATIO").put("mappingStatus","MAPPED").put("materialId",b.substring(8)).put("materialCode","R-2").put("compositionBasis","MASS_PERCENT");
-                request.putObject("yColumn").put("code","wear").put("name","耐磨次数").put("kind","NUMERIC");
+                request.putObject("yColumn").put("code","wear").put("name","耐磨次数").put("kind","NUMERIC")
+                        .putObject("testConditions").put("load_g",500);
                 var rows=request.putArray("rows");for(int i=0;i<8;i++)rows.addObject().put("id","row-"+i).putObject("values").put(a,20+i).put(b,80-i).put("wear",100+i*10);
                 var result=json.createObjectNode().put("rowCount",8);result.putObject("metrics").put("selectedAlgorithm","LINEAR_REGRESSION").put("mae",0.5);
                 var domain=result.putObject("applicabilityDomain");domain.putArray("features").add(a).add(b);domain.putArray("minimum").add(20).add(73);domain.putArray("maximum").add(27).add(80);
@@ -63,6 +64,8 @@ class WorkbenchModelRegistrationPostgresTest {
                 assertThat(restored.frozenDictionary().path("compositionStatus").asText()).isEqualTo("COMPLETE");
                 assertThat(restored.frozenDictionary().path("materials").get(0).path("materialId").asText()).isEqualTo(a.substring(8));
                 assertThat(restored.definition().path("modelSource").path("yColumn").path("code").asText()).isEqualTo("wear");
+                assertThat(restored.definition().path("testConditions").path("load_g").asInt()).isEqualTo(500);
+                assertThat(jdbc.queryForObject("SELECT production_eligible FROM ai.model_version WHERE organization_id=? AND workbench_run_id=?",Boolean.class,actor.organizationId(),id)).isFalse();
                 assertThat(restored.artifactSha()).isEqualTo("c".repeat(64));
                 verify(store,times(1)).verify(anyString(),anyString(),anyString());
             } finally {ActorContext.clear();}

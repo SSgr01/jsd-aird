@@ -82,7 +82,7 @@ public class AgentDelegation {
         if (node.path("automation_grant_id").asText("").isBlank()) return;
         if (!"research-briefings".equals(node.path("scope").asText()) || !java.util.Set.of(
                 "runtime_context", "authorize_sources", "validate_cached_evidence", "context_resource",
-                "get_research_briefing_context", "business_search", "business_read", "business_links",
+                "get_research_briefing_context", "get_experiment_loop", "get_compute_result", "business_search", "business_read", "business_links",
                 "search_projects", "get_project_snapshot", "list_project_stages", "list_project_tasks", "get_task_detail", "get_project_records",
                 "search_experiments", "get_experiment_record", "web_search_status", "authorize",
                 "knowledge_search", "document_read", "document_outline", "table_read", "source_context", "source_image", "query_structured_data"
@@ -91,7 +91,7 @@ public class AgentDelegation {
             String type = "business_search".equals(action) ? arguments.path("type").asText()
                 : arguments.path("ref").path("type").asText();
             if ("business_search".equals(action) && type.isBlank()) return;
-            if (!java.util.Set.of("PROJECT", "STAGE", "TASK", "REQUIREMENT", "MATERIAL", "EXPERIMENT", "STRUCTURED_DATA").contains(type))
+            if (!java.util.Set.of("PROJECT", "STAGE", "TASK", "REQUIREMENT", "MATERIAL", "EXPERIMENT", "STRUCTURED_DATA", "RAW_MATERIAL", "RAW_MATERIAL_SOURCE").contains(type))
                 throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "后台授权仅包含研发资料");
         }
     }

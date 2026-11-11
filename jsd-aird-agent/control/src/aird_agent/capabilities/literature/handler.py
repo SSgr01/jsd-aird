@@ -519,13 +519,13 @@ class LiteratureTools:
         if name in {"bibliography_lookup", "literature_search", "literature_expand", "literature_acquire"}:
             if name == "literature_acquire" and "private-literature" not in run.get("pack_ids", []):
                 raise HTTPException(409, "PRIVATE_LITERATURE_CAPABILITY_REQUIRED")
-            approval_key = digest({"tool": name, "arguments": args})
+            approval_key = digest({"tool": name, "arguments": args, "call_id": call_id})
             approval = run["approvals"].get(approval_key)
             if approval and approval.get("decision") == "REJECTED":
                 return {"error": "EXTERNAL_QUERY_REJECTED", "retryable": False}
             if approval and approval.get("expires_at", 0) <= time.time():
                 approval = None
-            if not approval or approval.get("decision") != "APPROVED":
+            if not approval or approval.get("decision") != "APPROVED" or approval.get("call_id") != call_id:
                 async with self.store.transaction(principal, run["id"]) as conn:
                     current = await self.active(principal, run["id"], run["epoch"], conn)
                     current["status"] = "WAITING_APPROVAL"

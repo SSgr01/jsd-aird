@@ -24,7 +24,7 @@ def model_candidate(candidate, links=None):
         **({"url": links[candidate["evidence_id"]]["url"]}
            if links and candidate.get("evidence_id") in links
            and not document_identity(source_label(candidate.get("source") or {})) else {}),
-        **{key: candidate[key] for key in ("already_retrieved", "quote_count", "table_context") if key in candidate},
+        **{key: candidate[key] for key in ("already_retrieved", "quote_count", "table_context", "sample_associations") if key in candidate},
         **{key: candidate[key] for key in ("record_key", "field", "value", "unit", "value_type", "condition", "source_status") if key in candidate},
     }.items() if value is not None}
 
@@ -110,7 +110,7 @@ def _model_result(result):
     for key, value in result.items():
         if key in {"workspace_path", "content_sha256", "content_base64", "retrieval_trace", "source_refs", "citation_links"}:
             continue
-        if key in {"candidates", "context_candidates"} and isinstance(value, list):
+        if key in {"candidates", "context_candidates"} and isinstance(value, list) and all(isinstance(item, dict) and "source" in item for item in value):
             output[key] = [model_candidate(item, result.get("citation_links")) for item in value]
         elif key == "hits" and isinstance(value, list):
             output[key] = [model_hit(item) for item in value]

@@ -55,6 +55,23 @@ class HistoricalOptimizationCompositionTest {
                 .hasMessageContaining("配方还缺少材料：材料1");
     }
 
+    @Test void gramRecipesKeepTheirObservedTotalAndFixedMaterials() {
+        var data=dataset("g","MASS_AMOUNT");
+        data.path("columns").forEach(column->{if(column.path("code").asText().startsWith("formula:"))((ObjectNode)column).put("semanticType","MATERIAL_AMOUNT");});
+        submit(data,List.of(code(0),code(1)));
+        assertThat(submitted.get().path("formulaTotal").asDouble()).isEqualTo(100);
+        assertThat(submitted.get().at("/compositionGroups/0/total").asDouble()).isEqualTo(100);
+        assertThat(submitted.get().at("/compositionGroups/0/codes")).hasSize(4);
+        assertThat(submitted.get().path("features").get(3).path("fixedValue").asDouble()).isEqualTo(5);
+    }
+
+    @Test void differingGramBatchSizesNeedAnExplicitCandidateTotal() {
+        var data=dataset("g","MASS_AMOUNT");
+        data.path("columns").forEach(column->{if(column.path("code").asText().startsWith("formula:"))((ObjectNode)column).put("semanticType","MATERIAL_AMOUNT");});
+        ((ObjectNode)data.at("/rows/0/values")).put(code(0),62);
+        assertThatThrownBy(()->submit(data,List.of(code(0),code(1)))).hasMessageContaining("请明确本轮配方总量formulaTotal");
+    }
+
     private String code(int index){return "formula:"+ids.get(index);}
     private ObjectNode dataset(String unit,String basis) {
         var data=json.createObjectNode().put("id",datasetId.toString()).put("name","涂层配方");
@@ -79,7 +96,7 @@ class HistoricalOptimizationCompositionTest {
         when(jdbc.queryForObject(anyString(),eq(Integer.class),any(Object[].class))).thenReturn(1);
         when(repository.materialCatalog(any())).thenReturn(new MaterialCatalogSnapshot(java.util.Map.of(),java.util.Map.of(),java.util.Set.copyOf(ids)));
         var jobs=mock(OpsAsyncFacade.class,call->call.getMethod().getName().equals("enqueue")?UUID.randomUUID():RETURNS_DEFAULTS.answer(call));
-        var service=new OptimizationService(repository,null,new ConfigurationHashing(json),jobs,mock(AuditLogFacade.class),mock(AuthorizationService.class),null,json,false);
+        var service=new OptimizationService(repository,null,new ConfigurationHashing(json),jobs,mock(AuditLogFacade.class),mock(AuthorizationService.class),null,json,false,null);
         var request=json.createObjectNode().put("datasetId",datasetId.toString()).put("yColumn","gloss");
         request.set("xColumns",json.valueToTree(selected));
         var previousRequest=json.createObjectNode();previousRequest.set("datasetSnapshot",data);

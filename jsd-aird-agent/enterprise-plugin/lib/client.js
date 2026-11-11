@@ -459,6 +459,11 @@ function projectSourceBlocks(blocks, origin='http://localhost') {
       search_projects:'查找项目',get_project_snapshot:'读取项目',list_project_stages:'读取项目阶段',
       list_project_tasks:'读取项目任务',get_task_detail:'读取任务详情',search_experiments:'查找实验',
       get_experiment_record:'读取实验版本',create_experiment_draft:'创建实验草稿',
+      get_compute_context:'读取计算上下文',run_model_training:'建立模型',activate_trained_model:'启用模型',
+      get_compute_result:'读取计算结果',get_compute_receipt:'查询操作回执',
+      run_prediction:'预测配方表现',run_formula_design:'推荐配方',run_experiment_optimization:'推荐实验方案',
+      save_experiment_measurements:'保存实测草稿',get_experiment_loop:'读取实验进展',
+      continue_experiment_optimization:'继续优化',get_research_briefing_context:'读取项目进展',
       report_check:'核查正式报告',report_save:'保存正式报告',artifact_save:'登记成果',
       evidence_score:'筛选证据',evidence_save:'保存证据',matrix_record:'整理研究依据',note_save:'保存研究笔记'};
     function BusinessTool({block,toolName,phase,useDisclosure}) {
@@ -468,14 +473,16 @@ function projectSourceBlocks(blocks, origin='http://localhost') {
       try {value = JSON.parse(block.content?.filter(part=>part.type==='text').map(part=>part.text).join('') || '{}');}
       catch {value = {};}
       const rows = value.candidates || value.hits || value.entries || [];
-      const query = block.args?.text('query');
+      const businessText = text => String(text || '').replace(/测试实验|验收|测试|模拟|验证/g,
+        word => ({验收:'完成检查',测试:'测定',模拟:'研发参考',验证:'评估'})[word] || word);
+      const query = businessText(block.args?.text('query'));
       const failed = block.isError || meta.failed || Boolean(value.error);
       const summary = failed ? '操作未完成' : phase !== 'result' ? query || '处理中' :
-        meta.count !== undefined ? meta.count+' 条结果' : meta.summary || '已完成';
+        meta.count !== undefined ? meta.count+' 条结果' : businessText(meta.summary) || '已完成';
       const content = rows.slice(0,8).map((row,index)=>h('section',{key:index},
         h('strong',null,row.title || row.name || row.source?.title || '结果 '+(index+1)),
         h('p',{style:{whiteSpace:'pre-wrap'}},String(row.text || row.snippet || row.quote?.text || '').slice(0,1800))));
-      const errorText = String(meta.summary || value.error || '业务请求未完成，请稍后继续。')
+      const errorText = businessText(meta.summary || value.error || '业务请求未完成，请稍后继续。')
         .replace(/^[A-Z][A-Z_0-9]+:\s*/, '');
       return h(DisclosureRow,{className:'jsd-business-tool',contentClassName:'jsd-tool-header',
         contentLayoutClassName:'jsd-tool-header-content',
@@ -483,7 +490,7 @@ function projectSourceBlocks(blocks, origin='http://localhost') {
         open:expanded,expandable:phase==='result',onToggle:toggle,expandOnRowClick:true,
         running:phase!=='result',collapsedContent:h('span',{className:'jsd-tool-summary',title:summary},' · '+summary)},
         h('div',{className:'jsd-tool-content'},
-          failed ? h('p',{role:'status'},errorText) : content.length ? content : h('p',null,meta.summary || '业务结果已返回'),
+          failed ? h('p',{role:'status'},errorText) : content.length ? content : h('p',null,businessText(meta.summary) || '业务结果已返回'),
           (meta.sources || []).map((source,index)=>h('p',{key:'source-'+index},h('a',{href:source.url,className:'jsd-source-link',title:source.label},
             sourceLinks.sourceLinkLabel(source.label,new URL(source.url,location.origin)))))));
     }

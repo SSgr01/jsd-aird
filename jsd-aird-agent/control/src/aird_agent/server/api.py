@@ -370,6 +370,9 @@ def create_app(settings=None, store=None, service=None):
                 "instructions": service.instructions_for(run)}}
         if action == "gate":
             return await service.gate_dsh(user, body)
+        if action == "literature-approval":
+            from aird_agent.capabilities.literature.approval import native_literature_approval
+            return await native_literature_approval(service, user, body)
         if action == "auxiliary-admit":
             return await service.admit_auxiliary(user, body)
         if action in {"model-result", "auxiliary-result"}:

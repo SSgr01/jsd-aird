@@ -167,6 +167,25 @@ class BusinessDataServiceTest {
         assertThat(BusinessViews.markdown("项目", facts)).isEqualTo(evidence);
         assertThat(facts.path("materialCount").asInt()).isZero();
     }
+    @Test void batchRelationsUseRecordedVersionAndRecheckUpstreamAccess() throws Exception {
+        var ref=BusinessViews.ref("EXPERIMENT",id(81)).put("version_id",id(82).toString());
+        var origin=json.createObjectNode();origin.putArray("candidates").addObject().set("ref",ref);
+        var batches=origin.putArray("batch_sources");
+        batches.addObject().put("sourceExperimentId",id(83).toString()).put("sourceVersionId",id(84).toString()).put("sourceSampleKey","upstream-a").put("targetColumn",2);
+        batches.addObject().put("sourceExperimentId",id(83).toString()).put("sourceVersionId",id(84).toString()).put("sourceSampleKey","upstream-b").put("targetColumn",3);
+        when(existing.invoke(eq("business_read"),any())).thenAnswer(call->{
+            var target=call.getArgument(1,ObjectNode.class).path("ref");
+            if(target.path("id").asText().equals(id(81).toString()))return origin;
+            assertThat(target.path("version_id").asText()).isEqualTo(id(84).toString());
+            var found=json.createObjectNode();found.putArray("candidates").addObject().put("text","上游批次正文");return found;
+        });
+        var args=json.createObjectNode().put("relation","来源实验");args.set("ref",ref);
+        var result=service.invoke("business_links",args);
+        assertThat(result.path("candidates")).hasSize(2);
+        assertThat(result.path("candidates").path(1).path("sample_associations")).hasSize(2);
+        doThrow(new ApiException(ApiErrorCode.DATA_SCOPE_DENIED)).when(existing).invoke(eq("business_read"),argThat(a->a!=null&&a.path("ref").path("id").asText().equals(id(83).toString())));
+        assertThat(service.invoke("business_links",args).path("candidates")).hasSize(1);
+    }
     @Test void markdownPreservesUnknownFieldsEscapesTablesAndRemovesEditorProtocol() throws Exception {
         var facts = BusinessViews.clean(object("{\"zero\":0,\"missing\":null,\"newField\":\"未测\",\"allowedActions\":[\"DELETE\"],\"workbookSnapshot\":{},\"rows\":[{\"sample\":\"A|B\",\"value\":0}]}"));
         String text = BusinessViews.markdown("隔离样本", facts);

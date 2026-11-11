@@ -48,6 +48,11 @@ public class WorkbenchModelRegistrationService {
         if(!"SUCCEEDED".equals(run.path("status").asText())) throw invalid("请等待训练成功后再注册模型");
         var artifact=artifacts.verify(run.path("artifactKey").asText(),run.path("artifactHash").asText(),"application/zip");
         var request=sanitizeMaterialMappings(run.path("request"));
+        // Older saved runs keep these conditions in the full dataset snapshot.
+        for(var column:request.path("datasetSnapshot").path("columns"))
+            if(column.path("code").equals(request.path("yColumn").path("code"))&&column.has("testConditions")
+                    &&!request.path("yColumn").has("testConditions"))
+                ((ObjectNode)request.path("yColumn")).set("testConditions",column.path("testConditions").deepCopy());
         var result=jdbc.queryForObject("SELECT result_jsonb FROM ai.modeling_workbench_run WHERE organization_id=? AND id=?",
                 (rs,n)->parse(rs.getString(1)),org,runId);
         var identity=familyIdentity(request); var familyHash=hashing.hash(identity);
@@ -68,7 +73,7 @@ public class WorkbenchModelRegistrationService {
         target.set("classes",classes);target.set("observationSemantics",json.createObjectNode());
         var modelSource=target.putObject("modelSource").put("datasetName",run.path("datasetName").asText());
         modelSource.set("xColumns",request.path("xColumns"));modelSource.set("yColumn",y);
-        for(var metadata:List.of("testMethod","testStage","testMethods","semanticKey","semanticType","materialId","materialCode","mappingStatus","compositionBasis","measurementComponent"))if(y.has(metadata))target.set(metadata,y.get(metadata));
+        for(var metadata:List.of("testMethod","testStage","testMethods","testConditions","semanticKey","semanticType","materialId","materialCode","mappingStatus","compositionBasis","measurementComponent"))if(y.has(metadata))target.set(metadata,y.get(metadata));
         target.put("sha256",hashing.hash(target));
         var scheme=ref(schemeId);scheme.put("version",configurationVersion);scheme.put("targetVersionId",targetVersionId.toString());var fields=scheme.putArray("fields");
         for(var x:request.path("xColumns")){
@@ -76,7 +81,7 @@ public class WorkbenchModelRegistrationService {
                     .put("code",code).put("name",x.path("name").asText()).put("valueType","NUMERIC".equals(x.path("kind").asText())?"NUMBER":"CATEGORY")
                     .put("required",true).put("acquisitionTiming","PRE_EXPERIMENT");
             if(x.hasNonNull("unit"))field.set("unit",x.path("unit"));
-            for(var metadataKey:List.of("semanticKey","semanticType","materialId","materialCode","mappingStatus","compositionBasis","testMethods","testStage","measurementComponent"))if(x.has(metadataKey))field.set(metadataKey,x.get(metadataKey));
+            for(var metadataKey:List.of("semanticKey","semanticType","materialId","materialCode","mappingStatus","compositionBasis","testMethods","testConditions","testStage","measurementComponent"))if(x.has(metadataKey))field.set(metadataKey,x.get(metadataKey));
             var encoding=field.putObject("encoding");
             if("CATEGORICAL".equals(x.path("kind").asText())){var values=new TreeSet<String>();request.path("rows").forEach(r->values.add(r.path("values").path(code).asText().strip()));var allowed=encoding.putArray("allowedValues");values.forEach(allowed::add);}
         }
@@ -111,6 +116,9 @@ public class WorkbenchModelRegistrationService {
         var card=json.createObjectNode().put("origin","WORKBENCH").put("workbenchRunId",runId.toString()).put("datasetName",run.path("datasetName").asText());
         card.set("xColumns",request.path("xColumns"));card.set("yColumn",y);card.set("targetDefinition",target);card.set("inputScheme",scheme);
         card.set("materialDictionary",materialDictionary);
+        var dataNature=request.path("dataNature").asText("REAL");
+        if(!java.util.Set.of("REAL","SYNTHETIC").contains(dataNature))throw invalid("训练来源性质无效");
+        card.put("dataNature",dataNature);
         card.put("rowCount",result.path("rowCount").asInt());
         var domain=(ObjectNode)result.path("applicabilityDomain").deepCopy();domain.put("nearBoundaryRatio",0.05);
         if(previous!=null)jdbc.update("UPDATE ai.model_version SET status='RETIRED',revision=revision+1,updated_at=now() WHERE organization_id=? AND id=?",org,previous);
@@ -118,9 +126,9 @@ public class WorkbenchModelRegistrationService {
                 INSERT INTO ai.model_version(id,organization_id,target_id,target_version_id,input_scheme_id,workbench_run_id,
                     model_artifact_id,model_type,status,metrics_jsonb,applicability_domain_jsonb,model_card_jsonb,contract_version,
                     model_hash,created_by,version_no,data_nature,production_eligible)
-                VALUES(?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,'modeling-workbench.v1',?,?,?,'REAL',true)
+                VALUES(?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,'modeling-workbench.v1',?,?,?,?,?)
                 """,modelId,org,targetId,targetVersionId,schemeId,runId,artifactId,result.path("metrics").path("selectedAlgorithm").asText(),
-                pg(result.path("metrics")),pg(domain),pg(card),hashing.hash(List.of(runId,artifact.sha256())),actor.userId(),version);
+                pg(result.path("metrics")),pg(domain),pg(card),hashing.hash(List.of(runId,artifact.sha256())),actor.userId(),version,dataNature,"REAL".equals(dataNature));
         jdbc.update("INSERT INTO ai.model_release(id,organization_id,target_id,model_version_id,previous_model_version_id,action,reason,actor_id,request_id,idempotency_key) VALUES(?,?,?,?,?,?,'建模结果注册',?,?,?)",
                 UUID.randomUUID(),org,targetId,modelId,previous,previous==null?"ACTIVATE":"REPLACE",actor.userId(),RequestIdHolder.currentOrUnknown(),"WB_REGISTER:"+runId);
         audit.append(org,actor.userId(),"AI_WORKBENCH_MODEL_REGISTERED","AI_MODEL_VERSION",modelId,card);
@@ -139,7 +147,7 @@ public class WorkbenchModelRegistrationService {
         x.sort(Comparator.comparing(JsonNode::toString));identity.set("x",json.valueToTree(x));return identity;
     }
     private JsonNode columnIdentity(JsonNode column){var out=json.createObjectNode();
-        for(var key:List.of("code","kind","unit","testMethod","testStage","testMethods","semanticKey","semanticType","materialId","materialCode","mappingStatus","compositionBasis","measurementComponent"))out.set(key,(column.hasNonNull(key)&&!(column.get(key).isArray()&&column.get(key).isEmpty()))?column.get(key):json.nullNode());return out;}
+        for(var key:List.of("code","kind","unit","testMethod","testStage","testMethods","testConditions","semanticKey","semanticType","materialId","materialCode","mappingStatus","compositionBasis","measurementComponent"))out.set(key,(column.hasNonNull(key)&&!(column.get(key).isArray()&&column.get(key).isEmpty()))?column.get(key):json.nullNode());return out;}
     private ObjectNode sanitizeMaterialMappings(JsonNode source) {
         var request=(ObjectNode)source.deepCopy();
         var candidates=new java.util.LinkedHashSet<String>();

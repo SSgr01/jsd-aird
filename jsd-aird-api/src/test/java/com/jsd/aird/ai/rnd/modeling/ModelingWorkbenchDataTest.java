@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ModelingWorkbenchDataTest {
     private final ObjectMapper json = new ObjectMapper();
-    private final ModelingWorkbenchService service = new ModelingWorkbenchService(null, json, null, null, null, null, null);
+    private final ModelingWorkbenchService service = new ModelingWorkbenchService(null, json, null, null, null, null, null, null, null);
 
     @Test
     void freezesAllSelectedRecordsForChecksAndKeepsOnlyNormalizedCompleteRowsForRegistration() {

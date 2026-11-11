@@ -47,16 +47,27 @@ public class OptimizationService {
     private final TemplateDataImportFacade templates;
     private final ObjectMapper json;
     private final boolean inlineWorker;
+    private ResearchObservationService loopObservations;
+    private com.jsd.aird.mdm.api.RawMaterialFacade rawMaterials;
+    private final com.jsd.aird.rnd.api.ResearchExperimentFacade sourceAccess;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.jsd.aird.ai.application.ResearchActivityService activities;
+    @org.springframework.beans.factory.annotation.Autowired
+    void loopServices(ResearchObservationService observations,com.jsd.aird.mdm.api.RawMaterialFacade materials) {
+        this.loopObservations=observations;this.rawMaterials=materials;
+    }
 
     public OptimizationService(OptimizationRepository repository, ModelComputeClient compute,
                                 ConfigurationHashing hashing, OpsAsyncFacade jobs, AuditLogFacade audit,
                                 AuthorizationService authorization,
                                 TemplateDataImportFacade templates, ObjectMapper json,
-                                @Value("${JSD_AIRD_R09_INLINE_ACCEPTANCE_WORKER:false}") boolean inlineWorker) {
+                                @Value("${JSD_AIRD_R09_INLINE_ACCEPTANCE_WORKER:false}") boolean inlineWorker,
+                                com.jsd.aird.rnd.api.ResearchExperimentFacade sourceAccess) {
         this.repository=repository;this.compute=compute;
         this.hashing=hashing;this.jobs=jobs;this.audit=audit;this.authorization=authorization;
         this.templates=templates;
         this.json=json;this.inlineWorker=inlineWorker;
+        this.sourceAccess=sourceAccess;
     }
 
     public JsonNode historyDatasets(String keyword) {
@@ -338,6 +349,11 @@ public class OptimizationService {
         var datasetIds=requestedHistoryDatasetIds(body);var datasetId=datasetIds.getFirst();
         boolean useFrozenRows=previous!=null;
         var dataset=useFrozenRows?previous.request().path("datasetSnapshot"):mergedHistoryDataset(datasetIds,body.path("expectedDatasetHashes"));
+        if(sourceAccess!=null) {
+            var checked=new HashSet<String>();
+            for(var row:dataset.path("rows"))if(checked.add(row.path("sourceExperimentId").asText()+":"+row.path("versionId").asText()))
+                sourceAccess.record(actor.organizationId(),UUID.fromString(row.path("sourceExperimentId").asText()),UUID.fromString(row.path("versionId").asText()));
+        }
         if(!dataset.path("rows").isArray())throw validation("本任务没有保存样品数据，请重新选择数据开始优化");
         var selectedRows=selectedHistoryRows(dataset,body);
         if(selectedRows.isEmpty())throw validation("请至少勾选一条实验记录");
@@ -398,6 +414,22 @@ public class OptimizationService {
         if(!selectedFormulaCodes.isEmpty()&&!featureCodes.containsAll(formulaCodes))
             throw validation("配方还缺少材料："+formulaCodes.stream().filter(code->!featureCodes.contains(code)).map(code->columns.get(code).path("name").asText(code)).collect(java.util.stream.Collectors.joining("、")));
         var compositionGroups=json.createArrayNode();
+        Double amountTotal=null;
+        if(ratioColumns.isEmpty() && formulaCodes.size()>=2 && featureCodes.containsAll(formulaCodes)) {
+            if(useFrozenRows && previous.request().hasNonNull("formulaTotal"))amountTotal=previous.request().path("formulaTotal").asDouble();
+            else if(body.has("formulaTotal")) {
+                if(!body.path("formulaTotal").isNumber())throw validation("配方总量须为正数，单位为g");
+                amountTotal=body.path("formulaTotal").asDouble();
+            } else for(var row:selectedRows) {
+                if(featureCodes.stream().anyMatch(code->!row.path("values").hasNonNull(code))||!row.path("values").path(targetCode).isNumber())continue;
+                double total=0;
+                for(var code:formulaCodes)total+=row.path("values").path(code).asDouble();
+                if(amountTotal!=null && Math.abs(amountTotal-total)>0.001)throw validation("历史配方总量不同，请明确本轮配方总量formulaTotal，单位为g");
+                amountTotal=total;
+            }
+            if(amountTotal==null||!Double.isFinite(amountTotal)||amountTotal<=0)throw validation("配方总量须为正数，单位为g");
+            var group=compositionGroups.addObject().put("total",amountTotal);group.set("codes",json.valueToTree(formulaCodes));
+        }
         if(!ratioColumns.isEmpty() && formulaCodes.size()>=2&&featureCodes.containsAll(formulaCodes)){
             for(var row:selectedRows){
                 // Incomplete X/Y rows are excluded below, as shown in the selection preview.
@@ -423,14 +455,14 @@ public class OptimizationService {
             if(!"NUMERIC".equals(feature.path("kind").asText())) {
                 var distinct=new HashSet<String>();selectedRows.forEach(row -> { var value=row.path("values").path(code);if(!value.isMissingNode()&&!value.isNull())distinct.add(value.asText()); });
                 if(distinct.size()>1)adjustable=true;
-            } else if((!selectedFormulaCodes.contains(code) || "MATERIAL_AMOUNT".equals(columns.get(code).path("semanticType").asText()))
+            } else if(!selectedFormulaCodes.contains(code)
                     && feature.path("minimum").asDouble()<feature.path("maximum").asDouble())adjustable=true;
         }
         for(var group:compositionGroups) {
             double minimum=0,maximum=0;
             for(var feature:featureNodes)if(formulaCodes.contains(feature.path("code").asText())) { minimum+=feature.path("minimum").asDouble();maximum+=feature.path("maximum").asDouble(); }
             var total=group.path("total").asDouble();
-            if(minimum>total+1e-8||maximum<total-1e-8)throw validation("材料比例上下限无法合计为100%，请调整对应材料的范围或固定值");
+            if(minimum>total+1e-8||maximum<total-1e-8)throw validation("原料上下限无法合计为配方目标总量，请调整对应原料的范围或固定值");
             for(var feature:featureNodes)if(formulaCodes.contains(feature.path("code").asText())) {
                 var low=feature.path("minimum").asDouble();var high=feature.path("maximum").asDouble();
                 if(Math.min(high,total-minimum+low)-Math.max(low,total-maximum+high)>1e-9)adjustable=true;
@@ -474,10 +506,27 @@ public class OptimizationService {
                 .put("candidateCount",4).put("selectedRowCount",selectedRows.size());
         request.set("datasetIds",json.valueToTree(datasetIds));request.set("selectedRowIdsByDataset",selectedIdsByDataset);
         request.put("submissionFingerprint",submissionFingerprint);
+        if(body.hasNonNull("trainingRunId"))request.set("sourceTrainingRunId",body.path("trainingRunId"));
         if (isNonNegativeCountUnit(targetUnit(dataset.path("columns"), targetCode)))
             request.putObject("resultConstraints").put("nonNegative", true);
         request.set("datasetSnapshot",dataset.deepCopy());request.put("projectionVersion",HistorySampleProjection.VERSION);
         request.set("features",featureNodes);request.set("rows",rows);request.set("columns",dataset.path("columns").deepCopy());
+        if(amountTotal!=null)request.put("formulaTotal",amountTotal);
+        if(useFrozenRows) {
+            request.put("parentRunId",previous.id().toString());
+            request.set("comparisonContext",previous.request().path("comparisonContext"));
+            request.set("baseRows",previous.request().path("baseRows"));
+            request.set("observationManifest",body.path("observationManifest"));
+            request.set("materialDossiers",previous.request().path("materialDossiers"));
+            if(rawMaterials!=null)rawMaterials.authorizeSnapshot(request.path("materialDossiers"));
+        } else {
+            request.set("baseRows",json.valueToTree(selectedRows));
+            var context=request.putObject("comparisonContext");
+            var anchorSample=selectedRows.stream().filter(row->row.path("versionId").asText().equals(anchor.versionId().toString())
+                &&row.path("values").path(targetCode).isNumber()&&featureCodes.stream().allMatch(code->row.path("values").hasNonNull(code))).findFirst().orElseThrow();
+            anchorSample.path("values").properties().forEach(entry->{if(entry.getKey().startsWith("process:")&&!featureCodes.contains(entry.getKey()))context.set(entry.getKey(),entry.getValue());});
+            if(rawMaterials!=null)request.set("materialDossiers",rawMaterials.snapshot(dataset.path("columns")));
+        }
         if(!compositionGroups.isEmpty())request.set("compositionGroups",compositionGroups);
         var normalized=hashing.canonical(request);var requestHash=hashing.hash(normalized);var requestId=RequestIdHolder.currentOrUnknown();var seed=seed(requestHash);var runId=UUID.randomUUID();
         var config=json.createObjectNode().put("algorithm","GAUSSIAN_PROCESS_EI").put("candidateCount",4);
@@ -487,6 +536,14 @@ public class OptimizationService {
         try{inserted=repository.insertRun(runId,actor.organizationId(),actor.userId(),idempotencyKey.strip(),requestId,requestHash,normalized,json.createObjectNode(),seed,config,anchor,hashing.hash(frozen),frozen,optimization);}
         catch(DataIntegrityViolationException e){throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"当前组织已有实验优化任务执行中",e);}
         if(!inserted){var old=repository.byKey(actor.organizationId(),actor.userId(),idempotencyKey).orElseThrow();if(!submissionFingerprint.equals(old.request().path("submissionFingerprint").asText()))throw new ApiException(ApiErrorCode.IDEMPOTENCY_CONFLICT);return accepted(old);}
+        if(useFrozenRows)repository.jdbc().update("UPDATE ai.research_run_v2 SET parent_run_id=? WHERE organization_id=? AND id=?",previous.id(),actor.organizationId(),runId);
+        if(activities!=null&&previous!=null) {
+            var parent=activities.authorizedContext("EXPERIMENT_OPTIMIZATION",previous.id());var metadata=json.createObjectNode();
+            if(parent.hasNonNull("projectId"))metadata.set("project_id",parent.path("projectId"));
+            metadata.set("source_refs",parent.path("sourceRefs").isArray()?parent.path("sourceRefs"):json.createArrayNode());
+            metadata.set("research_basis",parent.path("researchBasis").isArray()?parent.path("researchBasis"):json.createArrayNode());
+            activities.bind("EXPERIMENT_OPTIMIZATION",runId,metadata);
+        }
         var payload=json.createObjectNode().put("organizationId",actor.organizationId().toString()).put("actorId",actor.userId().toString()).put("runId",runId.toString()).put("requestId",requestId);
         var jobId=jobs.enqueue(actor.organizationId(),"AI_EXPERIMENT_OPTIMIZATION_V2",payload,"ai-experiment-optimization:"+runId,45,3);repository.attachJob(actor.organizationId(),runId,jobId);
         audit.append(actor.organizationId(),actor.userId(),"AI_EXPERIMENT_OPTIMIZATION_STARTED","AI_RESEARCH_RUN",runId,normalized);
@@ -520,24 +577,27 @@ public class OptimizationService {
         var previous=repository.byId(actor.organizationId(),actor.userId(),previousRunId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND));
         if(!"HISTORICAL_GP_BO".equals(previous.request().path("mode").asText()))throw validation("只有历史数据优化任务可以继续下一轮");
         if(!"SUCCEEDED".equals(previous.executionStatus()))throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"请等待本轮候选方案生成完成");
-        var supplemental=new ArrayList<JsonNode>();
-        previous.request().path("rows").forEach(row->supplemental.add(row.deepCopy()));
-        supplemental.addAll(repository.jdbc().query("""
-            SELECT c.fixed_inputs_jsonb,o.observed_value_jsonb
-            FROM ai.research_candidate_history_observation_v2 o
-            JOIN ai.research_candidate_v2 c ON c.organization_id=o.organization_id
-              AND c.research_run_id=o.research_run_id AND c.id=o.research_candidate_id
-            WHERE o.organization_id=? AND o.research_run_id=? AND o.field_code=?
-            ORDER BY c.candidate_no
-            """,(rs,n)->{
-                var row=json.createObjectNode();var inputs=readJson(rs.getString("fixed_inputs_jsonb"));
-                if(inputs.isObject())row.setAll((ObjectNode)inputs);
-                row.set(previous.request().path("target").asText(),readJson(rs.getString("observed_value_jsonb")));return (JsonNode)row;
-            },actor.organizationId(),previousRunId,previous.request().path("target").asText()));
-        if(supplemental.size()==previous.request().path("rows").size())throw validation("先填写并保存至少一个方案的 Y 实测值，再开始下一轮");
+        if(loopObservations==null)throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"实验关联服务暂不可用");
+        var manifest=loopObservations.trainingManifest(actor.organizationId(),previousRunId);
+        var priorSources=new HashSet<String>();previous.request().path("observationManifest").forEach(o->priorSources.add(o.path("experimentVersionId").asText()+":"+o.path("sampleKey").asText()));
+        if(manifest.stream().noneMatch(o->!priorSources.contains(o.path("experimentVersionId").asText()+":"+o.path("sampleKey").asText())))
+            throw validation("请先完成至少一个新增关联样品，再继续下一轮优化");
+        var supplemental=new ArrayList<JsonNode>();var seen=new HashSet<String>();
+        var baseRows=previous.request().path("baseRows");
+        if(!baseRows.isArray())throw validation("该轮缺少样品来源快照，请重新选择实验数据");
+        for(var row:baseRows)if(loopObservations.currentSource(actor.organizationId(),row)) {
+            var identity=row.path("sourceExperimentId").asText()+":"+row.path("sampleKey").asText();
+            if(seen.add(identity))supplemental.add(row.path("values").deepCopy());
+        }
+        for(var observation:manifest) {
+            var identity=observation.path("experimentId").asText()+":"+observation.path("sampleKey").asText();
+            if(!seen.add(identity))continue;
+            var values=(ObjectNode)observation.path("actualInputs").deepCopy();values.set(observation.path("fieldCode").asText(),observation.path("value"));supplemental.add(values);
+        }
         var body=json.createObjectNode().put("mode","HISTORICAL_GP_BO").put("datasetId",previous.request().path("datasetId").asText())
                 .put("yColumn",previous.request().path("target").asText()).put("direction",previous.request().path("direction").asText())
                 .put("candidateCount",previous.request().path("candidateCount").asInt(4));
+        body.set("observationManifest",json.valueToTree(manifest));
         if(previous.request().path("datasetIds").isArray())body.set("datasetIds",previous.request().path("datasetIds").deepCopy());
         if(previous.request().path("selectedRowIdsByDataset").isObject())body.set("selectedRowIdsByDataset",previous.request().path("selectedRowIdsByDataset").deepCopy());
         var x=body.putArray("xColumns");var bounds=body.putObject("bounds");
@@ -549,7 +609,23 @@ public class OptimizationService {
         return submitHistorical(body,idempotencyKey,actor,supplemental,previous,fingerprint);
     }
 
-    public OptimizationRun get(UUID runId){var a=actor();require(a,"ai.experiment.optimize","AI_RESEARCH_RUN",runId,"READ");return view(a.organizationId(),repository.byId(a.organizationId(),a.userId(),runId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"实验优化运行不存在")));}
+    public OptimizationRun get(UUID runId){
+        var a=actor();require(a,"ai.experiment.optimize","AI_RESEARCH_RUN",runId,"READ");
+        var run=repository.byId(a.organizationId(),a.userId(),runId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"实验优化运行不存在"));
+        if(activities!=null)activities.authorizedContext("EXPERIMENT_OPTIMIZATION",runId);
+        if(rawMaterials!=null)rawMaterials.authorizeSnapshot(run.request().path("materialDossiers"));
+        if(sourceAccess!=null) {
+            var seen=new HashSet<String>();
+            for(var row:run.request().path("datasetSnapshot").path("rows")) {
+                var identity=row.path("sourceExperimentId").asText()+":"+row.path("versionId").asText();
+                if(seen.add(identity))sourceAccess.requireReadableVersion(a.organizationId(),UUID.fromString(row.path("sourceExperimentId").asText()),UUID.fromString(row.path("versionId").asText()));
+            }
+            for(var observation:run.request().path("observationManifest"))
+                if(seen.add(observation.path("experimentId").asText()+":"+observation.path("experimentVersionId").asText()))
+                    sourceAccess.requireReadableVersion(a.organizationId(),UUID.fromString(observation.path("experimentId").asText()),UUID.fromString(observation.path("experimentVersionId").asText()));
+        }
+        return view(a.organizationId(),run);
+    }
 
     public JsonNode execute(UUID org,UUID runId){
         var run=repository.any(org,runId).orElseThrow();if(!repository.markRunning(org,runId))return run.result();

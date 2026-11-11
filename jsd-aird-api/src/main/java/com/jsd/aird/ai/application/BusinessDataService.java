@@ -205,6 +205,35 @@ public class BusinessDataService {
                 }
                 if (records.has("next_offset")) result.set("next_offset", records.path("next_offset"));
             }
+        } else if ("EXPERIMENT".equals(type) && source.path("batch_sources").isArray()) {
+            result.putArray("available_relations").add("来源实验").add("所属项目");
+            if(!args.hasNonNull("relation"))return timed(result);
+            if("来源实验".equals(args.path("relation").asText())) {
+                var targets=new LinkedHashMap<String,ObjectNode>();
+                for(var batch:source.path("batch_sources")) {
+                    if(!batch.hasNonNull("sourceExperimentId")||!batch.hasNonNull("sourceVersionId"))continue;
+                    var target=json.createObjectNode().put("type","EXPERIMENT").put("id",batch.path("sourceExperimentId").asText()).put("version_id",batch.path("sourceVersionId").asText());
+                    targets.putIfAbsent(target.toString(),target);
+                }
+                for(var target:targets.values().stream().skip(offset(args)).limit(limit(args)).toList())try {
+                    var found=existing.invoke("business_read",json.createObjectNode().set("ref",target));
+                    for(var record:found.path("candidates")) {
+                        var copy=(ObjectNode)record.deepCopy();copy.put("relation","来源实验");
+                        var associations=copy.putArray("sample_associations");
+                        for(var batch:source.path("batch_sources"))if(target.path("id").equals(batch.path("sourceExperimentId"))&&target.path("version_id").equals(batch.path("sourceVersionId")))associations.add(batch.deepCopy());
+                        links.add(copy);
+                    }
+                }catch(ApiException error){if(!hidden(error))throw error;}
+                if(targets.size()>offset(args)+limit(args))result.put("next_offset",offset(args)+limit(args));
+                return timed(result);
+            }
+            if(!"所属项目".equals(args.path("relation").asText()))throw new ApiException(ApiErrorCode.BAD_REQUEST,"不存在该实验关系");
+            var project=source.path("candidates").path(0).path("ref").path("project_id");
+            if(project.isTextual()) {
+                var target=json.createObjectNode().put("type","PROJECT").put("id",project.asText());
+                var parent=existing.invoke("business_read",json.createObjectNode().set("ref",target));
+                for(var record:parent.path("candidates")){var copy=(ObjectNode)record.deepCopy();copy.put("relation","所属项目");links.add(copy);}
+            }
         } else if (source.path("candidates").path(0).path("ref").hasNonNull("project_id")) {
             var target = json.createObjectNode().put("type", "PROJECT").put("id", source.path("candidates").path(0).path("ref").path("project_id").asText());
             var parent = existing.invoke("business_read", json.createObjectNode().set("ref", target));

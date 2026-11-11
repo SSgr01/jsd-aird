@@ -28,6 +28,8 @@ export type HistoryDataset = { id: string; name: string; rowCount: number; proje
 export type OptimizationCandidate = { id: string; candidateNo: number; strategy: string; title: string; formula: any; inputs: any; results: any; quality: any; applicability: any; ruleCheck: any; score: number; targetTotal: number; baselineDistance: number; changes: any; strategyEvidence: any; risks: string[] }
 export type OptimizationRun = { id: string; executionStatus: 'QUEUED'|'RUNNING'|'SUCCEEDED'|'FAILED'|'CANCELLED'; outcomeStatus?: 'SUCCEEDED'|'PARTIAL'|'BLOCKED'; progress: number; currentStage?: string; requestedCandidateCount: number; actualCandidateCount: number; missingStrategies: string[]; missingStrategyReasons?: Record<string,string>; candidates: OptimizationCandidate[]; error?: { code?: string; message?: string }; frozenBaseline: any; frozenRequest: any; modelBindings: Record<string,string>; requestId: string; updatedAt: string; simulation?: boolean; predictionMode?: 'FORMAL'|'SIMULATION'; searchEngine?: 'BAYBE'|'DETERMINISTIC_CANDIDATE_POOL'|'GAUSSIAN_PROCESS_EI'; searchStrategy?: 'CONTINUOUS_BAYBE'|'DISCRETE_DETERMINISTIC_POOL'|'EXPECTED_IMPROVEMENT'; searchEvidence?: Record<string, unknown> }
 export type OptimizationObservation = { candidateId: string; targetId?: string; fieldCode?: string; value: number|string; updatedAt?: string }
+export type LoopExperiment = { candidateId: string; experimentId: string; versionId: string; sampleKey: string; title: string; status: string; path: string }
+export type ResearchLoop = { runId: string; comparableCount: number; experiments: LoopExperiment[]; observations: Array<{candidateId: string; value: number; comparisonStatus: string}>; draftDefaults: {title: string; categoryId?: string; templateVersionId: string; projectId?: string}; draftCategories?: Array<{id: string; name: string}> }
 
 type OptimizationSubmission = {
   executionStatus: OptimizationRun['executionStatus']; pollAfterMs?: number
@@ -48,6 +50,9 @@ async function submitOptimization(path: string, request: unknown, key: string, f
 }
 
 export const optimizationApi = {
+  async loop(runId: string) { return unwrap(await httpClient.get<ApiResponse<{runs: ResearchLoop[]}>>(`${root}/research-loop`, {params:{runId}})) },
+  async createDraft(request: unknown, key: string) { return unwrap(await httpClient.post<ApiResponse<{id: string; path: string}>>(`${root}/research-loop/drafts`, request, {headers:{'Idempotency-Key':key}})) },
+  async draftReceipt(key: string) { return unwrap(await httpClient.get<ApiResponse<{status: string; result?: {id:string; path:string}}>>(`${root}/research-loop/draft-receipts/${encodeURIComponent(key)}`)) },
   async historyDatasets(keyword?: string) { return unwrap(await httpClient.get<ApiResponse<{ items: HistoryDatasetOption[] }>>(`${root}/optimization-datasets`, { params: { keyword } })) },
   async historyDataset(id: string) { return unwrap(await httpClient.get<ApiResponse<HistoryDataset>>(`${root}/optimization-datasets/${id}`)) },
   submit(request: unknown, key: string) { return submitOptimization('/experiment-optimizations', request, key, '实验优化条件不满足') },

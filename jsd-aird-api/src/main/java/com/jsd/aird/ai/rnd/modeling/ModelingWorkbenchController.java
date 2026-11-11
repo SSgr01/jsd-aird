@@ -36,6 +36,7 @@ public class ModelingWorkbenchController {
 
     @PostMapping("/runs/{id}/register")
     public ApiResponse<?> register(@PathVariable UUID id, @RequestHeader("Idempotency-Key") String key) {
+        service.run(id);
         return ok(registration.register(id,key));
     }
 

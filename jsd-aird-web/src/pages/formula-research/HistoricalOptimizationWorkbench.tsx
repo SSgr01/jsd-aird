@@ -1,31 +1,34 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return */
 import { ReloadOutlined, RightOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Card, Checkbox, Empty, Input, InputNumber, Progress, Select, Space, Steps, Table, Tag, Typography } from 'antd'
+import { Alert, App, Button, Card, Checkbox, Empty, Form, Input, InputNumber, Modal, Progress, Select, Space, Steps, Table, Tag, Typography } from 'antd'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Key } from 'react'
 import { aiActionFeedback } from '@/services/ai-rnd/action-feedback'
-import { optimizationApi, type HistoryDataset, type HistoryDatasetColumn, type HistoryDatasetOption, type OptimizationObservation, type OptimizationRun } from '@/services/ai-rnd/optimization-api'
+import { optimizationApi, type HistoryDataset, type HistoryDatasetColumn, type HistoryDatasetOption, type OptimizationObservation, type OptimizationRun, type ResearchLoop } from '@/services/ai-rnd/optimization-api'
 import { mergeHistoryDatasets, selectedRowIdsByDataset, fixedMaterial, isMappedFormulaColumn } from '@/services/ai-rnd/history-dataset-utils'
 import { generateUUID } from '@/utils/uuid'
 import { XYColumnPicker, SelectedDataIssues } from '@/components/ai-rnd/XYColumnPicker'
-import { createExperiment } from '@/services/experiments/experiment-api'
 import { useAuthStore } from '@/stores/auth-store'
-import { historicalCandidatesDraft } from './historical-optimization-draft'
 import { useNavigate } from 'react-router-dom'
 import { invalidContinuousPrediction } from '../performance-prediction/performance-prediction-utils'
 import { HttpError } from '@/services/http/errors'
 import './historical-optimization-workbench.css'
 
 const { Title, Text, Paragraph } = Typography
+// Older links could carry both the original run and the accepted next round.
+const optimizationRunFromUrl = (query: URLSearchParams) => query.get('optimizationRun') ?? query.get('runId')
 const clearOptimizationRunUrl = (id?: string) => {
-  const query = new URLSearchParams(window.location.search)
-  if (id && query.get('optimizationRun') !== id) return
-  query.delete('optimizationRun')
-  window.history.replaceState({}, '', `${window.location.pathname}${query.size ? `?${query.toString()}` : ''}`)
+  const url = new URL(window.location.href)
+  if (id && optimizationRunFromUrl(url.searchParams) !== id) return
+  url.searchParams.delete('optimizationRun')
+  url.searchParams.delete('runId')
+  window.history.replaceState(window.history.state, '', url)
 }
 const setOptimizationRunUrl = (id: string) => {
-  const query = new URLSearchParams(window.location.search); query.set('optimizationRun', id)
-  window.history.replaceState({}, '', `${window.location.pathname}?${query.toString()}`)
+  const url = new URL(window.location.href)
+  url.searchParams.delete('optimizationRun')
+  url.searchParams.set('runId', id)
+  window.history.replaceState(window.history.state, '', url)
 }
 const stepTitles = ['选择数据', '选择 X 和 Y', '设置范围', '查看方案']
 type PendingOptimizationOperation = { kind: 'SUBMIT'; key: string; request: Record<string, unknown>; acceptedRunId?: string } | { kind: 'NEXT_ROUND'; key: string; parentRunId: string; acceptedRunId?: string }
@@ -53,14 +56,16 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
   const runStorageKey = `${storageKey}:run`
   const setupStorageKey = `${storageKey}:setup`
   const operationStorageKey = `${storageKey}:pending-operation`
-  const draftStorageKey = `${storageKey}:drafts`
   const [pendingOperation, setPendingOperation] = useState<PendingOptimizationOperation | undefined>(() => {
     try { return JSON.parse(localStorage.getItem(operationStorageKey) ?? 'null') as PendingOptimizationOperation | null ?? undefined }
     catch { return undefined }
   })
   const [creatingDraft, setCreatingDraft] = useState<string>()
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<Key[]>([])
-  const [drafts, setDrafts] = useState<Record<string, string>>(() => { try { return JSON.parse(localStorage.getItem(draftStorageKey) ?? '{}') as Record<string,string> } catch { return {} } })
+  const [loop, setLoop] = useState<ResearchLoop>()
+  const [draftSelection, setDraftSelection] = useState<string[]>()
+  const [draftForm] = Form.useForm<{title:string; category_id:string; planned_date:string; plan:string}>()
+  const refreshLoop = async (id: string) => { const value=(await optimizationApi.loop(id)).runs[0];setLoop(value);return value }
   const [keyword, setKeyword] = useState('')
   const [datasets, setDatasets] = useState<HistoryDatasetOption[]>([])
   const [selectedDatasetIds, setSelectedDatasetIds] = useState<string[]>([])
@@ -175,7 +180,7 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
     localStorage.setItem(setupStorageKey, JSON.stringify({ datasetIds: selectedDatasetIds, selectedRowIdsByDataset: selectedRowIds, xColumns, yColumn, activeStep, direction, bounds, manualBounds: [...manualBounds.current] }))
   }, [activeStep, selectedDatasetIds, selectedRowIds, setupReady, xColumns, yColumn, direction, bounds])
   useEffect(() => {
-    const remembered = new URLSearchParams(location.search).get('optimizationRun') ?? localStorage.getItem(runStorageKey) ?? undefined
+    const remembered = optimizationRunFromUrl(new URLSearchParams(window.location.search)) ?? localStorage.getItem(runStorageKey) ?? undefined
     if (remembered) { setRunId(remembered); setActiveStep(3) }
   }, [])
 
@@ -280,7 +285,8 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
     if (formulaCodes.includes(column.code) && range.minimum < 0) return '材料用量不能为负数'
     return ''
   }
-  const hasSavedMeasurement = savedObservations.length > 0
+  const hasSavedMeasurement = (loop?.comparableCount ?? 0) > 0
+  useEffect(() => {setLoop(undefined);if(runId)void refreshLoop(runId).catch(error=>message.error(aiActionFeedback(error,'无法读取实验关联')))},[runId])
   const configurationLocked = Boolean(pendingOperation || runId && frozenDataset)
   const canSubmit = Boolean(selectedDatasetView && selectedRows.length && yColumn && xColumns.length && completeRowCount >= 4 && hasAdjustment && !partialFormulaSelection && !compositionProblem && !selectedFeatureColumns.some(column => rangeError(column)))
 
@@ -355,7 +361,7 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
     try {
       const result = await optimizationApi.saveObservations(runId, values)
       setSavedObservations(result.observations)
-      message.success(`已保存 ${result.savedCount} 条实测值`)
+      message.success(`已暂存 ${result.savedCount} 条待处理读数，请在关联实验中补齐正式记录`)
     } catch (error) { message.error(aiActionFeedback(error, '保存实测值失败')) }
     finally { setSaving(false) }
   }
@@ -384,29 +390,46 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
     if (!run || !user || creatingDraft) return
     const candidates = run.candidates.filter(candidate => selectedCandidateIds.includes(candidate.id))
     if (!candidates.length) { message.warning('请先勾选方案'); return }
-    const draftKey = `${run.id}:${candidates.map(candidate => candidate.id).sort().join(',')}`
-    if (drafts[draftKey]) { navigate(`/experiments/${drafts[draftKey]}`); return }
-    setCreatingDraft(draftKey)
     try {
-      const measurements = Object.fromEntries(savedObservations.map(item => [item.candidateId, Number(item.value)]))
-      const input = historicalCandidatesDraft(run, candidates, measurements)
-      const created = await createExperiment({ ...input, ownerName: user.displayName || user.username })
-      const next = { ...drafts, [draftKey]: created.id }; setDrafts(next); localStorage.setItem(draftStorageKey,JSON.stringify(next))
-      message.success('实验草稿已生成'); navigate(`/experiments/${created.id}`)
-    } catch (error) { message.error(aiActionFeedback(error, '实验草稿生成失败')) }
-    finally { setCreatingDraft(undefined) }
+      const current=await refreshLoop(run.id)
+      const ids=candidates.map(candidate=>candidate.id).sort()
+      const linked=current?.experiments.find(item=>ids.every(id=>current.experiments.some(other=>other.candidateId===id&&other.experimentId===item.experimentId)))
+      if(linked){navigate(linked.path);return}
+      if(!current?.draftDefaults)throw new Error('无法读取推荐来源，请重新打开本轮方案')
+      draftForm.setFieldsValue({title:current.draftDefaults.title,category_id:current.draftDefaults.categoryId,planned_date:'',plan:`按本轮推荐方案开展实验，目标为${yMeta?.name ?? '所选指标'}；记录实际配方、工艺与实测读数。`})
+      setDraftSelection(ids)
+    } catch (error) { message.error(aiActionFeedback(error, '无法读取推荐来源')) }
+  }
+
+  const confirmDraft = async () => {
+    if(!run||!loop||!draftSelection)return
+    const values=await draftForm.validateFields()
+    const key=`recommendation:${run.id}:${draftSelection.join(',')}`
+    setCreatingDraft(key)
+    try {
+      const receipt=await optimizationApi.draftReceipt(key)
+      const result=receipt.result ?? await optimizationApi.createDraft({title:values.title,planned_date:values.planned_date,
+        category_id:values.category_id,template_version_id:loop.draftDefaults.templateVersionId,
+        ...(loop.draftDefaults.projectId?{project_id:loop.draftDefaults.projectId}:{}),edit_model:{plan:values.plan},
+        recommendation:{run_id:run.id,candidate_ids:draftSelection}},key)
+      setDraftSelection(undefined);message.success('实验草稿已生成');navigate(result.path)
+    } catch(error){message.error(aiActionFeedback(error,'草稿结果尚未确认，请保留当前方案并重试'))}
+    finally{setCreatingDraft(undefined)}
   }
 
   const candidateColumns = [
     { title: '方案', dataIndex: 'title', fixed: 'left' as const, width: 110, render: (_: string, candidate: any) => <Text strong>{candidate.title}</Text> },
     ...selectedFeatureColumns.map(column => ({ title: <span>{column.name}{column.unit ? <Text type="secondary">（{column.unit}）</Text> : null}</span>, width: 140, render: (_: unknown, candidate: any) => { const value = candidate.inputs?.[column.code]; return <Text>{column.kind === 'NUMERIC' ? valueText(value, undefined, 8) : value ?? '—'}</Text> } })),
     { title: <span>预测 {yMeta?.name ?? 'Y'}{yMeta?.unit ? `（${yMeta.unit}）` : ''}</span>, width: 210, render: (_: unknown, candidate: any) => { const prediction = candidatePrediction(candidate); const hasPrediction = Number.isFinite(Number(prediction.value)); const invalid = hasPrediction && invalidContinuousPrediction(Number(prediction.value), yMeta?.unit); return <Space direction="vertical" size={0}><Text strong>{invalid ? '未展示：结果不合理' : valueText(prediction.value)}</Text>{invalid ? <Text type="danger">核对单位并补充相近实验后重新优化</Text> : <Text type="secondary">范围 {valueText(prediction.lower)}～{valueText(prediction.upper)}</Text>}</Space> } },
-    { title: <span>实测 {yMeta?.name ?? 'Y'}{yMeta?.unit ? `（${yMeta.unit}）` : ''}</span>, width: 180, render: (_: unknown, candidate: any) => <InputNumber aria-label={`${candidate.title}实测${yMeta?.name ?? 'Y'}`} className="history-observation-input" disabled={Boolean(pendingOperation)} value={observations[`${candidate.id}:${yColumn}`]} onChange={value => setObservations(current => ({ ...current, [`${candidate.id}:${yColumn}`]: value ?? undefined }))} placeholder="完成实验后填写" /> },
+    { title: <span>待处理读数{yMeta?.unit ? `（${yMeta.unit}）` : ''}</span>, width: 180, render: (_: unknown, candidate: any) => <InputNumber aria-label={`${candidate.title}待处理读数`} className="history-observation-input" disabled={Boolean(pendingOperation)} value={observations[`${candidate.id}:${yColumn}`]} onChange={value => setObservations(current => ({ ...current, [`${candidate.id}:${yColumn}`]: value ?? undefined }))} placeholder="正式值请在实验中记录" /> },
   ]
 
   const steps = <div className="history-steps-card"><Steps current={activeStep} onChange={setActiveStep} responsive={false} items={stepTitles.map(title => ({ title }))} /></div>
 
   return <main className="historical-optimization-page">
+    <Modal title="生成实验草稿" open={Boolean(draftSelection)} confirmLoading={Boolean(creatingDraft)} onCancel={()=>setDraftSelection(undefined)} onOk={()=>void confirmDraft()} okText="生成草稿">
+      <Form form={draftForm} layout="vertical"><Form.Item name="title" label="实验名称" rules={[{required:true}]}><Input /></Form.Item><Form.Item name="category_id" label="实验分类" rules={[{required:true,message:'请选择实验分类'}]}><Select options={loop?.draftCategories?.map(item=>({value:item.id,label:item.name}))} /></Form.Item><Form.Item name="planned_date" label="计划日期" rules={[{required:true,message:'请选择计划日期'}]}><Input type="date" /></Form.Item><Form.Item name="plan" label="实验方案" rules={[{required:true}]}><Input.TextArea rows={4} /></Form.Item></Form>
+    </Modal>
     <header className="historical-page-header">
       <div><Text className="historical-eyebrow">AI 研发助手 · 实验优化</Text><Title level={2}>实验优化</Title><Paragraph>选择一张或多张实验数据表，勾选要使用的记录，再选择 X 因素和 Y 指标。</Paragraph></div>
       <Button icon={<ReloadOutlined />} onClick={() => void loadDatasets()}>刷新数据</Button>
@@ -466,11 +489,12 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
     {activeStep === 3 && <div className="history-step-panel">
       {!runId ? runLoadError ? <Card className="history-card"><Alert type="warning" showIcon message={runLoadError} /><div className="history-step-footer"><Button onClick={() => setActiveStep(2)}>返回保留的设置</Button><Button type="primary" onClick={() => { setRunLoadError(''); setActiveStep(2) }}>重新开始优化</Button></div></Card> : <Card className="history-card"><Empty description="还没有优化结果"><Button type="primary" onClick={() => setActiveStep(dataset ? 1 : 0)}>选择数据并开始</Button></Empty></Card> : !run ? <Card className="history-card">{runLoadError ? <Alert type="warning" showIcon message={runLoadError} description="任务设置已保留。可稍后刷新进度，或返回设置重新优化。" /> : <Text type="secondary">已提交，正在读取优化任务状态…</Text>}<div className="history-step-footer"><Button icon={<ReloadOutlined />} onClick={() => { setRunLoadError(''); void optimizationApi.run(runId).then(current => { setRun(current); setRunLoadError('') }).catch(error => setRunLoadError(aiActionFeedback(error, '读取优化进度失败，请重试。'))) }}>重试读取</Button><Button onClick={() => setActiveStep(2)}>返回设置</Button></div></Card> : run.executionStatus === 'FAILED' ? <Card className="history-card"><Alert type="error" showIcon message="优化没有完成" description={aiActionFeedback(run.error, '检查 X/Y 是否有足够的完整且不同的历史记录，然后重新提交。')} /><div className="history-step-footer"><Button onClick={() => { detachRunForEditing(); setActiveStep(2) }}>调整条件后重试</Button></div></Card> : ['QUEUED','RUNNING'].includes(run.executionStatus) ? <Card className="history-card"><Progress percent={Math.max(run.progress, 10)} status="active" /><Text type="secondary">高斯过程正在学习 {run.frozenRequest?.rows?.length ?? 0} 条历史实验…</Text></Card> : <>
         <Card className="history-card history-result-card" title="下一轮实验建议" extra={<Space><Tag color="green">已生成 {run.candidates.length} 个方案</Tag><Button icon={<ReloadOutlined />} onClick={() => void optimizationApi.run(runId).then(setRun)}>刷新</Button></Space>}>
-          <Paragraph className="history-result-explainer">高斯过程使用 {run.searchEvidence?.trainingRowCount ?? run.frozenRequest?.rows?.length ?? '历史'} 条实验记录学习 X 与 Y 的关系。完成实验后填写实测 Y，系统会把这些新记录纳入下一轮计算。</Paragraph>
+          <Paragraph className="history-result-explainer">高斯过程使用 {run.searchEvidence?.trainingRowCount ?? run.frozenRequest?.rows?.length ?? '历史'} 条实验记录学习 X 与 Y 的关系。将方案生成实验草稿，记录实际配方、工艺和读数；完成实验后，可用于下一轮计算。</Paragraph>
           {run.candidates.length ? <><Table size="middle" rowKey="id" pagination={false} scroll={{ x: 'max-content' }} columns={candidateColumns} dataSource={run.candidates} rowSelection={user?.permissions.includes('experiment.create') ? { selectedRowKeys: selectedCandidateIds, onChange: setSelectedCandidateIds } : undefined} />{user?.permissions.includes('experiment.create') && <div className="history-step-footer"><Text type="secondary">已选 {run.candidates.filter(candidate => selectedCandidateIds.includes(candidate.id)).length} 个方案，将写入同一实验表的不同对照组。</Text><Button type="primary" loading={Boolean(creatingDraft)} disabled={!run.candidates.some(candidate => selectedCandidateIds.includes(candidate.id))} onClick={() => void createDraft()}>生成一组实验草稿</Button></div>}</> : <Empty description="当前数据无法生成新的实验组合" />}
-          {run.candidates.length > 0 && <div className="history-measurement-footer"><Text type="secondary">预测用于安排实验；实测值保存后才能用于下一轮优化。</Text><Space><Button loading={saving} disabled={Boolean(pendingOperation)} onClick={() => void saveMeasurements()}>保存实测值</Button><Button type="primary" disabled={!hasSavedMeasurement || Boolean(pendingOperation)} loading={continuing} onClick={() => void startNextRound()}>用实测值优化下一轮</Button></Space></div>}
+          {run.candidates.length > 0 && <div className="history-measurement-footer"><Text type="secondary">已完成且可比较的关联样品：{loop?.comparableCount ?? 0}</Text><Space><Button loading={saving} disabled={Boolean(pendingOperation)} onClick={() => void saveMeasurements()}>暂存读数</Button><Button onClick={()=>void refreshLoop(runId).catch(error=>message.error(aiActionFeedback(error,'无法刷新实验关联')))}>刷新实验关联</Button><Button type="primary" disabled={!hasSavedMeasurement || Boolean(pendingOperation)} loading={continuing} onClick={() => void startNextRound()}>用正式结果优化下一轮</Button></Space></div>}
         </Card>
-        {savedObservations.length > 0 && <Card className="history-card" title="已保存的实测值"><Text type="secondary">{savedObservations.length} 条实测结果已保存，可继续优化下一轮。</Text></Card>}
+        {loop?.experiments.length ? <Card className="history-card" title="关联实验"><Space direction="vertical">{Array.from(new Map(loop.experiments.map(item=>[item.experimentId,item])).values()).map(item=><Button key={item.experimentId} type="link" onClick={()=>navigate(item.path)}>{item.title} · {item.status}</Button>)}</Space></Card> : null}
+        {savedObservations.length > 0 && <Card className="history-card" title="待处理读数"><Text type="secondary">已暂存 {savedObservations.length} 条读数。请在关联实验中记录样品、实际执行条件和读数，完成后继续优化。</Text></Card>}
       </>}
       <div className="history-step-footer"><Button onClick={() => setActiveStep(0)}>查看数据</Button>{dataset && <Button onClick={() => { detachRunForEditing(); setActiveStep(1) }}>修改 X/Y 选择</Button>}</div>
     </div>}

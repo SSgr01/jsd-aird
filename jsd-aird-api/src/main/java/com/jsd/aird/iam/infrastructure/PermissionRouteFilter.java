@@ -101,6 +101,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         var read = Set.of("GET", "HEAD", "OPTIONS").contains(method);
 
         if (path.startsWith("/api/v1/agents/")) return permission("ai.use", "AI", read ? "READ" : "WRITE");
+        if (path.startsWith("/api/v1/raw-materials")) return permission(read?"ai.modeling.read":"ai.modeling.manage", "AI_MODELING", read?"READ":"WRITE");
+        if (path.startsWith("/api/v1/ai/rnd/research-loop")) return permission("ai.experiment.optimize", "AI_EXPERIMENT", read?"READ":"WRITE");
 
         if (path.startsWith("/api/v1/partners") || path.startsWith("/api/v1/crm") || path.startsWith("/api/v1/business-partners")) {
             return action(method, "customer.view", "customer.create", "customer.update", "customer.delete", "CUSTOMER");

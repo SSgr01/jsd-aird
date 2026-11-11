@@ -72,7 +72,7 @@ public class MaterialService {
 
     @Transactional
     public UUID create(Material input) {
-        Optional.ofNullable(repository.findByCode(input.code())).ifPresent(r -> {
+        repository.findByCode(input.code()).ifPresent(r -> {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "资料编号已存在");
         });
         var now = Instant.now();

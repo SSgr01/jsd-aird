@@ -41,6 +41,8 @@ public class AgentToolsController {
     private com.jsd.aird.rnd.api.AgentExperimentFacade experiments;
     private org.springframework.beans.factory.ObjectProvider<com.jsd.aird.ai.application.BusinessDataService> businessData;
     private org.springframework.beans.factory.ObjectProvider<com.jsd.aird.ai.application.BusinessComputeService> businessCompute;
+    @org.springframework.beans.factory.annotation.Autowired private com.jsd.aird.ai.rnd.optimization.ResearchLoopService loops;
+    private final com.jsd.aird.rnd.api.ResearchExperimentFacade measurements;
 
     @org.springframework.beans.factory.annotation.Autowired
     void businessServices(org.springframework.beans.factory.ObjectProvider<com.jsd.aird.ai.application.BusinessDataService> data,
@@ -55,13 +57,14 @@ public class AgentToolsController {
             ResearchKnowledgeFacade knowledge, WebSearchProvider web, ObjectMapper mapper, AgentArtifactService artifacts,
             AgentHostService host, SharedRetrievalService retrieval, AgentProjectFacade projects,
             @Value("${app.ai.harness.enabled:false}") boolean enabled, PrivateResearchSourceService privateSources,
-            ScholarlyLiteratureFacade scholarly) {
+            ScholarlyLiteratureFacade scholarly, com.jsd.aird.rnd.api.ResearchExperimentFacade measurements) {
         this.delegation = delegation; this.research = research; this.knowledge = knowledge;
         this.web = web; this.mapper = mapper; this.enabled = enabled;
         this.host = host; this.retrieval = retrieval; this.projects = projects;
         this.artifacts = artifacts;
         this.privateSources = privateSources;
         this.scholarly = scholarly;
+        this.measurements = measurements;
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -115,14 +118,16 @@ public class AgentToolsController {
                     : knowledge.context(mapper.convertValue(args.path("source"), ResearchKnowledgeFacade.SourceRef.class),args.path("before").asInt(1),args.path("after").asInt(1),args.path("cursor").asInt());
                 case "get_research_briefing_context" -> briefings.context(args);
                 case "business_search", "business_read", "business_links", "business_query" -> businessData.getObject().invoke(command.action(), args);
-                case "get_compute_context", "get_compute_result", "run_prediction", "run_formula_design", "run_experiment_optimization" -> businessCompute.getObject().invoke(command.action(), args);
-                case "operation_receipt" -> Set.of("run_prediction", "run_formula_design", "run_experiment_optimization").contains(args.path("tool").asText())
+                case "get_compute_context", "get_compute_result", "run_prediction", "run_formula_design", "run_experiment_optimization", "run_model_training", "activate_trained_model", "continue_experiment_optimization" -> businessCompute.getObject().invoke(command.action(), args);
+                case "get_experiment_loop" -> loops.context(args);
+                case "save_experiment_measurements" -> measurements.saveMeasurements(args);
+                case "operation_receipt" -> "save_experiment_measurements".equals(args.path("tool").asText())?measurements.measurementReceipt(args.path("operation_key").asText()):Set.of("run_prediction", "run_formula_design", "run_experiment_optimization", "run_model_training", "activate_trained_model", "continue_experiment_optimization").contains(args.path("tool").asText())
                     ? businessCompute.getObject().receipt(args) : "create_experiment_draft".equals(args.path("tool").asText())
-                    ? (args.path("close_uncommitted").asBoolean(false)
+                    ? (args.path("arguments").has("recommendation")?loops.draftReceipt(args):args.path("close_uncommitted").asBoolean(false)
                         ? experiments.reconcileReceipt(args.path("operation_key").asText(), args.path("arguments") instanceof ObjectNode request ? request : null)
                         : experiments.receipt(args.path("operation_key").asText(), args.path("arguments") instanceof ObjectNode request ? request : null)) : research.receipt(args);
                 case "search_experiments", "get_experiment_record" -> experiments.read(command.action(), args);
-                case "create_experiment_draft" -> experiments.createDraft(args);
+                case "create_experiment_draft" -> args.has("recommendation")?loops.createDraft(args):experiments.createDraft(args);
                 case "search_projects", "get_project_snapshot", "list_project_stages", "list_project_tasks", "get_task_detail", "get_project_records" -> projects.read(command.action(), args);
                 case "authorize" -> { knowledge.authorize(refs(args.path("documents"))); yield Map.of("allowed", true); }
                 case "source_image" -> {

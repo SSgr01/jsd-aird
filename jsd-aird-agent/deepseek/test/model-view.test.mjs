@@ -2,6 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { presentation, modelResult, renderModelResult } from '../../enterprise-plugin/src/model-view.mjs';
 
+test('optimization candidates retain identities, inputs and predictions on the model path', () => {
+  const raw={candidates:[{id:'candidate-1',inputs:{temperature:83},results:{value:51.8}},
+    {candidateId:'candidate-2',predictedResults:{value:52}}]};
+  assert.deepEqual(modelResult(raw),raw);
+});
+
 test('enterprise metadata is lossless JSON for discovery, empty results and actual sources', () => {
   for (const value of [{activate_tools:['get_experiment_record']},{candidates:[]},
     {candidates:[{text:'actual source'}],citation_links:{e1:{url:'/fixed-version',label:'原文·第3页'}}}]) {

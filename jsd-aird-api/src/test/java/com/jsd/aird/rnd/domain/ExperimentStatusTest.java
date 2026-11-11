@@ -23,7 +23,7 @@ class ExperimentStatusTest {
                 Set.of(ExperimentStatus.PENDING_REVIEW, ExperimentStatus.VOIDED),
                 ExperimentStatus.PENDING_REVIEW,
                 Set.of(ExperimentStatus.COMPLETED, ExperimentStatus.RETURNED),
-                ExperimentStatus.COMPLETED, Set.of(),
+                ExperimentStatus.COMPLETED, Set.of(ExperimentStatus.VOIDED),
                 ExperimentStatus.VOIDED, Set.of()
         );
 

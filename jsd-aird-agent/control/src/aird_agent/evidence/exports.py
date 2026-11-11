@@ -50,6 +50,10 @@ def export_sources(run, explicit_quotes, inputs, input_contents):
     for eid in selected:
         candidate = evidence[eid]
         if candidate["source"].get("kind") in LITERATURE_KINDS:
+            # A cited evidence/quote pair selects that span. Its evidence identity
+            # is not an instruction to export every other span in the source.
+            if any(available[qid]["evidence_id"] == eid for qid in mentioned):
+                continue
             candidate_quotes = quotes(candidate)
             if not candidate_quotes:
                 raise HTTPException(422, "ANALYSIS_SOURCE_QUOTES_REQUIRED: selected source has no original quotes")

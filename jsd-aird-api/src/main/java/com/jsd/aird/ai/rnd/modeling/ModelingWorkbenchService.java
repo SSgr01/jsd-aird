@@ -39,10 +39,16 @@ public class ModelingWorkbenchService {
     private final OpsAsyncFacade async;
     private final ModelComputeClient compute;
     private final FormulaModelArtifactStore artifacts;
+    private final com.jsd.aird.mdm.api.RawMaterialFacade rawMaterials;
+    private final com.jsd.aird.rnd.api.ResearchExperimentFacade sourceAccess;
+    @org.springframework.beans.factory.annotation.Value("${JSD_AIRD_RESEARCH_DATA_NATURE:REAL}")
+    private String dataNature = "REAL";
 
     public ModelingWorkbenchService(JdbcTemplate jdbc, ObjectMapper json, OptimizationService optimization,
                                     ConfigurationHashing hashing, OpsAsyncFacade async,
-                                    ModelComputeClient compute, FormulaModelArtifactStore artifacts) {
+                                    ModelComputeClient compute, FormulaModelArtifactStore artifacts,
+                                    com.jsd.aird.mdm.api.RawMaterialFacade rawMaterials,
+                                    com.jsd.aird.rnd.api.ResearchExperimentFacade sourceAccess) {
         this.jdbc = jdbc;
         this.json = json;
         this.optimization = optimization;
@@ -50,6 +56,8 @@ public class ModelingWorkbenchService {
         this.async = async;
         this.compute = compute;
         this.artifacts = artifacts;
+        this.rawMaterials = rawMaterials;
+        this.sourceAccess = sourceAccess;
     }
 
     public JsonNode datasets(String keyword) {
@@ -80,7 +88,19 @@ public class ModelingWorkbenchService {
         var datasetIds = requestedDatasetIds(command);
 
         var dataset = optimization.modelingHistoryDatasetSetForTraining(datasetIds);
+        // Check the exact snapshot that is about to be persisted, including unselected rows.
+        if (sourceAccess != null) {
+            var checked = new LinkedHashSet<String>();
+            for (var row : dataset.path("rows")) {
+                var experiment = UUID.fromString(row.path("sourceExperimentId").asText());
+                var version = UUID.fromString(row.path("versionId").asText());
+                if (checked.add(experiment + ":" + version)) sourceAccess.requireReadableVersion(actor.organizationId(), experiment, version);
+            }
+        }
         var frozenRequest = freezeRequest(dataset, command, datasetIds);
+        if (!Set.of("REAL", "SYNTHETIC").contains(dataNature)) throw validation("数据来源配置无效");
+        frozenRequest.put("dataNature", dataNature);
+        if(rawMaterials!=null)frozenRequest.set("materialDossiers",rawMaterials.snapshot(dataset.path("columns")));
         ((ObjectNode) frozenRequest).put("submissionFingerprint", submissionFingerprint);
         var requestHash = hashing.hash(frozenRequest);
 
@@ -114,7 +134,16 @@ public class ModelingWorkbenchService {
 
     public JsonNode run(UUID id) {
         var actor = ActorContext.required();
-        return runView(actor.organizationId(), actor.userId(), id);
+        var result=runView(actor.organizationId(), actor.userId(), id);
+        if(rawMaterials!=null)rawMaterials.authorizeSnapshot(result.path("materialDossiers"));
+        if(sourceAccess!=null) {
+            var checked=new java.util.HashSet<String>();
+            for(var row:result.path("datasetSnapshot").path("rows")) {
+                var identity=row.path("sourceExperimentId").asText()+":"+row.path("versionId").asText();
+                if(checked.add(identity))sourceAccess.requireReadableVersion(actor.organizationId(),UUID.fromString(row.path("sourceExperimentId").asText()),UUID.fromString(row.path("versionId").asText()));
+            }
+        }
+        return result;
     }
 
     public JsonNode execute(UUID organizationId, UUID runId) {
@@ -304,7 +333,7 @@ public class ModelingWorkbenchService {
         var result = json.createObjectNode().put("code", source.path("code").asText())
                 .put("name", source.path("name").asText(source.path("code").asText()))
                 .put("kind", source.path("kind").asText("CATEGORICAL"));
-        for(var metadata:List.of("testMethod","testMethods","testStage","semanticKey","semanticType","materialId","materialCode","mappingStatus","compositionBasis","measurementComponent"))if(source.hasNonNull(metadata))result.set(metadata,source.get(metadata));
+        for(var metadata:List.of("testMethod","testMethods","testConditions","testStage","semanticKey","semanticType","materialId","materialCode","mappingStatus","compositionBasis","measurementComponent"))if(source.hasNonNull(metadata))result.set(metadata,source.get(metadata));
         if (source.hasNonNull("unit")) result.put("unit", source.path("unit").asText());
         else result.putNull("unit");
         return result;
@@ -346,6 +375,8 @@ public class ModelingWorkbenchService {
         result.set("yColumn", row.yColumn());
         result.set("result", row.result());
         result.set("datasetSnapshot",row.request().path("datasetSnapshot"));
+        result.set("materialDossiers",row.request().path("materialDossiers"));
+        result.set("dataNature",row.request().path("dataNature"));
         result.set("selectedRowIdsByDataset",row.request().path("selectedRowIdsByDataset"));
         result.set("error", row.error().isEmpty() ? json.nullNode() : row.error());
         return result;

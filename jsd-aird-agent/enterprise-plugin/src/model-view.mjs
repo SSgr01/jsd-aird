@@ -101,7 +101,7 @@ function projectResult(value) {
           ...(hit.source_text || quotes.length ? {text:hit.source_text ?? quotes.map(quote=>quote.text).join('\n')} : {}),
           ...(hit.quote_id || hit.quote?.quote_id ? {quote_id:hit.quote_id || hit.quote.quote_id} : {})};
       });
-    } else if (['candidates','context_candidates'].includes(key) && Array.isArray(item)) {
+    } else if (['candidates','context_candidates'].includes(key) && Array.isArray(item) && item.every(candidate => candidate.evidence_id || candidate.source)) {
       output[key] = item.map(candidate => ({ evidence_id: candidate.evidence_id,
         ...sourceLabel(candidate.source), offset: candidate.node_offset, text: candidate.model_text ?? candidate.text,
         ...(candidate.ref ? {ref: candidate.ref} : {}), ...(candidate.relation ? {relation: candidate.relation} : {}),

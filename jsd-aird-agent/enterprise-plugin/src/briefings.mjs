@@ -8,7 +8,7 @@ export const briefingDefaults = Object.freeze([
     '请整理研发周报。先用 get_research_briefing_context 获取 research-weekly 的本周活动索引，读完各分区及分页，再用 business_read 读取固定记录；实验优先用 section=record 一次完整读取，仅记录过大时按返回的非空分区和 next_offset 分页。以服务端确定的周一零点至当前时刻为窗口，梳理项目、阶段、任务与实验的实际进展、成果、风险和下周安排。区分本周更新与当前状态；没有前态依据时不推断具体变化。沿真实关联联动分析，注明不同单位、方法和条件的可比边界，给出记录及版本入口。只在本会话保留完整正文，不创建草稿、正式报告或文件。'},
   {id:'experiment-review', title:'实验复盘', time:'17:30:00', weekdays:[1,2,3,4,5], prompt:
     '请完成本期实验复盘。先用 get_research_briefing_context 获取 experiment-review 的活动索引，读完全部分页；以服务端确定的时间窗口为准，包含独立实验。用 business_read 的 section=record 一次读取每条实验的固定版本背景、方案、样品、配方、工艺、条件及结果；仅记录过大时按返回的非空分区和 next_offset 分页。必要时沿明确的实验与版本关联回读历史依据。比较配方、工艺、方法、条件和结果，区分历史依据、本次实测、缺失、未测与零值，不把不同单位或不同条件直接比较。给出有依据的结论、局限和下一步建议，附真实版本入口；覆盖不完整时明确说明，不声称完成。只在本会话保留完整正文，不创建草稿、正式报告或文件。'},
-].map(task=>Object.freeze({...task,prompt:task.prompt+' 正文直接呈现业务事实、判断与建议，用记录名称和版本链接提供入口。覆盖情况、协议字段、解析状态与技术标识留在过程记录。'})));
+].map(task=>Object.freeze({...task,prompt:task.prompt+' 使用 get_experiment_loop 读取项目相关的建模、推荐与实验轮次，沿 activities 的 kind 和 runId 调用 get_compute_result 读取模型与预测成果，按正式实验版本说明实际执行差异、预测偏差、优化进展和下一步；需解释配方时沿 RAW_MATERIAL 与 RAW_MATERIAL_SOURCE 读取牌号、组成、物性及来源位置，结合已读取文献说明条件和边界。后台仅可读取，正文保留在本对话。正文直接呈现业务事实、判断与建议，用记录名称和版本链接提供入口。正文采用实测、测定、评估、研发参考等业务用词；标准模板原名与原始证据保持完整。'})));
 
 export function reconcileBriefings(plan, catalog) {
   return Object.values(plan.tasks).map(saved => {
@@ -28,20 +28,21 @@ export function beginBriefingPeriod(agent, turn, step, signal) {
   const session=agent.session;
   const start=session.snapshotEvents().find(event=>event.type==='turn/start' && event.data.turn===turn)?.seq;
   if(start===undefined)return;
+  if(session.snapshotEvents().some(event=>event.type==='developer/message' && event.data.turn===turn && event.data.message?.source?.kind==='enterprise-briefing-period'))return;
   const nodes=[...session.surface.nodes];
   const first=nodes.findIndex(seq=>seq<start && session.eventAt(seq)?.type!=='system/message');
-  if(first<0)return;
   let end=first;
   while(end+1<nodes.length && nodes[end+1]<start)end++;
-  const previous=nodes.slice(first,end+1);
+  const previous=first<0?[]:nodes.slice(first,end+1);
   // Surface replacement is a native, durable context operation. It leaves all
   // original messages and tool receipts readable in the conversation timeline.
   // A coding-task checkpoint would incorrectly frame an earlier period's facts
   // and errors as unfinished work for this newly scheduled business period.
   session.append('developer/message',{turn,step,message:createDeveloperMessage({
     source:{kind:'enterprise-briefing-period',turn},content:[{type:'text',text:
-      '本期是独立的研发简报周期。前期正文和过程仍保留在会话历史中；本期从服务端活动索引重新读取固定记录。历史工具结果不代表本期读取，记录更新时间不代表已知前后变化。需要比较历史时，沿真实版本关联重新读取。'}],
-  })},{surfaceOp:{op:'replace',startSeq:previous[0],endSeq:previous.at(-1)},sourceEventSeqs:previous});
+      '本期是独立的研发简报周期。前期正文和过程仍保留在会话历史中；本期从服务端活动索引重新读取固定记录。历史工具结果不代表本期读取，记录更新时间不代表已知前后变化。需要比较历史时，沿真实版本关联重新读取。'+
+      ' 使用get_experiment_loop读取项目的建模、推荐、正式实测与优化轮次，沿activities调用get_compute_result读取具体运行；比较推荐与实际配方、预测与实测偏差，按实验版本和样品核对数字。解释原料时读取RAW_MATERIAL及其来源位置，结合已读文献说明适用条件。日报说明当日进展、待办、阻塞和建议；周报说明本周变化、成果与下周安排；复盘说明偏差与下一轮建议。正文采用实测、测定、评估和研发参考等用词，全文保留在本会话。后台只读取，不保存项目文档。'}],
+  })},{surfaceOp:previous.length?{op:'replace',startSeq:previous[0],endSeq:previous.at(-1)}:'append',...(previous.length?{sourceEventSeqs:previous}:{})});
 }
 
 export class NativeBriefings {

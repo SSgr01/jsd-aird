@@ -21,4 +21,15 @@ class MeasurementValueParserTest {
         assertThat(MeasurementValueParser.number("30g","%")).isNull();
         assertThat(MeasurementValueParser.number("5mL","%")).isNull();
     }
+    @Test void convertsRecordedBatchUnitsWithoutMixingPhysicalQuantities() {
+        assertThat(MeasurementValueParser.number("0.875 Pa·s","cP")).isEqualByComparingTo("875");
+        assertThat(MeasurementValueParser.number("875 mPa.s","Pa·s")).isEqualByComparingTo("0.875");
+        assertThat(MeasurementValueParser.number("0.1 kg","g")).isEqualByComparingTo("100");
+        assertThat(MeasurementValueParser.number("150 mg","g")).isEqualByComparingTo("0.150");
+        assertThat(MeasurementValueParser.number("2 h","s")).isEqualByComparingTo("7200");
+        assertThat(MeasurementValueParser.number("35 min","s")).isEqualByComparingTo("2100");
+        assertThat(MeasurementValueParser.number("88 GU","GU")).isEqualByComparingTo("88");
+        assertThat(MeasurementValueParser.number("88 GU","%")).isNull();
+        assertThat(MeasurementValueParser.number("875 cP","KU")).isNull();
+    }
 }

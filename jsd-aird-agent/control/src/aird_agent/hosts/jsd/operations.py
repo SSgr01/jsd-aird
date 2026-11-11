@@ -11,6 +11,41 @@ from aird_agent.core.receipts import receipt as receipt
 
 logger = logging.getLogger(__name__)
 
+BUSINESS_RECEIPTS = frozenset({
+    "create_experiment_draft", "save_experiment_measurements", "run_model_training", "activate_trained_model",
+    "run_prediction", "run_formula_design", "run_experiment_optimization", "continue_experiment_optimization",
+})
+
+
+async def reconcile_business_operations(service, principal, run):
+    """Query the original authority before a resumed native step; never replay a write."""
+    async with service.store.pool.connection() as conn:
+        pending = await (await conn.execute(
+            "SELECT c.run_id,c.call_id,c.tool_name FROM agent_runtime.harness_calls c "
+            "JOIN agent_runtime.harness_records r ON r.kind='run' AND r.id=c.run_id "
+            "WHERE r.organization_id=%s AND r.actor_id=%s AND r.payload->>'conversation_id'=%s "
+            "AND c.status='UNKNOWN' AND c.tool_name=ANY(%s) ORDER BY c.updated_at LIMIT 20",
+            (*principal.key, run['conversation_id'], sorted(BUSINESS_RECEIPTS)),
+        )).fetchall()
+    recovered = []
+    for item in pending:
+        outcome = await reconcile(service, principal, str(item['run_id']), item['call_id'])
+        if outcome['outcome'] == 'STILL_UNKNOWN':
+            continue
+        async with service.store.pool.connection() as conn:
+            result = await (await conn.execute(
+                'SELECT status,result FROM agent_runtime.harness_calls WHERE run_id=%s AND call_id=%s',
+                (item['run_id'], item['call_id']),
+            )).fetchone()
+        recovered.append({'tool': item['tool_name'], 'status': result['status'], 'result': result['result']})
+    if recovered:
+        async with service.store.transaction(principal, run['id']) as conn:
+            current = await service.store.get(principal, 'run', run['id'], conn)
+            current.setdefault('business_context_updates', {})['operation_receipts'] = recovered
+            current = await service.store.update(principal, 'run', current, conn)
+        return current
+    return run
+
 
 async def reconcile_cancelled_execution(service, principal, rid, call_id):
     """A stop response can precede both Docker cleanup and the turn/end projection."""
@@ -111,7 +146,10 @@ async def reconcile(service, principal, rid, call_id):
             "operation_receipt",
             {"tool": operation["tool_name"], "operation_key": digest([rid, call_id]),
              "arguments": operation["arguments"],
-             **({"close_uncommitted": True} if operation["tool_name"] == "create_experiment_draft" else {})},
+             **({"close_uncommitted": True} if operation["tool_name"] in {
+                 "create_experiment_draft", "run_model_training", "activate_trained_model", "run_prediction",
+                 "run_formula_design", "run_experiment_optimization", "continue_experiment_optimization",
+             } else {})},
             rid,
         )
     confirmed = (

@@ -70,6 +70,7 @@ final class AgentExperimentProjection {
             var fields = result.putObject("fields");
             for (var name : List.of("title", "dataNature", "purpose", "plan", "conclusion"))
                 if (model.has(name)) fields.set(name, model.get(name));
+            if (model.path("batchSources").isArray()) result.set("batch_sources",model.path("batchSources"));
             var basics = result.putArray("basic_info");
             var snapshot = model.path("documentSnapshot");
             var sheet = LabWorkbook.sheet(snapshot);

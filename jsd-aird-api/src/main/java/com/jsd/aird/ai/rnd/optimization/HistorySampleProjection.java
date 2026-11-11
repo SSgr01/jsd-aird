@@ -11,7 +11,7 @@ import java.util.*;
 
 /** A report is a source document; samples, not documents, are learning observations. */
 public final class HistorySampleProjection {
-    public static final int VERSION = 5;
+    public static final int VERSION = 6;
     private final ObjectMapper json;
     public HistorySampleProjection(ObjectMapper json) { this.json = json; }
 
@@ -84,6 +84,11 @@ public final class HistorySampleProjection {
                     } else {
                         var method=text(item,"testMethod");var stage=text(item,"testStage");
                         var semantic=normal(label)+"|"+normal(unit)+"|"+normal(method)+"|"+normal(stage);
+                        var condition=item.path("testCondition");
+                        if(!condition.isMissingNode()&&!condition.isNull()&&!condition.isEmpty()) {
+                            semantic+="|conditions:"+new com.jsd.aird.shared.json.JsonCanonicalizer(json).hash(condition);
+                            column.set("testConditions",condition.deepCopy());
+                        }
                         code=(domain.equals("testResults")?"result:":"process:")+semantic;
                         column.put("testStage",stage);column.set("testMethods",json.valueToTree(method.isBlank()?List.of():List.of(method)));
                     }
@@ -278,7 +283,12 @@ public final class HistorySampleProjection {
                 .put("columnCode",code).put("rawValue",raw.asText()).put("message",message);
         issue.set("sourceRefs",row.path("sourceRefs").path(code));
     }
-    private boolean metadata(String label) { return label.matches(".*(?:备注|补充说明|合计|总计|实验编号|样品编号|配方编号).* ".strip()); }
+    private static boolean metadata(String label) { return label.matches(".*(?:备注|补充说明|合计|总计|实验编号|样品编号|配方编号|样品\\s*[/／]\\s*方案编号).* ".strip()); }
+
+    static boolean processMetadata(String code) {
+        int separator=code.indexOf('|');
+        return code.startsWith("process:")&&separator>"process:".length()&&metadata(code.substring("process:".length(),separator));
+    }
     private String cleanUnit(String unit) {
         var value=MeasurementValueParser.unit(unit);
         if(Set.of("份","质量份","重量份","体积份","次","秒").contains(value))return value;

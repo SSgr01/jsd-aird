@@ -106,6 +106,9 @@ public class AgentExperimentService implements AgentExperimentFacade {
                 options.addObject().put("template_version_id", option.versionId().toString()).put("name", option.name())
                     .put("template_code", option.templateCode()).put("version_no", option.versionNo());
             }
+        } else if ("draft_options".equals(action)) {
+            authorization.require(check(null));
+            result.set("categories", json.valueToTree(repository.categories(ActorContext.required().organizationId(), false)));
         } else if ("get_experiment_record".equals(action)) {
             var id = UUID.fromString(args.path("experiment_id").asText());
             var item = detail(id);
@@ -113,6 +116,8 @@ public class AgentExperimentService implements AgentExperimentFacade {
             candidates.add(candidate(id, version(id, vid == null ? item.currentVersionId() : vid), item.summary().title(), args));
             result.put("path", "/experiments/" + id);
             result.set("reading", candidates.get(0).path("reading"));
+            var batchSources=version(id,vid==null?item.currentVersionId():vid).editModel().path("batchSources");
+            if(batchSources.isArray())result.set("batch_sources",batchSources.deepCopy());
         } else throw new ApiException(ApiErrorCode.BAD_REQUEST);
         result.putObject("trace").put("kind", "AUTHORIZED_EXPERIMENT_RECORDS").put("read_at", Instant.now().toString());
         return result;
@@ -172,6 +177,10 @@ public class AgentExperimentService implements AgentExperimentFacade {
     }
 
     @Override @Transactional public ObjectNode createDraft(ObjectNode args) {
+        return createDraft(args, null);
+    }
+
+    @Override @Transactional public ObjectNode createDraft(ObjectNode args, JsonNode plannedWorkbook) {
         var actor = ActorContext.required();
         authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "experiment.create", "EXPERIMENT", null, "CREATE"));
         var key = args.path("operation_key").asText();
@@ -207,7 +216,9 @@ public class AgentExperimentService implements AgentExperimentFacade {
         var editModel = json.createObjectNode().put("plan", args.path("edit_model").path("plan").asText());
         if (args.path("edit_model").has("purpose")) editModel.set("purpose", args.path("edit_model").get("purpose"));
         if (snapshot != null && com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot)) {
-            var working = com.jsd.aird.tpl.api.TemplateWorkbookValues.blankCopy(snapshot, templates.getBindings(actor.organizationId(), templateId));
+            var working = plannedWorkbook == null
+                ? com.jsd.aird.tpl.api.TemplateWorkbookValues.blankCopy(snapshot, templates.getBindings(actor.organizationId(), templateId))
+                : com.jsd.aird.shared.lab.LabWorkbook.prepare(json, plannedWorkbook, snapshot, key);
             var sheet = com.jsd.aird.shared.lab.LabWorkbook.sheet(working);
             var fields = com.jsd.aird.shared.lab.LabWorkbook.definition(working).path("fields");
             var values = new LinkedHashMap<String, String>();

@@ -7,7 +7,7 @@ import { HistoricalOptimizationWorkbench } from './HistoricalOptimizationWorkben
 
 const api = vi.hoisted(() => ({
   historyDatasets: vi.fn(), historyDataset: vi.fn(), submit: vi.fn(), run: vi.fn(),
-  observations: vi.fn(), saveObservations: vi.fn(), nextRound: vi.fn(),
+  observations: vi.fn(), saveObservations: vi.fn(), nextRound: vi.fn(), loop: vi.fn(), draftReceipt: vi.fn(), createDraft: vi.fn(),
 }))
 
 vi.mock('@/services/ai-rnd/optimization-api', () => ({ optimizationApi: api }))
@@ -86,6 +86,7 @@ describe('HistoricalOptimizationWorkbench', () => {
     api.submit.mockResolvedValue({ runId: completedRun.id, executionStatus: 'QUEUED', pollAfterMs: 1000 })
     api.run.mockResolvedValue(completedRun)
     api.observations.mockResolvedValue({ observations: [] })
+    api.loop.mockResolvedValue({runs: []})
   })
 
   it('selects arbitrary measured X/Y columns and submits a direct historical GP optimization', async () => {
@@ -261,44 +262,42 @@ describe('HistoricalOptimizationWorkbench', () => {
     ], savedCount: 1 })
     api.nextRound.mockResolvedValue({ runId: 'run-2', executionStatus: 'QUEUED', pollAfterMs: 1000 })
 
+    window.history.replaceState({}, '', '/assistant/experiment-optimization?runId=run-1')
     const view = render(<App><MemoryRouter><HistoricalOptimizationWorkbench /></MemoryRouter></App>)
-    await screen.findByText('涂层历史数据')
-    fireEvent.click(screen.getByText('涂层历史数据'))
-    await waitFor(() => expect(chooseXYButton()).toBeEnabled())
-    fireEvent.click(chooseXYButton())
-    fireEvent.click(screen.getByRole('checkbox', { name: /烘烤温度/ }))
-    fireEvent.click(screen.getByRole('checkbox', { name: /烘烤时间/ }))
-    fireEvent.click(screen.getByRole('radio', { name: /60°光泽/ }))
-    fireEvent.click(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')!)
-    fireEvent.click(screen.getByRole('button', { name: '开始优化' }))
 
     await screen.findByText('下一轮实验建议')
-    const nextRoundButton = screen.getByRole('button', { name: '用实测值优化下一轮' })
+    const nextRoundButton = screen.getByRole('button', { name: '用正式结果优化下一轮' })
     expect(nextRoundButton).toBeDisabled()
 
-    fireEvent.click(screen.getByRole('button', { name: '保存实测值' }))
+    fireEvent.click(screen.getByRole('button', { name: '暂存读数' }))
     expect(await screen.findByText('至少填写一个方案的 Y 实测值')).toBeInTheDocument()
     expect(api.saveObservations).not.toHaveBeenCalled()
 
-    const observedValue = screen.getByRole('spinbutton', { name: /候选方案 1实测60°光泽/ })
+    const observedValue = screen.getByRole('spinbutton', { name: /候选方案 1待处理读数/ })
     fireEvent.change(observedValue, { target: { value: '51.2' } })
     fireEvent.blur(observedValue)
-    fireEvent.click(screen.getByRole('button', { name: '保存实测值' }))
+    fireEvent.click(screen.getByRole('button', { name: '暂存读数' }))
     await waitFor(() => expect(api.saveObservations).toHaveBeenCalledWith('run-1', [
       { candidateId: 'candidate-1', fieldCode: 'result:gloss', value: 51.2 },
     ]))
-    await waitFor(() => expect(screen.getByRole('button', { name: '用实测值优化下一轮' })).toBeEnabled())
+    expect(screen.getByRole('button', { name: '用正式结果优化下一轮' })).toBeDisabled()
+    api.loop.mockResolvedValue({runs: [{comparableCount:1,experiments:[]}]})
+    fireEvent.click(screen.getByRole('button', {name: '刷新实验关联'}))
+    await waitFor(() => expect(screen.getByRole('button', { name: '用正式结果优化下一轮' })).toBeEnabled())
 
-    fireEvent.click(screen.getByRole('button', { name: '用实测值优化下一轮' }))
+    fireEvent.click(screen.getByRole('button', { name: '用正式结果优化下一轮' }))
     await waitFor(() => expect(api.nextRound).toHaveBeenCalledOnce())
     await screen.findByText(/使用 9 条实验记录学习/)
     expect(api.nextRound).toHaveBeenCalledWith('run-1', expect.any(String))
+    expect(window.location.search).toBe('?runId=run-2')
 
     view.unmount()
+    localStorage.clear()
+    api.run.mockClear()
     render(<App><MemoryRouter><HistoricalOptimizationWorkbench /></MemoryRouter></App>)
     await screen.findByText(/使用 9 条实验记录学习/)
     expect(api.run).toHaveBeenCalledWith('run-2')
-    expect(screen.getByRole('spinbutton', { name: /候选方案 1实测60°光泽/ })).toBeInTheDocument()
+    expect(screen.getByRole('spinbutton', { name: /候选方案 1待处理读数/ })).toBeInTheDocument()
   })
 
   it('keeps the setup editable and explains structured data shortage when optimization is rejected', async () => {

@@ -294,6 +294,13 @@ public final class LabWorkbook {
                 boolean duplicate=uniqueFields.getOrDefault(code,r)!=r;
                 parsed.put("itemId",id(seed,code+":"+key+(duplicate?":duplicate:"+r:""))).put("sampleKey",key).put("sourceGroupKey",key).put("logicalSampleKey",key).put("sourceContextKey",seed).put("fieldCode",code).put("testItem",field.path("label").asText()).put("operation",field.path("label").asText()).put("testMethod",field.path("method").asText("")).put("testStage",field.path("groupId").asText()).put("trainingEligible",!field.path("local").asBoolean()&&!duplicate&&field.path("trainingEligible").asBoolean(true));
                 for(var property:List.of("baseMetric","testCondition","duplicateOf","supplemental"))if(field.has(property))parsed.set(property,field.path(property).deepCopy());
+                // Execution metadata belongs to this sample and version, not to the standard template.
+                var protocol=cell.path("custom").path("measurementProtocol");
+                if(protocol.isObject()) {
+                    if(protocol.hasNonNull("method"))parsed.put("testMethod",protocol.path("method").asText());
+                    if(protocol.has("conditions"))parsed.set("testCondition",protocol.path("conditions").deepCopy());
+                    parsed.set("measurementProtocol",protocol.deepCopy());
+                }
                 parsed.set("sourceRefs",json.createArrayNode().add(json.createObjectNode().put("sheetId",sid).put("cellRange",address(r,c)).put("sampleKey",key)));
                 if(field.path("domain").asText().equals("TEST"))tests.add(parsed);else processes.add(parsed);
             }

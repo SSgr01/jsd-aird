@@ -11,9 +11,9 @@ from aird_agent.server.security import issue
 
 KINDS = ("project-morning", "research-weekly", "experiment-review")
 READ_TOOLS = frozenset({"tool_search", "business_search", "business_read", "business_links",
-    "get_research_briefing_context", "knowledge_search", "document_read", "document_outline", "table_read",
+    "get_research_briefing_context", "get_experiment_loop", "get_compute_result", "knowledge_search", "document_read", "document_outline", "table_read",
     "source_context", "evidence_read", "evidence_context", "evidence_image_read", "evidence_quote", "query_structured_data"})
-RESEARCH_TYPES = {"PROJECT", "STAGE", "TASK", "REQUIREMENT", "MATERIAL", "EXPERIMENT", "STRUCTURED_DATA"}
+RESEARCH_TYPES = {"PROJECT", "STAGE", "TASK", "REQUIREMENT", "MATERIAL", "EXPERIMENT", "STRUCTURED_DATA", "RAW_MATERIAL", "RAW_MATERIAL_SOURCE"}
 
 
 def window(kind, *, now=None, last_success=None):

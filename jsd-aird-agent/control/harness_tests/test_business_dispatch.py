@@ -135,6 +135,37 @@ async def invoke(service, principal, run, name, args, call_id=None):
     return await service.tool(principal, run["id"], run["epoch"], call_id or str(uuid4()), name, args, native=name == "dsh_execute")
 
 
+@pytest.mark.parametrize('outcome', ['SUCCEEDED', 'FAILED', 'UNKNOWN'])
+async def test_native_continuation_queries_original_compute_receipt_without_replaying(setup, principal, store, outcome):
+    from aird_agent.hosts.jsd.operations import reconcile_business_operations
+    from psycopg.types.json import Jsonb
+    service, host, run, _ = setup
+    original_call = host.call
+    async def call(actor, action, args, rid=None):
+        if action != 'operation_receipt':
+            return await original_call(actor, action, args, rid)
+        host.calls.append((action, copy.deepcopy(args), rid))
+        assert args['close_uncommitted'] and args['operation_key'] == digest([run['id'], 'lost-submit'])
+        result = {'id': 'original-computation'}
+        if outcome == 'FAILED':
+            result['error'] = 'COMPUTE_NOT_COMMITTED'
+        return {'status': outcome, 'operation_key': args['operation_key'], 'result': result}
+    host.call = call
+    async with store.transaction(principal, run['id']) as conn:
+        await conn.execute("INSERT INTO agent_runtime.harness_calls(run_id,call_id,request_hash,tool_name,status,arguments,execution_epoch) "
+            "VALUES(%s,'lost-submit',%s,'run_experiment_optimization','UNKNOWN',%s,1)",
+            (run['id'], 'a'*64, Jsonb({'request': {'mode':'HISTORICAL_GP_BO'}})))
+    recovered = await reconcile_business_operations(service, principal, run)
+    async with store.pool.connection() as conn:
+        saved = await (await conn.execute("SELECT status FROM agent_runtime.harness_calls WHERE run_id=%s AND call_id='lost-submit'", (run['id'],))).fetchone()
+    assert saved['status'] == outcome
+    if outcome != 'UNKNOWN':
+        assert recovered['business_context_updates']['operation_receipts'][0]['result']['id'] == 'original-computation'
+        await reconcile_business_operations(service, principal, recovered)
+        assert len([item for item in host.calls if item[0] == 'operation_receipt']) == 1
+    assert not any(item[0] == 'run_experiment_optimization' for item in host.calls)
+
+
 @pytest.mark.parametrize('stop_reason,receipt_status,expected', [
     (None,'SUCCEEDED','SUCCEEDED'), ('max-tokens','SUCCEEDED','FAILED'),
     (None,'CANCELLED','CANCELLED'), (None,'FAILED','FAILED'),
@@ -761,14 +792,15 @@ async def test_external_queries_require_exact_unexpired_approval(setup, principa
             run["pack_ids"] = host.scope["pack_ids"]
             run["pack_versions"] = service.packs.pin(host.scope["pack_ids"])
             await store.update(principal, "run", run, conn)
-    key = digest({"tool": tool, "arguments": args})
+    call_id = "external-once"
+    key = digest({"tool": tool, "arguments": args, "call_id": call_id})
     if decision:
         async with store.transaction(principal, run["id"]) as conn:
             current = await store.get(principal, "run", run["id"], conn)
             # Even an old rejection stays final; an old approval cannot authorize a new request.
-            current["approvals"][key] = {"decision": decision, "expires_at": time.time() - 1}
+            current["approvals"][key] = {"decision": decision, "call_id": call_id, "expires_at": time.time() - 1}
             await store.update(principal, "run", current, conn)
-    result = await invoke(service, principal, run, tool, args)
+    result = await invoke(service, principal, run, tool, args, call_id)
     assert not any(action == tool for action, _, _ in host.calls)
     if decision == "REJECTED":
         assert result["error"] == "EXTERNAL_QUERY_REJECTED"
@@ -786,8 +818,8 @@ async def test_unknown_acquisition_is_reconciled_by_inspection_without_a_second_
     async with store.transaction(principal, run["id"]) as conn:
         run["pack_ids"] = host.scope["pack_ids"]
         run["pack_versions"] = service.packs.pin(run["pack_ids"])
-        run["approvals"][digest({"tool": "literature_acquire", "arguments": args})] = {
-            "decision": "APPROVED", "expires_at": time.time() + 900,
+        run["approvals"][digest({"tool": "literature_acquire", "arguments": args, "call_id": "acquire-1"})] = {
+            "decision": "APPROVED", "call_id": "acquire-1", "expires_at": time.time() + 900,
         }
         await store.update(principal, "run", run, conn)
     original = host.call

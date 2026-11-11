@@ -216,6 +216,17 @@ class HistorySampleProjectionTest {
         assertThat(data.path("rows").get(0).path("values")).isEmpty();
         assertThat(data.path("issues").get(0).path("message").asText()).contains("冲突");
     }
+    @Test void explicitConditionsSeparateIncompatibleResultsWithoutDependingOnJsonKeyOrder() throws Exception {
+        var data=project("""
+          {"sampleGroups":[{"sampleKey":"a"},{"sampleKey":"b"},{"sampleKey":"c"}],"testResults":[
+           {"testItem":"光泽","unit":"GU","testMethod":"CM-QC-006","sampleKey":"a","value":88,"testCondition":{"temperature_c":23,"hours":24}},
+           {"testItem":"光泽","unit":"GU","testMethod":"CM-QC-006","sampleKey":"b","value":89,"testCondition":{"hours":24,"temperature_c":23}},
+           {"testItem":"光泽","unit":"GU","testMethod":"CM-QC-006","sampleKey":"c","value":81,"testCondition":{"temperature_c":50,"hours":24}}]}
+          """);
+        assertThat(data.path("columns")).hasSize(2);
+        assertThat(data.path("columns").path(0).path("filledCount").asInt()).isEqualTo(2);
+        assertThat(data.path("columns").path(1).path("filledCount").asInt()).isEqualTo(1);
+    }
     @Test void unassignedObservationsAreReportedAndSubstrateRemainsAUsableCondition() throws Exception {
         var data=project("""
           {"sampleGroups":[{"sampleKey":"a","sourceContextKey":"a"},{"sampleKey":"b","sourceContextKey":"b"}],

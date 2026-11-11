@@ -1,4 +1,6 @@
-"""Refresh records affected by a confirmed draft write, retaining superseded evidence."""
+"""Refresh changed business records without replacing the historical evidence ledger."""
+
+import copy
 
 from fastapi import HTTPException
 
@@ -10,9 +12,71 @@ def identity(source):
     return source.get("resource_type"), source.get("resource_id")
 
 
+def version_conflict(error):
+    return (getattr(error, "status_code", None) == 409
+            and getattr(error, "tool_error", {}).get("error_code") == "VERSION_CONFLICT")
+
+
+async def authorize_history_snapshot(bindings, principal, previous):
+    """Re-read mutable records on a new turn; ACL failures always propagate.
+
+    Old runs remain immutable. Only the evidence inherited by the new turn is
+    refreshed, so an earlier draft or project count cannot block the conversation
+    forever or silently supply stale facts after a page edit.
+    """
+    request = await bindings.source_authorization(principal, previous, historical=True)
+    try:
+        await bindings.java(principal, "authorize_sources", request, previous["id"])
+        return previous
+    except HTTPException as error:
+        if not version_conflict(error) or request.get("purpose"):
+            raise
+    refreshed, superseded = [], set()
+    for source in request["sources"]:
+        try:
+            await bindings.java(principal, "authorize_sources", {"sources": [source]}, previous["id"])
+            continue
+        except HTTPException as error:
+            if not version_conflict(error):
+                raise
+        kind, resource_id = identity(source)
+        if source.get("kind") != "BUSINESS_RECORD" or kind not in {
+            "PROJECT", "STAGE", "TASK", "REQUIREMENT", "MATERIAL", "EXPERIMENT",
+        }:
+            raise HTTPException(409, "SOURCE_REFRESH_REQUIRED")
+        # These domain readers recheck current authorization. Keep experiment
+        # identity/version pinned while dropping only its obsolete draft hash.
+        ref = {"type": kind, "id": resource_id}
+        if kind == "EXPERIMENT":
+            ref["version_id"] = source["version_id"]
+        project = source.get("project_id") or source.get("anchor", {}).get("ref", {}).get("project_id")
+        if project:
+            ref["project_id"] = project
+        page = source.get("anchor", {}).get("page", {})
+        args = {"ref": ref, **{key: page[key] for key in ("section", "offset", "limit") if key in page}}
+        result = await bindings.java(principal, "business_read", args, previous["id"])
+        candidates = [canonical_candidate(item) for item in result.get("candidates", [])
+                      if identity(item.get("source", {})) == (kind, resource_id)]
+        if not candidates:
+            raise HTTPException(409, "SOURCE_REFRESH_REQUIRED")
+        await bindings.java(principal, "authorize_sources", {"sources": [item["source"] for item in candidates]}, previous["id"])
+        refreshed.extend(candidates)
+        superseded.add(digest(source))
+    snapshot = copy.deepcopy(previous)
+    stale = {key: item for key, item in snapshot.get("evidence", {}).items()
+             if digest(item.get("source", {})) in superseded}
+    snapshot.setdefault("superseded_evidence", {}).update(stale)
+    snapshot["evidence"] = register_candidates(
+        {key: item for key, item in snapshot.get("evidence", {}).items() if key not in stale}, refreshed)
+    refs = {digest(source): source for source in snapshot.get("source_refs", []) if digest(source) not in superseded}
+    refs.update({digest(item["source"]): item["source"] for item in refreshed})
+    snapshot["source_refs"] = list(refs.values())
+    return snapshot
+
+
 async def refresh_draft_context(bindings, principal, run):
     pending = [output for output in run.get("registered_outputs", [])
-               if output.get("kind") == "experiment_draft" and not output.get("context_refreshed")]
+               if output.get("kind") in {"experiment_draft", "experiment_measurements"} and not output.get("context_refreshed")]
     for output in pending:
         candidates = []
         project = output.get("project_id")
@@ -45,7 +109,8 @@ async def refresh_draft_context(bindings, principal, run):
         async with bindings.store.transaction(principal, run["id"]) as conn:
             current = await bindings.store.get(principal, "run", run["id"], conn)
             receipt = next((value for value in current.get("registered_outputs", [])
-                            if value.get("kind") == "experiment_draft" and value["id"] == output["id"]), None)
+                            if value.get("kind") == output.get("kind") and value["id"] == output["id"]
+                            and value.get("revision") == output.get("revision")), None)
             if receipt is None or receipt.get("context_refreshed"):
                 continue
             superseded = {key: item for key, item in current.get("evidence", {}).items()
@@ -59,7 +124,7 @@ async def refresh_draft_context(bindings, principal, run):
             current.update(evidence=evidence, source_refs=list(refs.values()))
             current["turn_evidence_ids"] = sorted(set(current.get("turn_evidence_ids", [])) - superseded.keys())
             current["business_context_updates"] = {
-                "reason": "Records refreshed after confirmed draft creation; use these current sources.",
+                "reason": "Records refreshed after a confirmed experiment write; use these current sources.",
                 "experiment_id": output["id"],
                 "superseded_evidence_ids": sorted(superseded),
                 "current_records": [{"evidence_id": item["evidence_id"], "text": item["text"]} for item in candidates],

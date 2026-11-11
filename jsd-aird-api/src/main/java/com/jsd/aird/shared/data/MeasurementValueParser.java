@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
 public final class MeasurementValueParser {
     private MeasurementValueParser() {}
     private static final String NUMBER = "[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?";
-    private static final Pattern SCALAR = Pattern.compile("^(" + NUMBER + ")\\s*(%|℃|°C|°|cm|mm|[µμu]m|nm|mJ/cm[²2]|mW/cm[²2]|J/cm[²2]|W/cm[²2]|mN/m|MPa|mPa[·.]s|cps|KU|g/m[lL]|g|kg|mg|m[lL]|L|phr|份|质量份|重量份|体积份|%RH|次|cycles|s|秒|N|V|Ω|B)?$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SCALAR = Pattern.compile("^(" + NUMBER + ")\\s*(%|℃|°C|°|cm|mm|[µμu]m|nm|mJ/cm[²2]|mW/cm[²2]|J/cm[²2]|W/cm[²2]|mN/m|MPa|m?Pa[·.]s|cps?|KU|GU|g/m[lL]|g|kg|mg|m[lL]|L|phr|份|质量份|重量份|体积份|%RH|次|cycles|s|秒|min|h|N|V|Ω|B)?$", Pattern.CASE_INSENSITIVE);
     public static String unit(String value) {
         return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC).strip()
                 .replace("℃", "°C").replace("µ", "μ").replace("um", "μm")
@@ -40,6 +40,14 @@ public final class MeasurementValueParser {
         if(a.equals(b)||(a.equals("次")&&b.equals("cycles"))||(a.equals("秒")&&b.equals("s")))return BigDecimal.ONE;
         var viscosity=java.util.Set.of("cps","cp","mpa.s","mpa·s");
         if(viscosity.contains(a)&&viscosity.contains(b))return BigDecimal.ONE;
+        var pas=java.util.Set.of("pa.s","pa·s");
+        if(pas.contains(a)&&viscosity.contains(b))return new BigDecimal("1000");
+        if(viscosity.contains(a)&&pas.contains(b))return new BigDecimal("0.001");
+        if(pas.contains(a)&&pas.contains(b))return BigDecimal.ONE;
+        for(var scale:java.util.List.of(
+                java.util.Map.of("kg",new BigDecimal("1000"),"g",BigDecimal.ONE,"mg",new BigDecimal("0.001")),
+                java.util.Map.of("h",new BigDecimal("3600"),"min",new BigDecimal("60"),"s",BigDecimal.ONE,"秒",BigDecimal.ONE)))
+            if(scale.containsKey(a)&&scale.containsKey(b))return scale.get(a).divide(scale.get(b),java.math.MathContext.DECIMAL128);
         return switch(a+"->"+b) {
             case "cm->mm", "mm->cm" -> new BigDecimal(a.equals("cm")?"10":"0.1");
             case "mm->μm" -> new BigDecimal("1000");

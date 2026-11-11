@@ -89,12 +89,11 @@ class JsdBindings(RuntimeBindings):
                 raise HTTPException(403, "CAPABILITY_ACCESS_REVOKED")
             from aird_agent.hosts.jsd.business_context import refresh_draft_context
             await refresh_draft_context(self, principal, run)
-            await self.java(
-                principal,
-                "authorize_sources",
-                await self.source_authorization(principal, run, historical=not execution),
-                run.get("id"),
-            )
+            if execution:
+                await self.java(principal, "authorize_sources", await self.source_authorization(principal, run), run.get("id"))
+            else:
+                from aird_agent.hosts.jsd.business_context import authorize_history_snapshot
+                await authorize_history_snapshot(self, principal, run)
         else:
             topic = await self.java(principal, "topic", {"id": run["topic_id"]}, run["id"])
         documents = {(item["document_id"], item["publication_id"]): item
@@ -296,10 +295,10 @@ class JsdBindings(RuntimeBindings):
                     + " "
                     + " ".join(value for key, value in aliases.items() if key in tool["name"])
                 ).lower()
-                return sum(1 for word in words if word in label)
+                return (tool["name"].lower() in words, sum(1 for word in words if word in label))
 
             catalog = self.tools_for(run)
-            matches = sorted((tool for tool in catalog if rank(tool)), key=rank, reverse=True)
+            matches = sorted((tool for tool in catalog if rank(tool)[1]), key=rank, reverse=True)
             selected = matches[:8]
             # Schemas already live in the native registered catalog. Repeating
             # them here can overflow the result budget and hide activation.
@@ -320,6 +319,8 @@ class JsdBindings(RuntimeBindings):
         return {"source_quotes": source_quotes, "source_refs": source_refs}
 
     async def prepare_run(self, principal, run):
+        from aird_agent.hosts.jsd.operations import reconcile_business_operations
+        run = await reconcile_business_operations(self.runtime, principal, run)
         # Seed an explicitly selected paper through the normal authorized, budgeted
         # read tool. No query rewrite/model call, and no duplicate read on recovery.
         if selected_sources(run) and not selected_evidence(run):
@@ -348,15 +349,11 @@ class JsdBindings(RuntimeBindings):
         snapshots = {}
         for rid in {item["run_id"] for item in conversation.get("messages", []) if item.get("run_id")}:
             previous = await self.store.get(principal, "run", rid)
-            snapshots[rid] = previous
             await self.java(principal, "authorize", {"documents": previous.get("source_documents", [])}, rid)
             if previous.get("source_refs"):
-                await self.java(
-                    principal,
-                    "authorize_sources",
-                    await self.source_authorization(principal, previous, historical=True),
-                    rid,
-                )
+                from aird_agent.hosts.jsd.business_context import authorize_history_snapshot
+                previous = await authorize_history_snapshot(self, principal, previous)
+            snapshots[rid] = previous
         return snapshots
 
     async def prepare_request(self, principal, request):
@@ -461,6 +458,9 @@ class JsdBindings(RuntimeBindings):
             )
 
     def output_receipt(self, run, name, arguments, result):
+        if name == "save_experiment_measurements" and result.get("id") and result.get("version_id"):
+            return {**{key: result[key] for key in ("id", "version_id", "revision", "path", "status") if key in result},
+                    "kind": "experiment_measurements"}
         if name == "create_experiment_draft" and result.get("id") and result.get("status") == "DRAFT":
             return {
                 **{key: result[key] for key in ("id", "title", "path", "version_id", "experiment_no", "status") if key in result},

@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 import { dataApi } from '@/services/data/data-api';
+import { useAuthStore } from '@/stores/auth-store';
 import { DataUploadPage } from './DataUploadPage';
 
 vi.mock('@/services/data/data-api', () => ({
@@ -27,18 +28,20 @@ vi.mock('@/components/project-relations/ProjectRelationPicker', () => ({
 }));
 
 vi.mock('@/components/upload-workspace', () => ({
-  UploadWorkspace: ({ classification, onFilesChange, onSubmit, submitDisabled }: {
+  UploadWorkspace: ({ classification, onFilesChange, onSubmit, submitDisabled, uploadReadOnly, showSubmit }: {
     classification: React.ReactNode;
     onFilesChange: (files: Array<Record<string, unknown>>) => void;
     onSubmit: () => void;
     submitDisabled?: boolean;
+    uploadReadOnly?: boolean;
+    showSubmit?: boolean;
   }) => <div>
     {classification}
-    <button type="button" onClick={() => onFilesChange([{
+    {uploadReadOnly ? <span>当前账号只有查看权限</span> : <button type="button" onClick={() => onFilesChange([{
       uid: 'word-file', name: 'report.docx', status: 'done',
       originFileObj: new File(['report'], 'report.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
-    }])}>添加 Word 文件</button>
-    <button type="button" disabled={submitDisabled} onClick={onSubmit}>创建导入任务</button>
+    }])}>添加 Word 文件</button>}
+    {showSubmit && <button type="button" disabled={submitDisabled} onClick={onSubmit}>创建导入任务</button>}
   </div>,
 }));
 
@@ -49,6 +52,13 @@ const createJobMock = vi.spyOn(dataApi, 'createJob');
 
 describe('DataUploadPage Word template flow', () => {
   beforeEach(() => {
+    // The submit guard requires the import grant; the page hides the submit
+    // button for read-only visitors.
+    useAuthStore.setState({ user: {
+      userId: 'user-1', organizationId: 'org-1', organizationName: 'Test',
+      username: 'uploader', displayName: 'Uploader', status: 'ACTIVE', authVersion: 1,
+      permissions: ['data.upload.create'],
+    } });
     vi.clearAllMocks();
     listTemplatesMock.mockResolvedValue([
       { templateId: 'sheet-template', versionId: 'sheet-v1', templateCode: 'SHEET', name: '表格模板', versionNo: 1, format: 'XLSX' },
@@ -87,4 +97,26 @@ describe('DataUploadPage Word template flow', () => {
     expect(createJobMock).not.toHaveBeenCalled();
   });
 
+  it('keeps the upload workspace read-only without the upload operation', async () => {
+    useAuthStore.setState((state) => ({ user: state.user && {
+      ...state.user, permissions: ['data.view'],
+    } }));
+    render(<App><MemoryRouter><DataUploadPage /></MemoryRouter></App>);
+
+    expect(await screen.findByText('当前账号只有查看权限')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '添加 Word 文件' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '创建导入任务' })).not.toBeInTheDocument();
+    expect(stageSourceMock).not.toHaveBeenCalled();
+  });
+
+  it('allows uploads with the data center create operation', async () => {
+    useAuthStore.setState((state) => ({ user: state.user && {
+      ...state.user, permissions: ['data.view', 'data.view.create'],
+    } }));
+    render(<App><MemoryRouter><DataUploadPage /></MemoryRouter></App>);
+
+    expect(await screen.findByRole('button', { name: '添加 Word 文件' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '创建导入任务' })).toBeInTheDocument();
+    expect(screen.queryByText('当前账号只有查看权限')).not.toBeInTheDocument();
+  });
 });

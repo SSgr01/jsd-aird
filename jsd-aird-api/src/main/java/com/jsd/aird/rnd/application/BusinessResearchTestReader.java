@@ -20,7 +20,7 @@ public class BusinessResearchTestReader implements BusinessReadPort {
     public Page references(String type, ObjectNode filter, int page, int size) {
         var result = records.search(ActorContext.required().organizationId(), new ResearchTestRepository.Search(null,
             filter.path("query").asText(""), filter.path("category").asText(null), filter.path("status").asText(null),
-            null, optionalId(filter, "project_id"), null, null, page, size));
+            null, optionalId(filter, "project_id"), null, null, null, page, size));
         return new Page(result.items().stream().map(row -> ref(type, row.id())).toList(), page < result.totalPages());
     }
     public BusinessRecordView read(ObjectNode request) {

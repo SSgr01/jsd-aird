@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
+import { usePermission } from '@/components/auth/usePermission';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 import { createExperiment, listExperiments, type ExperimentSummary } from '@/services/experiments/experiment-api';
 import { useAuthStore } from '@/stores/auth-store';
@@ -25,6 +26,7 @@ export function NewExperimentPage() {
   const { message } = App.useApp();
   const navigate = useNavigate();
   const user = useAuthStore((state) => state.user);
+  const canCreate = usePermission('eln.create.create');
   const [form] = Form.useForm();
   const [recordMode, setRecordMode] = useState<RecordMode>('word');
   const [templates, setTemplates] = useState<DataTemplateOption[]>([]);
@@ -86,6 +88,10 @@ export function NewExperimentPage() {
   };
 
   const submit = async () => {
+    if (!canCreate) {
+      void message.warning('当前账号没有新建实验权限，请联系管理员开通');
+      return;
+    }
     const values = await form.validateFields();
     const relation = relations.find((item) => item.projectId);
     setCreationError('');
@@ -157,7 +163,10 @@ export function NewExperimentPage() {
         {recordMode === 'template' && <Form.Item name="templateVersionId" label="选择模板" rules={[{ required: true, message: '请选择实验模板' }]}>
           <Select showSearch optionFilterProp="label" loading={templatesLoading} placeholder="请选择已发布模板" popupMatchSelectWidth={false} classNames={{ popup: { root: 'experiment-import-dropdown experiment-template-dropdown' } }} options={templateOptions} notFoundContent={templatesLoading ? '加载中' : '暂无已发布模板'} />
         </Form.Item>}
-        <div className="eln-entry-submit"><Button type="primary" icon={<EditOutlined />} loading={submitting} onClick={() => void submit()}>创建并进入编辑</Button></div>
+        <div className="eln-entry-submit">{canCreate
+          ? <Button type="primary" icon={<EditOutlined />} loading={submitting} onClick={() => void submit()}>创建并进入编辑</Button>
+          : <Typography.Text type="secondary">当前账号只有查看权限，如需在线记录实验请联系管理员开通新建实验权限。</Typography.Text>}
+        </div>
         {creationError && <Alert type="error" showIcon message="实验创建失败" description={creationError} />}
       </Form>
     </section>

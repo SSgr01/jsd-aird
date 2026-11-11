@@ -1,5 +1,7 @@
 package com.jsd.aird.mdm.application.service;
 
+import com.jsd.aird.iam.api.AuthorizationService;
+import com.jsd.aird.iam.api.PermissionCheck;
 import com.jsd.aird.mdm.application.command.ProjectCommands;
 import com.jsd.aird.mdm.application.port.ProjectRepository;
 import com.jsd.aird.mdm.application.query.ProjectQuery;
@@ -8,6 +10,7 @@ import com.jsd.aird.mdm.domain.model.ProjectPriority;
 import com.jsd.aird.mdm.domain.model.ProjectStatus;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
+import com.jsd.aird.shared.security.ActorContext;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,30 +26,33 @@ import java.util.UUID;
 @Service
 public class ProjectService {
 
-    static final String OPERATOR = "system";
-
     private final ProjectRepository repository;
+    private final AuthorizationService authorization;
 
-    public ProjectService(ProjectRepository repository) {
+    public ProjectService(ProjectRepository repository, AuthorizationService authorization) {
         this.repository = repository;
+        this.authorization = authorization;
     }
 
     public List<Project> search(ProjectQuery query) {
-        return repository.findPage(query);
+        return repository.findPage(scoped(query));
     }
 
     public long count(ProjectQuery query) {
-        return repository.count(query);
+        return repository.count(scoped(query));
     }
 
     public byte[] exportXlsx(ProjectQuery query) {
-        var total = repository.count(query);
+        var scopedQuery = scoped(query);
+        var total = repository.count(scopedQuery);
         var projects = new java.util.ArrayList<Project>();
         var pageSize = 200;
         var pages = (int) Math.ceil((double) total / pageSize);
         for (var page = 1; page <= pages; page++) {
             var pageQuery = new ProjectQuery(query.keyword(), query.owner(), query.priority(), query.status(),
-                query.startDateFrom(), query.startDateTo(), query.partnerId(), page, pageSize);
+                query.startDateFrom(), query.startDateTo(), query.partnerId(), page, pageSize)
+                .withDataScope(scopedQuery.organizationId(), scopedQuery.scopeType(), scopedQuery.scopeUserId(),
+                    scopedQuery.scopeTargetIds());
             projects.addAll(repository.findPage(pageQuery));
         }
         try (var workbook = new XSSFWorkbook(); var output = new ByteArrayOutputStream()) {
@@ -91,8 +97,33 @@ public class ProjectService {
     }
 
     public Project get(UUID id) {
-        return repository.findById(id)
+        var project = repository.findById(id)
             .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "项目不存在"));
+        authorize(id, "project.list.view");
+        return project;
+    }
+
+    public void requireAccess(UUID id, String permissionCode) {
+        if (repository.findById(id).isEmpty())
+            throw new ApiException(ApiErrorCode.NOT_FOUND, "项目不存在");
+        authorize(id, permissionCode);
+    }
+
+    private void authorize(UUID id, String permissionCode) {
+        var actor = ActorContext.required();
+        var menuKey = permissionCode.equals("project.list.view") ||
+                List.of("project.update", "project.delete", "project.copy").contains(permissionCode)
+                ? "project.list" : null;
+        authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), permissionCode,
+            "PROJECT", id, permissionCode.endsWith(".view") ? "READ" : "WRITE", menuKey));
+    }
+
+    public com.jsd.aird.iam.api.DataScopeResolver.ResolvedDataScope scope() {
+        var actor = ActorContext.required();
+        var scope = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
+            "project.list.view", "PROJECT", null, "READ", "project.list"));
+        if (!scope.allowed()) throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有项目查看权限");
+        return scope;
     }
 
     @Transactional
@@ -119,6 +150,7 @@ public class ProjectService {
         if (command.projectCode() == null || command.projectCode().isBlank())
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "项目编号不能为空");
         var current = get(id);
+        authorize(id, "project.update");
         var code = command.projectCode().trim();
         if (repository.existsByProjectCode(code, id)) throw duplicateProjectCode(code);
 
@@ -132,7 +164,7 @@ public class ProjectService {
             current.version(), current.createdAt(), Instant.now());
 
         try {
-            if (!repository.update(project, command.version(), OPERATOR)) mutationFailed(id);
+            if (!repository.update(project, command.version(), operator())) mutationFailed(id);
         } catch (DuplicateKeyException exception) {
             throw duplicateProjectCode(code);
         }
@@ -142,11 +174,12 @@ public class ProjectService {
     public void delete(UUID id, long expectedVersion) {
         requireVersion(expectedVersion);
         var current = get(id);
+        authorize(id, "project.delete");
         if (current.version() != expectedVersion) conflict();
         if (current.status() == ProjectStatus.COMPLETED) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "已完成项目不可直接删除");
         }
-        if (!repository.softDelete(id, expectedVersion, OPERATOR)) mutationFailed(id);
+        if (!repository.softDelete(id, expectedVersion, operator())) mutationFailed(id);
     }
 
     private void mutationFailed(UUID id) {
@@ -166,8 +199,9 @@ public class ProjectService {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "请选择需要复制的项目");
 
         var sources = repository.findAllByIds(ids);
-        if (sources.isEmpty())
+        if (sources.size() != ids.stream().distinct().count())
             throw new ApiException(ApiErrorCode.NOT_FOUND, "项目不存在");
+        for (var id : ids) requireAccess(id, "project.copy");
 
         var year = LocalDate.now().getYear();
         var now = Instant.now();
@@ -187,8 +221,9 @@ public class ProjectService {
      * 因此这里统一把约束冲突翻译成业务错误，避免前端收到 500「系统内部错误」。
      */
     private void insert(Project project) {
+        var actor = ActorContext.required();
         try {
-            repository.insert(project, OPERATOR);
+            repository.insert(project, actor.organizationId(), actor.userId().toString());
         } catch (DuplicateKeyException exception) {
             throw duplicateProjectCode(project.projectCode());
         }
@@ -202,6 +237,16 @@ public class ProjectService {
         return projectCode == null || projectCode.isBlank()
             ? repository.nextProjectCode(LocalDate.now().getYear())
             : projectCode.trim();
+    }
+
+    private ProjectQuery scoped(ProjectQuery query) {
+        var actor = ActorContext.required();
+        var scope = scope();
+        return query.withDataScope(actor.organizationId(), scope.scopeType(), actor.userId(), scope.targetIds());
+    }
+
+    private static String operator() {
+        return ActorContext.required().userId().toString();
     }
 
     private static void validate(ProjectCommands.SaveProject command) {

@@ -24,10 +24,20 @@ it('retries failed chunks locally while keeping navigation',async()=>{
   const importer=vi.fn<()=>Promise<{default:()=>ReactNode}>>().mockRejectedValueOnce(new Error('network')).mockResolvedValue({default:()=> <p>重试成功</p>});
   const Page=routePage(importer);
   render(<MemoryRouter future={{v7_startTransition:true,v7_relativeSplatPath:true}}><nav>导航仍可用</nav><ContentBoundary><Page /></ContentBoundary></MemoryRouter>);
+  expect(await screen.findByText('network')).toBeInTheDocument();
   fireEvent.click(await screen.findByText('重试当前页面'));
   expect(await screen.findByText('重试成功')).toBeInTheDocument();
   expect(screen.getByText('导航仍可用')).toBeInTheDocument();
   expect(importer).toHaveBeenCalledTimes(2);
+  error.mockRestore();
+});
+
+it('identifies a failed page chunk and offers a full reload', async () => {
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const Page = routePage((): Promise<{ default: () => ReactNode }> => Promise.reject(new Error('Failed to fetch dynamically imported module')));
+  render(<MemoryRouter><ContentBoundary><Page /></ContentBoundary></MemoryRouter>);
+  expect(await screen.findByText('页面资源加载失败，请重新加载。')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '重新加载页面' })).toBeInTheDocument();
   error.mockRestore();
 });
 

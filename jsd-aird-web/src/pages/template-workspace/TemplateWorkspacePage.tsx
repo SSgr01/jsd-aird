@@ -44,6 +44,7 @@ import {
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { generateUUID } from '@/utils/uuid';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { usePermission } from '@/components/auth/usePermission';
 
 import {
   bindingForField,
@@ -140,7 +141,43 @@ type SaveState = 'SAVED' | 'DIRTY' | 'SAVING' | 'FAILED' | 'CONFLICT';
 type WorkspaceView = 'preview' | 'edit' | 'versions';
 type ReviewSyncState = PublishReviewSyncState;
 
+/**
+ * 审核入口对拥有审核权限的人始终可见，只有「待审核」版本可点。不可点时用
+ * 提示说明原因，避免把「未提交审核」误认为「没有审核权限」。
+ */
+function reviewActionHint(status?: TemplateVersionReview['status']) {
+  switch (status) {
+    case 'SUBMITTED': return undefined;
+    case 'NOT_SUBMITTED': return '模板尚未提交审核，提交人提交后即可审核';
+    case 'APPROVED': return '模板已通过审核，无需重复审核';
+    case 'REJECTED': return '模板已被驳回，重新提交审核后即可再次审核';
+    default: return '审核状态尚未加载，请点击“刷新审核状态”后重试';
+  }
+}
+
 export function TemplateWorkspacePage() {
+  // 页面操作码是新的授权方式，旧配置页与内置角色发放的模块级码（
+  // template.update/approve/review/export/publish）仍然有效：后端
+  // JdbcAuthorizationService.ALTERNATE_CODES 把它们视为等价，前端如果只认
+  // 新码，就会出现「勾选了审核权限，工作台里却没有审核按钮」。
+  const canUpdatePage = usePermission('template.view.update');
+  const canUpdateLegacy = usePermission('template.update');
+  const canUpdate = canUpdatePage || canUpdateLegacy;
+  const canSubmitPage = usePermission('template.view.submit');
+  const canApprovePage = usePermission('template.view.approve');
+  const canApproveLegacy = usePermission('template.approve');
+  // template.review 的语义是「提交/通过/驳回模板审核」，三种动作都放行。
+  const canReviewLegacy = usePermission('template.review');
+  const canRejectPage = usePermission('template.view.review');
+  const canExportPage = usePermission('template.view.export');
+  const canExportLegacy = usePermission('template.export');
+  const canPublishPage = usePermission('template.view.publish');
+  const canPublishLegacy = usePermission('template.publish');
+  const canReview = canApprovePage || canApproveLegacy || canReviewLegacy;
+  const canReject = canRejectPage || canReviewLegacy;
+  const canSubmit = canSubmitPage || canReviewLegacy;
+  const canExport = canExportPage || canExportLegacy;
+  const canPublish = canPublishPage || canPublishLegacy;
   const { versionId } = useParams<{ versionId: string }>();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -228,7 +265,7 @@ export function TemplateWorkspacePage() {
             : Promise.resolve(undefined),
           templateApi.review(model.versionId).catch(() => undefined),
           model.snapshotFileId && model.snapshotHash
-            ? trackSnapshot(templateApi.downloadSnapshot(model.snapshotFileId))
+            ? trackSnapshot(templateApi.downloadSnapshot(model.versionId))
             : Promise.resolve(model.inlineSnapshot),
         ]);
         let loadedSnapshot = originalSnapshot;
@@ -322,7 +359,7 @@ export function TemplateWorkspacePage() {
         savedGenerationRef.current = 0;
         setView(requestedView === 'versions' ? 'versions'
           : requestedView === 'preview' ? 'preview'
-            : model.status === 'DRAFT' ? 'edit' : 'preview');
+            : model.status === 'DRAFT' && canUpdate ? 'edit' : 'preview');
         setSaveState('SAVED');
         setRecognitionActions({});
         setRecognitionAlternativeSelections({});
@@ -337,7 +374,7 @@ export function TemplateWorkspacePage() {
     return () => {
       active = false;
     };
-  }, [versionId]);
+  }, [versionId, canUpdate]);
 
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
@@ -1699,6 +1736,7 @@ export function TemplateWorkspacePage() {
   };
 
   const changeView = (next: WorkspaceView) => {
+    if (next === 'edit' && (!canUpdate || workspace?.status !== 'DRAFT')) return;
     if (next === 'versions' && editorRef.current) setSnapshot(editorRef.current.getSnapshot());
     setPicking(undefined);
     if (next !== 'edit') setFieldManagerTab('structure');
@@ -1720,7 +1758,7 @@ export function TemplateWorkspacePage() {
   }
   if (!workspace || !snapshot) return <ContentLoading label="下载文档…" />;
 
-  const editable = workspace.status === 'DRAFT' && isDesktop && view === 'edit'
+  const editable = canUpdate && workspace.status === 'DRAFT' && isDesktop && view === 'edit'
     && (templateReview?.status === 'NOT_SUBMITTED' || templateReview?.status === 'REJECTED');
   const recognitionBlocksPublish = Boolean(recognitionReview?.recognitionRunId)
     && (reviewSyncState === 'STALE'
@@ -1766,17 +1804,12 @@ export function TemplateWorkspacePage() {
               </>
             )}
           </span>
-          <Tag color={workspace.status === 'DRAFT' ? 'gold' : workspace.status === 'PUBLISHED' ? 'success' : 'default'}>
-            {workspace.status === 'DRAFT' ? '草稿' : workspace.status === 'PUBLISHED' ? '已发布' : '已停用'}
+          <Tag color={workspace.status === 'PUBLISHED' ? 'success' : workspace.status === 'RETIRED' ? 'default' : templateReview?.status === 'APPROVED' ? 'success' : templateReview?.status === 'SUBMITTED' ? 'processing' : templateReview?.status === 'REJECTED' ? 'error' : 'gold'}>
+            {workspace.status === 'PUBLISHED' ? '已发布' : workspace.status === 'RETIRED' ? '已停用' : templateReview?.status === 'APPROVED' ? '审核通过' : templateReview?.status === 'SUBMITTED' ? '待审核' : templateReview?.status === 'REJECTED' ? '已退回' : '草稿'}
           </Tag>
-          {workspace.status === 'DRAFT' && templateReview && (
-            <Tag color={templateReview.status === 'APPROVED' ? 'success' : templateReview.status === 'REJECTED' ? 'error' : 'processing'}>
-              审核：{templateReview.status === 'NOT_SUBMITTED' ? '未提交审核' : templateReview.status === 'SUBMITTED' ? '待审核（不可发布）' : templateReview.status === 'APPROVED' ? '已通过审核' : '已驳回，需重新提交'}
-            </Tag>
-          )}
         </div>
         <Space wrap className="workspace-header-actions">
-          {['PUBLISHED', 'RETIRED'].includes(workspace.status) && (
+          {canUpdate && ['PUBLISHED', 'RETIRED'].includes(workspace.status) && (
             <Button
               size="small"
               icon={<PlusOutlined />}
@@ -1804,18 +1837,35 @@ export function TemplateWorkspacePage() {
                刷新审核状态
               </Button>
             )}
-            {workspace.status === 'DRAFT' && templateReview && templateReview.status !== 'SUBMITTED' && templateReview.status !== 'APPROVED' && (
+            {canSubmit && workspace.status === 'DRAFT' && templateReview && templateReview.status !== 'SUBMITTED' && templateReview.status !== 'APPROVED' && (
               <Button onClick={() => void submitTemplateReview()}>
                 {templateReview.status === 'REJECTED' ? '再次提交审核' : '提交审核'}
               </Button>
             )}
-            {workspace.status === 'DRAFT' && templateReview?.status === 'SUBMITTED' && (
+            {workspace.status === 'DRAFT' && (canReview || canReject) && (
               <>
-                <Button onClick={() => void approveTemplateReview()}>审核通过</Button>
-                <Button danger onClick={() => setRejectReviewOpen(true)}>驳回</Button>
+                {canReview && (
+                  <Button
+                    onClick={() => void approveTemplateReview()}
+                    disabled={templateReview?.status !== 'SUBMITTED'}
+                    title={reviewActionHint(templateReview?.status)}
+                  >
+                    审核通过
+                  </Button>
+                )}
+                {canReject && (
+                  <Button
+                    danger
+                    onClick={() => setRejectReviewOpen(true)}
+                    disabled={templateReview?.status !== 'SUBMITTED'}
+                    title={reviewActionHint(templateReview?.status)}
+                  >
+                    驳回
+                  </Button>
+                )}
               </>
             )}
-            {view === 'edit' && (workspace.format === 'XLSX' || workspace.format === 'DOCX') && (
+            {canUpdate && view === 'edit' && (workspace.format === 'XLSX' || workspace.format === 'DOCX') && (
              <Button
               type={saveState === 'DIRTY' || saveState === 'SAVING' ? 'primary' : 'default'}
               className="workspace-save-button"
@@ -1827,7 +1877,7 @@ export function TemplateWorkspacePage() {
               保存草稿
             </Button>
           )}
-           <Dropdown
+           {canExport && <Dropdown
              menu={{
                items: [
                  ...(versionId ? [{ key: 'current', label: `导出当前${workspace.status === 'DRAFT' ? '草稿' : '版本'}` }] : []),
@@ -1843,8 +1893,8 @@ export function TemplateWorkspacePage() {
              }}
            >
              <Button icon={<DownloadOutlined />}>导出 {workspace.format === 'XLSX' ? 'Excel' : 'Word'} <DownOutlined /></Button>
-           </Dropdown>
-           <Button
+           </Dropdown>}
+           {canPublish && <Button
              type="primary"
              className="workspace-publish-button"
              icon={<SendOutlined />}
@@ -1857,7 +1907,7 @@ export function TemplateWorkspacePage() {
              onClick={requestPublish}
            >
             发布
-         </Button>
+         </Button>}
           <WorkspaceMaximizeButton />
          </Space>
         </header>
@@ -1917,7 +1967,7 @@ export function TemplateWorkspacePage() {
                 </span>
               ),
             },
-            { key: 'edit', label: '编辑', disabled: workspace.status !== 'DRAFT' },
+            { key: 'edit', label: '编辑', disabled: !canUpdate || workspace.status !== 'DRAFT' },
             { key: 'versions', label: '版本记录' },
           ]}
         />

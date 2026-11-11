@@ -12,7 +12,7 @@ export function canUseOperationPage(page: OperationPage, user: AuthUser | null) 
   return (
     (page.permissions.length === 0 ||
       page.permissions.some((code) => hasPermission(code, user.permissions))) &&
-    canViewPathWithMenus(pathname, user.permissions, user.menuKeys || [])
+    canViewPathWithMenus(pathname, user.permissions, user.menuKeys)
   );
 }
 

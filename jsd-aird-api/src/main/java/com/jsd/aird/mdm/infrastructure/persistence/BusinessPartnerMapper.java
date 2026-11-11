@@ -21,8 +21,17 @@ public interface BusinessPartnerMapper {
         "p.deleted, p.deleted_at deletedAt, p.deleted_by deletedBy " +
         "FROM mdm.business_partner p ";
 
+    String SCOPE_CLAUSE = "<if test='organizationId != null'> AND p.organization_id=#{organizationId} " +
+        "<choose>" +
+        "<when test='scopeType == &quot;ALL&quot; or scopeType == &quot;ORG&quot;'></when>" +
+        "<when test='scopeType == &quot;SELF&quot; or scopeType == &quot;CREATOR&quot;'> AND p.created_by::text=#{userId}::text</when>" +
+        "<when test='scopeType == &quot;DEPARTMENT&quot;'> AND p.department_id IS NOT NULL AND p.department_id=(SELECT department_id FROM iam.app_user WHERE id=#{userId} AND organization_id=#{organizationId})</when>" +
+        "<when test='scopeType == &quot;SELECTED&quot; and targetIds != null and targetIds.size() > 0'> AND (p.created_by::text=#{userId}::text OR p.id IN <foreach collection='targetIds' item='targetId' open='(' separator=',' close=')'>#{targetId}</foreach>)</when>" +
+        "<otherwise> AND 1=0</otherwise>" +
+        "</choose></if>";
+
     @Select("<script>" + SELECT_COLUMNS +
-        "WHERE 1=1 AND p.deleted = false " +
+        "WHERE 1=1 AND p.deleted = false " + SCOPE_CLAUSE +
         "<if test='keyword != null and keyword != &quot;&quot;'> AND (p.partner_code ILIKE concat('%',#{keyword},'%') OR p.name ILIKE concat('%',#{keyword},'%') OR EXISTS (SELECT 1 FROM mdm.partner_contact c WHERE c.partner_id=p.id AND c.status='ACTIVE' AND c.name ILIKE concat('%',#{keyword},'%')))</if>" +
         "<if test='industry != null and industry != &quot;&quot;'> AND p.industry=#{industry}</if>" +
         "<if test='customerLevel != null and customerLevel != &quot;&quot;'> AND p.customer_level=#{customerLevel}</if>" +
@@ -34,7 +43,9 @@ public interface BusinessPartnerMapper {
                                       @Param("customerLevel") String customerLevel,
                                       @Param("cooperationStatus") String cooperationStatus,
                                       @Param("owner") String owner,
-                                      @Param("status") String status, @Param("offset") int offset, @Param("size") int size);
+                                      @Param("status") String status, @Param("offset") int offset, @Param("size") int size,
+                                      @Param("organizationId") UUID organizationId, @Param("userId") UUID userId,
+                                      @Param("scopeType") String scopeType, @Param("targetIds") List<UUID> targetIds);
 
     record PartnerStatsRow(UUID id, long requirementCount, long projectCount,
                            Instant latestFollowUpAt, String ownerNames) {
@@ -81,7 +92,7 @@ public interface BusinessPartnerMapper {
         """)
     List<PartnerStatsRow> selectPartnerStats(@Param("ids") List<UUID> ids);
 
-    @Select("<script>SELECT count(*) FROM mdm.business_partner p WHERE 1=1 AND p.deleted = false " +
+    @Select("<script>SELECT count(*) FROM mdm.business_partner p WHERE 1=1 AND p.deleted = false " + SCOPE_CLAUSE +
         "<if test='keyword != null and keyword != &quot;&quot;'> AND (p.partner_code ILIKE concat('%',#{keyword},'%') OR p.name ILIKE concat('%',#{keyword},'%') OR EXISTS (SELECT 1 FROM mdm.partner_contact c WHERE c.partner_id=p.id AND c.status='ACTIVE' AND c.name ILIKE concat('%',#{keyword},'%')))</if>" +
         "<if test='industry != null and industry != &quot;&quot;'> AND p.industry=#{industry}</if>" +
         "<if test='customerLevel != null and customerLevel != &quot;&quot;'> AND p.customer_level=#{customerLevel}</if>" +
@@ -93,7 +104,9 @@ public interface BusinessPartnerMapper {
                @Param("customerLevel") String customerLevel,
                @Param("cooperationStatus") String cooperationStatus,
                @Param("owner") String owner,
-               @Param("status") String status);
+               @Param("status") String status, @Param("organizationId") UUID organizationId,
+               @Param("userId") UUID userId, @Param("scopeType") String scopeType,
+               @Param("targetIds") List<UUID> targetIds);
 
     @Select(SELECT_COLUMNS + "WHERE p.id=#{id} AND p.deleted = false GROUP BY p.id")
     Optional<BusinessPartnerRow> findById(@Param("id") UUID id);
@@ -101,15 +114,16 @@ public interface BusinessPartnerMapper {
     @Select("<script>SELECT EXISTS(SELECT 1 FROM mdm.business_partner WHERE normalized_name=#{name} <if test='excludedId != null'>AND id != #{excludedId}</if>)</script>")
     boolean exists(@Param("code") String code, @Param("name") String name, @Param("excludedId") UUID excludedId);
 
-    @Insert("INSERT INTO mdm.business_partner(id,partner_code,name,normalized_name,industry,address,status,remark,customer_level,cooperation_status,main_business,custom_fields,version,created_at,updated_at,created_by,updated_by) VALUES(#{id},#{code},#{name},#{normalized},#{industry},#{address},#{status},#{remark},#{customerLevel},#{cooperationStatus},#{mainBusiness},CAST(#{customFields} AS jsonb),0,#{now},#{now},#{operator},#{operator})")
+    @Insert("INSERT INTO mdm.business_partner(id,partner_code,name,normalized_name,industry,address,status,remark,customer_level,cooperation_status,main_business,custom_fields,version,created_at,updated_at,created_by,updated_by,organization_id,department_id) VALUES(#{id},#{code},#{name},#{normalized},#{industry},#{address},#{status},#{remark},#{customerLevel},#{cooperationStatus},#{mainBusiness},CAST(#{customFields} AS jsonb),0,#{now},#{now},#{userId},CAST(#{operator} AS uuid),#{organizationId},(SELECT department_id FROM iam.app_user WHERE id=#{userId} AND organization_id=#{organizationId}))")
     void insert(@Param("id") UUID id, @Param("code") String code, @Param("name") String name,
                 @Param("normalized") String normalized, @Param("industry") String industry, @Param("address") String address,
                 @Param("status") String status, @Param("remark") String remark,
                 @Param("customerLevel") String customerLevel, @Param("cooperationStatus") String cooperationStatus,
                 @Param("mainBusiness") String mainBusiness, @Param("customFields") String customFields,
-                @Param("now") Instant now, @Param("operator") String operator);
+                @Param("now") Instant now, @Param("operator") String operator,
+                @Param("organizationId") UUID organizationId, @Param("userId") UUID userId);
 
-    @Update("UPDATE mdm.business_partner SET partner_code=#{code},name=#{name},normalized_name=#{normalized},industry=#{industry},address=#{address},remark=#{remark},customer_level=#{customerLevel},cooperation_status=#{cooperationStatus},main_business=#{mainBusiness},custom_fields=CAST(#{customFields} AS jsonb),version=version+1,updated_at=#{now},updated_by=#{operator} WHERE id=#{id} AND version=#{version}")
+    @Update("UPDATE mdm.business_partner SET partner_code=#{code},name=#{name},normalized_name=#{normalized},industry=#{industry},address=#{address},remark=#{remark},customer_level=#{customerLevel},cooperation_status=#{cooperationStatus},main_business=#{mainBusiness},custom_fields=CAST(#{customFields} AS jsonb),version=version+1,updated_at=#{now},updated_by=CAST(#{operator} AS uuid) WHERE id=#{id} AND version=#{version}")
     int update(@Param("id") UUID id, @Param("code") String code, @Param("name") String name,
                @Param("normalized") String normalized, @Param("industry") String industry, @Param("address") String address,
                @Param("remark") String remark, @Param("customerLevel") String customerLevel,
@@ -117,25 +131,25 @@ public interface BusinessPartnerMapper {
                @Param("customFields") String customFields, @Param("version") long version,
                @Param("now") Instant now, @Param("operator") String operator);
 
-    @Update("UPDATE mdm.business_partner SET status=#{status},version=version+1,updated_at=now(),updated_by=#{operator} WHERE id=#{id} AND version=#{version}")
+    @Update("UPDATE mdm.business_partner SET status=#{status},version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) WHERE id=#{id} AND version=#{version}")
     int updateStatus(@Param("id") UUID id, @Param("status") String status, @Param("version") long version, @Param("operator") String operator);
 
     @Update("UPDATE mdm.business_partner SET deleted=true, deleted_at=now(), deleted_by=#{operator}, " +
-        "version=version+1, updated_at=now(), updated_by=#{operator} " +
+        "version=version+1, updated_at=now(), updated_by=CAST(#{operator} AS uuid) " +
         "WHERE id=#{id} AND version=#{version} AND deleted=false")
     int softDelete(@Param("id") UUID id, @Param("version") long version, @Param("operator") String operator);
 
     @Select("SELECT id,partner_id partnerId,name,department,title,phone,email,status,assigned_project_ids::text assignedProjectIds,members,wechat,custom_fields::text customFields,version,created_at createdAt,updated_at updatedAt,deleted,deleted_at deletedAt,deleted_by deletedBy FROM mdm.partner_contact WHERE partner_id=#{partnerId} AND deleted = false ORDER BY status,created_at")
     List<PartnerContactRow> findContacts(@Param("partnerId") UUID partnerId);
 
-    @Insert("INSERT INTO mdm.partner_contact(id,partner_id,name,department,title,phone,email,status,assigned_project_ids,members,wechat,custom_fields,version,created_at,updated_at,created_by,updated_by) VALUES(#{id},#{partnerId},#{name},#{department},#{title},#{phone},#{email},'ACTIVE',CAST(#{assignedProjectIds} AS jsonb),#{members},#{wechat},CAST(#{customFields} AS jsonb),0,#{now},#{now},#{operator},#{operator})")
+    @Insert("INSERT INTO mdm.partner_contact(id,partner_id,name,department,title,phone,email,status,assigned_project_ids,members,wechat,custom_fields,version,created_at,updated_at,created_by,updated_by) VALUES(#{id},#{partnerId},#{name},#{department},#{title},#{phone},#{email},'ACTIVE',CAST(#{assignedProjectIds} AS jsonb),#{members},#{wechat},CAST(#{customFields} AS jsonb),0,#{now},#{now},CAST(#{operator} AS uuid),CAST(#{operator} AS uuid))")
     void insertContact(@Param("id") UUID id, @Param("partnerId") UUID partnerId, @Param("name") String name,
                        @Param("department") String department, @Param("title") String title, @Param("phone") String phone,
                        @Param("email") String email, @Param("assignedProjectIds") String assignedProjectIds,
                        @Param("members") String members, @Param("wechat") String wechat, @Param("customFields") String customFields,
                        @Param("now") Instant now, @Param("operator") String operator);
 
-    @Update("UPDATE mdm.partner_contact SET name=#{name},department=#{department},title=#{title},phone=#{phone},email=#{email},assigned_project_ids=CAST(#{assignedProjectIds} AS jsonb),members=#{members},wechat=#{wechat},custom_fields=CAST(#{customFields} AS jsonb),version=version+1,updated_at=now(),updated_by=#{operator} WHERE id=#{id} AND partner_id=#{partnerId} AND version=#{version}")
+    @Update("UPDATE mdm.partner_contact SET name=#{name},department=#{department},title=#{title},phone=#{phone},email=#{email},assigned_project_ids=CAST(#{assignedProjectIds} AS jsonb),members=#{members},wechat=#{wechat},custom_fields=CAST(#{customFields} AS jsonb),version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) WHERE id=#{id} AND partner_id=#{partnerId} AND version=#{version}")
     int updateContact(@Param("id") UUID id, @Param("partnerId") UUID partnerId, @Param("name") String name,
                       @Param("department") String department, @Param("title") String title, @Param("phone") String phone,
                       @Param("email") String email, @Param("assignedProjectIds") String assignedProjectIds,
@@ -178,17 +192,18 @@ public interface BusinessPartnerMapper {
 
     @Insert("""
         INSERT INTO mdm.partner_contact_project (id, contact_id, project_id, created_at, updated_at, created_by, updated_by)
-        VALUES (gen_random_uuid(), #{contactId}, #{projectId}, now(), now(), 'system', 'system')
+        VALUES (gen_random_uuid(), #{contactId}, #{projectId}, now(), now(), CAST(#{operator} AS uuid), CAST(#{operator} AS uuid))
         ON CONFLICT DO NOTHING
         """)
-    void insertContactProject(@Param("contactId") UUID contactId, @Param("projectId") UUID projectId);
+    void insertContactProject(@Param("contactId") UUID contactId, @Param("projectId") UUID projectId,
+                              @Param("operator") String operator);
 
-    @Update("UPDATE mdm.partner_contact SET status=#{status},version=version+1,updated_at=now(),updated_by=#{operator} WHERE id=#{id} AND partner_id=#{partnerId} AND version=#{version}")
+    @Update("UPDATE mdm.partner_contact SET status=#{status},version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) WHERE id=#{id} AND partner_id=#{partnerId} AND version=#{version}")
     int updateContactStatus(@Param("partnerId") UUID partnerId, @Param("id") UUID id, @Param("status") String status,
                             @Param("version") long version, @Param("operator") String operator);
 
     @Update("UPDATE mdm.partner_contact SET deleted=true, deleted_at=now(), deleted_by=#{operator}, " +
-        "version=version+1, updated_at=now(), updated_by=#{operator} " +
+        "version=version+1, updated_at=now(), updated_by=CAST(#{operator} AS uuid) " +
         "WHERE id=#{contactId} AND partner_id=#{partnerId} AND version=#{version} AND deleted=false")
     int softDeleteContact(@Param("partnerId") UUID partnerId, @Param("contactId") UUID contactId,
                           @Param("version") long version, @Param("operator") String operator);

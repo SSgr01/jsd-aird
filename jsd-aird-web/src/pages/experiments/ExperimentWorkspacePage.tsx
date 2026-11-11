@@ -28,6 +28,7 @@ import {
 import { formatTime } from '@/utils/date';
 import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
 import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
+import { ReviewHistoryButton } from '@/components/workspace-review/ReviewHistoryButton';
 import {
   App,
   Alert,
@@ -88,6 +89,7 @@ import {
 } from '@/components/file-preview';
 import { Can } from '@/components/auth/Can';
 import { generateUUID } from '@/utils/uuid';
+import { usePermission } from '@/components/auth/usePermission';
 import { templateApi, type TemplateCategory } from '@/services/templates/template-api';
 import { ExperimentFieldReviewPanel } from './ExperimentFieldReviewPanel';
 import './experiments.css';
@@ -162,6 +164,7 @@ export function ExperimentWorkspacePage({
   returnTo?: string;
   onBack?: () => void;
 } = {}) {
+  const canUpdate = usePermission('eln.view.update');
   const { id: routeId = '' } = useParams();
   const id = experimentId ?? routeId;
   const navigate = useNavigate();
@@ -295,7 +298,7 @@ export function ExperimentWorkspacePage({
       setSnapshot(initialSnapshot);
       const editable = !['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(d.summary.status);
       setSelectedVersion(pinned);
-      setView(pinned ? 'versions' : editable ? 'edit' : 'preview');
+      setView(pinned ? 'versions' : editable && canUpdate ? 'edit' : 'preview');
       if (!editable && labDefinition(initialSnapshot)) {
         const result = await getExperimentPresentation(id, d.summary.revision);
         if (!isCurrent()) return;
@@ -312,7 +315,7 @@ export function ExperimentWorkspacePage({
       if (!isCurrent()) return;
       setLoadError(error instanceof Error ? error.message : '实验本加载失败');
     }
-  }, [id, beginLoad, requestedVersion]);
+  }, [id, beginLoad, requestedVersion, canUpdate]);
 
   useEffect(() => {
     setDetail(undefined);
@@ -970,7 +973,7 @@ export function ExperimentWorkspacePage({
   const applyReviewAction = async () => {
     if (!detail || !reviewAction) return;
     if (!reviewReason.trim()) {
-      void message.warning(voiding ? '请填写作废原因' : '请填写退回修改原因');
+      void message.warning(voiding ? '请填写作废原因' : '请填写驳回原因');
       return;
     }
     setBusy(true);
@@ -978,10 +981,10 @@ export function ExperimentWorkspacePage({
       await actExperiment(id, reviewAction, detail.summary.revision, reviewReason.trim());
       setReviewAction(undefined);
       setReviewReason('');
-      void message.success(voiding ? '实验已作废' : '实验已退回修改');
+      void message.success(voiding ? '实验已作废' : '实验审核已驳回');
       await load();
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : voiding ? '作废失败' : '退回修改失败');
+      void message.error(error instanceof Error ? error.message : voiding ? '作废失败' : '驳回失败');
     } finally {
       setBusy(false);
     }
@@ -1137,7 +1140,7 @@ export function ExperimentWorkspacePage({
       }
     : undefined;
   const sourceIsImage = /\.(png|jpe?g|gif|webp|bmp|tiff?)$/i.test(sourceFile?.fileName ?? '');
-  const readonly = statusLocked;
+  const readonly = statusLocked || !canUpdate;
   const editable = !readonly && isDesktop && view === 'edit';
   const unifiedDefinition = labDefinition(editModel.documentSnapshot ?? snapshot);
   // 无模板导入（CONTENT_ONLY）不涉及识别区域与字段绑定，隐藏 Excel 识别审核面板。
@@ -1217,6 +1220,7 @@ export function ExperimentWorkspacePage({
   const workspaceActions = (
     <Space wrap>
       <SaveStateBadge state={saveState} />
+      <ReviewHistoryButton items={detail.reviews} />
       <Button
         className="workspace-export-button"
         icon={<DownloadOutlined />}
@@ -1254,14 +1258,14 @@ export function ExperimentWorkspacePage({
         </Button>
       ) : null}
       {status === 'COMPLETED' && (
-        <Can permission="experiment.update">
+        <Can permission="eln.view.update">
           <Button loading={busy} onClick={reviseCompletedExperiment}>
             创建修订
           </Button>
         </Can>
       )}
       {status === 'COMPLETED' && (!requestedVersion || requestedVersion === detail.currentVersionId) && (
-        <Can permission="experiment.review">
+        <Can permission="eln.view.approve">
           <Button danger loading={busy} onClick={() => { setReviewReason(''); setReviewAction('void'); }}>
             作废实验
           </Button>
@@ -1286,7 +1290,7 @@ export function ExperimentWorkspacePage({
         保存草稿
       </Button>
       {publishAction === 'submit-review' ? (
-        <Can permission="experiment.submit">
+        <Can permission="eln.view.submit">
           <Button
             type="primary"
             className="workspace-publish-button"
@@ -1300,7 +1304,7 @@ export function ExperimentWorkspacePage({
       ) : null}
       {publishAction === 'approve' ? (
         <>
-          <Can permission="experiment.review">
+          <Can permission="eln.view.approve">
             <Button
               loading={busy}
               onClick={() => {
@@ -1308,10 +1312,10 @@ export function ExperimentWorkspacePage({
                 setReviewAction('return');
               }}
             >
-              退回修改
+              驳回
             </Button>
           </Can>
-          <Can permission="experiment.approve">
+          <Can permission="eln.view.approve">
             <Button
               type="primary"
               className="workspace-publish-button"
@@ -1460,9 +1464,9 @@ export function ExperimentWorkspacePage({
         </Form>
       </FormModal>
       <FormModal draft={reviewReason}
-        title={voiding ? '作废实验' : '退回修改'}
+        title={voiding ? '作废实验' : '驳回'}
         open={Boolean(reviewAction)}
-        okText={voiding ? '确认作废' : '确认退回'}
+        okText={voiding ? '确认作废' : '确认驳回'}
         cancelText="取消"
         confirmLoading={busy}
         onCancel={() => setReviewAction(undefined)}
@@ -1471,7 +1475,7 @@ export function ExperimentWorkspacePage({
       >
         {voiding && <Typography.Paragraph type="secondary">本次读数将退出后续优化，原实验版本与已有轮次保留。</Typography.Paragraph>}
         <Form layout="vertical">
-          <Form.Item label={voiding ? '作废原因' : '退回原因'} required>
+          <Form.Item label={voiding ? '作废原因' : '驳回原因'} required>
             <Input.TextArea
               rows={4}
               maxLength={500}

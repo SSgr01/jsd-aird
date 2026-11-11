@@ -3,6 +3,7 @@ package com.jsd.aird.rnd.infrastructure;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.rnd.application.port.ResearchTestRepository;
+import com.jsd.aird.rnd.application.port.ExperimentRepository;
 import com.jsd.aird.rnd.domain.ResearchTestModels.*;
 import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.error.ApiErrorCode;
@@ -29,23 +30,41 @@ public class JdbcResearchTestRepository implements ResearchTestRepository {
         if(q.type()!=null){w.append(" AND r.record_type=?");a.add(q.type().name());}
         if(text(q.keyword())){w.append(" AND (lower(r.name) LIKE ? OR lower(r.business_no) LIKE ?)");var k="%"+q.keyword().toLowerCase()+"%";a.add(k);a.add(k);}
         if(text(q.category())){w.append(" AND r.category=?");a.add(q.category());}if(text(q.status())){w.append(" AND r.status=?");a.add(q.status());}
+        if(text(q.format())){w.append(" AND r.document_format=?");a.add(q.format());}
         if(text(q.ownerName())){w.append(" AND lower(r.owner_name)=lower(?)");a.add(q.ownerName());}if(q.projectId()!=null){w.append(" AND r.project_id=?");a.add(q.projectId());}
         if(q.dateFrom()!=null){w.append(" AND r.business_date>=?");a.add(q.dateFrom());}if(q.dateTo()!=null){w.append(" AND r.business_date<=?");a.add(q.dateTo());}
+        appendScope(w,a,q.scope(),org,q.type());
         long total=Optional.ofNullable(jdbc.queryForObject("SELECT count(*) FROM rnd.research_test_record r"+w,Long.class,a.toArray())).orElse(0L);
         var args=new ArrayList<>(a);args.add(q.size());args.add((q.page()-1)*q.size());
         var items=jdbc.query(BASE+w+" ORDER BY r.updated_at DESC LIMIT ? OFFSET ?",this::summary,args.toArray());
         return new PageResponse<>(items,q.page(),q.size(),total,(total+q.size()-1)/q.size());
     }
+    private void appendScope(StringBuilder where,List<Object> args,ExperimentRepository.DataScopeFilter scope,UUID org,Type type){
+        switch(scope.type()){
+            case "ALL","ORG" -> { }
+            case "SELF","CREATOR" -> {where.append(" AND r.created_by=?");args.add(scope.actorId());}
+            case "DEPARTMENT" -> {where.append(" AND r.department_id IS NOT NULL AND r.department_id=(SELECT u.department_id FROM iam.app_user u WHERE u.id=? AND u.organization_id=?)");args.add(scope.actorId());args.add(org);}
+            case "SELECTED", "PROJECT" -> {
+                if(scope.targetIds().isEmpty())where.append(" AND 1=0");
+                else{where.append(type==Type.STANDARD?" AND (r.id IN (":" AND (r.project_id IN (").append(String.join(",",scope.targetIds().stream().map(id->"?").toList())).append(") OR r.created_by=?)");args.addAll(scope.targetIds());args.add(scope.actorId());}
+            }
+            default -> where.append(" AND 1=0");
+        }
+    }
     @Override public Optional<Detail> detail(UUID org,UUID id){return jdbc.query(BASE+" WHERE r.organization_id=? AND r.id=? AND r.deleted=false",this::detail,org,id).stream().findFirst();}
     @Override @Transactional public Detail create(Create c){
-        var id=UUID.randomUUID();var vid=UUID.randomUUID();var no=text(c.businessNo())?c.businessNo().trim():nextNo(c.type());
+        var id=UUID.randomUUID();var vid=UUID.randomUUID();var no=text(c.businessNo())?c.businessNo().trim():nextNo(c.organizationId(),c.type());
         if(exists(c.organizationId(),c.type(),no,null))conflict("编号 "+no+" 已存在");
-        jdbc.update("INSERT INTO rnd.research_test_record(id,organization_id,record_type,business_no,name,category,applicable_scope,owner_id,owner_name,business_date,document_format,source_type,status,visibility,project_id,stage_id,task_id,source_file_id,created_by,updated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                id,c.organizationId(),c.type().name(),no,c.name().trim(),c.category(),c.scope(),c.actorId(),c.ownerName(),c.date(),c.format(),c.sourceType(),"DRAFT",c.visibility(),c.projectId(),c.stageId(),c.taskId(),c.sourceFileId(),c.actorId(),c.actorId());
+        try{
+            jdbc.update("INSERT INTO rnd.research_test_record(id,organization_id,record_type,business_no,name,category,applicable_scope,owner_id,owner_name,business_date,document_format,source_type,status,visibility,project_id,stage_id,task_id,source_file_id,created_by,updated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    id,c.organizationId(),c.type().name(),no,c.name().trim(),c.category(),c.scope(),c.actorId(),c.ownerName(),c.date(),c.format(),c.sourceType(),"DRAFT",c.visibility(),c.projectId(),c.stageId(),c.taskId(),c.sourceFileId(),c.actorId(),c.actorId());
+        }catch(DuplicateKeyException e){conflict("编号 "+no+" 已存在，请刷新后重试");}
         jdbc.update("INSERT INTO rnd.research_test_version(id,organization_id,record_id,version_no,status,template_version_id,template_snapshot_hash,template_snapshot_jsonb,edit_model_jsonb,member_snapshot_jsonb,effective_from,effective_to,created_by) VALUES(?,?,?,1,'DRAFT',?,?,?,?,?,?,?,?)",
                 vid,c.organizationId(),id,c.templateVersionId(),c.templateHash(),pg(c.templateSnapshot()),pg(orObject(c.editModel())),pg(orArray(c.memberSnapshot())),c.effectiveFrom(),c.effectiveTo(),c.actorId());
         jdbc.update("UPDATE rnd.research_test_record SET current_version_id=? WHERE id=?",vid,id);audit(c.organizationId(),id,vid,"CREATED",null,c.editModel(),c.actorId(),c.actorName());return required(c.organizationId(),id);
     }
+    @Override public String nextReportNumber(){return nextNo(null,Type.REPORT);}
+    @Override public String nextStandardNumber(UUID org){return nextNo(org,Type.STANDARD);}
     @Override @Transactional public Detail save(UUID org,UUID id,Draft d,UUID actor,String name){var old=required(org,id);requireVersion(old,d.lockVersion());if(!old.summary().status().editable())conflict("当前状态不可编辑");if(exists(org,old.summary().recordType(),d.businessNo(),id))conflict("编号 "+d.businessNo()+" 已存在");
         var n=jdbc.update("UPDATE rnd.research_test_record SET business_no=?,name=?,category=?,applicable_scope=?,owner_name=?,business_date=?,visibility=?,project_id=?,stage_id=?,task_id=?,lock_version=lock_version+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND lock_version=? AND deleted=false",
                 d.businessNo().trim(),d.name().trim(),d.category(),d.scope(),d.ownerName(),d.date(),d.visibility(),d.projectId(),d.stageId(),d.taskId(),actor,org,id,d.lockVersion());lock(n);
@@ -92,16 +111,31 @@ public class JdbcResearchTestRepository implements ResearchTestRepository {
             throw new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在");
         return findUpload(org,id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在"));
     }
-    @Override public PageResponse<Upload> uploads(UUID org,Type type,String keyword,int page,int size){var w=" WHERE u.organization_id=? AND u.deleted=false AND r.record_type=?";var a=new ArrayList<Object>();a.add(org);a.add(type.name());if(text(keyword)){w+=" AND lower(u.original_name) LIKE ?";a.add("%"+keyword.toLowerCase()+"%");}var joins=" FROM rnd.research_test_upload u JOIN rnd.research_test_record r ON r.id=u.record_id";long total=jdbc.queryForObject("SELECT count(*)"+joins+w,Long.class,a.toArray());a.add(size);a.add((page-1)*size);var items=jdbc.query("SELECT u.*,r.category,r.visibility,p.name project_name,s.name stage_name,t.name task_name"+joins+" LEFT JOIN mdm.project p ON p.id=r.project_id AND p.deleted=false LEFT JOIN mdm.project_stage s ON s.id=r.stage_id AND s.deleted=false LEFT JOIN mdm.project_task t ON t.id=r.task_id AND t.deleted=false"+w+" ORDER BY u.created_at DESC LIMIT ? OFFSET ?",this::upload,a.toArray());return new PageResponse<>(items,page,size,total,(total+size-1)/size);}
+    @Override public PageResponse<Upload> uploads(UUID org,Type type,String keyword,int page,int size){return uploads(org,type,keyword,page,size,ExperimentRepository.DataScopeFilter.all());}
+    @Override public PageResponse<Upload> uploads(UUID org,Type type,String keyword,int page,int size,ExperimentRepository.DataScopeFilter scope){var w=new StringBuilder(" WHERE u.organization_id=? AND u.deleted=false AND r.record_type=? AND r.deleted=false");var a=new ArrayList<Object>();a.add(org);a.add(type.name());if(text(keyword)){w.append(" AND lower(u.original_name) LIKE ?");a.add("%"+keyword.toLowerCase()+"%");}appendUploadScope(w,a,scope,org);var joins=" FROM rnd.research_test_upload u JOIN rnd.research_test_record r ON r.id=u.record_id";long total=jdbc.queryForObject("SELECT count(*)"+joins+w,Long.class,a.toArray());a.add(size);a.add((page-1)*size);var items=jdbc.query("SELECT u.*,r.category,r.visibility,p.name project_name,s.name stage_name,t.name task_name"+joins+" LEFT JOIN mdm.project p ON p.id=r.project_id AND p.deleted=false LEFT JOIN mdm.project_stage s ON s.id=r.stage_id AND s.deleted=false LEFT JOIN mdm.project_task t ON t.id=r.task_id AND t.deleted=false"+w+" ORDER BY u.created_at DESC LIMIT ? OFFSET ?",this::upload,a.toArray());return new PageResponse<>(items,page,size,total,(total+size-1)/size);}
+    private void appendUploadScope(StringBuilder where,List<Object> args,ExperimentRepository.DataScopeFilter scope,UUID org){
+        switch(scope.type()){
+            case "ALL","ORG" -> { }
+            case "SELF","CREATOR" -> {where.append(" AND u.created_by=?");args.add(scope.actorId());}
+            case "DEPARTMENT" -> {where.append(" AND u.department_id=(SELECT department_id FROM iam.app_user WHERE id=? AND organization_id=?)");args.add(scope.actorId());args.add(org);}
+            case "SELECTED" -> {if(scope.targetIds().isEmpty())where.append(" AND 1=0");else{where.append(" AND (u.id IN (").append(String.join(",",scope.targetIds().stream().map(id->"?").toList())).append(") OR u.created_by=?)");args.addAll(scope.targetIds());args.add(scope.actorId());}}
+            default -> where.append(" AND 1=0");
+        }
+    }
     @Override public void deleteUpload(UUID org,UUID id){jdbc.update("UPDATE rnd.research_test_upload SET deleted=true WHERE organization_id=? AND id=?",org,id);}
 
     private void requireVersion(Detail current,long expected){if(expected<0||current.summary().lockVersion()!=expected)throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"记录已被其他会话修改，请核对最新版本后操作");}
     private Detail required(UUID org,UUID id){return detail(org,id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试记录不存在"));}
     private Upload upload(ResultSet r,int n)throws SQLException{return new Upload(r.getObject("id",UUID.class),r.getObject("record_id",UUID.class),r.getObject("file_id",UUID.class),r.getString("original_name"),r.getString("content_type"),r.getLong("file_size"),r.getString("status"),r.getString("category"),r.getString("visibility"),r.getString("project_name"),r.getString("stage_name"),r.getString("task_name"),instant(r,"created_at"));}
-    private String nextNo(Type type){if(type==Type.REPORT){var seq=jdbc.queryForObject("SELECT nextval('rnd.comprehensive_report_no_seq')",Long.class);return "CTR-"+LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE)+"-"+String.format("%03d",seq);}return "STD-"+LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE)+"-"+UUID.randomUUID().toString().substring(0,6).toUpperCase();}
+    private String nextNo(UUID org,Type type){
+        var date=LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE);
+        if(type==Type.REPORT){var seq=jdbc.queryForObject("SELECT nextval('rnd.comprehensive_report_no_seq')",Long.class);return "CTR-"+date+"-"+String.format("%03d",seq);}
+        var used=Optional.ofNullable(jdbc.queryForObject("SELECT COALESCE(MAX(substring(business_no from 14)::integer),0) FROM rnd.research_test_record WHERE organization_id=? AND record_type='STANDARD' AND business_no ~ ?",Integer.class,org,"^STD-"+date+"-[0-9]{3,}$")).orElse(0);
+        return "STD-"+date+"-"+String.format("%03d",used+1);
+    }
     private boolean exists(UUID org,Type t,String no,UUID exclude){return Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM rnd.research_test_record WHERE organization_id=? AND record_type=? AND business_no=? AND deleted=false"+(exclude==null?")": " AND id<>?)"),Boolean.class,exclude==null?new Object[]{org,t.name(),no}:new Object[]{org,t.name(),no,exclude}));}
-    private void validateTransition(Detail old,Status target,String comment){var s=old.summary().status();boolean ok=(target==Status.PENDING_REVIEW&&(s==Status.DRAFT||s==Status.RETURNED))||(target==Status.RETURNED&&s==Status.PENDING_REVIEW)||(target==Status.PUBLISHED&&s==Status.PENDING_REVIEW)||(target==Status.ARCHIVED&&s==Status.PUBLISHED);if(!ok)conflict("不允许从 "+s+" 转换到 "+target);if(target==Status.RETURNED&&!text(comment))invalid("驳回必须填写原因");}
-    private void validateStandardOverlap(UUID org,Detail d){if(d.effectiveFrom()==null)return;var overlap=jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM rnd.research_test_record r JOIN rnd.research_test_version v ON v.id=r.current_version_id WHERE r.organization_id=? AND r.record_type='STANDARD' AND r.status='PUBLISHED' AND r.deleted=false AND r.id<>? AND COALESCE(r.applicable_scope,'')=COALESCE(?, '') AND COALESCE(v.effective_to,'9999-12-31')>=? AND COALESCE(?,'9999-12-31')>=v.effective_from)",Boolean.class,org,d.summary().id(),d.summary().applicableScope(),d.effectiveFrom(),d.effectiveTo());if(Boolean.TRUE.equals(overlap))conflict("相同适用范围存在有效期重叠的已发布标准");}
+    private void validateTransition(Detail old,Status target,String comment){var s=old.summary().status();boolean ok=(target==Status.PENDING_REVIEW&&(s==Status.DRAFT||s==Status.RETURNED))||(target==Status.RETURNED&&s==Status.PENDING_REVIEW)||(target==Status.APPROVED&&s==Status.PENDING_REVIEW)||(target==Status.PUBLISHED&&s==Status.APPROVED)||(target==Status.ARCHIVED&&s==Status.PUBLISHED);if(!ok)conflict("不允许从 "+s+" 转换到 "+target);if(target==Status.RETURNED&&!text(comment))invalid("驳回必须填写原因");}
+    private void validateStandardOverlap(UUID org,Detail d){if(d.effectiveFrom()==null)return;var overlap=jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM rnd.research_test_record r JOIN rnd.research_test_version v ON v.id=r.current_version_id WHERE r.organization_id=? AND r.record_type='STANDARD' AND r.status='PUBLISHED' AND r.deleted=false AND r.id<>? AND COALESCE(r.applicable_scope,'')=COALESCE(?, '') AND COALESCE(v.effective_to,DATE '9999-12-31')>=? AND COALESCE(CAST(? AS date),DATE '9999-12-31')>=v.effective_from)",Boolean.class,org,d.summary().id(),d.summary().applicableScope(),d.effectiveFrom(),d.effectiveTo());if(Boolean.TRUE.equals(overlap))conflict("相同适用范围存在有效期重叠的已发布标准");}
     private Summary summary(ResultSet r,int n)throws SQLException{return new Summary(r.getObject("id",UUID.class),Type.valueOf(r.getString("record_type")),r.getString("business_no"),r.getString("name"),r.getString("category"),r.getString("applicable_scope"),r.getString("owner_name"),r.getObject("business_date",LocalDate.class),r.getString("document_format"),r.getString("source_type"),Status.valueOf(r.getString("status")),r.getString("visibility"),r.getObject("project_id",UUID.class),r.getString("project_name"),r.getObject("stage_id",UUID.class),r.getString("stage_name"),r.getObject("task_id",UUID.class),r.getString("task_name"),r.getObject("source_file_id",UUID.class),r.getInt("version_no"),r.getLong("lock_version"),instant(r,"created_at"),instant(r,"updated_at"));}
     private Detail detail(ResultSet r,int n)throws SQLException{var s=summary(r,n);return new Detail(s,r.getObject("current_version_id",UUID.class),r.getObject("template_version_id",UUID.class),r.getString("template_snapshot_hash"),node(r,"template_snapshot_jsonb"),node(r,"edit_model_jsonb"),node(r,"member_snapshot_jsonb"),r.getObject("effective_from",LocalDate.class),r.getObject("effective_to",LocalDate.class),reviews(s.id()));}
     private Version version(ResultSet r,int n)throws SQLException{return new Version(r.getObject("id",UUID.class),r.getInt("version_no"),r.getString("status"),r.getObject("template_version_id",UUID.class),r.getString("template_snapshot_hash"),node(r,"template_snapshot_jsonb"),node(r,"edit_model_jsonb"),node(r,"member_snapshot_jsonb"),r.getObject("effective_from",LocalDate.class),r.getObject("effective_to",LocalDate.class),r.getString("change_summary"),instant(r,"submitted_at"),instant(r,"published_at"),r.getObject("created_by",UUID.class),instant(r,"created_at"));}

@@ -24,6 +24,15 @@ import java.util.UUID;
 
 @Repository
 public class QualityDataRepository implements QualityDataStore {
+    private static final String WORKFLOW_STATUS_SQL = """
+            CASE WHEN EXISTS (SELECT 1 FROM quality.data_record_version v
+                WHERE v.organization_id=r.organization_id AND v.record_id=r.id
+                  AND v.change_type='PUBLISH' AND v.lock_version=r.lock_version) THEN 'PUBLISHED'
+            ELSE COALESCE((SELECT w.status FROM ops.workspace_review w
+                WHERE w.organization_id=r.organization_id AND w.resource_type='QUALITY_RECORD'
+                  AND w.resource_id=r.id AND w.resource_updated_at=r.updated_at), 'NOT_SUBMITTED')
+            END workflow_status
+            """;
     private final JdbcTemplate jdbc; private final ObjectMapper mapper;
     public QualityDataRepository(JdbcTemplate jdbc,ObjectMapper mapper){this.jdbc=jdbc;this.mapper=mapper;}
     @Override public void lockCategory(UUID organizationId,UUID categoryId){
@@ -32,26 +41,109 @@ public class QualityDataRepository implements QualityDataStore {
     }
 
     public List<Category> categories(UUID org,String type){return jdbc.query("SELECT c.*,count(r.id) record_count FROM quality.data_category c LEFT JOIN quality.data_record r ON r.category_id=c.id AND r.deleted=false WHERE c.organization_id=? AND c.business_type=? GROUP BY c.id ORDER BY c.sort_order,c.created_at",(rs,n)->category(rs),org,type);}
+    @Override public List<Category> categories(UUID org,String role,String type,QualityDataStore.DataScopeFilter scope){
+        var args=new java.util.ArrayList<Object>();
+        args.add(role); args.add(role); args.add(role);
+        var visible="r.organization_id=c.organization_id AND r.business_type=c.business_type AND r.deleted=false"
+                +" AND (r.visibility='ALL' OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND r.visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND r.visibility='RND'))";
+        visible=appendScope(visible,args,scope,org);
+        args.add(org); args.add(type);
+        return jdbc.query("SELECT c.*,count(r.id) record_count FROM quality.data_category c LEFT JOIN quality.data_record r ON r.category_id=c.id AND "
+                +visible+" WHERE c.organization_id=? AND c.business_type=? GROUP BY c.id ORDER BY c.sort_order,c.created_at",
+                (rs,n)->category(rs),args.toArray());
+    }
+    @Override public UUID ensureUncategorizedCategory(UUID org,String type,UUID user){
+        var existing=jdbc.query("SELECT id FROM quality.data_category WHERE organization_id=? AND business_type=? AND system_default=true ORDER BY sort_order LIMIT 1",(rs,n)->rs.getObject(1,UUID.class),org,type);
+        if(!existing.isEmpty())return existing.getFirst();
+        var byName=jdbc.query("SELECT id FROM quality.data_category WHERE organization_id=? AND business_type=? AND btrim(name)='未分类' ORDER BY sort_order LIMIT 1",(rs,n)->rs.getObject(1,UUID.class),org,type);
+        if(!byName.isEmpty()){
+            var id=byName.getFirst();
+            jdbc.update("UPDATE quality.data_category SET system_default=true WHERE organization_id=? AND id=?",org,id);
+            return id;
+        }
+        var id=UUID.randomUUID();
+        jdbc.update("INSERT INTO quality.data_category(id,organization_id,business_type,name,description,system_default,sort_order,created_by) VALUES(?,?,?,?,?,true,coalesce((SELECT max(sort_order)+1 FROM quality.data_category WHERE organization_id=? AND business_type=?),1),?)",
+                id,org,type,"未分类","未归属分类的品管数据",org,type,user);
+        return id;
+    }
     public Category category(UUID org,UUID id){var rows=jdbc.query("SELECT c.*,0 record_count FROM quality.data_category c WHERE organization_id=? AND id=?",(rs,n)->category(rs),org,id);if(rows.isEmpty())throw new ApiException(ApiErrorCode.NOT_FOUND,"品管分类不存在");return rows.getFirst();}
     public Category createCategory(UUID org,UUID user,String type,String name,String desc){try{var id=UUID.randomUUID();jdbc.update("INSERT INTO quality.data_category(id,organization_id,business_type,name,description,created_by) VALUES(?,?,?,?,?,?)",id,org,type,name,desc,user);return category(org,id);}catch(DuplicateKeyException e){throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"分类名称已存在");}}
     public Category updateCategory(UUID org,UUID id,String name,String desc){try{if(jdbc.update("UPDATE quality.data_category SET name=?,description=?,updated_at=now() WHERE organization_id=? AND id=?",name,desc,org,id)==0)throw new ApiException(ApiErrorCode.NOT_FOUND,"品管分类不存在");return category(org,id);}catch(DuplicateKeyException e){throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"分类名称已存在");}}
-    public void deleteCategory(UUID org,UUID id){if(jdbc.queryForObject("SELECT count(*) FROM quality.data_record WHERE organization_id=? AND category_id=? AND deleted=false",Long.class,org,id)>0)throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"该分类下存在数据，请先移动或删除数据");jdbc.update("DELETE FROM quality.data_category WHERE organization_id=? AND id=?",org,id);}
-    public PageResponse<RecordView> records(UUID org,String role,String type,UUID cat,String keyword,UUID projectId,String status,int page,int size){
+    public void deleteCategory(UUID org,UUID id,UUID replacementCategoryId){
+        var type=jdbc.query("SELECT business_type FROM quality.data_category WHERE organization_id=? AND id=?",(rs,n)->rs.getString(1),org,id).stream().findFirst()
+                .orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"品管分类不存在"));
+        if(replacementCategoryId!=null){
+            if(replacementCategoryId.equals(id))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"迁移目标不能是当前分类");
+            var replacementType=jdbc.query("SELECT business_type FROM quality.data_category WHERE organization_id=? AND id=?",(rs,n)->rs.getString(1),org,replacementCategoryId).stream().findFirst()
+                    .orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"迁移目标分类不存在"));
+            if(!replacementType.equals(type))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"迁移目标分类与当前分类的数据类型不一致");
+            jdbc.update("UPDATE quality.data_record SET category_id=?,updated_at=now() WHERE organization_id=? AND category_id=?",replacementCategoryId,org,id);
+        }else if(jdbc.queryForObject("SELECT count(*) FROM quality.data_record WHERE organization_id=? AND category_id=? AND deleted=false",Long.class,org,id)>0){
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"该分类下存在数据，请选择迁移目标分类");
+        }
+        jdbc.update("DELETE FROM quality.data_category WHERE organization_id=? AND id=?",org,id);
+    }
+    private static final String FORMAT_SQL = """
+            CASE WHEN upper(r.data_jsonb->>'fileType') IN ('EXCEL','XLSX') THEN 'EXCEL'
+                 WHEN upper(r.data_jsonb->>'fileType') IN ('WORD','DOCX') THEN 'WORD'
+                 WHEN upper(r.data_jsonb->>'fileType') IN ('CSV','PDF') THEN upper(r.data_jsonb->>'fileType')
+                 WHEN upper(r.data_jsonb->>'fileType') IN ('IMAGE','PHOTO','图片') THEN 'IMAGE'
+                 WHEN lower(coalesce((SELECT f.original_name FROM ops.file_object f WHERE f.id=r.source_file_id),
+                     (SELECT u.original_name FROM quality.upload_file u WHERE u.generated_record_id=r.id AND u.deleted=false ORDER BY u.created_at LIMIT 1),'')) ~ '\\.(xlsx|xls)$' THEN 'EXCEL'
+                 WHEN lower(coalesce((SELECT f.original_name FROM ops.file_object f WHERE f.id=r.source_file_id),
+                     (SELECT u.original_name FROM quality.upload_file u WHERE u.generated_record_id=r.id AND u.deleted=false ORDER BY u.created_at LIMIT 1),'')) ~ '\\.(docx|doc)$' THEN 'WORD'
+                 WHEN lower(coalesce((SELECT f.original_name FROM ops.file_object f WHERE f.id=r.source_file_id),
+                     (SELECT u.original_name FROM quality.upload_file u WHERE u.generated_record_id=r.id AND u.deleted=false ORDER BY u.created_at LIMIT 1),'')) ~ '\\.csv$' THEN 'CSV'
+                 WHEN lower(coalesce((SELECT f.original_name FROM ops.file_object f WHERE f.id=r.source_file_id),
+                     (SELECT u.original_name FROM quality.upload_file u WHERE u.generated_record_id=r.id AND u.deleted=false ORDER BY u.created_at LIMIT 1),'')) ~ '\\.pdf$' THEN 'PDF'
+                 WHEN lower(coalesce((SELECT f.original_name FROM ops.file_object f WHERE f.id=r.source_file_id),
+                     (SELECT u.original_name FROM quality.upload_file u WHERE u.generated_record_id=r.id AND u.deleted=false ORDER BY u.created_at LIMIT 1),'')) ~ '\\.(jpg|jpeg|png|tif|tiff)$' THEN 'IMAGE'
+            END
+            """;
+    public PageResponse<RecordView> records(UUID org,String role,String type,UUID cat,String keyword,UUID projectId,String status,String format,int page,int size){
+        return records(org,role,type,cat,keyword,projectId,status,format,page,size,
+                QualityDataStore.DataScopeFilter.all());
+    }
+    @Override public PageResponse<RecordView> records(UUID org,String role,String type,UUID cat,String keyword,UUID projectId,String status,String format,int page,int size,
+            QualityDataStore.DataScopeFilter scope){
         var like="%"+(keyword==null?"":keyword.trim())+"%";
         var where=" organization_id=? AND business_type=? AND deleted=false AND (?::uuid IS NULL OR category_id=?) AND (?::uuid IS NULL OR project_id=?) AND (?='' OR business_no ILIKE ? OR coalesce(display_name,'') ILIKE ? OR data_jsonb::text ILIKE ?) AND (?::text IS NULL OR data_jsonb->>'status'=?) AND (visibility='ALL' OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND visibility='RND'))";
-        var args=new Object[]{org,type,cat,cat,projectId,projectId,keyword==null?"":keyword.trim(),like,like,like,status,status,role,role,role};
-        var total=jdbc.queryForObject("SELECT count(*) FROM quality.data_record WHERE"+where,Long.class,args);
-        var pageArgs=java.util.Arrays.copyOf(args,args.length+2);
-        pageArgs[args.length]=size;pageArgs[args.length+1]=(page-1)*size;
-        var rows=jdbc.query("SELECT r.*,(SELECT name FROM quality.data_category c WHERE c.id=r.category_id) category_name,COALESCE((SELECT original_name FROM ops.file_object f WHERE f.id=r.source_file_id AND f.status <> 'DELETED'),(SELECT original_name FROM quality.upload_file u WHERE u.generated_record_id=r.id AND u.deleted=false ORDER BY u.created_at LIMIT 1)) source_file_name FROM quality.data_record r WHERE"+where+" ORDER BY updated_at DESC LIMIT ? OFFSET ?",(rs,n)->record(rs),pageArgs);
+        if (format != null && !format.isBlank()) where += " AND (" + FORMAT_SQL + ") = ?";
+        var args=new java.util.ArrayList<Object>(java.util.Arrays.asList(org,type,cat,cat,projectId,projectId,keyword==null?"":keyword.trim(),like,like,like,status,status,role,role,role));
+        if (format != null && !format.isBlank()) args.add(format);
+        where=appendScope(where,args,scope,org);
+        var total=jdbc.queryForObject("SELECT count(*) FROM quality.data_record r WHERE"+where,Long.class,args.toArray());
+        var pageArgs=new java.util.ArrayList<>(args);
+        pageArgs.add(size);pageArgs.add((page-1)*size);
+        var rows=jdbc.query("SELECT r.*,(SELECT name FROM quality.data_category c WHERE c.id=r.category_id) category_name,COALESCE((SELECT original_name FROM ops.file_object f WHERE f.id=r.source_file_id AND f.status <> 'DELETED'),(SELECT original_name FROM quality.upload_file u WHERE u.generated_record_id=r.id AND u.deleted=false ORDER BY u.created_at LIMIT 1)) source_file_name,"+WORKFLOW_STATUS_SQL+" FROM quality.data_record r WHERE"+where+" ORDER BY updated_at DESC LIMIT ? OFFSET ?",(rs,n)->record(rs),pageArgs.toArray());
         return new PageResponse<>(rows,page,size,total,(total+size-1)/size);
     }
+    private String appendScope(String where,java.util.List<Object> args,QualityDataStore.DataScopeFilter scope,UUID org){
+        switch (scope.type()) {
+            case "ALL", "ORG" -> { }
+            case "SELF", "CREATOR" -> { where += " AND r.created_by=?"; args.add(scope.actorId()); }
+            case "DEPARTMENT" -> {
+                where += " AND r.department_id IS NOT NULL AND r.department_id=(SELECT u.department_id FROM iam.app_user u WHERE u.id=? AND u.organization_id=?)";
+                args.add(scope.actorId()); args.add(org);
+            }
+            case "SELECTED", "PROJECT" -> {
+                if (scope.targetIds().isEmpty()) where += " AND 1=0";
+                else {
+                    where += " AND (r.project_id IN (" + String.join(",",scope.targetIds().stream().map(id -> "?").toList()) + ") OR r.created_by=?)";
+                    args.addAll(scope.targetIds());
+                    args.add(scope.actorId());
+                }
+            }
+            default -> where += " AND 1=0";
+        }
+        return where;
+    }
     public Optional<RecordView> recordByBusinessNo(UUID org,String role,String type,String businessNo){
-        var rows=jdbc.query("SELECT r.*,(SELECT name FROM quality.data_category c WHERE c.id=r.category_id) category_name,COALESCE((SELECT original_name FROM ops.file_object f WHERE f.id=r.source_file_id AND f.status <> 'DELETED'),(SELECT original_name FROM quality.upload_file u WHERE u.generated_record_id=r.id AND u.deleted=false ORDER BY u.created_at LIMIT 1)) source_file_name FROM quality.data_record r WHERE r.organization_id=? AND r.business_type=? AND r.business_no=? AND r.deleted=false AND (r.visibility='ALL' OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND r.visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND r.visibility='RND'))",(rs,n)->record(rs),org,type,businessNo,role,role,role);
+        var rows=jdbc.query("SELECT r.*,(SELECT name FROM quality.data_category c WHERE c.id=r.category_id) category_name,COALESCE((SELECT original_name FROM ops.file_object f WHERE f.id=r.source_file_id AND f.status <> 'DELETED'),(SELECT original_name FROM quality.upload_file u WHERE u.generated_record_id=r.id AND u.deleted=false ORDER BY u.created_at LIMIT 1)) source_file_name,"+WORKFLOW_STATUS_SQL+" FROM quality.data_record r WHERE r.organization_id=? AND r.business_type=? AND r.business_no=? AND r.deleted=false AND (r.visibility='ALL' OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND r.visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND r.visibility='RND'))",(rs,n)->record(rs),org,type,businessNo,role,role,role);
         return rows.stream().findFirst();
     }
     public RecordView record(UUID org,UUID id){return record(org,"ADMIN",id);}
-    public RecordView record(UUID org,String role,UUID id){var rows=jdbc.query("SELECT r.*,(SELECT name FROM quality.data_category c WHERE c.id=r.category_id) category_name,COALESCE((SELECT original_name FROM ops.file_object f WHERE f.id=r.source_file_id AND f.status <> 'DELETED'),(SELECT original_name FROM quality.upload_file u WHERE u.generated_record_id=r.id AND u.deleted=false ORDER BY u.created_at LIMIT 1)) source_file_name FROM quality.data_record r WHERE r.organization_id=? AND r.id=? AND r.deleted=false AND (r.visibility='ALL' OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND r.visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND r.visibility='RND'))",(rs,n)->record(rs),org,id,role,role,role);if(rows.isEmpty())throw new ApiException(ApiErrorCode.NOT_FOUND,"品管数据不存在");return rows.getFirst();}
+    public RecordView record(UUID org,String role,UUID id){var rows=jdbc.query("SELECT r.*,(SELECT name FROM quality.data_category c WHERE c.id=r.category_id) category_name,COALESCE((SELECT original_name FROM ops.file_object f WHERE f.id=r.source_file_id AND f.status <> 'DELETED'),(SELECT original_name FROM quality.upload_file u WHERE u.generated_record_id=r.id AND u.deleted=false ORDER BY u.created_at LIMIT 1)) source_file_name,"+WORKFLOW_STATUS_SQL+" FROM quality.data_record r WHERE r.organization_id=? AND r.id=? AND r.deleted=false AND (r.visibility='ALL' OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND r.visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND r.visibility='RND'))",(rs,n)->record(rs),org,id,role,role,role);if(rows.isEmpty())throw new ApiException(ApiErrorCode.NOT_FOUND,"品管数据不存在");return rows.getFirst();}
     public List<VersionView> versions(UUID org,UUID recordId){return jdbc.query("SELECT v.*,coalesce(u.display_name,u.username,'未知用户') created_by_name FROM quality.data_record_version v LEFT JOIN iam.app_user u ON u.id=v.created_by WHERE v.organization_id=? AND v.record_id=? AND v.change_type='PUBLISH' ORDER BY v.version_no DESC",(rs,n)->version(rs),org,recordId);}
     public RecordView upsert(UUID org,UUID user,String type,UUID cat,UUID id,String no,JsonNode data,JsonNode workbookSnapshot,
                              UUID projectId,String projectName,UUID stageId,String stageName,UUID taskId,String taskName,long version){
@@ -70,10 +162,21 @@ public class QualityDataRepository implements QualityDataStore {
             return record(org,recordId);
         }catch(DuplicateKeyException e){throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"编号不能为空或重复");}
     }
-    public RecordView rename(UUID org,UUID user,UUID id,String displayName,UUID projectId,String projectName,UUID stageId,String stageName,UUID taskId,String taskName,long version){
-        var updated=jdbc.update("UPDATE quality.data_record SET display_name=?,project_id=?,project_name=?,stage_id=?,stage_name=?,task_id=?,task_name=?,updated_by=?,lock_version=lock_version+1,updated_at=now() WHERE organization_id=? AND id=? AND lock_version=? AND deleted=false",displayName,projectId,projectName,stageId,stageName,taskId,taskName,user,org,id,version);
-        if(updated==0) throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"品管数据已被其他用户修改");
-        return record(org,id);
+    public RecordView rename(UUID org,UUID user,UUID id,String displayName,String businessNo,UUID projectId,String projectName,UUID stageId,String stageName,UUID taskId,String taskName,JsonNode dataPatch,long version){
+        String no=businessNo==null||businessNo.isBlank()?null:businessNo.trim();
+        String patch=dataPatch!=null&&dataPatch.isObject()&&!dataPatch.isEmpty()?dataPatch.toString():null;
+        try{
+            int updated;
+            if(patch==null){
+                updated=jdbc.update("UPDATE quality.data_record SET display_name=?,business_no=coalesce(?,business_no),project_id=?,project_name=?,stage_id=?,stage_name=?,task_id=?,task_name=?,updated_by=?,lock_version=lock_version+1,updated_at=now() WHERE organization_id=? AND id=? AND lock_version=? AND deleted=false",displayName,no,projectId,projectName,stageId,stageName,taskId,taskName,user,org,id,version);
+            }else{
+                updated=jdbc.update("UPDATE quality.data_record SET display_name=?,business_no=coalesce(?,business_no),data_jsonb=coalesce(data_jsonb,'{}'::jsonb) || ?::jsonb,project_id=?,project_name=?,stage_id=?,stage_name=?,task_id=?,task_name=?,updated_by=?,lock_version=lock_version+1,updated_at=now() WHERE organization_id=? AND id=? AND lock_version=? AND deleted=false",displayName,no,patch,projectId,projectName,stageId,stageName,taskId,taskName,user,org,id,version);
+            }
+            if(updated==0) throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"品管数据已被其他用户修改");
+            return record(org,id);
+        }catch(DuplicateKeyException e){
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"编号不能为空或重复");
+        }
     }
     public void insertVersion(UUID org,UUID user,UUID recordId,int versionNo,String no,JsonNode data,JsonNode workbookSnapshot,long lockVersion,String changeType){jdbc.update("INSERT INTO quality.data_record_version(id,organization_id,record_id,version_no,business_no,data_jsonb,workbook_snapshot_jsonb,lock_version,change_type,created_by) VALUES(?,?,?,?,?,?,?,?,?,?)",UUID.randomUUID(),org,recordId,versionNo,no,pg(data),pgOrNull(workbookSnapshot),lockVersion,changeType,user);}
     public void lockRecord(UUID org,UUID id){
@@ -102,6 +205,24 @@ public class QualityDataRepository implements QualityDataStore {
         insertVersion(org,user,id,next,current.businessNo(),current.data(),current.workbookSnapshot(),current.lockVersion(),"PUBLISH");
         return versions(org,id).getFirst();
     }
+    public RecordView createRevision(UUID org,UUID user,UUID id,long expected){
+        changed(jdbc.update("""
+            UPDATE quality.data_record r SET
+                data_jsonb=CASE WHEN r.business_type='coa' AND r.data_jsonb->>'status' IN ('已签发','已归档')
+                    THEN jsonb_set(r.data_jsonb,'{status}',to_jsonb('草稿'::text),true)
+                    WHEN r.business_type='defect' AND r.data_jsonb->>'status'='已关闭'
+                    THEN jsonb_set(r.data_jsonb,'{status}',to_jsonb('处理中'::text),true)
+                    WHEN r.data_jsonb->>'status'='有效'
+                    THEN jsonb_set(r.data_jsonb,'{status}',to_jsonb('修订中'::text),true)
+                    ELSE r.data_jsonb END,
+                lock_version=r.lock_version+1,updated_by=?,updated_at=now()
+            WHERE r.organization_id=? AND r.id=? AND r.deleted=false AND r.lock_version=?
+              AND EXISTS (SELECT 1 FROM quality.data_record_version v
+                  WHERE v.organization_id=r.organization_id AND v.record_id=r.id
+                    AND v.change_type='PUBLISH' AND v.lock_version=r.lock_version)
+            """,user,org,id,expected));
+        return record(org,id);
+    }
     public UploadView insertUpload(UUID org,UUID user,UUID recordId,QualityDataService.UploadInput in){var id=UUID.randomUUID();jdbc.update("INSERT INTO quality.upload_file(id,organization_id,file_id,category_id,original_name,content_type,file_size,sha256,project_id,project_name,stage_id,stage_name,task_id,task_name,visibility,status,generated_record_id,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",id,org,in.fileId(),in.categoryId(),in.originalName(),in.contentType(),in.size(),in.sha256(),in.projectId(),in.projectName(),in.stageId(),in.stageName(),in.taskId(),in.taskName(),in.visibility(),"DRAFT_CREATED",recordId,user);return upload(org,id);}
     public Optional<UploadView> findUpload(UUID org,UUID id){var rows=jdbc.query("SELECT u.*,(SELECT name FROM quality.data_category c WHERE c.id=u.category_id) category_name FROM quality.upload_file u WHERE u.organization_id=? AND u.id=? AND u.deleted=false",(rs,n)->upload(rs),org,id);return rows.stream().findFirst();}
     public UploadView updateUploadStatus(UUID org,UUID id,String status,UUID generatedRecordId,String errorMessage){
@@ -110,13 +231,19 @@ public class QualityDataRepository implements QualityDataStore {
     }
     public Optional<String> findBusinessNoByField(UUID org,String type,String field,String value){if(value==null||value.isBlank()||!List.of("batchNumber","productName","chemicalName","fileName").contains(field))return Optional.empty();var rows=jdbc.query("SELECT business_no FROM quality.data_record WHERE organization_id=? AND business_type=? AND deleted=false AND data_jsonb ->> ? = ? ORDER BY updated_at DESC LIMIT 1",(rs,n)->rs.getString("business_no"),org,type,field,value.trim());return rows.stream().findFirst();}
     public PageResponse<UploadView> uploads(UUID org,UUID userId,String role,String keyword,String status,UUID projectId,int page,int size){
+        return uploads(org,userId,role,keyword,status,projectId,page,size,com.jsd.aird.iam.api.RecordDataScope.all());
+    }
+    @Override public PageResponse<UploadView> uploads(UUID org,UUID userId,String role,String keyword,String status,UUID projectId,int page,int size,com.jsd.aird.iam.api.RecordDataScope scope){
         var q=keyword==null?"":keyword.trim();
         var like="%"+q+"%";
         var statusValue=status==null?"":status.trim();
         var where=" organization_id=? AND deleted=false AND (?='' OR original_name ILIKE ?) AND (?='' OR status=?) AND (?::uuid IS NULL OR project_id=?) AND (visibility='ALL' OR created_by=? OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND visibility='RND'))";
-        var total=jdbc.queryForObject("SELECT count(*) FROM quality.upload_file WHERE"+where,Long.class,org,q,like,statusValue,statusValue,projectId,projectId,userId,role,role,role);
-        var rows=jdbc.query("SELECT u.*,(SELECT name FROM quality.data_category c WHERE c.id=u.category_id) category_name FROM quality.upload_file u WHERE"+where+" ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                (rs,n)->upload(rs),org,q,like,statusValue,statusValue,projectId,projectId,userId,role,role,role,size,(page-1)*size);
+        var args=new java.util.ArrayList<Object>(java.util.Arrays.asList(org,q,like,statusValue,statusValue,projectId,projectId,userId,role,role,role));
+        var scoped=new StringBuilder(where).append(scope.sqlCondition("u",args));
+        var total=jdbc.queryForObject("SELECT count(*) FROM quality.upload_file u WHERE"+scoped,Long.class,args.toArray());
+        args.add(size);args.add((page-1)*size);
+        var rows=jdbc.query("SELECT u.*,(SELECT name FROM quality.data_category c WHERE c.id=u.category_id) category_name FROM quality.upload_file u WHERE"+scoped+" ORDER BY u.created_at DESC LIMIT ? OFFSET ?",
+                (rs,n)->upload(rs),args.toArray());
         return new PageResponse<>(rows,page,size,total,(total+size-1)/size);
     }
     public void deleteUpload(UUID org,UUID id){jdbc.update("UPDATE quality.upload_file SET deleted=true WHERE organization_id=? AND id=?",org,id);}
@@ -129,7 +256,7 @@ public class QualityDataRepository implements QualityDataStore {
         // until the additive migration is applied.
         var displayName=optionalColumn(r,"display_name");
         if(displayName==null||displayName.isBlank()) displayName=sourceFileName;
-        return new RecordView(r.getObject("id",UUID.class),r.getString("business_type"),r.getObject("category_id",UUID.class),r.getString("category_name"),r.getString("business_no"),displayName,json(r.getString("data_jsonb")),r.getObject("source_file_id",UUID.class),sourceFileName,r.getObject("project_id",UUID.class),r.getString("project_name"),r.getObject("stage_id",UUID.class),r.getString("stage_name"),r.getObject("task_id",UUID.class),r.getString("task_name"),r.getString("visibility"),jsonNullable(r.getString("workbook_snapshot_jsonb")),r.getLong("lock_version"),r.getTimestamp("created_at").toInstant(),r.getTimestamp("updated_at").toInstant());
+        return new RecordView(r.getObject("id",UUID.class),r.getString("business_type"),r.getObject("category_id",UUID.class),r.getString("category_name"),r.getString("business_no"),displayName,json(r.getString("data_jsonb")),r.getObject("source_file_id",UUID.class),sourceFileName,r.getObject("project_id",UUID.class),r.getString("project_name"),r.getObject("stage_id",UUID.class),r.getString("stage_name"),r.getObject("task_id",UUID.class),r.getString("task_name"),r.getString("visibility"),jsonNullable(r.getString("workbook_snapshot_jsonb")),r.getLong("lock_version"),r.getTimestamp("created_at").toInstant(),r.getTimestamp("updated_at").toInstant(),r.getString("workflow_status"));
     }
     private VersionView version(ResultSet r)throws java.sql.SQLException{return new VersionView(r.getObject("id",UUID.class),r.getObject("record_id",UUID.class),r.getInt("version_no"),r.getString("business_no"),json(r.getString("data_jsonb")),jsonNullable(r.getString("workbook_snapshot_jsonb")),r.getLong("lock_version"),r.getString("change_type"),r.getString("created_by_name"),r.getTimestamp("created_at").toInstant());}
     private UploadView upload(ResultSet r)throws java.sql.SQLException{return new UploadView(r.getObject("id",UUID.class),r.getObject("file_id",UUID.class),r.getObject("category_id",UUID.class),r.getString("category_name"),r.getString("original_name"),r.getString("content_type"),r.getLong("file_size"),r.getString("status"),r.getObject("generated_record_id",UUID.class),r.getObject("project_id",UUID.class),r.getString("project_name"),r.getObject("stage_id",UUID.class),r.getString("stage_name"),r.getObject("task_id",UUID.class),r.getString("task_name"),r.getString("visibility"),r.getString("error_message"),r.getTimestamp("created_at").toInstant());}

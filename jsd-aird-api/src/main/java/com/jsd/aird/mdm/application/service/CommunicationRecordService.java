@@ -4,6 +4,7 @@ import com.jsd.aird.mdm.api.PartnerCommands;
 import com.jsd.aird.mdm.application.port.CommunicationRecordRepository;
 import com.jsd.aird.mdm.domain.model.*;
 import com.jsd.aird.shared.api.PageResponse;
+import com.jsd.aird.shared.security.ActorContext;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import org.springframework.stereotype.Service;
@@ -25,22 +26,27 @@ public class CommunicationRecordService {
     }
 
     public PageResponse<CommunicationRecord> communications(UUID partnerId, String status, int page, int size) {
-        return repository.findCommunications(partnerId, status, page(page), size(size));
+        var actor = ActorContext.required();
+        return repository.findCommunications(partnerId, status, page(page), size(size),
+                actor.organizationId(), actor.userId(), partnerService.scope("customer.followup.view"));
     }
 
     public CommunicationRecord communication(UUID id) {
-        return repository.findCommunication(id).orElseThrow(notFound("沟通记录不存在"));
+        var value = repository.findCommunication(id).orElseThrow(notFound("沟通记录不存在"));
+        partnerService.requireAccess(value.partnerId(), "customer.followup.view");
+        return value;
     }
 
     @Transactional
     public PartnerCommands.Created createCommunication(CommunicationRecord input) {
         BusinessPartnerService.requireWrite();
+        partnerService.requireAccess(input.partnerId(), "customer.followup.create");
         var now = Instant.now();
         var value = new CommunicationRecord(UUID.randomUUID(), CrmServiceSupport.code("COMMU"), input.name(), input.partnerId(),
             input.communicatedAt(), input.internalParticipants(), input.communicationMethod(),
             input.content(), CommunicationRecord.CommunicationStatus.OPEN,
             input.customFields(), 0, now, now);
-        repository.insertCommunication(value, CrmServiceSupport.OPERATOR);
+        repository.insertCommunication(value, CrmServiceSupport.operator());
         partnerService.appendAudit("COMMUNICATION_CREATED", value.partnerId());
         return new PartnerCommands.Created(value.id(), 0);
     }
@@ -49,10 +55,12 @@ public class CommunicationRecordService {
     public void updateCommunication(UUID id, CommunicationRecord input) {
         BusinessPartnerService.requireWrite();
         var current = communication(id);
+        partnerService.requireAccess(current.partnerId(), "customer.followup.update");
+        partnerService.requireAccess(input.partnerId(), "customer.followup.update");
         var value = new CommunicationRecord(id, current.recordCode(), input.name(), input.partnerId(),
             input.communicatedAt(), input.internalParticipants(), input.communicationMethod(),
             input.content(), input.status(), input.customFields(), input.version(), current.createdAt(), Instant.now());
-        if (!repository.updateCommunication(value, CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
+        if (!repository.updateCommunication(value, CrmServiceSupport.operator())) CrmServiceSupport.conflict();
         partnerService.appendAudit("COMMUNICATION_UPDATED", value.partnerId());
     }
 
@@ -60,7 +68,8 @@ public class CommunicationRecordService {
     public void deleteCommunication(UUID id, long version) {
         BusinessPartnerService.requireWrite();
         var current = communication(id);
-        if (!repository.deleteCommunication(id, version, CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
+        partnerService.requireAccess(current.partnerId(), "customer.followup.delete");
+        if (!repository.deleteCommunication(id, version, CrmServiceSupport.operator())) CrmServiceSupport.conflict();
         partnerService.appendAudit("COMMUNICATION_DELETED", current.partnerId());
     }
 

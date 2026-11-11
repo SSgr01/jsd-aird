@@ -11,6 +11,20 @@ export class HttpError extends Error {
   }
 }
 
+/** 页面初始化查询没有可见数据时，将拒绝结果按正常空状态处理。 */
+export function isAccessDenied(error: unknown): boolean {
+  return error instanceof HttpError && error.status === 403 && error.code !== 'CSRF_TOKEN_INVALID';
+}
+
+export function httpErrorMessage(status: number | undefined, code: string | undefined, backendMessage: string | undefined, transportMessage: string | undefined): string {
+  if (status === 403 && code !== 'CSRF_TOKEN_INVALID') {
+    return backendMessage && !/^request failed with status code 403$/i.test(backendMessage)
+      ? backendMessage
+      : '当前用户没有操作权限';
+  }
+  return backendMessage || transportMessage || '请求失败';
+}
+
 export function retryAfterMillis(value: unknown, now = Date.now()): number | undefined {
   if (typeof value !== 'string' && typeof value !== 'number') return undefined;
   const text = String(value).trim();

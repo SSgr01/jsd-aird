@@ -1138,15 +1138,24 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
         var idColumn = experiment ? "p.experiment_id" : "p.import_job_id";
         var selfColumn = experiment ? "p.experiment_created_by" : "p.import_created_by";
         return switch (scope.type()) {
-            case "ALL" -> new ScopeClause("1 = 1", List.of());
-            case "SELF" -> experiment
-                    ? new ScopeClause("(p.experiment_created_by = ? OR p.experiment_owner_id = ?)",
-                    List.of(scope.actorId(), scope.actorId()))
-                    : new ScopeClause(selfColumn + " = ?", List.of(scope.actorId()));
+            case "ALL", "ORG" -> new ScopeClause("1 = 1", List.of());
+            case "SELF", "CREATOR" -> new ScopeClause(selfColumn + " = ?", List.of(scope.actorId()));
+            case "DEPARTMENT" -> new ScopeClause("EXISTS (SELECT 1 FROM " +
+                    (experiment ? "rnd.experiment" : "data.import_job") + " root JOIN iam.app_user scope_user" +
+                    " ON scope_user.id = ? AND scope_user.organization_id = root.organization_id" +
+                    " WHERE root.id = " + idColumn + " AND root.organization_id = p.organization_id" +
+                    " AND root.department_id IS NOT NULL AND root.department_id = scope_user.department_id)",
+                    List.of(scope.actorId()));
             case "ASSIGNED" -> experiment
                     ? new ScopeClause("p.experiment_owner_id = ?", List.of(scope.actorId()))
                     : new ScopeClause("1 = 0", List.of());
-            case "SELECTED" -> idsClause(idColumn + " IN (%s)", scope.targetIds());
+            case "SELECTED" -> {
+                var selected = idsClause((experiment ? "p.experiment_project_id" : idColumn) + " IN (%s)", scope.targetIds());
+                if (scope.actorId() == null || scope.targetIds().isEmpty()) yield selected;
+                var parameters = new ArrayList<>(selected.parameters());
+                parameters.add(scope.actorId());
+                yield new ScopeClause("(" + selected.sql() + " OR " + selfColumn + " = ?)", parameters);
+            }
             case "CATEGORY" -> idsClause((experiment ? "p.experiment_category_id" : "p.data_category_id")
                     + " IN (%s)", scope.targetIds());
             case "PROJECT" -> experiment

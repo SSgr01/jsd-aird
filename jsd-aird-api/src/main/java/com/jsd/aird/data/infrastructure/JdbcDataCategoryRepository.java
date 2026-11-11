@@ -1,10 +1,12 @@
 package com.jsd.aird.data.infrastructure;
 
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Optional;
 import java.util.UUID;
 
 import com.jsd.aird.data.application.port.DataCategoryRepository;
+import com.jsd.aird.iam.api.RecordDataScope;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,25 +27,45 @@ public class JdbcDataCategoryRepository implements DataCategoryRepository {
 
     @Override
     public List<Category> list(UUID organizationId) {
+        return list(organizationId, RecordDataScope.all());
+    }
+
+    @Override
+    public List<Category> list(UUID organizationId, RecordDataScope scope) {
+        var args = new ArrayList<Object>();
+        var scopeClause = scope.sqlCondition("j", args);
+        args.add(organizationId);
         return jdbc.query("""
                 SELECT c.id, c.name, c.description, c.sort_order, count(DISTINCT j.id) AS source_count
                 FROM data.data_category c
                 LEFT JOIN data.import_job j ON j.category_id = c.id AND j.organization_id = c.organization_id
-                    AND j.source_owner = 'DATA_CENTER'
+                    AND j.source_owner = 'DATA_CENTER' AND j.hidden_at IS NULL
+                """ + scopeClause + "\n" + """
                 WHERE c.organization_id = ?
                 GROUP BY c.id, c.name, c.description, c.sort_order, c.created_at
                 ORDER BY c.sort_order, c.created_at
-                """, this::map, organizationId);
+                """, this::map, args.toArray());
     }
 
     @Override
     public DataSourceFacets facets(UUID organizationId) {
+        return facets(organizationId, RecordDataScope.all());
+    }
+
+    @Override
+    public DataSourceFacets facets(UUID organizationId, RecordDataScope scope) {
+        var args = new ArrayList<Object>();
+        args.add(organizationId);
+        var totalScope = scope.sqlCondition("j", args);
+        args.add(organizationId); args.add(organizationId);
+        var categoryScope = scope.sqlCondition("j", args);
         var rows = jdbc.query("""
                 WITH totals AS (
                     SELECT count(*) AS total_source_count,
-                           count(*) FILTER (WHERE category_id IS NULL) AS uncategorized_source_count
-                    FROM data.import_job
-                    WHERE organization_id = ? AND source_owner = 'DATA_CENTER'
+                           count(*) FILTER (WHERE j.category_id IS NULL) AS uncategorized_source_count
+                    FROM data.import_job j
+                    WHERE j.organization_id = ? AND j.source_owner = 'DATA_CENTER' AND j.hidden_at IS NULL
+                """ + totalScope + "\n" + """
                 )
                 SELECT totals.total_source_count, totals.uncategorized_source_count,
                        c.id AS category_id, c.name, c.description, c.sort_order, c.created_at,
@@ -51,14 +73,15 @@ public class JdbcDataCategoryRepository implements DataCategoryRepository {
                 FROM totals
                 LEFT JOIN data.data_category c ON c.organization_id = ?
                 LEFT JOIN data.import_job j ON j.organization_id = ? AND j.source_owner = 'DATA_CENTER'
-                    AND j.category_id = c.id
+                    AND j.category_id = c.id AND j.hidden_at IS NULL
+                """ + categoryScope + "\n" + """
                 GROUP BY totals.total_source_count, totals.uncategorized_source_count,
                          c.id, c.name, c.description, c.sort_order, c.created_at
                 ORDER BY c.sort_order NULLS LAST, c.created_at NULLS LAST
                 """, (rs, rowNum) -> new FacetRow(
                 rs.getLong("total_source_count"), rs.getLong("uncategorized_source_count"),
                 rs.getObject("category_id", UUID.class), rs.getString("name"), rs.getString("description"),
-                (Integer) rs.getObject("sort_order"), rs.getLong("source_count")), organizationId, organizationId, organizationId);
+                (Integer) rs.getObject("sort_order"), rs.getLong("source_count")), args.toArray());
         var categories = rows.stream().filter(row -> row.categoryId() != null)
                 .map(row -> new Category(row.categoryId(), row.name(), row.description(), row.sortOrder(), row.sourceCount()))
                 .toList();

@@ -21,6 +21,7 @@ import type {
   PartnerContact,
 } from '@/services/partners/partner-api';
 import { errorMessage } from '@/services/http/errors';
+import { useAuthStore } from '@/stores/auth-store';
 import './partner-modals.css';
 
 type Props = {
@@ -120,6 +121,7 @@ export function PartnerPrototypeModal({
 
 function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>) {
   const { message } = App.useApp();
+  const canCreateContact = useAuthStore((state) => state.can('customer.overview.create'));
   const [form] = Form.useForm<CustomerValues>();
   const [people, setPeople] = useState<Person[]>([]);
   const [nameTouched, setNameTouched] = useState(false);
@@ -201,11 +203,16 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
     if (savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
+    let createdPartnerId: string | undefined;
     try {
       const v = await form.validateFields();
       if (people.length > 0 && people.some((p) => !p.name || !p.name.trim())) {
         setNameTouched(true);
         message.error('请输入负责人姓名');
+        return;
+      }
+      if (!partner && people.some((person) => person.name) && !canCreateContact) {
+        message.error('当前用户没有新增负责人权限，请移除负责人后再保存客户');
         return;
       }
       const input = {
@@ -220,7 +227,7 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
         customFields: toCustomFieldRecord(partnerFields),
         version: partner?.version,
       };
-      const partnerId = partner?.id ?? (await createPartner(input)).id;
+      const partnerId = partner?.id ?? (createdPartnerId = (await createPartner(input)).id);
       if (partner) await updatePartner(partner.id, input);
       for (const [index, person] of people.entries())
         if (person.name) {
@@ -257,7 +264,10 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
       onSaved();
       onClose();
     } catch (e) {
-      message.error(errorMessage(e, '客户保存失败'));
+      message.error(createdPartnerId
+        ? `客户已创建，但负责人保存失败：${errorMessage(e, '请重试')}`
+        : errorMessage(e, '客户保存失败'));
+      if (createdPartnerId) onSaved();
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -466,7 +476,7 @@ function RequirementModal({ partner, requirement, open, onClose, onSaved }: Omit
       });
     } else {
       form.resetFields();
-      form.setFieldsValue({ status: '自定义状态', customStatusName: '草稿', urgency: '中', raisedAt: dayjs() });
+      form.setFieldsValue({ status: '草稿', urgency: '中', raisedAt: dayjs() });
     }
     setRequirementCustomFields(toCustomFieldList(requirement?.customFields));
   }, [form, open, requirement]);
@@ -632,7 +642,7 @@ function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<
       });
     } else {
       form.resetFields();
-      form.setFieldsValue({ name: '未命名记录', time: dayjs(), method: '微信', owner: partner?.name });
+      form.setFieldsValue({ time: dayjs(), method: '微信', owner: partner?.name });
     }
     setFollowupCustomFields(toCustomFieldList(communication?.customFields));
   }, [form, open, communication, partner?.name]);
@@ -645,7 +655,7 @@ function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<
       if (!partner) return;
       const payload: CommunicationInput = {
         partnerId: partner.id,
-        name: v.name,
+        name: v.name.trim(),
         communicatedAt: v.time.toISOString(),
         communicationMethod: v.method,
         internalParticipants: v.owner,
@@ -679,7 +689,7 @@ function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<
       <Form form={form} layout="vertical">
         <Row className="cm-form-row" gutter={24}>
           <Col span={6}>
-            <Form.Item name="name" label="跟进名称" rules={[{ required: true }]}>
+            <Form.Item name="name" label="跟进名称" rules={[{ required: true, whitespace: true, message: '请输入跟进名称' }]}>
               <Input placeholder="请输入跟进名称" />
             </Form.Item>
           </Col>

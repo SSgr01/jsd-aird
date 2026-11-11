@@ -10,6 +10,7 @@ import {
   Alert,
   Button,
   Input,
+  Modal,
   Select,
   Space,
   Spin,
@@ -19,6 +20,9 @@ import {
   message,
 } from 'antd';
 import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
+import { usePermission } from '@/components/auth/usePermission';
+import { WorkspaceReviewActions } from '@/components/workspace-review/WorkspaceReviewActions';
+import type { WorkspaceReviewState } from '@/services/reviews/workspace-review-api';
 import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
 import {
   lazy,
@@ -187,6 +191,10 @@ function parseQualityWorkbookData(
 }
 
 export function QualityRecordWorkspacePage() {
+  const canUpdate = usePermission('quality.view.update');
+  const canExport = usePermission('quality.view.export');
+  const canDownload = usePermission('quality.view.download');
+  const canPublish = usePermission('quality.view.publish');
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const [types, setTypes] = useState<QualityType[]>([]);
@@ -194,15 +202,18 @@ export function QualityRecordWorkspacePage() {
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [versions, setVersions] = useState<QualityRecordVersion[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<QualityRecordVersion>();
-  const [view, setView] = useState<ViewMode>('edit');
+  const [view, setView] = useState<ViewMode>(canUpdate ? 'edit' : 'preview');
   const [dirty, setDirty] = useState(false);
+  const [reviewStatus, setReviewStatus] = useState<WorkspaceReviewState['status']>();
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [revising, setRevising] = useState(false);
   const [downloadingSource, setDownloadingSource] = useState(false);
   const [error, setError] = useState<string>();
   const [workbook, setWorkbook] = useState<Record<string, unknown>>();
   const editorRef = useRef<EditorHandle>(null);
   const [msg, holder] = message.useMessage();
+  const [modal, modalHolder] = Modal.useModal();
   const isDesktop = useDesktopEditing();
 
   const load = useCallback(async () => {
@@ -213,6 +224,7 @@ export function QualityRecordWorkspacePage() {
         qualityApi.types(),
       ]);
       setRecord(detail);
+      if (detail.workflowStatus === 'PUBLISHED') setView('preview');
       setDraft({ ...detail.data });
       let initialWorkbook = detail.workbookSnapshot && Object.keys(detail.workbookSnapshot).length
         ? detail.workbookSnapshot
@@ -255,6 +267,10 @@ export function QualityRecordWorkspacePage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!canUpdate) setView('preview');
+  }, [canUpdate]);
 
   const exportRecord = async () => {
     if (!record) return;
@@ -352,22 +368,14 @@ export function QualityRecordWorkspacePage() {
   };
   const publish = async () => {
     if (!record || selectedVersion) return;
+    if (record.workflowStatus === 'PUBLISHED' || reviewStatus !== 'APPROVED') return;
     if (dirty) {
       msg.warning('当前内容尚未保存，请先保存草稿后再发布');
       return;
     }
     setPublishing(true);
     try {
-      // Uploaded/new records may not have a stored workbook snapshot yet. Persist
-      // the current workbook before creating the publish version so the version
-      // always contains the exact Excel snapshot that was published.
-      let expectedVersion=record.lockVersion;
-      if (!record.workbookSnapshot && workbook) {
-        const saved = await save();
-        if (!saved) return;
-        expectedVersion=saved.lockVersion;
-      }
-      await qualityApi.publishRecord(record.id,expectedVersion);
+      await qualityApi.publishRecord(record.id, record.lockVersion);
       msg.success('品管数据已发布，并生成新版本');
       await load();
     } catch (e) {
@@ -376,7 +384,29 @@ export function QualityRecordWorkspacePage() {
       setPublishing(false);
     }
   };
+  const revise = () => {
+    if (!record || record.workflowStatus !== 'PUBLISHED') return;
+    void modal.confirm({
+      title: '创建修订版本？',
+      content: '已发布版本将保留，新草稿需要重新提交审核后才能发布。',
+      onOk: async () => {
+        setRevising(true);
+        try {
+          await qualityApi.createRevision(record.id, record.lockVersion);
+          setReviewStatus(undefined);
+          await load();
+          setView(canUpdate && isDesktop ? 'edit' : 'preview');
+          msg.success('修订草稿已创建');
+        } catch (e) {
+          msg.error(e instanceof Error ? e.message : '创建修订失败');
+        } finally {
+          setRevising(false);
+        }
+      },
+    });
+  };
   const switchView = (next: ViewMode) => {
+    if (next === 'edit' && (!canUpdate || !isDesktop || record?.workflowStatus === 'PUBLISHED')) return;
     if (next === 'versions' && dirty) {
       msg.warning('当前内容尚未保存，请先保存后再查看版本记录');
       return;
@@ -403,13 +433,16 @@ export function QualityRecordWorkspacePage() {
   const displayed = selectedVersion?.data ?? (view === 'preview' ? record.data : draft);
   const displayedWorkbook =
     selectedVersion?.workbookSnapshot ?? (selectedVersion ? undefined : workbook);
-  const readonly = view !== 'edit' || Boolean(selectedVersion);
-  const editable = isDesktop && !readonly;
+  const currentReviewStatus = record.workflowStatus === 'PUBLISHED' ? 'PUBLISHED' : reviewStatus ?? record.workflowStatus;
+  const reviewLocked = currentReviewStatus === 'SUBMITTED' || currentReviewStatus === 'APPROVED' || currentReviewStatus === 'PUBLISHED';
+  const readonly = view !== 'edit' || Boolean(selectedVersion) || reviewLocked;
+  const editable = canUpdate && isDesktop && !readonly;
   const saveState: SaveState = saving ? 'SAVING' : dirty ? 'DIRTY' : 'SAVED';
 
   return (
     <section className="workspace-shell template-business-workspace quality-excel-workspace">
       {holder}
+      {modalHolder}
       <header className="workspace-header">
         <div className="workspace-identity">
           <Button
@@ -433,10 +466,10 @@ export function QualityRecordWorkspacePage() {
         </div>
         <Space wrap>
           <SaveStateBadge state={saveState} />
-          <Button icon={<DownloadOutlined />} onClick={() => void exportRecord()}>
+          {canExport && <Button icon={<DownloadOutlined />} onClick={() => void exportRecord()}>
             导出
-          </Button>
-          {record.sourceFileId && (
+          </Button>}
+          {canDownload && record.sourceFileId && (
             <Button icon={<FileOutlined />} loading={downloadingSource} onClick={() => void downloadSource()}>
               原文
             </Button>
@@ -448,7 +481,12 @@ export function QualityRecordWorkspacePage() {
           )}
           {!selectedVersion && (
             <>
-              <Button
+              <WorkspaceReviewActions type="QUALITY_RECORD" id={record.id} saved={!dirty && !saving}
+                published={record.workflowStatus === 'PUBLISHED'}
+                refreshKey={record.lockVersion}
+                onStatusChange={setReviewStatus} />
+              {canUpdate && record.workflowStatus === 'PUBLISHED' && <Button loading={revising} onClick={revise}>创建修订</Button>}
+              {canUpdate && <Button
                 type="primary"
                 icon={<SaveOutlined />}
                 loading={saving}
@@ -456,15 +494,15 @@ export function QualityRecordWorkspacePage() {
                 onClick={() => void save()}
               >
                 保存草稿
-              </Button>
-              <Button
+              </Button>}
+              {canPublish && record.workflowStatus !== 'PUBLISHED' && <Button
                 type="primary"
                 loading={publishing}
-                disabled={!editable || dirty || saving}
+                disabled={view !== 'edit' || Boolean(selectedVersion) || dirty || saving || reviewStatus !== 'APPROVED'}
                 onClick={() => void publish()}
               >
                 发布
-              </Button>
+              </Button>}
             </>
           )}
         </Space>
@@ -482,7 +520,7 @@ export function QualityRecordWorkspacePage() {
                 </>
               ),
             },
-            { key: 'edit', label: '编辑', disabled: !isDesktop },
+            { key: 'edit', label: '编辑', disabled: !canUpdate || !isDesktop || record.workflowStatus === 'PUBLISHED' },
             {
               key: 'versions',
               label: (

@@ -96,6 +96,24 @@ describe('AiConversationWorkspace', () => {
     expect(onSelectConversation).not.toHaveBeenCalled();
   });
 
+  it('hides conversation creation and sending when creation is not granted', () => {
+    render(
+      <AiConversationWorkspace
+        conversations={[]}
+        messages={[]}
+        scopeContent={<div>资料范围</div>}
+        question=""
+        canCreate={false}
+        onNewConversation={vi.fn()}
+        onSelectConversation={vi.fn()}
+        onQuestionChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: '新建对话' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '发送问题' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: '输入问题' })).not.toBeInTheDocument();
+  });
   it('offers icon tools in the input and copies only the readable answer', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });

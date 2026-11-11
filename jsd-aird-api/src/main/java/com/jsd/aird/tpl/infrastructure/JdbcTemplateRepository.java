@@ -67,7 +67,7 @@ public class JdbcTemplateRepository implements TemplateRepository {
                        retired.version_no AS retired_version_no,
                        draft.id AS draft_version_id,
                        draft.version_no AS draft_version_no,
-                       t.created_by, au.display_name AS created_by_name, t.created_at
+                       t.created_by, t.department_id, au.display_name AS created_by_name, t.created_at
                 FROM tpl.template t
                 LEFT JOIN tpl.template_category tc ON tc.id = t.category_id
                 LEFT JOIN iam.app_user au ON au.id = t.created_by
@@ -119,6 +119,8 @@ public class JdbcTemplateRepository implements TemplateRepository {
                        (SELECT count(*)::int FROM tpl.template_mapping tm
                         WHERE tm.template_version_id = lt.version_id
                           AND tm.binding_status <> 'VALID') AS issue_count,
+                       (SELECT review_status FROM tpl.template_version_review tr
+                        WHERE tr.version_id = lt.draft_version_id) AS draft_review_status,
                        count(*) OVER() AS total_count
                 FROM logical_templates lt
                 WHERE lt.version_id IS NOT NULL
@@ -169,7 +171,8 @@ public class JdbcTemplateRepository implements TemplateRepository {
                 rs.getObject("draft_version_id") != null,
                 rs.getObject("created_by", UUID.class),
                 rs.getString("created_by_name"),
-                rs.getTimestamp("created_at").toInstant()
+                rs.getTimestamp("created_at").toInstant(),
+                rs.getString("draft_review_status")
         ));
         var safeTotal = total;
         return new TemplatePage(rows, safeTotal, page, size,
@@ -254,16 +257,23 @@ public class JdbcTemplateRepository implements TemplateRepository {
 
     private void appendScopeFilter(StringBuilder sql, MapSqlParameterSource parameters,
                                    TemplateRepository.DataScopeFilter scope) {
-        if (scope == null || "ALL".equals(scope.type())) return;
+        if (scope == null || "ALL".equals(scope.type()) || "ORG".equals(scope.type())) return;
         switch (scope.type()) {
-            case "SELF" -> {
+            case "SELF", "CREATOR" -> {
                 sql.append(" AND lt.created_by = :scopeActorId\n");
                 parameters.addValue("scopeActorId", scope.actorId());
+            }
+            case "DEPARTMENT" -> {
+                sql.append(" AND lt.department_id IS NOT NULL AND lt.department_id = " +
+                        "(SELECT u.department_id FROM iam.app_user u WHERE u.id = :scopeActorId AND u.organization_id = :scopeOrganizationId)\n");
+                parameters.addValue("scopeActorId", scope.actorId());
+                parameters.addValue("scopeOrganizationId", parameters.getValue("organizationId"));
             }
             case "SELECTED" -> {
                 if (scope.targetIds().isEmpty()) sql.append(" AND 1 = 0\n");
                 else {
-                    sql.append(" AND lt.template_id IN (:scopeTargetIds)\n");
+                    sql.append(" AND (lt.created_by = :scopeActorId OR lt.template_id IN (:scopeTargetIds))\n");
+                    parameters.addValue("scopeActorId", scope.actorId());
                     parameters.addValue("scopeTargetIds", scope.targetIds());
                 }
             }
@@ -276,7 +286,7 @@ public class JdbcTemplateRepository implements TemplateRepository {
             }
             // A template has no assignee/project relation in the current model.
             // Returning an empty set is safer than broadening access.
-            case "ASSIGNED", "PROJECT" -> sql.append(" AND 1 = 0\n");
+            case "ASSIGNED", "PROJECT", "OWNER", "MANAGER", "PARTICIPANT", "PROJECT_GROUP" -> sql.append(" AND 1 = 0\n");
             default -> sql.append(" AND 1 = 0\n");
         }
     }
@@ -357,7 +367,7 @@ public class JdbcTemplateRepository implements TemplateRepository {
                         item.currentPublishedVersionNo() == null ? item.versionNo() : item.currentPublishedVersionNo(),
                         item.lockVersion(), item.updatedAt(), item.issueCount(), item.categoryId(),
                         item.currentPublishedVersionId(), item.currentPublishedVersionNo(), item.retiredVersionNo(), item.draftVersionId(),
-                        item.draftVersionNo(), item.hasDraft(), item.createdBy(), item.createdByName(), item.createdAt()))
+                        item.draftVersionNo(), item.hasDraft(), item.createdBy(), item.createdByName(), item.createdAt(), item.draftReviewStatus()))
                 .toList();
     }
 

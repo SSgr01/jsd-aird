@@ -40,18 +40,20 @@ public class PartnerContactService implements com.jsd.aird.mdm.api.PartnerContac
 
     public List<ContactProjectVector> findContactProjectVectors(UUID partnerId) {
         partnerService.get(partnerId);
-        return repository.findContactProjectVectors(partnerId);
+        return repository.findContactProjectVectors(partnerId).stream()
+                .filter(item -> partnerService.mayReadProject(item.projectId())).toList();
     }
 
     @Transactional
     public PartnerCommands.Created addContact(UUID partnerId, PartnerCommands.SaveContact c) {
         BusinessPartnerService.requireWrite();
-        var partner = partnerService.get(partnerId);
+        partnerService.requireAccess(partnerId, "customer.overview.create");
+        var partner = partnerService.findExisting(partnerId);
         requireNotDuplicate(partnerId, c.phone(), c.name(), null);
         var now = Instant.now();
         var contact = new PartnerContact(UUID.randomUUID(), partnerId, trim(c.name()), c.department(), c.title(),
             c.phone(), c.email(), PartnerStatus.ACTIVE, c.assignedProjectIds(), c.members(), c.wechat(), 0, c.customFields(), now, now);
-        repository.insertContact(contact, BusinessPartnerService.OPERATOR);
+        repository.insertContact(contact, BusinessPartnerService.operator());
         ensureProjectPartners(partnerId, partner.name(), contact.assignedProjectIds());
         partnerService.appendAudit("CONTACT_CREATED", partnerId);
         return new PartnerCommands.Created(contact.id(), 0);
@@ -60,7 +62,8 @@ public class PartnerContactService implements com.jsd.aird.mdm.api.PartnerContac
     @Transactional
     public void updateContact(UUID partnerId, UUID contactId, PartnerCommands.SaveContact c) {
         BusinessPartnerService.requireWrite();
-        var partner = partnerService.get(partnerId);
+        partnerService.requireAccess(partnerId, "customer.overview.update");
+        var partner = partnerService.findExisting(partnerId);
         BusinessPartnerService.requireVersion(c.version());
         requireNotDuplicate(partnerId, c.phone(), c.name(), contactId);
         var previousProjects = repository.findContacts(partnerId).stream()
@@ -71,7 +74,7 @@ public class PartnerContactService implements com.jsd.aird.mdm.api.PartnerContac
         var contact = new PartnerContact(contactId, partnerId, trim(c.name()), c.department(), c.title(),
             c.phone(), c.email(), PartnerStatus.ACTIVE, c.assignedProjectIds(), c.members(), c.wechat(), c.version(),
             c.customFields(), null, Instant.now());
-        if (!repository.updateContact(contact, BusinessPartnerService.OPERATOR)) {
+        if (!repository.updateContact(contact, BusinessPartnerService.operator())) {
             BusinessPartnerService.conflict();
         }
         synchronizeProjectPartners(partnerId, partner.name(), previousProjects, contact.assignedProjectIds());
@@ -89,13 +92,14 @@ public class PartnerContactService implements com.jsd.aird.mdm.api.PartnerContac
     @Transactional
     public void changeContactStatus(UUID partnerId, UUID contactId, PartnerCommands.ChangeStatus c) {
         BusinessPartnerService.requireWrite();
-        var partner = partnerService.get(partnerId);
+        partnerService.requireAccess(partnerId, "customer.overview.update");
+        var partner = partnerService.findExisting(partnerId);
         var assignedProjects = repository.findContacts(partnerId).stream()
             .filter(item -> item.id().equals(contactId))
             .findFirst()
             .map(PartnerContact::assignedProjectIds)
             .orElse(List.of());
-        if (!repository.updateContactStatus(partnerId, contactId, c.status(), c.version(), BusinessPartnerService.OPERATOR)) {
+        if (!repository.updateContactStatus(partnerId, contactId, c.status(), c.version(), BusinessPartnerService.operator())) {
             BusinessPartnerService.conflict();
         }
         if (c.status() == PartnerStatus.ACTIVE) {
@@ -109,13 +113,14 @@ public class PartnerContactService implements com.jsd.aird.mdm.api.PartnerContac
     @Transactional
     public void deleteContact(UUID partnerId, UUID contactId, long version) {
         BusinessPartnerService.requireWrite();
-        partnerService.get(partnerId);
+        partnerService.requireAccess(partnerId, "customer.overview.delete");
+        partnerService.findExisting(partnerId);
         var assignedProjects = repository.findContacts(partnerId).stream()
             .filter(item -> item.id().equals(contactId))
             .findFirst()
             .map(PartnerContact::assignedProjectIds)
             .orElse(List.of());
-        if (!repository.deleteContact(partnerId, contactId, version, BusinessPartnerService.OPERATOR)) {
+        if (!repository.deleteContact(partnerId, contactId, version, BusinessPartnerService.operator())) {
             BusinessPartnerService.conflict();
         }
         clearProjectPartnersWhenUnassigned(partnerId, assignedProjects);
@@ -140,7 +145,8 @@ public class PartnerContactService implements com.jsd.aird.mdm.api.PartnerContac
 
     private void ensureProjectPartners(UUID partnerId, String partnerName, Set<UUID> projectIds) {
         for (UUID projectId : projectIds) {
-            projectRepository.assignPartner(projectId, partnerId, partnerName, BusinessPartnerService.OPERATOR);
+            partnerService.requireProjectVisible(projectId);
+            projectRepository.assignPartner(projectId, partnerId, partnerName, BusinessPartnerService.operator());
         }
     }
 
@@ -150,8 +156,9 @@ public class PartnerContactService implements com.jsd.aird.mdm.api.PartnerContac
 
     private void clearProjectPartnersWhenUnassigned(UUID partnerId, Set<UUID> projectIds) {
         for (UUID projectId : projectIds) {
+            partnerService.requireProjectVisible(projectId);
             if (!repository.hasActiveProjectAssignment(partnerId, projectId)) {
-                projectRepository.clearPartner(projectId, partnerId, BusinessPartnerService.OPERATOR);
+                projectRepository.clearPartner(projectId, partnerId, BusinessPartnerService.operator());
             }
         }
     }

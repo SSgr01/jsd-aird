@@ -11,7 +11,14 @@ public final class ExperimentModels {
     public record Summary(UUID id, String experimentNo, String title, UUID categoryId, String categoryName, String sourceType,
                           ExperimentStatus status, UUID projectId, String projectName, UUID stageId, String stageName,
                           UUID taskId, String taskName, String ownerName,
-                          LocalDate experimentDate, int versionNo, long revision, Instant updatedAt) {
+                          LocalDate experimentDate, int versionNo, long revision, Instant updatedAt, String documentFormat) {
+        public Summary(UUID id, String experimentNo, String title, UUID categoryId, String categoryName, String sourceType,
+                       ExperimentStatus status, UUID projectId, String projectName, UUID stageId, String stageName,
+                       UUID taskId, String taskName, String ownerName, LocalDate experimentDate, int versionNo,
+                       long revision, Instant updatedAt) {
+            this(id, experimentNo, title, categoryId, categoryName, sourceType, status, projectId, projectName,
+                    stageId, stageName, taskId, taskName, ownerName, experimentDate, versionNo, revision, updatedAt, null);
+        }
         public List<String> getAllowedActions() {
             return AllowedActions.experiment(status == null ? null : status.name());
         }

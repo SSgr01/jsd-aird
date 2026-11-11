@@ -7,6 +7,8 @@ import java.util.UUID;
 import com.jsd.aird.iam.application.IamAdminService;
 import com.jsd.aird.iam.application.AuditLogPresentationService;
 import com.jsd.aird.iam.application.port.IamStore.Binding;
+import com.jsd.aird.iam.application.port.IamStore;
+import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.PageResponse;
@@ -40,8 +42,9 @@ public class IamController {
     public ApiResponse<PageResponse<IamAdminService.UserView>> users(
             @RequestParam(required = false) String keyword,
             @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "20") int size) {
-        return success(service.users(ActorContext.required(), keyword, page, size));
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String permissionView) {
+        return success(service.users(ActorContext.required(), keyword, page, size, permissionView));
     }
 
     @PostMapping("/users")
@@ -127,6 +130,74 @@ public class IamController {
         return success(service.permissionDefinitions(ActorContext.required()));
     }
 
+    @GetMapping("/permission-model")
+    public ApiResponse<IamAdminService.PermissionModelView> permissionModel() {
+        return success(service.permissionModel(ActorContext.required()));
+    }
+
+    @GetMapping("/roles/{roleId}/menus")
+    public ApiResponse<IamAdminService.MenuPermissionsView> roleMenus(@PathVariable UUID roleId) {
+        return success(service.roleMenus(ActorContext.required(), roleId));
+    }
+
+    @PutMapping("/roles/{roleId}/menus")
+    public ApiResponse<VersionPayload> saveRoleMenus(@PathVariable UUID roleId,
+                                                     @Valid @RequestBody MenuRequest request) {
+        var version = service.saveRoleMenus(ActorContext.required(), roleId, request.expectedVersion(), request.menuKeys());
+        return success(new VersionPayload(version));
+    }
+
+    @GetMapping("/permission-levels")
+    public ApiResponse<List<IamAdminService.PermissionLevelView>> permissionLevels() {
+        return success(service.permissionLevels(ActorContext.required()));
+    }
+
+    @PostMapping("/permission-levels")
+    public ApiResponse<IamAdminService.PermissionLevelView> createPermissionLevel(@Valid @RequestBody PermissionLevelRequest request) {
+        return success(service.createPermissionLevel(ActorContext.required(), request.code(), request.name(), request.description(), request.tier()));
+    }
+
+    @PatchMapping("/permission-levels/{levelId}")
+    public ApiResponse<Void> renamePermissionLevel(@PathVariable UUID levelId, @Valid @RequestBody RenamePermissionLevelRequest request) {
+        service.renamePermissionLevel(ActorContext.required(), levelId, request.name(), request.description());
+        return success(null);
+    }
+
+    @DeleteMapping("/permission-levels/{levelId}")
+    public ApiResponse<Void> deletePermissionLevel(@PathVariable UUID levelId) {
+        service.deletePermissionLevel(ActorContext.required(), levelId);
+        return success(null);
+    }
+
+    @GetMapping("/permission-levels/{levelId}/permissions")
+    public ApiResponse<IamAdminService.PermissionLevelPayload> permissionLevelPermissions(@PathVariable UUID levelId) {
+        return success(service.permissionLevelBindings(ActorContext.required(), levelId));
+    }
+
+    @PutMapping("/permission-levels/{levelId}/permissions")
+    public ApiResponse<VersionPayload> savePermissionLevelPermissions(@PathVariable UUID levelId,
+                                                                       @Valid @RequestBody PermissionLevelPermissionsRequest request) {
+        var version = service.savePermissionLevelBindings(ActorContext.required(), levelId,
+                request.expectedVersion(), toPermissionLevelBindings(request.bindings()));
+        return success(new VersionPayload(version));
+    }
+
+    @GetMapping("/users/{userId}/permission-model")
+    public ApiResponse<IamAdminService.UserModelView> userModel(@PathVariable UUID userId) {
+        return success(service.userModel(ActorContext.required(), userId));
+    }
+
+    @PutMapping("/users/{userId}/permission-model")
+    public ApiResponse<VersionPayload> saveUserModel(@PathVariable UUID userId,
+                                                     @Valid @RequestBody UserModelRequest request) {
+        var version = service.saveUserModel(ActorContext.required(), userId,
+                new IamAdminService.SaveUserModelCommand(request.roleIds(), request.primaryRoleId(),
+                        request.permissionLevelId(), request.menus() == null ? List.of() : request.menus().stream()
+                                .map(item -> new IamStore.MenuOverride(item.menuKey(), item.effect())).toList(),
+                        toBindings(request.operations()), toBindings(request.scopes()), request.expectedVersion()));
+        return success(new VersionPayload(version));
+    }
+
     @GetMapping("/audit-logs")
     public ApiResponse<PageResponse<AuditLogPresentationService.AuditLogView>> auditLogs(
             @RequestParam(required = false) String keyword,
@@ -143,7 +214,14 @@ public class IamController {
 
     private List<Binding> toBindings(List<BindingRequest> requests) {
         return (requests == null ? List.<BindingRequest>of() : requests).stream()
-                .map(item -> new Binding(item.permissionCode(), item.effect(), item.scopeType(), item.targetIds() == null ? List.of() : item.targetIds()))
+                .map(item -> new Binding(item.menuKey(), item.permissionCode(), item.effect(), item.scopeType(), item.targetIds() == null ? List.of() : item.targetIds()))
+                .toList();
+    }
+
+    private List<IamStore.PermissionLevelBinding> toPermissionLevelBindings(List<PermissionLevelBindingRequest> requests) {
+        return (requests == null ? List.<PermissionLevelBindingRequest>of() : requests).stream()
+                .map(item -> new IamStore.PermissionLevelBinding(item.menuKey(), item.permissionCode(), item.effect(),
+                        item.scopeType(), item.targetIds() == null ? List.of() : item.targetIds()))
                 .toList();
     }
 
@@ -159,8 +237,18 @@ public class IamController {
     public record RenameRoleRequest(@NotNull @jakarta.validation.constraints.PositiveOrZero Long expectedVersion,@NotBlank String name) { }
     public record VersionRequest(@NotNull @jakarta.validation.constraints.PositiveOrZero Long expectedVersion) {}
     public record PermissionRequest(@NotNull @jakarta.validation.constraints.PositiveOrZero Long expectedVersion, List<BindingRequest> bindings) { }
-    public record BindingRequest(@NotBlank String permissionCode, @NotBlank String effect, @NotBlank String scopeType,
+    public record PermissionLevelPermissionsRequest(long expectedVersion, List<PermissionLevelBindingRequest> bindings) { }
+    public record BindingRequest(String menuKey, @NotBlank String permissionCode, @NotBlank String effect, @NotBlank String scopeType,
                                  List<UUID> targetIds) { }
+    public record PermissionLevelBindingRequest(String menuKey, @NotBlank String permissionCode, @NotBlank String effect,
+                                                @NotBlank String scopeType, List<UUID> targetIds) { }
     public record PermissionPayload(long version, List<Binding> bindings) { }
     public record VersionPayload(long version) { }
+    public record MenuRequest(long expectedVersion, List<String> menuKeys) { }
+    public record MenuOverrideRequest(@NotBlank String menuKey, @NotBlank String effect) { }
+    public record PermissionLevelRequest(@NotBlank String code, @NotBlank String name, String description, int tier) { }
+    public record RenamePermissionLevelRequest(@NotBlank String name, String description) { }
+    public record UserModelRequest(long expectedVersion, List<UUID> roleIds, UUID primaryRoleId,
+                                   UUID permissionLevelId, List<MenuOverrideRequest> menus,
+                                   List<BindingRequest> operations, List<BindingRequest> scopes) { }
 }

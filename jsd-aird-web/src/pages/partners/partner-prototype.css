@@ -213,6 +213,9 @@
   color: var(--app-text-secondary);
   font-size: 12px;
 }
+.cm-timeline-head .ant-tag {
+  margin-inline-end: 0;
+}
 .cm-timeline-title {
   display: flex;
   align-items: baseline;
@@ -269,6 +272,10 @@
   align-items: center;
   gap: 12px;
   margin-top: 10px;
+}
+.cm-timeline-actions .cm-followup-edit,
+.cm-timeline-actions .cm-followup-edit:hover {
+  color: #1677ff;
 }
 
 /* 视图切换按钮 */

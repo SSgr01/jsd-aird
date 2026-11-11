@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
+import { usePermission } from '@/components/auth/usePermission';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import { downloadPreviewFile } from '@/components/file-preview';
 import { fetchFileBlob, fileContentUrl, stageFile } from '@/services/files';
@@ -39,6 +40,13 @@ function taskStatus(task: KnowledgeUploadTask) {
 }
 
 export function KnowledgeLibraryPage() {
+  const canUpload = usePermission('knowledge.upload.create');
+  const canView = usePermission('knowledge.upload.view');
+  const hasDownloadPermission = usePermission('knowledge.upload.download');
+  const canDownload = canView || hasDownloadPermission;
+  const hasRetryPermission = usePermission('knowledge.upload.retry');
+  const canRetry = canUpload || hasRetryPermission;
+  const canDelete = usePermission('knowledge.upload.delete');
   const { message, modal } = App.useApp();
   const navigate = useNavigate();
   const [fileList, setFileList] = useState<UploadFile[]>([]);
@@ -172,6 +180,7 @@ export function KnowledgeLibraryPage() {
   };
 
   const upload = async () => {
+    if (!canUpload) { void message.warning('当前账号没有资料上传权限，请联系管理员开通'); return; }
     if (uploadLock.current) return;
     const files = fileList.reduce<File[]>((result, item) => {
       if (item.originFileObj) result.push(item.originFileObj);
@@ -311,7 +320,7 @@ export function KnowledgeLibraryPage() {
       status: state, progress: task.progress,
       commonActions: {
         view: { onClick: () => navigate(task.documentId ? `/knowledge/documents/${task.documentId}` : `/knowledge/upload-tasks/${task.id}`) },
-        download: {
+        ...(canDownload ? { download: {
           disabled: !task.sourceFileId,
           title: task.sourceFileId ? undefined : '原文件尚未暂存，无法下载',
           onClick: () => {
@@ -319,13 +328,13 @@ export function KnowledgeLibraryPage() {
             void downloadPreviewFile({ fileName: task.fileName, load: () => fetchFileBlob(task.sourceFileId!), downloadUrl: fileContentUrl(task.sourceFileId) })
               .catch((error: unknown) => void message.error(error instanceof Error ? error.message : '原文件下载失败'));
           },
-        },
-        retry: {
+        } } : {}),
+        ...(canRetry ? { retry: {
           disabled: active || (!task.sourceFileId && !(task.documentId && task.documentVersionId)),
           title: !task.sourceFileId && !(task.documentId && task.documentVersionId) ? '原文件不可用，请重新选择文件' : undefined,
           onClick: () => void retryUploadTask(task),
-        },
-        delete: {
+        } } : {}),
+        ...(canDelete ? { delete: {
           disabled: active,
           title: active ? '处理中的任务不能删除' : undefined,
           onClick: () => modal.confirm({
@@ -334,13 +343,15 @@ export function KnowledgeLibraryPage() {
             okText: '删除记录', okButtonProps: { danger: true }, cancelText: '取消',
             onOk: () => removeUploadTask(task.id),
           }),
-        },
+        } } : {}),
       },
     };
   });
 
   return <>
     <UploadWorkspace
+      uploadReadOnly={!canUpload}
+      showSubmit={canUpload}
       breadcrumbs={[{ title: '研发知识库' }, { title: '资料上传' }]}
       title="资料上传"
       description="文件解析完成后进入人工校对，确认后发布。"
@@ -355,7 +366,7 @@ export function KnowledgeLibraryPage() {
       </Form>}
       accept={uploadCapabilities?.supportedExtensions.join(',') || ''}
       beforeUpload={validateSelectedFile}
-      uploadDisabled={!uploadCapabilities}
+      uploadDisabled={!canUpload || !uploadCapabilities}
       multiple files={fileList} onFilesChange={setFileList}
       onRemoveFile={(file) => setFileList((current) => current.filter((item) => item.uid !== file.uid))}
       onClearFiles={() => setFileList([])}

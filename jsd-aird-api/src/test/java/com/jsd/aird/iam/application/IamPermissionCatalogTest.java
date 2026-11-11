@@ -8,6 +8,16 @@ import org.junit.jupiter.api.Test;
 class IamPermissionCatalogTest {
 
     @Test
+    void businessPermissionDefaultsAreAllAtEveryBuiltInLevel() {
+        var definitions = IamPermissionCatalog.definitions();
+        assertThat(definitions).allSatisfy(definition ->
+                assertThat(definition.defaultScope()).isEqualTo("ALL"));
+        PermissionModelCatalog.levels().forEach(level ->
+                assertThat(PermissionModelCatalog.presetLevelBindings(level.code(), definitions))
+                        .allSatisfy(binding -> assertThat(binding.scopeType()).isEqualTo("ALL")));
+    }
+
+    @Test
     void businessPermissionsAreAtomicAndCodesAreUnique() {
         var definitions = IamPermissionCatalog.definitions();
         var codes = definitions.stream().map(definition -> definition.code()).toList();
@@ -40,5 +50,24 @@ class IamPermissionCatalogTest {
                 .containsEntry("project.update", "编辑项目")
                 .containsEntry("project.delete", "删除项目")
                 .containsEntry("project.assign", "关联项目资料/分配项目成员");
+    }
+
+    @Test
+    void featureMenusExposeOnlyApplicableStandardActions() {
+        var codes = IamPermissionCatalog.definitions().stream().map(definition -> definition.code()).collect(java.util.stream.Collectors.toSet());
+        assertThat(codes).contains("eln.view.create", "eln.view.approve", "quality.view.publish",
+                "research-test.report.view.approve", "production.view.delete", "project.meeting.publish",
+                "knowledge.review.publish", "template.upload.download", "template.upload.retry",
+                "research-test.report.upload.delete", "production.upload.download",
+                "knowledge.upload.retry", "data.upload.delete", "quality.upload.download");
+        assertThat(codes).doesNotContain("ai.search.create", "project.materials.delete");
+        assertThat(codes).doesNotContain("spectrum.view.publish");
+    }
+
+    @Test
+    void pageMenusOnlyImplyReadPermissions() {
+        assertThat(MenuViewPermissions.impliedBy(Set.of("template.view", "eln.view", "system.users")))
+                .contains("template.view", "experiment.view", "system.user.view")
+                .doesNotContain("template.view.create", "eln.view.delete", "system.users.reset");
     }
 }

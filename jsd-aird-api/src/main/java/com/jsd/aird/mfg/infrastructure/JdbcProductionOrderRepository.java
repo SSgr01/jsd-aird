@@ -10,6 +10,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.mfg.application.port.ProductionOrderRepository;
+import com.jsd.aird.iam.api.RecordDataScope;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -27,9 +28,15 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
 
     @Override
     public PageResult<ProductionOrderListItem> list(UUID organizationId, ListQuery query) {
+        return list(organizationId, query, RecordDataScope.all());
+    }
+
+    @Override
+    public PageResult<ProductionOrderListItem> list(UUID organizationId, ListQuery query, RecordDataScope scope) {
         var where = new StringBuilder(" WHERE po.organization_id = ? ");
         var args = new ArrayList<Object>();
         args.add(organizationId);
+        appendScope(where, args, scope);
         if (query.keyword() != null && !query.keyword().isBlank()) {
             where.append(" AND (lower(po.order_no) LIKE ? OR lower(t.name) LIKE ? OR lower(t.template_code) LIKE ? OR lower(coalesce(p.name, '')) LIKE ?)");
             var keyword = "%" + query.keyword().trim().toLowerCase() + "%";
@@ -90,6 +97,22 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
         var safeTotal = total == null ? 0 : total;
         return new PageResult<>(items, query.page(), query.size(), safeTotal,
                 safeTotal == 0 ? 0 : (safeTotal + query.size() - 1) / query.size());
+    }
+
+    private void appendScope(StringBuilder where, List<Object> args, RecordDataScope scope) {
+        switch (scope.type()) {
+            case "ALL", "ORG" -> { }
+            case "SELF", "CREATOR" -> { where.append(" AND po.created_by = ?"); args.add(scope.actorId()); }
+            case "DEPARTMENT" -> {
+                where.append(" AND po.department_id = (SELECT department_id FROM iam.app_user WHERE id = ? AND organization_id = po.organization_id)");
+                args.add(scope.actorId());
+            }
+            case "SELECTED", "PROJECT" -> {
+                if (scope.targetIds().isEmpty()) where.append(" AND false");
+                else { where.append(" AND (po.project_id IN (").append(String.join(",", scope.targetIds().stream().map(id -> "?").toList())).append(") OR po.created_by = ?)"); args.addAll(scope.targetIds()); args.add(scope.actorId()); }
+            }
+            default -> where.append(" AND false");
+        }
     }
 
     @Override

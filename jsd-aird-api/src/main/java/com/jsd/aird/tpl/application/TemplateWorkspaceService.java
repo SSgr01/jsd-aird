@@ -121,7 +121,7 @@ public class TemplateWorkspaceService {
         var actor = ActorContext.required();
         return repository.findTemplates(new TemplateRepository.TemplateQuery(
                 actor.organizationId(), keyword, null, false, format, status, null, null, null,
-                "UPDATED_AT", "DESC", 1, 1000, scopeFilter(actor, "template.view", "TEMPLATE", "READ"))).items();
+                "UPDATED_AT", "DESC", 1, 1000, viewScopeFilter(actor))).items();
     }
 
     public TemplateRepository.TemplatePage list(TemplateListQuery query) {
@@ -129,14 +129,14 @@ public class TemplateWorkspaceService {
         return repository.findTemplates(new TemplateRepository.TemplateQuery(
                 actor.organizationId(), query.keyword(), query.categoryId(), query.uncategorized(), query.format(), query.status(),
                 query.createdBy(), query.updatedFrom(), query.updatedTo(), query.sortBy(), query.sortDirection(),
-                query.page(), query.size(), scopeFilter(actor, "template.view", "TEMPLATE", "READ")));
+                query.page(), query.size(), viewScopeFilter(actor)));
     }
 
     public TemplateRepository.TemplateFacetSummary facets(TemplateFacetQuery query) {
         var actor = ActorContext.required();
         return repository.findTemplateFacets(new TemplateRepository.TemplateFacetQuery(
                 actor.organizationId(), query.keyword(), query.format(), query.status(), query.createdBy(),
-                query.updatedFrom(), query.updatedTo(), scopeFilter(actor, "template.view", "TEMPLATE", "READ")));
+                query.updatedFrom(), query.updatedTo(), viewScopeFilter(actor)));
     }
 
     public List<TemplateRepository.TemplateCreatorOption> filterOptions() {
@@ -169,10 +169,13 @@ public class TemplateWorkspaceService {
         return builder.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
-    private TemplateRepository.DataScopeFilter scopeFilter(Actor actor, String permissionCode,
-                                                              String resourceType, String operation) {
+    private TemplateRepository.DataScopeFilter viewScopeFilter(Actor actor) {
         var scope = authorizationService.resolveScope(new PermissionCheck(
-                actor.organizationId(), actor.userId(), permissionCode, resourceType, null, operation));
+                actor.organizationId(), actor.userId(), "template.view.view", "TEMPLATE", null, "READ"));
+        if (!scope.allowed()) {
+            scope = authorizationService.resolveScope(new PermissionCheck(
+                    actor.organizationId(), actor.userId(), "template.view", "TEMPLATE", null, "READ"));
+        }
         if (!scope.allowed()) {
             throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有模板查看权限");
         }

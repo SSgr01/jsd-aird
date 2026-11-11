@@ -3,8 +3,12 @@ import { Button, Card, Input, Select, Space, Table, Tag, Typography, message } f
 import { useCallback, useEffect, useState } from 'react';
 
 import { templateApi, type StandardFieldOption, type StandardFieldRequest } from '@/services/templates/template-api';
+import { useAuthStore } from '@/stores/auth-store';
 
 export function StandardDictionaryPage() {
+  const permissions = useAuthStore((state) => state.user?.permissions ?? []);
+  const canCreate = permissions.includes('system.dictionary.create');
+  const canApprove = permissions.includes('system.dictionary.update');
   const [fields, setFields] = useState<StandardFieldOption[]>([]);
   const [requests, setRequests] = useState<StandardFieldRequest[]>([]);
   const [templates, setTemplates] = useState<Array<{ versionId: string; templateCode: string; name: string }>>([]);
@@ -18,7 +22,7 @@ export function StandardDictionaryPage() {
     const [nextFields, nextRequests, templatePage] = await Promise.all([
       templateApi.searchStandardFields(),
       templateApi.listStandardFieldRequests('PENDING'),
-      templateApi.list({ status: 'PUBLISHED', page: 1, size: 100 }),
+      canCreate ? templateApi.list({ status: 'PUBLISHED', page: 1, size: 100 }) : Promise.resolve({ items: [] }),
     ]);
     setFields(nextFields);
     setRequests(nextRequests);
@@ -30,7 +34,7 @@ export function StandardDictionaryPage() {
     setTemplates(options);
     setTemplateVersionId((current) => current && options.some((item) => item.versionId === current)
       ? current : options[0]?.versionId);
-  }, []);
+  }, [canCreate]);
 
   useEffect(() => {
     void load().catch((error) => msg.error(error instanceof Error ? error.message : '标准字段字典加载失败'));
@@ -83,7 +87,7 @@ export function StandardDictionaryPage() {
         </div>
         <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
       </div>
-      <Card title="新增标准字段申请" extra={<PlusOutlined />}>
+      {canCreate && <Card title="新增标准字段申请" extra={<PlusOutlined />}>
         <Space wrap>
           <Input
             value={displayName}
@@ -116,7 +120,7 @@ export function StandardDictionaryPage() {
           />
           <Button type="primary" loading={saving} onClick={() => void requestField()}>提交申请</Button>
         </Space>
-      </Card>
+      </Card>}
       <Card title={`待审核申请（${requests.length}）`} style={{ marginTop: 16 }}>
         <Table
           rowKey="id"
@@ -127,7 +131,7 @@ export function StandardDictionaryPage() {
             { title: '字段名称', dataIndex: 'displayName' },
             { title: '类型', dataIndex: 'valueType' },
             { title: '状态', dataIndex: 'status', render: (value: string) => <Tag color="gold">{value}</Tag> },
-            { title: '操作', render: (_: unknown, row: StandardFieldRequest) => <Button type="link" onClick={() => void approve(row)}>批准生效</Button> },
+            ...(canApprove ? [{ title: '操作', render: (_: unknown, row: StandardFieldRequest) => <Button type="link" onClick={() => void approve(row)}>批准生效</Button> }] : []),
           ]}
         />
       </Card>

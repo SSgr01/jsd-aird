@@ -9,8 +9,15 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface ResearchTestRepository {
-    record Search(Type type,String keyword,String category,String status,String ownerName,UUID projectId,
-                  LocalDate dateFrom,LocalDate dateTo,int page,int size) {}
+    record Search(Type type,String keyword,String category,String status,String ownerName,UUID projectId,String format,
+                  LocalDate dateFrom,LocalDate dateTo,int page,int size,
+                  com.jsd.aird.rnd.application.port.ExperimentRepository.DataScopeFilter scope) {
+        public Search(Type type,String keyword,String category,String status,String ownerName,UUID projectId,String format,
+                      LocalDate dateFrom,LocalDate dateTo,int page,int size) {
+            this(type,keyword,category,status,ownerName,projectId,format,dateFrom,dateTo,page,size,
+                    ExperimentRepository.DataScopeFilter.all());
+        }
+    }
     record Create(UUID organizationId,UUID actorId,String actorName,Type type,String businessNo,String name,
                   String category,String scope,String ownerName,LocalDate date,String format,String sourceType,
                   String visibility,UUID projectId,UUID stageId,UUID taskId,UUID sourceFileId,
@@ -24,6 +31,8 @@ public interface ResearchTestRepository {
     PageResponse<Summary> search(UUID organizationId, Search search);
     Optional<Detail> detail(UUID organizationId, UUID id);
     Detail create(Create command);
+    String nextReportNumber();
+    String nextStandardNumber(UUID organizationId);
     Detail save(UUID organizationId,UUID id,Draft draft,UUID actor,String actorName);
     Detail rename(UUID organizationId, UUID id, String name, String businessNo, String ownerName, LocalDate date,
                   String category, String scope, LocalDate effectiveFrom, LocalDate effectiveTo,
@@ -39,5 +48,9 @@ public interface ResearchTestRepository {
     Optional<Upload> findUpload(UUID organizationId, UUID id);
     Upload retryUpload(UUID organizationId, UUID id);
     PageResponse<Upload> uploads(UUID organizationId,Type type,String keyword,int page,int size);
+    default PageResponse<Upload> uploads(UUID organizationId,Type type,String keyword,int page,int size,
+                                         ExperimentRepository.DataScopeFilter scope) {
+        return uploads(organizationId,type,keyword,page,size);
+    }
     void deleteUpload(UUID organizationId,UUID id);
 }

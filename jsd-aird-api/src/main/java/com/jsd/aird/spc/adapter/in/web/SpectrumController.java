@@ -59,8 +59,9 @@ public class SpectrumController {
     }
 
     @DeleteMapping("/categories/{categoryId}")
-    public ApiResponse<Void> deleteCategory(@PathVariable UUID categoryId,@RequestParam String revision) {
-        service.deleteCategory(categoryId,revision);
+    public ApiResponse<Void> deleteCategory(@PathVariable UUID categoryId,@RequestParam String revision,
+                                            @RequestParam(required = false) UUID replacementCategoryId) {
+        service.deleteCategory(categoryId,revision,replacementCategoryId);
         return success(null);
     }
 

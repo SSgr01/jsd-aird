@@ -65,6 +65,7 @@ interface AiConversationWorkspaceProps {
   inputRef?: Ref<TextAreaRef>;
   assistantLabel?: string;
   submitDisabled?: boolean;
+  canCreate?: boolean;
   pendingLabel?: string;
   scopeTitle?: string;
   welcomeTitle?: string;
@@ -121,6 +122,7 @@ export function AiConversationWorkspace({
   inputRef,
   assistantLabel = 'AI研发助手',
   submitDisabled = false,
+  canCreate = true,
   pendingLabel = '正在阅读资料并整理依据',
   scopeTitle = '选择检索范围',
   welcomeTitle = '从研发资料开始提问',
@@ -371,7 +373,7 @@ export function AiConversationWorkspace({
         aria-label={historyTitle}
       >
         <div className="ai-conversation-side-head">
-          <Button
+          {canCreate && <Button
             type="primary"
             size="large"
             icon={<PlusOutlined />}
@@ -384,7 +386,7 @@ export function AiConversationWorkspace({
             }}
           >
             新建对话
-          </Button>
+          </Button>}
           <Button
             className="ai-conversation-side-close"
             type="text"
@@ -662,7 +664,7 @@ export function AiConversationWorkspace({
             onClick={() => scrollToLatest('smooth')}
           />
         ) : null}
-        <div
+        {canCreate && <div
           ref={composerRef}
           className={`ai-conversation-composer${compactComposer ? ' is-compact' : ''}`}
         >
@@ -746,7 +748,7 @@ export function AiConversationWorkspace({
               />
             )}
           </div>
-        </div>
+        </div>}
       </main>
       <Drawer
         title={scopeTitle === '选择检索范围' ? '选择资料' : scopeTitle}

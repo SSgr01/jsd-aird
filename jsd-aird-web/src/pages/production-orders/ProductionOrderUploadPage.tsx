@@ -159,8 +159,11 @@ async function readProductionMetadata(file: File) {
 export function ProductionOrderUploadPage() {
   const { message } = App.useApp();
   const navigate = useNavigate();
-  const canCreate = usePermission('production.create') && usePermission('ops.file.upload');
-  const canDelete = usePermission('production.delete');
+  const canCreate = usePermission('production.upload.create');
+  const canDownload = usePermission('production.upload.download');
+  const hasRetryPermission = usePermission('production.upload.retry');
+  const canRetry = canCreate || hasRetryPermission;
+  const canDelete = usePermission('production.upload.delete');
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
   // Recognition only consumes XLSX templates: their mapping locators are the
@@ -169,6 +172,9 @@ export function ProductionOrderUploadPage() {
   const [templates, setTemplates] = useState<TemplateListItem[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(true);
   const [templateVersionId, setTemplateVersionId] = useState<string>();
+  // Template availability is only reported after the operator tries to upload,
+  // so opening the page does not greet the user with a validation error.
+  const [submitAttempted, setSubmitAttempted] = useState(false);
   const [visibility, setVisibility] = useState<ProductionUploadVisibility>('ALL');
   const [uploads, setUploads] = useState<ProductionUpload[]>([]);
   const [keyword, setKeyword] = useState('');
@@ -208,6 +214,12 @@ export function ProductionOrderUploadPage() {
   }, [loadUploads]);
 
   useEffect(() => {
+    // The recognition template only feeds the upload form; a read-only visitor
+    // has no upload grant (and often no template view grant) so skip the call.
+    if (!canCreate) {
+      setTemplatesLoading(false);
+      return;
+    }
     void templateApi
       .list({ status: 'PUBLISHED', page: 1, size: 100 })
       .then((result) => setTemplates(result.items.filter((item) => item.format === 'XLSX')))
@@ -215,7 +227,7 @@ export function ProductionOrderUploadPage() {
         void message.error(error instanceof Error ? error.message : '识别模板加载失败'),
       )
       .finally(() => setTemplatesLoading(false));
-  }, [message]);
+  }, [canCreate, message]);
 
   const validateFile: UploadProps['beforeUpload'] = (file) => {
     if (!/\.(xlsx?|docx?|png|jpe?g|gif|webp|bmp|tiff?)$/i.test(file.name) || file.size === 0) {
@@ -249,7 +261,17 @@ export function ProductionOrderUploadPage() {
     return () => window.clearInterval(timer);
   }, [loadUploads, uploads]);
 
+  const templatesUnavailable = !templatesLoading && templates.length === 0;
+  const templateErrorMessage = submitAttempted && templatesUnavailable
+    ? '暂无已发布的 Excel 模板，请先在模板中心发布生产单模板'
+    : undefined;
+
   const submit = async () => {
+    if (!canCreate) {
+      void message.warning('当前账号没有生产单上传权限，请联系管理员开通');
+      return;
+    }
+    setSubmitAttempted(true);
     // Recognition always runs against a template: it supplies the field list the
     // extractor writes into, and it is what turns an image or Word production
     // order into an editable Excel record.
@@ -370,7 +392,7 @@ export function ProductionOrderUploadPage() {
         >
           {/\.xlsx?$/i.test(upload.originalName) ? '确认字段' : '查看'}
         </Button>
-        <Button
+        {canDownload && <Button
           type="link"
           icon={<DownloadOutlined />}
           loading={downloadingId === upload.id}
@@ -385,8 +407,8 @@ export function ProductionOrderUploadPage() {
           }}
         >
           下载
-        </Button>
-        {canCreate && (
+        </Button>}
+        {canRetry && (
           <Button
             type="link"
             icon={<ReloadOutlined />}
@@ -428,12 +450,8 @@ export function ProductionOrderUploadPage() {
             <Form.Item
               label="识别模板"
               required
-              validateStatus={templates.length === 0 && !templatesLoading ? 'error' : undefined}
-              help={
-                templates.length === 0 && !templatesLoading
-                  ? '暂无已发布的 Excel 模板，请先在模板中心发布生产单模板'
-                  : undefined
-              }
+              validateStatus={templateErrorMessage ? 'error' : undefined}
+              help={templateErrorMessage}
             >
               <Select
                 showSearch
@@ -463,6 +481,8 @@ export function ProductionOrderUploadPage() {
         }
         accept=".doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff"
         uploadDisabled={!canCreate}
+        uploadReadOnly={!canCreate}
+        showSubmit={canCreate}
         beforeUpload={validateFile}
         multiple
         files={files}
@@ -477,7 +497,7 @@ export function ProductionOrderUploadPage() {
         submitIcon={<CloudUploadOutlined />}
         onSubmit={() => void submit()}
         submitting={uploading}
-        submitDisabled={!canCreate || !templateVersionId}
+        submitDisabled={!canCreate}
         fileRequired={false}
         rightTitle="已上传文件"
         rightCount={page.total}

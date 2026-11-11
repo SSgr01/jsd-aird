@@ -46,11 +46,12 @@ public class ProductionUploadController {
     public ApiResponse<ProductionUploadRepository.PageResult<ProductionUploadRepository.UploadView>> list(
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String status,
+            @RequestParam(required = false) String format,
             @RequestParam(required = false) UUID projectId,
             @RequestParam(defaultValue = "false") boolean viewableOnly,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
-        return success(service.list(keyword, status, projectId, viewableOnly, page, size));
+        return success(service.list(keyword, status, format, projectId, viewableOnly, page, size));
     }
 
     @GetMapping("/{id}")

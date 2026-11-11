@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import com.jsd.aird.iam.api.PermissionDefinitionContributor.PermissionDefinition;
+import com.jsd.aird.iam.api.RecordDataScope;
 
 /**
  * Application port for IAM persistence.  The JDBC implementation stays behind
@@ -30,14 +31,21 @@ public interface IamStore {
 
     Optional<User> user(UUID organizationId, String username);
 
-    List<User> users(UUID organizationId, String keyword, int page, int size);
+    List<User> users(UUID organizationId, String keyword, int page, int size, RecordDataScope dataScope);
 
-    long countUsers(UUID organizationId, String keyword);
+    long countUsers(UUID organizationId, String keyword, RecordDataScope dataScope);
 
     long countUsersByStatus(UUID organizationId, String status);
 
     void insertUser(UUID id, UUID organizationId, String username, String displayName, String email,
                     String phone, String department, UUID roleId, String passwordHash);
+
+    default void insertUser(UUID id, UUID organizationId, String username, String displayName, String email,
+                            String phone, String department, UUID roleId, String passwordHash, UUID createdBy) {
+        insertUser(id, organizationId, username, displayName, email, phone, department, roleId, passwordHash);
+    }
+
+    boolean userInScope(UUID organizationId, UUID userId, RecordDataScope dataScope);
 
     void updateUser(UUID organizationId, UUID userId, String displayName, String email, String phone,
                     String department, UUID roleId);
@@ -119,6 +127,48 @@ public interface IamStore {
 
     void updateRole(UUID organizationId, UUID userId, UUID roleId);
 
+    /** Permission model v2: business-role menu bindings and user assignments. */
+    List<Role> userRoles(UUID organizationId, UUID userId);
+
+    void replaceUserRoles(UUID organizationId, UUID userId, List<UUID> roleIds, UUID primaryRoleId);
+
+    List<String> roleMenus(UUID organizationId, UUID roleId);
+
+    void replaceRoleMenus(UUID organizationId, UUID roleId, long expectedVersion, List<String> menuKeys);
+
+    List<PermissionLevel> permissionLevels(UUID organizationId);
+
+    Optional<PermissionLevel> permissionLevel(UUID organizationId, UUID levelId);
+
+    PermissionLevel ensurePermissionLevel(UUID organizationId, String code, String name, String description,
+                                          boolean builtin, int tier);
+
+    void renamePermissionLevel(UUID organizationId, UUID levelId, String name, String description);
+
+    void deletePermissionLevel(UUID organizationId, UUID levelId);
+
+    List<PermissionLevelBinding> permissionLevelBindings(UUID organizationId, UUID levelId);
+
+    void replacePermissionLevelBindings(UUID organizationId, UUID levelId, long expectedVersion,
+                                        List<PermissionLevelBinding> bindings);
+
+    long permissionLevelVersion(UUID organizationId, UUID levelId);
+
+    Optional<UUID> userPermissionLevel(UUID organizationId, UUID userId);
+
+    void saveUserPermissionLevel(UUID organizationId, UUID userId, long expectedVersion, UUID levelId);
+
+    List<MenuOverride> userMenuOverrides(UUID organizationId, UUID userId);
+
+    void replaceUserMenuOverrides(UUID organizationId, UUID userId, List<MenuOverride> overrides);
+
+    List<Binding> userOperationOverrides(UUID organizationId, UUID userId);
+
+    List<Binding> userScopeOverrides(UUID organizationId, UUID userId);
+
+    void replaceUserModelOverrides(UUID organizationId, UUID userId, List<MenuOverride> menus,
+                                   List<Binding> operations, List<Binding> scopes);
+
     record Organization(UUID id, String name) { }
 
     record User(UUID id, UUID organizationId, String username, String displayName, String email, String phone,
@@ -129,7 +179,23 @@ public interface IamStore {
     record Role(UUID id, UUID organizationId, String code, String name, boolean builtin, boolean enabled,
                 long policyVersion) { }
 
-    record Binding(String permissionCode, String effect, String scopeType, List<UUID> targetIds) { }
+    record Binding(String menuKey, String permissionCode, String effect, String scopeType, List<UUID> targetIds) {
+        public Binding(String permissionCode, String effect, String scopeType, List<UUID> targetIds) {
+            this(null, permissionCode, effect, scopeType, targetIds);
+        }
+    }
+
+    /**
+     * A permission-level operation is scoped to the prototype row where it is
+     * configured. A null menuKey is retained for legacy/global bindings.
+     */
+    record PermissionLevelBinding(String menuKey, String permissionCode, String effect,
+                                  String scopeType, List<UUID> targetIds) { }
+
+    record MenuOverride(String menuKey, String effect) { }
+
+    record PermissionLevel(UUID id, UUID organizationId, String code, String name, String description,
+                           boolean builtin, boolean enabled, int tier, long policyVersion) { }
 
     record Session(UUID id, UUID organizationId, UUID userId, long authVersion, Instant issuedAt, Instant lastSeenAt,
                    Instant expiresAt, Instant absoluteExpiresAt, String username, String status) { }

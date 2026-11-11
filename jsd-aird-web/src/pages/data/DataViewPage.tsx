@@ -4,13 +4,14 @@ import { useListPageBounds } from '@/services/query/use-list-page-bounds';
 import { useBusinessQuery } from '@/services/query/use-business-query';
 import { useListKeyword, useListUrl } from '@/services/query/use-list-url';
 import { DatabaseOutlined, DownloadOutlined, EyeOutlined, LinkOutlined, RedoOutlined, ReloadOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
-import { App, Button, Dropdown, Empty, Input, Modal, Progress, Select, Space, Table, Tag, Typography } from 'antd';
+import { App, Button, Dropdown, Empty, Input, Progress, Select, Space, Table, Tag, Typography } from 'antd';
 import { DataPublicationPanel } from '@/features/data-workbench/DataPublicationPanel';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { CategoryCardGrid, type CatalogCategoryCard } from '@/components/catalog-workspace/CategoryCardGrid';
 import { CatalogListPanel } from '@/components/catalog-workspace/CatalogListPanel';
+import { CategoryDeleteModal } from '@/components/catalog-workspace/CategoryDeleteModal';
 import { CategoryEditorModal, type CategoryEditorValue } from '@/components/catalog-workspace/CategoryEditorModal';
 import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
 import { Can } from '@/components/auth/Can';
@@ -50,7 +51,15 @@ export function DataViewPage() {
   const [saving, setSaving] = useState(false);
   const [projectId, setProjectId] = url.field<string | undefined>('projectId', undefined);
   const [relationEditor, setRelationEditor] = useState<{ item: DataSourceFile; targets: ProjectRelationTarget[] }>();
-  const canUpdate = usePermission('data.update');
+  const canUploadPage = usePermission('data.upload.create');
+  const canCreateFromView = usePermission('data.view.create');
+  const canUpload = canUploadPage || canCreateFromView;
+  // 维护来源文件的项目关联属于数据中心查看页的编辑操作。
+  const canUpdateSource = usePermission('data.view.update');
+  // Archive category maintenance is its own permission module without a data scope.
+  const canCategoryCreate = usePermission('data.category.create');
+  const canCategoryUpdate = usePermission('data.category.update');
+  const canCategoryDelete = usePermission('data.category.delete');
 
   const filters = { categoryId: categoryId !== 'ALL' && categoryId !== UNCATEGORIZED_CATEGORY_ID ? categoryId : undefined, uncategorized: categoryId === UNCATEGORIZED_CATEGORY_ID, keyword: keyword || undefined, status, projectId, page: url.number('page',1), size: url.number('size',20) };
   const listQuery = useBusinessQuery('data', filters, signal => dataApi.listSourceFiles(filters, signal), { keepPage:true });
@@ -128,14 +137,14 @@ export function DataViewPage() {
   return <div className="business-page">
     <div className="page-heading">
       <div><Typography.Title level={2}>数据中心</Typography.Title><Typography.Text type="secondary">查看数据中心导入文件及确认状态。</Typography.Text></div>
-      <Can permission="data.create"><Button type="primary" icon={<UploadOutlined />} onClick={() => navigate('/data/upload')}>数据上传</Button></Can>
+      {canUpload && <Button type="primary" icon={<UploadOutlined />} onClick={() => navigate('/data/upload')}>数据上传</Button>}
     </div>
     <CategoryCardGrid categories={cards} activeId={categoryId}
       onSelect={(id) => { setCategoryId(id); setPage((value) => ({ ...value, current: 1 })); }}
-      onCreate={canUpdate ? () => setEditor({ mode: 'NEW' }) : undefined}
-      onRename={canUpdate ? (item) => setEditor({ mode: 'EDIT', item: categories.find((candidate) => candidate.id === item.id) }) : undefined}
-      onDelete={canUpdate ? (item) => { const category = categories.find((candidate) => candidate.id === item.id); if (category?.allowedActions?.includes('DELETE')) setDeleteItem(category); } : undefined} />
-    <div className="catalog-sync-note"><ReloadOutlined /> 处理完成后需核对数据、提交审核，通过后发布。可在“审核与版本记录”查看版本和审核意见。</div>
+      onCreate={canCategoryCreate ? () => setEditor({ mode: 'NEW' }) : undefined}
+      onRename={canCategoryUpdate ? (item) => setEditor({ mode: 'EDIT', item: categories.find((candidate) => candidate.id === item.id) }) : undefined}
+      onDelete={canCategoryDelete ? (item) => { const category = categories.find((candidate) => candidate.id === item.id); if (category?.allowedActions?.includes('DELETE')) setDeleteItem(category); } : undefined} />
+    <div className="catalog-sync-note"><ReloadOutlined /> 处理完成后需确认数据、提交审核，通过后发布。可在“审核与版本记录”查看版本和审核意见。</div>
     <CatalogListPanel title={cards.find((item) => item.id === categoryId)?.name || '来源文件'} count={page.total}
       feedback={listQuery.data !== undefined ? <ListQueryFeedback query={listQuery} /> : undefined}
       filters={<Space wrap><Input allowClear prefix={<SearchOutlined />} placeholder="搜索来源文件名" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} /><Select allowClear showSearch optionFilterProp="label" popupMatchSelectWidth={false} classNames={{ popup: { root: 'project-relation-picker-dropdown' } }} placeholder="全部项目" value={projectId} onChange={(value) => { setProjectId(value); setPage((current) => ({ ...current, current: 1 })); }} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={[{ label: '审核发布状态', options: ['DRAFT', 'CONFIRMED', 'PENDING_REVIEW', 'RETURNED', 'APPROVED', 'PUBLISHED', 'DISABLED'].map((value) => ({ value: `PUB_${value}`, label: formalStatusLabels[value]?.[0] || value })) }, { label: '文件处理状态', options: Object.entries(statusLabels).map(([value, item]) => ({ value, label: item[0] })) }]} /><Button icon={<RedoOutlined />} onClick={resetFilters}>重置</Button></Space>}
@@ -152,27 +161,39 @@ export function DataViewPage() {
         { title: '操作', width: 500, render: (_: unknown, record: DataSourceFile) => {
           const historicalFreeform = record.recognitionMode === 'FREEFORM';
           return <Space wrap>
-            <DataPublicationPanel lazy readOnly={historicalFreeform} jobId={record.importJobId}
+            <DataPublicationPanel lazy readOnly={historicalFreeform} permissionPrefix="data.view" jobId={record.importJobId}
               onChanged={() => void load()} onEdit={() => navigate(sourceRoute(record))} />
             {record.fileObjectId && <>
               <Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(resolveFile(record))}>预览</Button>
-              <Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(resolveFile(record))}>下载</Button>
+              <Can permission="data.view.download"><Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(resolveFile(record))}>下载</Button></Can>
             </>}
             <Button type="link" onClick={() => navigate(sourceRoute(record))}>
               {historicalFreeform ? '查看历史结果' : '查看导入'}
             </Button>
             {record.experimentId && <Button type="link" onClick={() => navigate(`/experiments/${record.experimentId}`)}>查看实验</Button>}
-            {!historicalFreeform && <Can permission="data.update"><Dropdown trigger={['click']} menu={{ items: [
+            {!historicalFreeform && <Can permission="data.view.update"><Dropdown trigger={['click']} menu={{ items: [
               { key: UNCATEGORIZED_CATEGORY_ID, label: '移到未分类', onClick: () => void moveSource(record) },
               ...categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void moveSource(record, category.id) })),
             ] }}><Button type="link">移动分类</Button></Dropdown></Can>}
-            {!historicalFreeform && <Can permission="project.assign"><Button type="link" icon={<LinkOutlined />} onClick={() => setRelationEditor({ item: record, targets: (record.relatedProjects || []).map((relation) => ({ projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId })) })}>关联项目</Button></Can>}
+            {!historicalFreeform && canUpdateSource && <Button type="link" icon={<LinkOutlined />} onClick={() => setRelationEditor({ item: record, targets: (record.relatedProjects || []).map((relation) => ({ projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId })) })}>关联项目</Button>}
           </Space>;
         } },
       ]} />
     </CatalogListPanel>
     <CategoryEditorModal open={Boolean(editor)} title={editor?.mode === 'NEW' ? '新增归档分类' : '编辑归档分类'} initialValue={editor?.item ? { name: editor.item.name, description: editor.item.description } : { name: '' }} confirmLoading={saving} onCancel={() => setEditor(undefined)} onSubmit={(value) => void saveCategory(value)} />
-    {deleteItem && <Modal open title={`删除分类“${deleteItem.name}”`} okText="删除并迁移" okButtonProps={{ danger: true }} cancelText="取消" confirmLoading={saving} onCancel={() => setDeleteItem(undefined)} onOk={() => void removeCategory()}><Typography.Paragraph>来源文件将迁移到所选分类；未选择时移到“未分类”。</Typography.Paragraph><Select allowClear placeholder="未分类" value={replacementId} onChange={setReplacementId} options={categories.filter((item) => item.id !== deleteItem.id).map((item) => ({ value: item.id, label: item.name }))} style={{ width: '100%' }} /></Modal>}
+    {deleteItem && <CategoryDeleteModal
+      open
+      title={`删除分类“${deleteItem.name}”`}
+      description="来源文件不会被删除。请选择迁移目标，留空则移到未分类。"
+      confirmLoading={saving}
+      replacement={{
+        value: replacementId,
+        onChange: setReplacementId,
+        options: categories.filter((item) => item.id !== deleteItem.id).map((item) => ({ value: item.id, label: item.name })),
+      }}
+      onCancel={() => { setDeleteItem(undefined); setReplacementId(undefined); }}
+      onConfirm={() => void removeCategory()}
+    />}
     <FilePreviewModal open={Boolean(previewFile)} file={previewFile} onClose={() => setPreviewFile(undefined)} showSpreadsheetMerges={false} />
     <FormModal draft={relationEditor?.targets} open={Boolean(relationEditor)} title="维护数据任务关联项目" width={760} okText="保存" confirmLoading={saving} onCancel={() => setRelationEditor(undefined)} onOk={() => saveRelations()}>{relationEditor && <ProjectRelationPicker value={relationEditor.targets} onChange={(targets) => setRelationEditor((current) => current ? { ...current, targets } : current)} />}</FormModal>
   </div>;

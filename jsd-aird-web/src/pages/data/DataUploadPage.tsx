@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
+import { usePermission } from '@/components/auth/usePermission';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import { downloadFile } from '@/services/files';
 import { dataApi, type DataJob, type DataTemplateOption } from '@/services/data/data-api';
@@ -47,6 +48,9 @@ function jobRecord(
   onDelete: (job: DataJob) => void,
   retrying: boolean,
   deleting: boolean,
+  canDownload: boolean,
+  canRetry: boolean,
+  canDelete: boolean,
 ): UploadWorkspaceRecord {
   const status = statusView[job.status] || { label: job.status, color: 'default' };
   const parseProgress = dataParseProgress(job);
@@ -67,16 +71,25 @@ function jobRecord(
     progressLabel: '解析进度',
     commonActions: {
       view: { onClick: () => navigate(job.templateVersionId ? `/data/import-jobs/${job.id}` : `/data/recognition-jobs/${job.id}`) },
-      download: { onClick: () => { void onDownload(job); } },
+      ...(canDownload ? { download: { onClick: () => { void onDownload(job); } } } : {}),
       ...(!historicalFreeform ? {
-        retry: { disabled: !terminal, loading: retrying, onClick: () => { void onRetry(job); } },
-        delete: { disabled: !terminal, loading: deleting, onClick: () => onDelete(job) },
+        ...(canRetry ? { retry: { disabled: !terminal, loading: retrying, onClick: () => { void onRetry(job); } } } : {}),
+        ...(canDelete ? { delete: { disabled: !terminal, loading: deleting, onClick: () => onDelete(job) } } : {}),
       } : {}),
     },
   };
 }
 
 export function DataUploadPage() {
+  const canUploadPage = usePermission('data.upload.create');
+  const canCreateFromView = usePermission('data.view.create');
+  const canCreate = canUploadPage || canCreateFromView;
+  const hasRetryPermission = usePermission('data.upload.retry');
+  const canRetry = canCreate || hasRetryPermission;
+  const canView = usePermission('data.upload.view');
+  const hasDownloadPermission = usePermission('data.upload.download');
+  const canDownload = canView || hasDownloadPermission;
+  const canDelete = usePermission('data.upload.delete');
   const { message, modal } = App.useApp();
   const navigate = useNavigate();
   const [templates, setTemplates] = useState<DataTemplateOption[]>([]);
@@ -140,6 +153,10 @@ export function DataUploadPage() {
   const chosenWordTemplate = useMemo(() => wordTemplates.find((item) => item.versionId === wordTemplateVersionId), [wordTemplateVersionId, wordTemplates]);
 
   const submit = async () => {
+    if (!canCreate) {
+      void message.warning('当前账号没有数据导入权限，请联系管理员开通');
+      return;
+    }
     const selectedFiles = files.flatMap((item) => item.originFileObj ? [{ file: item.originFileObj, uid: item.uid }] : []);
     if (!selectedFiles.length) { void message.warning('请选择数据文件'); return; }
     const spreadsheetFiles = selectedFiles.filter(({ file }) => /\.(?:xls|xlsx|csv)$/i.test(file.name));
@@ -237,7 +254,7 @@ export function DataUploadPage() {
     });
   };
   const records = jobs.items.map((job) => jobRecord(job, navigate, downloadJob, retryJob, deleteJob,
-    retryingJobId === job.id, deletingJobId === job.id));
+    retryingJobId === job.id, deletingJobId === job.id, canDownload, canRetry, canDelete));
 
   return (
     <>
@@ -313,7 +330,9 @@ export function DataUploadPage() {
       onClearFiles={() => setFiles([])}
       uploadMainText="拖拽文件到此处/点击选择文件/点击拍照上传"
       uploadHint="支持 XLS / XLSX / CSV / DOC / DOCX；Excel / CSV 需选择 Excel 模板，DOC / DOCX 需选择 Word 模板。单次最多 20 个文件，单个文件最大 100M。"
-      uploadDisabled={loading}
+      uploadDisabled={loading || !canCreate}
+      uploadReadOnly={!canCreate}
+      showSubmit={canCreate}
       previewEmptyText="暂无待导入文件，点击上方区域选择文件"
       submitLabel="创建导入任务"
       submitIcon={<RightOutlined />}

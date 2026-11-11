@@ -236,8 +236,10 @@ export const spectrumApi = {
     );
     return response.data.data;
   },
-  async deleteCategory(id: string, revision: string) {
-    await httpClient.delete(`/api/v1/spc/categories/${id}`, { params: { revision } });
+  async deleteCategory(id: string, revision: string, replacementCategoryId?: string) {
+    const params: Record<string, string> = { revision };
+    if (replacementCategoryId) params.replacementCategoryId = replacementCategoryId;
+    await httpClient.delete(`/api/v1/spc/categories/${id}`, { params });
   },
   async listCharts(
     params: {

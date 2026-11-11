@@ -2,7 +2,7 @@ import axios from 'axios';
 import type { AxiosResponse } from 'axios';
 
 import { appEnv } from '@/app/config/env';
-import { HttpError, retryAfterMillis } from '@/services/http/errors';
+import { HttpError, httpErrorMessage, retryAfterMillis } from '@/services/http/errors';
 import type { ApiErrorResponse } from '@/services/http/types';
 import { getSessionEpoch, notifyAuthRequired } from '@/services/http/auth-events';
 import { generateUUID } from '@/utils/uuid';
@@ -115,7 +115,7 @@ httpClient.interceptors.response.use(
       }
       if (response?.status === 401 && !isLoginRequest && !isCurrentPasswordMismatch) notifyAuthRequired(response.data?.code);
       throw new HttpError(
-        response?.data?.message || error.message || '请求失败',
+        httpErrorMessage(response?.status, response?.data?.code, response?.data?.message, error.message),
         response?.data?.code || 'HTTP_REQUEST_FAILED',
         response?.status,
         response?.data?.traceId,

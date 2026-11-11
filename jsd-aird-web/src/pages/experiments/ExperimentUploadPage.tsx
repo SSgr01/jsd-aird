@@ -25,7 +25,7 @@ import {
   type Category,
   type ExperimentImportJob,
 } from '@/services/experiments/experiment-api';
-import { downloadFile } from '@/services/files/file-api';
+import { triggerNativeDownload } from '@/services/files/file-api';
 import { useAuthStore } from '@/stores/auth-store';
 import { loadAllPages } from './experiment-import-history-utils';
 
@@ -38,6 +38,8 @@ const ACTIVE_JOB_STATES = ['CREATED', 'QUEUED', 'PARSING', 'VALIDATING', 'COMMIT
 export function ExperimentUploadPage() {
   const { message } = App.useApp();
   const user = useAuthStore((state) => state.user);
+  const can = (action: string) => user?.permissions.includes(`eln.upload.${action}`) ?? false;
+  const canUpload = can('create');
   const navigate = useNavigate();
   const [mode, setMode] = useState<'TEMPLATE' | 'CONTENT_ONLY'>('TEMPLATE');
   const [files, setFiles] = useState<UploadFile[]>([]);
@@ -77,25 +79,29 @@ export function ExperimentUploadPage() {
 
   useEffect(() => {
     setTemplatesLoading(true);
-    void Promise.all([
-      listCategories().then((items) => {
-        setCategories(items);
-        setExperimentCategoryId((current) => current ?? items[0]?.id);
-      }).catch((error) => void message.error(error instanceof Error ? error.message : '实验分类加载失败')),
-      dataApi.listTemplates().then((result) => {
-        const experimentTemplates = result.filter(
-          (item) => item.format === 'XLSX' && item.experimentImportReady === true,
-        );
-        setTemplates(experimentTemplates);
-        setTemplateVersionId((current) =>
-          current && experimentTemplates.some((item) => item.versionId === current)
-            ? current
-            : experimentTemplates[0]?.versionId,
-        );
-      }).catch((error) => void message.error(error instanceof Error ? error.message : '实验模板加载失败')).finally(() => setTemplatesLoading(false)),
-      load(),
-    ]);
-  }, [load]);
+    // Categories and templates only feed the upload form. A read-only visitor
+    // sees the import history only, so skip the calls they are not granted.
+    const catalog = canUpload
+      ? [
+        listCategories().then((items) => {
+          setCategories(items);
+          setExperimentCategoryId((current) => current ?? items[0]?.id);
+        }).catch((error) => void message.error(error instanceof Error ? error.message : '实验分类加载失败')),
+        dataApi.listTemplates().then((result) => {
+          const experimentTemplates = result.filter(
+            (item) => item.format === 'XLSX' && item.experimentImportReady === true,
+          );
+          setTemplates(experimentTemplates);
+          setTemplateVersionId((current) =>
+            current && experimentTemplates.some((item) => item.versionId === current)
+              ? current
+              : experimentTemplates[0]?.versionId,
+          );
+        }).catch((error) => void message.error(error instanceof Error ? error.message : '实验模板加载失败')).finally(() => setTemplatesLoading(false)),
+      ]
+      : [Promise.resolve().finally(() => setTemplatesLoading(false))];
+    void Promise.all([...catalog, load()]);
+  }, [canUpload, load]);
 
   const running = useMemo(
     () => [...freeJobs, ...templateJobs].some((job) => ACTIVE_JOB_STATES.includes(job.status)),
@@ -122,7 +128,7 @@ export function ExperimentUploadPage() {
   };
 
   const submit = async () => {
-    if (uploading) return;
+    if (uploading || !canUpload) return;
     const sourceFiles = files.flatMap((item) => (item.originFileObj ? [item.originFileObj] : []));
     if (!sourceFiles.length) { void message.warning('请先选择实验文件'); return; }
     if (!experimentCategoryId) { void message.warning('请选择实验分类'); return; }
@@ -225,6 +231,9 @@ export function ExperimentUploadPage() {
 
   return <>
     <UploadWorkspace
+      uploadDisabled={!canUpload}
+      uploadReadOnly={!canUpload}
+      showSubmit={canUpload}
       breadcrumbs={[{ title: '电子实验记录本' }, { title: '实验数据导入' }]}
       title="文件导入"
       description="无模板导入无需预填负责人和日期；草稿默认使用当前用户和今天，解析完成后可在实验编辑页修改基本信息。"
@@ -286,7 +295,7 @@ export function ExperimentUploadPage() {
       detail: [(job.status === 'COMPLETED' ? '草稿已生成，尚未发布' : job.currentStage || '等待读取'), job.errorMessage ? `失败原因：${job.errorMessage}` : null].filter(Boolean).join(' · '),
       status: job.status === 'COMPLETED' ? { label: '草稿已生成 · 尚未发布', color: 'success' } : job.status === 'FAILED' ? { label: '解析失败', color: 'error' } : { label: `处理中 ${progress}%`, color: 'processing' },
       progress,
-      actions: <Space size={2}>{job.experimentId ? <Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/experiments/${job.experimentId}`)}>打开实验</Button> : null}<Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadFile(job.sourceFileId, job.sourceFileName).catch((error) => void message.error(error instanceof Error ? error.message : '原文件下载失败'))}>下载原文件</Button><Button type="link" icon={<ReloadOutlined />} disabled={!['FAILED', 'CANCELLED'].includes(job.status)} loading={retryingId === job.id} onClick={() => void retry(job)}>重试</Button><Popconfirm title="确认删除该导入记录？" description="删除后记录将从列表中移除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => deleteFree(job)}><Button type="link" danger icon={<DeleteOutlined />} disabled={ACTIVE_JOB_STATES.includes(job.status)}>删除</Button></Popconfirm></Space>,
+      actions: <Space size={2}>{job.experimentId ? <Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/experiments/${job.experimentId}`)}>打开实验</Button> : null}{can('view') && <Button type="link" icon={<DownloadOutlined />} onClick={() => triggerNativeDownload(`/api/v1/experiment-imports/${job.id}/source`, job.sourceFileName)}>下载原文件</Button>}{(canUpload || can('retry')) && <Button type="link" icon={<ReloadOutlined />} disabled={!['FAILED', 'CANCELLED'].includes(job.status)} loading={retryingId === job.id} onClick={() => void retry(job)}>重试</Button>}{can('delete') && <Popconfirm title="确认删除该导入记录？" description="删除后记录将从列表中移除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => deleteFree(job)}><Button type="link" danger icon={<DeleteOutlined />} disabled={ACTIVE_JOB_STATES.includes(job.status)}>删除</Button></Popconfirm>}</Space>,
     };
   }
 
@@ -323,7 +332,7 @@ export function ExperimentUploadPage() {
         : job.status === 'FAILED' ? { label: '处理失败', color: 'error' }
           : { label: job.status === 'WAITING_MAPPING' || job.status === 'WAITING_CONFIRM' ? '待核对数据' : `处理中 ${progress}%`, color: job.status === 'WAITING_MAPPING' || job.status === 'WAITING_CONFIRM' ? 'warning' : 'processing' },
       progress,
-      actions: <Space size={2}><Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/experiments/template-imports/${job.id}`)}>核对数据</Button><Button type="link" icon={<ReloadOutlined />} disabled={!['FAILED', 'CANCELLED'].includes(job.status)} loading={retryingId === job.id} onClick={() => void retryTemplate(job)}>重试</Button><Popconfirm title="确认删除该导入记录？" description="删除后记录将从列表中移除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => deleteTemplate(job)}><Button type="link" danger icon={<DeleteOutlined />} disabled={ACTIVE_JOB_STATES.includes(job.status)}>删除</Button></Popconfirm><Button type="link" icon={<DownloadOutlined />} onClick={() => void dataApi.sourceBlob(job.sourceFileId).then((blob) => downloadBlob(blob, job.sourceFileName)).catch((error) => void message.error(error instanceof Error ? error.message : '原文件下载失败'))}>下载原文件</Button></Space>,
+      actions: <Space size={2}>{(canUpload || can('update')) && <Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/experiments/template-imports/${job.id}`)}>确认数据</Button>}{(canUpload || can('retry')) && <Button type="link" icon={<ReloadOutlined />} disabled={!['FAILED', 'CANCELLED'].includes(job.status)} loading={retryingId === job.id} onClick={() => void retryTemplate(job)}>重试</Button>}{can('delete') && <Popconfirm title="确认删除该导入记录？" description="删除后记录将从列表中移除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => deleteTemplate(job)}><Button type="link" danger icon={<DeleteOutlined />} disabled={ACTIVE_JOB_STATES.includes(job.status)}>删除</Button></Popconfirm>}{can('view') && <Button type="link" icon={<DownloadOutlined />} onClick={() => triggerNativeDownload(`/api/v1/data/experiment-import-jobs/${job.id}/source`, job.sourceFileName)}>下载原文件</Button>}</Space>,
     };
   }
 
@@ -352,11 +361,4 @@ export function ExperimentUploadPage() {
 
 function formatLabel(format: string) {
   return ({ XLSX: 'Excel', XLS: '旧版 Excel', CSV: 'CSV', DOCX: 'Word', PDF: 'PDF', IMAGE: '图片' } as Record<string, string>)[format] ?? format;
-}
-
-function downloadBlob(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url; anchor.download = name; anchor.click();
-  URL.revokeObjectURL(url);
 }

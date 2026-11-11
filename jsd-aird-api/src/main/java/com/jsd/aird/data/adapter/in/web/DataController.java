@@ -3,6 +3,10 @@ package com.jsd.aird.data.adapter.in.web;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
+import java.io.IOException;
+import jakarta.servlet.http.HttpServletResponse;
+import com.jsd.aird.ops.application.port.FileStorageFacade;
+import com.jsd.aird.shared.web.ImportSourceDownload;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.core.api.ProjectResourceFacade.ProjectRelationTarget;
@@ -36,6 +40,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class DataController {
 
     private final DataImportService service;
+    private final FileStorageFacade files;
     private final DataWorkbookService workbookService;
     private final com.jsd.aird.data.application.DataCategoryService categoryService;
     private final ExperimentAssemblyService experimentAssemblyService;
@@ -47,8 +52,10 @@ public class DataController {
                           DataWorkbookService workbookService,
                           ExperimentAssemblyService experimentAssemblyService,
                           SourceRecognitionService recognitionService,
-                          com.jsd.aird.data.application.DataPublicationService publicationService) {
+                          com.jsd.aird.data.application.DataPublicationService publicationService,
+                          FileStorageFacade files) {
         this.service = service;
+        this.files = files;
         this.categoryService = categoryService;
         this.workbookService = workbookService;
         this.experimentAssemblyService = experimentAssemblyService;
@@ -94,6 +101,15 @@ public class DataController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         return success(service.listExperimentJobs(templateVersionId, status, keyword, page, size));
+    }
+
+    @GetMapping("/experiment-import-jobs/{id}/source")
+    public void experimentImportSource(@PathVariable UUID id, HttpServletResponse response) throws IOException {
+        var job = service.get(id);
+        if (!"EXPERIMENT_DRAFT".equals(job.importPurpose())) {
+            throw new ApiException(ApiErrorCode.NOT_FOUND, "实验导入任务不存在");
+        }
+        ImportSourceDownload.write(files, job.sourceFileId(), response);
     }
 
     @PostMapping("/experiment-import-jobs/{id}/retry")
@@ -236,12 +252,12 @@ public class DataController {
         return success(service.excludeRowAtRevision(id,request.revision(), recordId, request.excluded(), request.reason()));
     }
 
-    @GetMapping("/import-jobs/{id}/preview")
+    @GetMapping({"/import-jobs/{id}/preview", "/experiment-import-jobs/{id}/preview"})
     public ApiResponse<DataImportService.Preview> preview(@PathVariable UUID id) {
         return success(service.preview(id));
     }
 
-    @GetMapping("/import-jobs/{id}/workbook-snapshot")
+    @GetMapping({"/import-jobs/{id}/workbook-snapshot", "/experiment-import-jobs/{id}/workbook-snapshot"})
     public ApiResponse<DataWorkbookService.WorkbookContext> importWorkbook(@PathVariable UUID id) {
         return success(workbookService.importJob(id));
     }
@@ -266,7 +282,7 @@ public class DataController {
         return success(service.reanchorAtRevision(id,request.revision(), componentId, request.sheetId(), request.sourceRange(), request.reason()));
     }
 
-    @PostMapping("/import-jobs/{id}/commit")
+    @PostMapping({"/import-jobs/{id}/commit", "/experiment-import-jobs/{id}/commit"})
     public ApiResponse<DataRepository.Job> commit(@PathVariable UUID id,@Valid @RequestBody(required=false) DataPublicationController.VersionRequest request) {
         if (service.isDataCenterJob(id)) {
             publicationService.confirm(id,request==null?null:request.revision());
@@ -283,19 +299,19 @@ public class DataController {
         return success(job);
     }
 
-    @GetMapping("/import-jobs/{id}/experiments")
+    @GetMapping({"/import-jobs/{id}/experiments", "/experiment-import-jobs/{id}/experiments"})
     public ApiResponse<com.jsd.aird.data.application.ExperimentImportAssembler.AssemblyPlan> experimentPlan(
             @PathVariable UUID id) {
         return success(experimentAssemblyService.preview(id));
     }
 
-    @PostMapping("/import-jobs/{id}/experiment-sync")
+    @PostMapping({"/import-jobs/{id}/experiment-sync", "/experiment-import-jobs/{id}/experiment-sync"})
     public ApiResponse<ExperimentAssemblyService.SyncResult> syncExperiments(
             @PathVariable UUID id, @Valid @RequestBody ExperimentSyncRequest request) {
         return success(experimentAssemblyService.sync(id, request.categoryId(), request.assemblyKeys()));
     }
 
-    @GetMapping("/import-jobs/{id}/experiment-sync-status")
+    @GetMapping({"/import-jobs/{id}/experiment-sync-status", "/experiment-import-jobs/{id}/experiment-sync-status"})
     public ApiResponse<ExperimentAssemblyService.SyncStatus> experimentSyncStatus(@PathVariable UUID id) {
         return success(experimentAssemblyService.status(id));
     }

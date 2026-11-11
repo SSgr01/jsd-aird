@@ -33,7 +33,7 @@ export function KnowledgeDocumentEditor({ item, tagOptions, onCancel, onSaved }:
   const [categories, setCategories] = useState<KnowledgeCategory[]>([]);
   const [loadingCategories, setLoadingCategories] = useState(false);
   const [saving, setSaving] = useState(false);
-  const canAssign = usePermission('project.assign');
+  const canAssign = usePermission('knowledge.view.update');
 
   useEffect(() => {
     let active = true;

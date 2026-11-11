@@ -29,12 +29,13 @@ public class MyBatisProjectMaterialRepository implements ProjectMaterialReposito
 
     @Override
     public void link(UUID projectId, UUID materialId, String operator, String remark) {
-        mapper.insert(new ProjectMaterialRow(UUID.randomUUID(), projectId, materialId));
+        mapper.insert(new ProjectMaterialRow(UUID.randomUUID(), projectId, materialId), operator);
     }
 
     @Override
     public boolean updateRemark(UUID linkId, String remark) {
-        return mapper.updateRemark(new ProjectMaterialRow(linkId, null, null)) > 0;
+        return mapper.updateRemark(new ProjectMaterialRow(linkId, null, null),
+                com.jsd.aird.shared.security.ActorContext.required().userId().toString()) > 0;
     }
 
     @Override
@@ -51,7 +52,7 @@ public class MyBatisProjectMaterialRepository implements ProjectMaterialReposito
         }
         var toAdd = materialIds.stream().filter(id -> !existing.contains(id)).toList();
         for (var id : toAdd) {
-            mapper.insert(new ProjectMaterialRow(UUID.randomUUID(), projectId, id));
+            mapper.insert(new ProjectMaterialRow(UUID.randomUUID(), projectId, id), operator);
         }
     }
 

@@ -8,8 +8,14 @@ public record PermissionCheck(
         String permissionCode,
         String resourceType,
         UUID resourceId,
-        String operation
+        String operation,
+        String menuKey
 ) {
+    public PermissionCheck(UUID organizationId, UUID userId, String permissionCode, String resourceType,
+                           UUID resourceId, String operation) {
+        this(organizationId, userId, permissionCode, resourceType, resourceId, operation, null);
+    }
+
     public PermissionCheck {
         if (organizationId == null || userId == null || permissionCode == null || permissionCode.isBlank()) {
             throw new IllegalArgumentException("权限检查缺少组织、用户或权限编码");

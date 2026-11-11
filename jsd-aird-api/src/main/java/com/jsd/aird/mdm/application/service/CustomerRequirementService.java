@@ -30,23 +30,40 @@ public class CustomerRequirementService {
     }
 
     public PageResponse<CustomerRequirement> requirements(UUID partnerId, UUID projectId, String status, int page, int size) {
-        return repository.findRequirements(partnerId, projectId, status, page(page), size(size));
+        if (projectId != null) partnerService.requireProjectAction(projectId, "project.customer-needs.view");
+        var actor = ActorContext.required();
+        return repository.findRequirements(partnerId, projectId, status, page(page), size(size),
+                actor.organizationId(), actor.userId(), partnerService.scope("customer.needs.view"));
+    }
+
+    public PageResponse<CustomerRequirement> projectRequirements(UUID projectId, String status, int page, int size) {
+        partnerService.requireProjectAction(projectId, "project.customer-needs.view");
+        var actor = ActorContext.required();
+        return repository.findRequirements(null, projectId, status, page(page), size(size),
+                actor.organizationId(), actor.userId(), partnerService.optionalScope("customer.needs.view"));
     }
 
     public CustomerRequirement requirement(UUID id) {
-        return repository.findRequirement(id).orElseThrow(notFound("客户需求不存在"));
+        var value = repository.findRequirement(id).orElseThrow(notFound("客户需求不存在"));
+        if (value.partnerId() != null) partnerService.requireAccess(value.partnerId(), "customer.needs.view");
+        else if (value.projectId() != null) partnerService.requireProjectAction(value.projectId(), "project.customer-needs.view");
+        else throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "客户需求无有效归属");
+        return value;
     }
 
     @Transactional
     public PartnerCommands.Created createRequirement(CustomerRequirement input) {
         BusinessPartnerService.requireWrite();
+        if (input.partnerId() != null) partnerService.requireAccess(input.partnerId(), "customer.needs.create");
+        else if (input.projectId() != null) partnerService.requireProjectAction(input.projectId(), "project.customer-needs.create");
+        else throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "客户需求必须关联客户或项目");
         CrmServiceSupport.validatePartnerAndContact(partnerService, input.partnerId(), null);
         var now = java.time.Instant.now();
         var projectIds = normalizeProjectIds(input.projectIds(), input.projectId());
         var value = new CustomerRequirement(UUID.randomUUID(), CrmServiceSupport.code("REQ"), input.partnerId(),
             input.title(), input.rawRequirement(), input.urgency(), input.raisedAt(), input.deliveryDate(), input.status(),
             input.customStatusName(), firstProjectId(projectIds), projectIds, input.customFields(), 0, now, now);
-        repository.insertRequirement(value, CrmServiceSupport.OPERATOR);
+        repository.insertRequirement(value, CrmServiceSupport.operator());
         appendAudit("CUSTOMER_REQUIREMENT_CREATED", value);
         return new PartnerCommands.Created(value.id(), 0);
     }
@@ -55,13 +72,18 @@ public class CustomerRequirementService {
     public void updateRequirement(UUID id, CustomerRequirement input) {
         BusinessPartnerService.requireWrite();
         var current = requirement(id);
+        if (current.partnerId() != null) partnerService.requireAccess(current.partnerId(), "customer.needs.update");
+        else if (current.projectId() != null) partnerService.requireProjectAction(current.projectId(), "project.customer-needs.update");
+        if (input.partnerId() != null) partnerService.requireAccess(input.partnerId(), "customer.needs.update");
+        else if (input.projectId() != null) partnerService.requireProjectAction(input.projectId(), "project.customer-needs.update");
+        else throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "客户需求必须关联客户或项目");
         CrmServiceSupport.validatePartnerAndContact(partnerService, input.partnerId(), null);
         var projectIds = normalizeProjectIds(input.projectIds(), input.projectId());
         var value = new CustomerRequirement(id, current.requirementCode(), input.partnerId(), input.title(),
             input.rawRequirement(), input.urgency(), input.raisedAt(), input.deliveryDate(),
             input.status(), input.customStatusName(), firstProjectId(projectIds), projectIds, input.customFields(), input.version(),
             current.createdAt(), java.time.Instant.now());
-        if (!repository.updateRequirement(value, CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
+        if (!repository.updateRequirement(value, CrmServiceSupport.operator())) CrmServiceSupport.conflict();
         appendAudit("CUSTOMER_REQUIREMENT_UPDATED", value);
     }
 
@@ -69,7 +91,9 @@ public class CustomerRequirementService {
     public void deleteRequirement(UUID id, long version) {
         BusinessPartnerService.requireWrite();
         var current = requirement(id);
-        if (!repository.deleteRequirement(id, version, CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
+        if (current.partnerId() != null) partnerService.requireAccess(current.partnerId(), "customer.needs.delete");
+        else if (current.projectId() != null) partnerService.requireProjectAction(current.projectId(), "project.customer-needs.delete");
+        if (!repository.deleteRequirement(id, version, CrmServiceSupport.operator())) CrmServiceSupport.conflict();
         if (current.partnerId() != null) {
             partnerService.appendAudit("CUSTOMER_REQUIREMENT_DELETED", current.partnerId());
         } else {

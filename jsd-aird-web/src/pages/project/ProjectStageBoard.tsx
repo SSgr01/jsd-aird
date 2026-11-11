@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import dayjs from '@/utils/dayjs';
 import { Can } from '@/components/auth/Can';
+import { usePermission } from '@/components/auth/usePermission';
 import { ProjectTaskBoard } from './ProjectTaskBoard';
 
 import {
@@ -31,6 +32,7 @@ interface StageFormValues {
 }
 
 export function ProjectStageBoard({ projectId }: { projectId: string }) {
+  const canUpdateStage = usePermission('project.stage.update');
   const [stages, setStages] = useState<ProjectStage[]>([]);
   const [selectedStageId, setSelectedStageId] = useState<string>();
   const [collapsedStageId, setCollapsedStageId] = useState<string>();
@@ -180,25 +182,25 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
       <div className="pm-stage-overview-head">
         <div className="pm-stage-overview-title"><strong>项目预览图</strong><span>拖拽或使用左右按钮调整顺序</span></div>
         <Space.Compact className="pm-stage-overview-actions">
-          <Button
+          <Can permission="project.stage.update"><Button
             icon={<ArrowLeftOutlined />}
             disabled={!selectedStageId || stages.findIndex(({ id }) => id === selectedStageId) <= 0}
             onClick={() => moveSelected(-1)}
           >
             左移
-          </Button>
-          <Button
+          </Button></Can>
+          <Can permission="project.stage.update"><Button
             icon={<ArrowRightOutlined />}
             disabled={!selectedStageId || stages.findIndex(({ id }) => id === selectedStageId) < 0 || stages.findIndex(({ id }) => id === selectedStageId) >= stages.length - 1}
             onClick={() => moveSelected(1)}
           >
             右移
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增阶段</Button>
-          <Button icon={<EditOutlined />} disabled={!selectedStageId} onClick={openEditSelected}>
+          </Button></Can>
+          <Can permission="project.stage.create"><Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增阶段</Button></Can>
+          <Can permission="project.stage.update"><Button icon={<EditOutlined />} disabled={!selectedStageId} onClick={openEditSelected}>
             编辑阶段
-          </Button>
-          <Can permission="project.delete">
+          </Button></Can>
+          <Can permission="project.stage.delete">
             <Popconfirm
               title="确认删除当前阶段？"
               description="阶段下存在任务时不能删除。"
@@ -224,8 +226,8 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
               <div
                 ref={stage.id === focusedId ? focusedRef : undefined}
                 className={`pm-stage-card${stage.id === focusedId ? ' pm-stage-focused' : ''}${stage.id === selectedStageId ? ' pm-stage-selected' : ''}`}
-                draggable onDragStart={() => setDragId(stage.id)} onDragOver={(event) => event.preventDefault()}
-                onDrop={() => dropOn(stage.id)}
+                draggable={canUpdateStage} onDragStart={() => setDragId(stage.id)} onDragOver={(event) => { if (canUpdateStage) event.preventDefault(); }}
+                onDrop={() => { if (canUpdateStage) dropOn(stage.id); }}
                 onClick={() => {
                   if (stage.id === selectedStageId) {
                     setCollapsedStageId((value) => (value === stage.id ? undefined : stage.id));
@@ -257,12 +259,12 @@ export function ProjectStageBoard({ projectId }: { projectId: string }) {
         </div>
       ) : null}
       {stages.find(({ id }) => id === selectedStageId) && collapsedStageId !== selectedStageId ? (
-        <ProjectTaskBoard
+        <Can permission="project.task.view"><ProjectTaskBoard
           projectId={projectId}
           stage={stages.find(({ id }) => id === selectedStageId)!}
           stages={stages}
           onTaskSaved={handleTaskSaved}
-        />
+        /></Can>
       ) : null}
 
       <FormModal form={form} title={editing ? '编辑阶段' : '新增阶段'} open={open} confirmLoading={saving}

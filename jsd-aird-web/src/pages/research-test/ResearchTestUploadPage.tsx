@@ -10,6 +10,7 @@ import type { UploadFile, UploadProps } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
+import { usePermission } from '@/components/auth/usePermission';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import { downloadFile } from '@/services/files/file-api';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
@@ -43,6 +44,12 @@ type UploadTask = {
 
 export function ResearchTestUploadPage({ type = 'REPORT' }: { type?: ResearchTestType }) {
   const standard = type === 'STANDARD';
+  const permissionPrefix = standard ? 'research-test.standard.upload' : 'research-test.report.upload';
+  const canUpload = usePermission(`${permissionPrefix}.create`);
+  const canDownload = usePermission(`${permissionPrefix}.download`);
+  const hasRetryPermission = usePermission(`${permissionPrefix}.retry`);
+  const canRetry = canUpload || hasRetryPermission;
+  const canDelete = usePermission(`${permissionPrefix}.delete`);
   const { message } = App.useApp();
   const navigate = useNavigate();
   const [files, setFiles] = useState<UploadFile[]>([]);
@@ -101,6 +108,10 @@ export function ResearchTestUploadPage({ type = 'REPORT' }: { type?: ResearchTes
   };
 
   const uploadFiles = async (sourceFiles: File[]) => {
+    if (!canUpload) {
+      void message.warning(`当前账号没有${standard ? '测试标准' : '报告'}上传权限，请联系管理员开通`);
+      return;
+    }
     if (!sourceFiles.length) {
       void message.warning(`请先选择${standard ? '测试方法' : '报告'}文件`);
       return;
@@ -229,7 +240,7 @@ export function ResearchTestUploadPage({ type = 'REPORT' }: { type?: ResearchTes
           ? { label: '失败', color: 'error' }
           : { label: `解析中 ${task.progress}%`, color: 'processing' },
       progress: task.progress,
-      actions: (
+      actions: canRetry && (
         <Button
           type="link"
           icon={<ReloadOutlined />}
@@ -258,7 +269,7 @@ export function ResearchTestUploadPage({ type = 'REPORT' }: { type?: ResearchTes
           >
             查看
           </Button>
-          <Button
+          {canDownload && <Button
             type="link"
             icon={<DownloadOutlined />}
             onClick={() =>
@@ -268,16 +279,16 @@ export function ResearchTestUploadPage({ type = 'REPORT' }: { type?: ResearchTes
             }
           >
             下载
-          </Button>
-          <Button
+          </Button>}
+          {canRetry && <Button
             type="link"
             icon={<ReloadOutlined />}
             loading={retryingUploadId === row.id}
             onClick={() => void retryUploadedRow(row)}
           >
             重试
-          </Button>
-          <Button
+          </Button>}
+          {canDelete && <Button
             type="link"
             danger
             icon={<DeleteOutlined />}
@@ -297,7 +308,7 @@ export function ResearchTestUploadPage({ type = 'REPORT' }: { type?: ResearchTes
             }
           >
             删除
-          </Button>
+          </Button>}
         </Space>
       ),
     })),
@@ -306,6 +317,9 @@ export function ResearchTestUploadPage({ type = 'REPORT' }: { type?: ResearchTes
   return (
     <>
       <UploadWorkspace
+        uploadDisabled={!canUpload}
+        uploadReadOnly={!canUpload}
+        showSubmit={canUpload}
         breadcrumbs={[{ title: '研发测试中心' }, { title: standard ? '测试标准上传' : '报告上传' }]}
         title={standard ? '测试标准上传' : '报告上传'}
         description={`${standard ? '测试方法' : 'Excel 报告'}按原文档格式打开；图片自动调用 OCR 转为可维护的 Excel 草稿，原始文件和项目关联信息会完整保留。`}

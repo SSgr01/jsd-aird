@@ -38,6 +38,7 @@ export interface QualityRecord {
   data: Record<string, unknown>;
   sourceFileId?: string;
   sourceFileName?: string;
+  documentFormat?: 'WORD' | 'EXCEL' | 'CSV' | 'PDF' | 'IMAGE';
   projectId?: string;
   projectName?: string;
   stageId?: string;
@@ -49,6 +50,7 @@ export interface QualityRecord {
   lockVersion: number;
   createdAt: string;
   updatedAt: string;
+  workflowStatus?: 'NOT_SUBMITTED' | 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'PUBLISHED';
   allowedActions?: string[];
   newRow?: boolean;
 }
@@ -124,19 +126,20 @@ export const qualityApi = {
         params: { type }, signal,
       }),
     ),
-  createCategory: async (input: { type: QualityTypeId; name: string; description: string }) =>
+  createCategory: async (input: { type: QualityTypeId; name: string; description?: string }) =>
     data(await httpClient.post<ApiResponse<QualityCategory>>('/api/v1/quality/categories', input)),
-  updateCategory: async (id: string, input: { revision: string; name: string; description: string }) =>
+  updateCategory: async (id: string, input: { revision: string; name: string; description?: string }) =>
     data(
       await httpClient.put<ApiResponse<QualityCategory>>(`/api/v1/quality/categories/${id}`, input),
     ),
-  deleteCategory: async (id: string, revision: string) => httpClient.delete(`/api/v1/quality/categories/${id}`, { params: { revision } }),
+  deleteCategory: async (id: string, revision: string, replacementCategoryId?: string) => httpClient.delete(`/api/v1/quality/categories/${id}`, { params: { revision, replacementCategoryId } }),
   records: async (params: {
     type: QualityTypeId;
     categoryId?: string;
     keyword?: string;
     projectId?: string;
     status?: string;
+    format?: 'WORD' | 'EXCEL' | 'CSV' | 'PDF' | 'IMAGE';
     page: number;
     size: number;
   }, signal?: AbortSignal) =>
@@ -154,6 +157,9 @@ export const qualityApi = {
   renameRecord: async (id: string, input: {
     revision: number;
     name: string;
+    businessNo?: string;
+    /** 业务字段补丁，按 key 合并到记录的 data 中。 */
+    data?: Record<string, unknown>;
     projectId?: string;
     projectName?: string;
     stageId?: string;
@@ -180,6 +186,8 @@ export const qualityApi = {
         `/api/v1/quality/records/${id}/publish`, { revision },
       ),
     ),
+  createRevision: async (id: string, revision: number) =>
+    data(await httpClient.post<ApiResponse<QualityRecord>>(`/api/v1/quality/records/${id}/revisions`, { revision })),
   deleteRecord: async (id: string, revision: number) => httpClient.delete(`/api/v1/quality/records/${id}`, { params: { revision } }),
   deleteRecords: async (records: Array<{id: string; lockVersion: number}>) => httpClient.post("/api/v1/quality/records/delete", { records }),
   versions: async (id: string) =>

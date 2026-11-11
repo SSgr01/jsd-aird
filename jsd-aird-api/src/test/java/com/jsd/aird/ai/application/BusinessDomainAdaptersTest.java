@@ -77,7 +77,7 @@ class BusinessDomainAdaptersTest {
 
     private QualityDataStore.RecordView quality(UUID id, String type, String number, ObjectNode data) {
         return new QualityDataStore.RecordView(id, type, null, "隔离分类", number, number, data, null, null,
-            null, null, null, null, null, null, "ALL", json.createObjectNode(), 1, Instant.EPOCH, Instant.EPOCH);
+            null, null, null, null, null, null, "ALL", json.createObjectNode(), 1, Instant.EPOCH, Instant.EPOCH, "DRAFT");
     }
     @Test void shipmentCoaTestAndStandardFollowExactBusinessNumbers() throws Exception {
         var shipment = mock(InventoryModels.Shipment.class);

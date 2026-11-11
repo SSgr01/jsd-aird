@@ -4,6 +4,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { CloseCircleFilled, PlusOutlined } from '@ant-design/icons';
 import { useEffect, useMemo, useState } from 'react';
 import dayjs from '@/utils/dayjs';
+import { Can } from '@/components/auth/Can';
 
 import {
   createProjectRequirement,
@@ -29,7 +30,7 @@ interface CreateFormValues {
   urgency?: Requirement['urgency'];
   raisedAt?: dayjs.Dayjs | null;
   deliveryDate?: dayjs.Dayjs | null;
-  status: Requirement['status'];
+  status: Requirement['status'] | 'CUSTOM';
   customStatusName?: string;
 }
 
@@ -39,16 +40,27 @@ const URGENCY_COLORS: Record<string, string> = {
   LOW: 'blue',
 };
 
-const STATUS_COLORS: Record<string, string> = {
-  DRAFT: 'default',
-  COMMUNICATING: 'blue',
-  CONFIRMED: 'cyan',
-  PENDING: 'orange',
-  DONE: 'green',
-  CANCELED: 'red',
-  IN_PROJECT: 'geekblue',
-  COMPLETED: 'green',
-  CANCELLED: 'red',
+const STATUS_TAG_CLASSES: Record<string, string> = {
+  DRAFT: 'status-not_started',
+  COMMUNICATING: 'status-in_progress',
+  CONFIRMED: 'status-pending',
+  PENDING: 'status-pending',
+  DONE: 'status-completed',
+  CANCELED: 'status-cancelled',
+  IN_PROJECT: 'status-in_progress',
+  COMPLETED: 'status-completed',
+  CANCELLED: 'status-cancelled',
+};
+
+const CUSTOM_STATUS_TAG_CLASSES: Record<string, string> = {
+  草稿: 'status-not_started',
+  未开始: 'status-not_started',
+  待开始: 'status-pending',
+  已确认: 'status-pending',
+  进行中: 'status-in_progress',
+  已立项: 'status-in_progress',
+  已完成: 'status-completed',
+  已取消: 'status-cancelled',
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -171,7 +183,7 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
       urgency: record.urgency,
       raisedAt: record.raisedAt ? dayjs(record.raisedAt) : undefined,
       deliveryDate: record.deliveryDate ? dayjs(record.deliveryDate) : undefined,
-      status: record.status,
+      status: record.customStatusName ? 'CUSTOM' : record.status,
       customStatusName: record.customStatusName,
     });
     fillCustomFields(record);
@@ -222,8 +234,8 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
         partnerId: partnerId ?? '',
         title: values.title?.trim() ?? '',
         rawRequirement: values.rawRequirement?.trim() || undefined,
-        status: values.status,
-        customStatusName: undefined,
+        status: values.status === 'CUSTOM' ? 'DRAFT' : values.status,
+        customStatusName: values.status === 'CUSTOM' ? values.customStatusName?.trim() : undefined,
         urgency: values.urgency,
         raisedAt: values.raisedAt ? values.raisedAt.format('YYYY-MM-DD') : null,
         deliveryDate: values.deliveryDate ? values.deliveryDate.format('YYYY-MM-DD') : null,
@@ -269,7 +281,13 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
         dataIndex: 'status',
         key: 'status',
         width: 110,
-        render: (v: string) => <Tag color={STATUS_COLORS[v] ?? 'default'}>{formatStatus(v)}</Tag>,
+        render: (v: string, record) => {
+          const customName = record.customStatusName?.trim();
+          const tagClass = customName
+            ? CUSTOM_STATUS_TAG_CLASSES[customName] ?? 'status-custom'
+            : STATUS_TAG_CLASSES[v] ?? 'status-not_started';
+          return <span className={`pm-tag ${tagClass}`}>{customName || formatStatus(v)}</span>;
+        },
       },
       {
         title: '操作',
@@ -277,10 +295,10 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
         width: 120,
         render: (_, record) => (
           <Space className="management-table-actions" size={0}>
-            <Button type="link" size="small" onClick={() => openEdit(record)}>
+            <Can permission="project.customer-needs.update"><Button type="link" size="small" onClick={() => openEdit(record)}>
               编辑
-            </Button>
-            <Popconfirm
+            </Button></Can>
+            <Can permission="project.customer-needs.delete"><Popconfirm
               title="确认删除该客户需求？"
               okText="删除"
               cancelText="取消"
@@ -290,7 +308,7 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
               <Button type="link" size="small" danger>
                 删除
               </Button>
-            </Popconfirm>
+            </Popconfirm></Can>
           </Space>
         ),
       },
@@ -305,9 +323,9 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
         <div className="pm-cr-tab-tip">
           记录需求日期、处理状态、关联项目（当前项目：{projectName ?? projectId}）和需求详情。
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+        <Can permission="project.customer-needs.create"><Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
           新建需求
-        </Button>
+        </Button></Can>
       </div>
 
       <Table<Requirement>
@@ -368,17 +386,22 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
                   { value: 'IN_PROJECT', label: '已立项' },
                   { value: 'COMPLETED', label: '已完成' },
                   { value: 'CANCELLED', label: '已取消' },
+                  { value: 'CUSTOM', label: '自定义状态' },
                 ]}
               />
             </Form.Item>
           </div>
 
-          <Form.Item
-            name="customStatusName"
-            label="自定义状态名称"
-            rules={[{ max: 100, message: '最多 100 个字符' }]}
-          >
-            <Input placeholder="自定义状态名称" maxLength={100} />
+          <Form.Item shouldUpdate={(prev, curr) => prev.status !== curr.status} noStyle>
+            {() => form.getFieldValue('status') === 'CUSTOM' ? (
+              <Form.Item
+                name="customStatusName"
+                label="自定义状态名称"
+                rules={[{ required: true, whitespace: true, message: '请输入自定义状态名称' }, { max: 50, message: '最多 50 个字符' }]}
+              >
+                <Input placeholder="请输入自定义状态名称" maxLength={50} />
+              </Form.Item>
+            ) : null}
           </Form.Item>
 
           <Form.Item name="rawRequirement" label="需求总结">

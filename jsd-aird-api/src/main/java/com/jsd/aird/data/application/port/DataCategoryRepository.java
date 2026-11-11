@@ -4,14 +4,17 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import com.jsd.aird.shared.api.AllowedActions;
+import com.jsd.aird.iam.api.RecordDataScope;
 
 public interface DataCategoryRepository {
     void lockCategory(UUID organizationId,UUID categoryId);
 
 
     List<Category> list(UUID organizationId);
+    default List<Category> list(UUID organizationId, RecordDataScope scope) { return list(organizationId); }
 
     DataSourceFacets facets(UUID organizationId);
+    default DataSourceFacets facets(UUID organizationId, RecordDataScope scope) { return facets(organizationId); }
 
     Optional<Category> find(UUID organizationId, UUID categoryId);
 

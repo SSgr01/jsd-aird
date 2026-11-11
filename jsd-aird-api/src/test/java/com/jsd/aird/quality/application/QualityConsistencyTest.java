@@ -40,5 +40,19 @@ class QualityConsistencyTest {
         conflict(()->service.deleteBatch(List.of(new QualityDataService.RecordVersion(id,13L),new QualityDataService.RecordVersion(other,3L))));
         verify(repository,never()).softDeleteOne(any(),any(),anyLong());
     }
+    @Test void publishedRecordRequiresRevisionBeforeEditing(){
+        when(current.workflowStatus()).thenReturn("PUBLISHED");
+        when(repository.createRevision(org,actor,id,13)).thenReturn(current);
+        assertThatThrownBy(()->service.rename(id,new QualityDataService.RenameCommand(13,"new",null,null,null,null,null,null,null,null)))
+                .isInstanceOf(ApiException.class).hasMessageContaining("创建修订");
+        verify(repository,never()).rename(any(),any(),any(),any(),any(),any(),any(),any(),any(),any(),any(),any(),anyLong());
+        service.createRevision(id,13);
+        verify(repository).createRevision(org,actor,id,13);
+    }
+    @Test void draftCannotCreateRevision(){
+        when(current.workflowStatus()).thenReturn("NOT_SUBMITTED");
+        assertThatThrownBy(()->service.createRevision(id,13)).isInstanceOf(ApiException.class);
+        verify(repository,never()).createRevision(any(),any(),any(),anyLong());
+    }
     private void conflict(org.assertj.core.api.ThrowableAssert.ThrowingCallable action){assertThatThrownBy(action).isInstanceOfSatisfying(ApiException.class,error->assertThat(error.errorCode()).isEqualTo(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT));}
 }

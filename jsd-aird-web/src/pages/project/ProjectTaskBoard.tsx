@@ -12,6 +12,7 @@ import {
   projectPriorities, type ProjectPriority, type ProjectStage, type ProjectTask,
 } from '@/services/project/project-api';
 import '../experiments/experiments.css';
+import '../experiments/experiment-create-relations.css';
 import '@/styles/management-list.css';
 
 const taskStatuses: Record<string, string> = { PENDING: '待开始', IN_PROGRESS: '进行中', COMPLETED: '已完成', CANCELLED: '已取消' };
@@ -261,7 +262,7 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
 
   return <div className="pm-stage-work">
     {holder}
-    <div className="pm-stage-work-head"><div><b>当前阶段：{stage.name}</b><small>项目 &gt; {stage.name} &gt; {tasks.length}个任务 &gt; {totalExperiments}个实验</small></div><Button type="primary" onClick={openNewTask}>＋ 新增任务</Button></div>
+    <div className="pm-stage-work-head"><div><b>当前阶段：{stage.name}</b><small>项目 &gt; {stage.name} &gt; {tasks.length}个任务 &gt; {totalExperiments}个实验</small></div><Can permission="project.task.create"><Button type="primary" onClick={openNewTask}>＋ 新增任务</Button></Can></div>
     <div className="pm-task-cards">{tasks.map((task) => <button key={task.id} ref={task.id === focusedTaskId ? focusedTaskRef : undefined} className={`pm-task-card${selected?.id === task.id ? ' active' : ''}${task.id === focusedTaskId ? ' pm-task-focused' : ''}`} onClick={() => setSelected(task)}>
       <div className="pm-task-card-head"><b title={task.name}>{task.name}</b></div>
       <div className="pm-task-card-body"><span>{task.owner || '未设置'}</span><span className="pm-task-card-experiments">{task.experimentCount}实验</span></div>
@@ -269,12 +270,12 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
         <span className={`pm-dot pm-dot-${task.status.toLowerCase()}`} />
         <span className="pm-task-card-status-label">{formatTaskStatus(task.status)}</span>
         <div className="pm-task-card-actions" onClick={(e) => e.stopPropagation()}>
-          <span className="pm-task-card-edit" onClick={() => void openEditTask(task.id)}>编辑</span>
-          <Can permission="project.delete"><Popconfirm title="确认删除该任务？" description="任务下存在实验时不能删除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true, loading: deletingTaskId === task.id }} onConfirm={() => void deleteTask(task)}><span className="pm-task-card-delete" role="button" tabIndex={0} aria-label={`删除任务${task.name}`}>删除</span></Popconfirm></Can>
+          <Can permission="project.task.update"><span className="pm-task-card-edit" onClick={() => void openEditTask(task.id)}>编辑</span></Can>
+          <Can permission="project.task.delete"><Popconfirm title="确认删除该任务？" description="任务下存在实验时不能删除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true, loading: deletingTaskId === task.id }} onConfirm={() => void deleteTask(task)}><span className="pm-task-card-delete" role="button" tabIndex={0} aria-label={`删除任务${task.name}`}>删除</span></Popconfirm></Can>
         </div>
       </div>
     </button>)}</div>
-    {selected ? <><div className="pm-stage-work-head"><b>当前任务：{selected.name}</b><Button type="primary" onClick={showExperiment}>＋ 新增实验</Button></div><Table rowKey="id" pagination={false} dataSource={experiments} columns={[{ title: '实验编号', dataIndex: 'experimentNo' }, { title: '实验名称', dataIndex: 'title' }, { title: '日期', dataIndex: 'experimentDate' }, { title: '负责人', dataIndex: 'ownerName' }, { title: '状态', dataIndex: 'status', render: (status: string) => formatExperimentStatus(status) }, { title: '操作', key: 'action', width: 120, fixed: 'right', render: (_, experiment) => <Space className="management-table-actions" size={0}><Button type="link" size="small" onClick={() => nav(`/experiments/${experiment.id}`, { state: { returnTo: `${location.pathname}${location.search}` } })}>查看</Button><Can permission="project.delete"><Popconfirm title="确认删除该实验？" description="删除后实验记录将从列表中移除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true, loading: deletingExperimentId === experiment.id }} onConfirm={() => void deleteExperiment(experiment)}><Button type="link" danger size="small">删除</Button></Popconfirm></Can></Space> }]} /></> : <Empty description="当前阶段暂无任务" />}
+    {selected ? <><div className="pm-stage-work-head"><b>当前任务：{selected.name}</b><Can permission="eln.create.create"><Button type="primary" onClick={showExperiment}>＋ 新增实验</Button></Can></div><Table rowKey="id" pagination={false} dataSource={experiments} columns={[{ title: '实验编号', dataIndex: 'experimentNo' }, { title: '实验名称', dataIndex: 'title' }, { title: '日期', dataIndex: 'experimentDate' }, { title: '负责人', dataIndex: 'ownerName' }, { title: '状态', dataIndex: 'status', render: (status: string) => formatExperimentStatus(status) }, { title: '操作', key: 'action', width: 120, fixed: 'right', render: (_, experiment) => <Space className="management-table-actions" size={0}><Button type="link" size="small" onClick={() => nav(`/experiments/${experiment.id}`, { state: { returnTo: `${location.pathname}${location.search}` } })}>查看</Button><Can permission="eln.view.delete"><Popconfirm title="确认删除该实验？" description="删除后实验记录将从列表中移除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true, loading: deletingExperimentId === experiment.id }} onConfirm={() => void deleteExperiment(experiment)}><Button type="link" danger size="small">删除</Button></Popconfirm></Can></Space> }]} /></> : <Empty description="当前阶段暂无任务" />}
 
     <FormModal form={form} draft={[createMode, format]} rootClassName="eln-create-modal" width={598} centered title="新增实验" open={open} closable
       styles={{ body: { maxHeight: 'calc(100vh - 240px)', overflowY: 'auto' } }}
@@ -322,11 +323,11 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
       footer={(_, { OkBtn, CancelBtn }) => <div className="pm-experiment-footer"><CancelBtn /><OkBtn /></div>}>
       <div className="pm-task-form-body">
         <Form form={taskForm} layout="vertical" requiredMark={false}>
-          <Form.Item name="stageId" label={<FieldLabel text="关联阶段" required />} rules={[{ required: true, message: '请选择阶段' }]}>
-            <Select placeholder="请选择阶段" options={stages.map((s) => ({ value: s.id, label: s.name }))} />
-          </Form.Item>
           <Form.Item name="name" label={<FieldLabel text="任务名称" required />} rules={[{ required: true, message: '请输入任务名称' }, { max: 300 }]}>
             <Input placeholder="请输入任务名称" />
+          </Form.Item>
+          <Form.Item name="stageId" label={<FieldLabel text="关联阶段" required />} rules={[{ required: true, message: '请选择阶段' }]}>
+            <Select placeholder="请选择阶段" options={stages.map((s) => ({ value: s.id, label: s.name }))} />
           </Form.Item>
           <Form.Item name="owner" label={<FieldLabel text="负责人" />}>
             <Input placeholder="请输入负责人" />

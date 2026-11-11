@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.jsd.aird.core.api.ProjectResourceFacade.RelatedProjectView;
 import com.jsd.aird.shared.api.PageResponse;
+import com.jsd.aird.iam.api.RecordDataScope;
 
 public interface DataRepository {
 
@@ -24,6 +25,11 @@ public interface DataRepository {
 
     PageResponse<Job> listJobs(UUID organizationId, UUID templateVersionId,
                                String status, String keyword, String sourceOwner, int page, int size);
+    default PageResponse<Job> listJobs(UUID organizationId, UUID templateVersionId,
+                                       String status, String keyword, String sourceOwner, int page, int size,
+                                       RecordDataScope scope) {
+        return listJobs(organizationId, templateVersionId, status, keyword, sourceOwner, page, size);
+    }
 
     PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, String status,
                                              String keyword, int page, int size);
@@ -33,6 +39,13 @@ public interface DataRepository {
                                                      int page, int size) {
         if (uncategorized) return new PageResponse<>(List.of(), Math.max(1, page), Math.max(1, size), 0, 0);
         return listSourceFiles(organizationId, categoryId, status, keyword, allowedImportJobIds, page, size);
+    }
+
+    default PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, boolean uncategorized,
+                                                     String status, String keyword, Set<UUID> allowedImportJobIds,
+                                                     int page, int size, RecordDataScope dataScope) {
+        return listSourceFiles(organizationId, categoryId, uncategorized, status, keyword,
+                allowedImportJobIds, page, size);
     }
 
     default PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, String status,

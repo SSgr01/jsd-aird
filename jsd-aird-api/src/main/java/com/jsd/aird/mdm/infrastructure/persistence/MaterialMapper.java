@@ -58,10 +58,10 @@ public interface MaterialMapper {
                         @Param("owner") String owner);
 
     @Insert("INSERT INTO mdm.material(id, code, name, category, source_category, source_module, stage, contact_person, status, description, version, created_at, created_by, updated_at, updated_by) " +
-            "VALUES(#{row.id}, #{row.code}, #{row.name}, #{row.category}, #{row.sourceCategory}, #{row.sourceModule}, #{row.stage}, #{row.contactPerson}, #{row.status}, #{row.description}, #{row.version}, #{row.createdAt}, #{operator}, #{row.updatedAt}, #{operator})")
+            "VALUES(#{row.id}, #{row.code}, #{row.name}, #{row.category}, #{row.sourceCategory}, #{row.sourceModule}, #{row.stage}, #{row.contactPerson}, #{row.status}, #{row.description}, #{row.version}, #{row.createdAt}, CAST(#{operator} AS uuid), #{row.updatedAt}, CAST(#{operator} AS uuid))")
     void insert(@Param("row") MaterialRow row, @Param("operator") String operator);
 
-    @Update("UPDATE mdm.material SET name=#{row.name}, category=#{row.category}, source_category=#{row.sourceCategory}, source_module=#{row.sourceModule}, stage=#{row.stage}, contact_person=#{row.contactPerson}, status=#{row.status}, description=#{row.description}, version=#{row.version}, updated_at=#{row.updatedAt}, updated_by=#{operator} WHERE id=#{row.id} AND version=#{currentVersion}")
+    @Update("UPDATE mdm.material SET name=#{row.name}, category=#{row.category}, source_category=#{row.sourceCategory}, source_module=#{row.sourceModule}, stage=#{row.stage}, contact_person=#{row.contactPerson}, status=#{row.status}, description=#{row.description}, version=#{row.version}, updated_at=#{row.updatedAt}, updated_by=CAST(#{operator} AS uuid) WHERE id=#{row.id} AND version=#{currentVersion}")
     int update(@Param("row") MaterialRow row, @Param("currentVersion") long currentVersion, @Param("operator") String operator);
 
     @Delete("DELETE FROM mdm.material WHERE id=#{id} AND version=#{version}")

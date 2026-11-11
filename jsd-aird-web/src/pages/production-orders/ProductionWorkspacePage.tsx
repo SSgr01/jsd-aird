@@ -26,11 +26,15 @@ import {
   Space,
   Steps,
   Table,
+  Tabs,
   Tag,
   Typography,
 } from 'antd';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { usePermission } from '@/components/auth/usePermission';
+import { WorkspaceReviewActions } from '@/components/workspace-review/WorkspaceReviewActions';
+import type { WorkspaceReviewState } from '@/services/reviews/workspace-review-api';
 
 import { readFieldModel, writeFieldModel } from '@/features/template-workspace/field-model';
 import { preloadWorkspaceEditor } from '@/features/template-workspace/preload-editor';
@@ -62,6 +66,9 @@ import {
 
 
 export function ProductionWorkspacePage() {
+  const canUpdate = usePermission('production.view.update');
+  const canExport = usePermission('production.view.export');
+  const canSubmit = usePermission('production.view.submit');
   const { orderId } = useParams<{ orderId: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -76,11 +83,13 @@ export function ProductionWorkspacePage() {
   const saveOwnerRef = useRef<object>();
   const selectionCycleRef = useRef({ key: '', index: 0 });
   const [workspace, setWorkspace] = useState<ProductionWorkspace>();
+  const [view, setView] = useState<'preview' | 'edit'>(canUpdate ? 'edit' : 'preview');
   const [snapshot, setSnapshot] = useState<Record<string, unknown>>();
   const [data, setData] = useState<Record<string, unknown>>({});
   const [selectedId, setSelectedId] = useState<string>();
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [reviewStatus, setReviewStatus] = useState<WorkspaceReviewState['status']>();
   const latestSaveRef = useRef({ workspace, data });
   latestSaveRef.current = { workspace, data };
   const markDirty = () => { editGenerationRef.current += 1; setDirty(true); };
@@ -114,13 +123,14 @@ export function ProductionWorkspacePage() {
     const loaded = await trackSnapshot(model.snapshotFileId ? productionOrderApi.downloadSnapshot(model.snapshotFileId) : Promise.resolve({}));
     if (!isCurrent()) return;
     setWorkspace(model);
+    setView(canUpdate && model.status === 'DRAFT' ? 'edit' : 'preview');
     setData(model.data || {});
     setSnapshot(loaded);
     editGenerationRef.current = 0; savedGenerationRef.current = 0; savedEditorRef.current = undefined; setDirty(false);
     } catch (reason) {
       if (isCurrent()) throw reason;
     }
-  }, [orderId, beginLoad]);
+  }, [orderId, beginLoad, canUpdate]);
 
   useEffect(() => {
     setWorkspace(undefined); setSnapshot(undefined); setError(undefined);
@@ -147,7 +157,7 @@ export function ProductionWorkspacePage() {
     [selectedId, workspace],
   );
   const selectedField = fieldModel?.fields.find((field) => field.bindingId === selectedId);
-  const editable = workspace?.status === 'DRAFT';
+  const editable = canUpdate && workspace?.status === 'DRAFT' && view === 'edit';
   const structuralParentIds = useMemo(
     () => new Set(
       (workspace?.mapping || [])
@@ -434,13 +444,13 @@ export function ProductionWorkspacePage() {
             <small className="binding-path">{workspace.templateName}</small>
           </span>
           <Tag color={workspace.format === 'XLSX' ? 'green' : 'blue'}>{workspace.format === 'XLSX' ? 'Excel' : 'Word'}</Tag>
-          <Tag color={editable ? 'processing' : workspace.status === 'SUBMITTED' ? 'success' : 'default'}>
-            {editable ? '填写中' : workspace.status === 'SUBMITTED' ? '已提交' : '已取消'}
+          <Tag color={workspace.status === 'DRAFT' ? 'processing' : workspace.status === 'SUBMITTED' ? 'success' : 'default'}>
+            {workspace.status === 'DRAFT' ? '填写中' : workspace.status === 'SUBMITTED' ? '已提交' : '已取消'}
           </Tag>
         </Space>
         <Space className="production-workspace-actions" wrap>
           {dirty && <Typography.Text type="warning">有未保存内容</Typography.Text>}
-          <Button
+          {canUpdate && <Button
             icon={<PlusOutlined />}
             disabled={!editable || workspace.format !== 'XLSX'}
             onClick={() => {
@@ -453,8 +463,8 @@ export function ProductionWorkspacePage() {
             }}
           >
             新增自定义字段
-          </Button>
-          <Dropdown
+          </Button>}
+          {canExport && <Dropdown
             menu={{
               items: [
                 ...(editable ? [{ key: 'draft', label: '导出当前草稿' }] : []),
@@ -465,9 +475,11 @@ export function ProductionWorkspacePage() {
             }}
           >
             <Button icon={<DownOutlined />}>导出 {workspace.format === 'XLSX' ? 'Excel' : 'Word'}</Button>
-          </Dropdown>
-          <Button icon={<SaveOutlined />} disabled={!editable || !dirty} loading={saving} onClick={() => void save()}>保存</Button>
-          <Button type="primary" icon={<SendOutlined />} disabled={!editable || workspace.reconciliationRequired} onClick={submit}>提交生产单</Button>
+          </Dropdown>}
+          {canUpdate && <Button icon={<SaveOutlined />} disabled={!editable || !dirty} loading={saving} onClick={() => void save()}>保存</Button>}
+          {workspace.status === 'DRAFT' && <WorkspaceReviewActions type="PRODUCTION_ORDER" id={orderId || ''}
+            saved={!dirty && !saving} onStatusChange={setReviewStatus} />}
+          {canSubmit && <Button type="primary" icon={<SendOutlined />} disabled={workspace.status !== 'DRAFT' || workspace.reconciliationRequired || reviewStatus !== 'APPROVED'} onClick={submit}>提交生产单</Button>}
         </Space>
       </header>
 
@@ -481,6 +493,17 @@ export function ProductionWorkspacePage() {
         ]} />
       </div>
       {workspace.reconciliationRequired && <Alert banner type="warning" message="部分填写位置需要检查，完成后才能提交。" />}
+
+      <nav className="workspace-view-tabs" aria-label="生产单页面">
+        <Tabs activeKey={view} onChange={(key) => {
+          if (key === 'edit' && (!canUpdate || workspace.status !== 'DRAFT')) return;
+          if (dirty) { message.warning('请先保存当前内容'); return; }
+          setView(key as 'preview' | 'edit');
+        }} items={[
+          { key: 'preview', label: '预览' },
+          { key: 'edit', label: '编辑', disabled: !canUpdate || workspace.status !== 'DRAFT' },
+        ]} />
+      </nav>
 
       <div className="workspace-grid">
         <aside className="workspace-rail">

@@ -139,6 +139,31 @@ export function riskDisplayLabel(risk: string): string {
   return { LOW: '低风险', MEDIUM: '中风险', HIGH: '高风险', CRITICAL: '极高风险' }[risk] || risk;
 }
 
+/**
+ * Upload workspaces double as their module's record list, so a module view
+ * grant must be enough to open the page. The page itself hides the drop zone
+ * and the submit button unless the matching upload operation was granted.
+ */
+export const uploadWorkspaceViewPermissions: Record<string, string> = {
+  '/templates/upload': 'template.view',
+  '/experiments/new': 'experiment.view',
+  '/experiments/upload': 'experiment.view',
+  '/research-test/upload': 'research-test.report.view',
+  '/research-test/standard-upload': 'research-test.standard.view',
+  '/quality/upload': 'quality.view',
+  '/spectrum/upload': 'spectrum.view',
+  '/production-orders/upload': 'production.view',
+  '/knowledge/library': 'knowledge.view',
+  '/data/upload': 'data.view',
+};
+
+/** Permission that grants read-only entry to an upload workspace. */
+export function uploadWorkspaceViewPermission(pathname: string): string | undefined {
+  const path = pathname.split('?')[0]?.replace(/\/$/, '') || '/';
+  if (path.startsWith('/knowledge/upload-tasks/')) return 'knowledge.view';
+  return uploadWorkspaceViewPermissions[path];
+}
+
 export function requiredPermissionForPath(pathname: string): string | undefined {
   // Pure menu group: its visibility is determined by accessible children.
   if (pathname === '/research-test-root') return undefined;
@@ -149,37 +174,42 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   if (path === '/assistant/experiment-optimization') return 'ai.experiment.optimize';
   if (path === '/assistant' || path.startsWith('/assistant/') || path === '/knowledge/search') return 'ai.use';
   if (path === '/knowledge/library' || path.startsWith('/knowledge/upload-tasks/')) return 'knowledge.upload';
-  if (path === '/data/upload') return 'data.create';
-  if (path === '/quality/upload') return 'quality.upload';
+  if (path === '/data/upload') return 'data.view';
+  if (path === '/quality/upload') return 'quality.upload.create';
   if (path === '/quality/view' || path.startsWith('/quality/records/')) return 'quality.view';
   if (path.startsWith('/system/users')) return 'system.user.view';
-  if (path.startsWith('/system/roles') || path.startsWith('/system/user-permissions')) return 'system.permission.manage';
+  if (path.startsWith('/system/roles') || path.startsWith('/system/user-permissions')) return 'system.permissions.view';
+  if (path.startsWith('/system/dictionary')) return 'system.dictionary.view';
+  if (path.startsWith('/system/parameters')) return 'system.parameters.view';
   if (path.startsWith('/system/audit-logs')) return 'system.audit.view';
   if (path.startsWith('/system/dictionary')) return 'system.dictionary.manage';
   if (path.startsWith('/system/parameters')) return 'system.parameter.manage';
   if (path.startsWith('/partners')) return 'customer.view';
   if (path.startsWith('/projects')) return 'project.view';
-  if (path === '/experiments/upload' || path === '/experiments/new') return 'experiment.create';
+  if (path === '/experiments/upload') return 'eln.upload.create';
+  if (path === '/experiments/new') return 'experiment.view';
   if (path.startsWith('/experiments')) return 'experiment.view';
-  if (path === '/research-test/upload') return 'research-test.report.create';
-  if (path === '/research-test/standard-upload') return 'research-test.standard.create';
+  if (path === '/research-test/upload') return 'research-test.report.upload.create';
+  if (path === '/research-test/standard-upload') return 'research-test.standard.upload.create';
   if (path.startsWith('/research-test/standards')) return 'research-test.standard.view';
   if (path.startsWith('/research-test')) return 'research-test.report.view';
   if (path.startsWith('/knowledge/review')) return 'knowledge.review';
   if (path.startsWith('/knowledge')) return 'knowledge.view';
-  if (path === '/templates/upload') return 'template.upload';
+  if (path === '/templates/upload') return 'template.upload.create';
   if (path.startsWith('/templates') || path.startsWith('/render/import')) return 'template.view';
+  if (path === '/production-orders/upload') return 'production.upload.create';
   if (path.startsWith('/production-orders')) return 'production.view';
   if (path === '/quotations/upload') return 'quotation.create';
   if (path.startsWith('/quotations')) return 'quotation.view';
   if (path.startsWith('/inventory')) return 'inventory.view';
   if (path.startsWith('/data')) return 'data.view';
+  if (path === '/spectrum/upload') return 'spectrum.upload.create';
   if (path.startsWith('/spectrum')) return 'spectrum.view';
   return undefined;
 }
 
 export function canViewPath(pathname: string, permissions: string[]): boolean {
-  return canViewPathWithMenus(pathname, permissions, []);
+  return canViewPathWithMenus(pathname, permissions);
 }
 
 export function requiredMenuForPath(pathname: string): string | undefined {
@@ -189,9 +219,8 @@ export function requiredMenuForPath(pathname: string): string | undefined {
   if (path === '/projects/phases') return 'project.stage';
   if (path === '/projects/tasks') return 'project.task';
   if (path.startsWith('/projects')) return 'project.list';
+  if (path === '/experiments/new') return 'eln.create';
   if (path === '/experiments/upload') return 'eln.upload';
-  // New records and file imports share the existing ELN create menu grant.
-  if (path === '/experiments/new') return 'eln.upload';
   if (path.startsWith('/experiments')) return 'eln.view';
   if (path.startsWith('/knowledge/search')) return 'ai.search';
   if (path.startsWith('/assistant')) return 'ai.qa';
@@ -232,16 +261,27 @@ export function hasMenu(required: string, menuKeys: string[]): boolean {
   return menuKeys.includes(required);
 }
 
-export function canViewPathWithMenus(pathname: string, permissions: string[], menuKeys: string[]): boolean {
+function hasPageOperation(menu: string, permissions: string[]): boolean {
+  return permissions.some((permission) =>
+    (permission.startsWith(`${menu}.`) && !permission.endsWith('.view'))
+    || (menu === 'template.upload' && permission === 'template.create'));
+}
+
+export function canViewPathWithMenus(pathname: string, permissions: string[], menuKeys?: string[]): boolean {
   const path = pathname.split('?')[0]?.replace(/\/$/, '') || '/';
   if (path === '/knowledge/view') {
-    if (menuKeys.length > 0) return menuKeys.includes('knowledge.view') || menuKeys.includes('knowledge.review');
+    if (menuKeys !== undefined) return menuKeys.includes('knowledge.view') || menuKeys.includes('knowledge.review');
     return hasPermission('knowledge.view', permissions) || hasPermission('knowledge.review', permissions);
   }
+  // Upload workspaces stay reachable for read-only roles: the page renders the
+  // upload history, while the upload controls require their own operation grant.
+  const uploadView = uploadWorkspaceViewPermission(path);
+  if (uploadView && hasPermission(uploadView, permissions)) return true;
   const menu = requiredMenuForPath(pathname);
   // In the v2 model business roles own navigation visibility. Permission
   // levels remain independent and are enforced by page actions and APIs.
-  if (menuKeys.length > 0 && menu) return hasMenu(menu, menuKeys);
+  if (menuKeys !== undefined && menu) return hasMenu(menu, menuKeys) || hasPageOperation(menu, permissions);
+  if (menu && hasPageOperation(menu, permissions)) return true;
   if (path === '/assistant/model-center') {
     return hasPermission('ai.model.read', permissions) || hasPermission('ai.modeling.read', permissions);
   }
@@ -257,17 +297,24 @@ export function canViewPathWithMenus(pathname: string, permissions: string[], me
  */
 export function hasPermission(required: string, permissions: string[]): boolean {
   if (permissions.includes(required)) return true;
+  if (required.startsWith('research-test.report.view.')) {
+    return permissions.includes(required.replace('research-test.report.view.', 'research-test.report.'));
+  }
+  if (required === 'ai.use' && permissions.some((permission) => permission.startsWith('ai.qa.'))) return true;
+  if ((required === 'knowledge.review' || required === 'knowledge.upload')
+    && permissions.some((permission) => permission.startsWith(`${required}.`))) return true;
+  if (required.endsWith('.view') && permissions.some((permission) => permission.startsWith(`${required}.`))) return true;
   if (required === 'experiment.view') {
     return permissions.some((permission) => [
       'experiment.create', 'experiment.update', 'experiment.submit',
       'experiment.approve', 'experiment.review', 'experiment.delete',
-    ].includes(permission));
+    ].includes(permission) || permission.startsWith('eln.view.') || permission.startsWith('eln.create.') || permission.startsWith('eln.upload.'));
   }
   if (required === 'production.view') {
     return permissions.some((permission) => [
       'production.create', 'production.update', 'production.delete',
       'production.submit', 'production.cancel', 'production.export',
-    ].includes(permission));
+    ].includes(permission) || permission.startsWith('production.upload.'));
   }
   if (required === 'quotation.view') {
     return permissions.some((permission) => ['quotation.create', 'quotation.edit', 'quotation.delete'].includes(permission));
@@ -277,7 +324,7 @@ export function hasPermission(required: string, permissions: string[]): boolean 
   return false;
 }
 
-export function firstAccessiblePath(permissions: string[], menuKeys: string[] = []): string | null {
+export function firstAccessiblePath(permissions: string[], menuKeys?: string[]): string | null {
   if (
     (hasPermission('ai.model.read', permissions) || hasPermission('ai.modeling.read', permissions))
     && canViewPathWithMenus('/assistant/model-center', permissions, menuKeys)
@@ -324,7 +371,7 @@ type MenuRoute = {
   [key: string]: unknown;
 };
 
-export function filterMenuRoute(route: MenuRoute, permissions: string[], menuKeys: string[] = []): MenuRoute | null {
+export function filterMenuRoute(route: MenuRoute, permissions: string[], menuKeys?: string[]): MenuRoute | null {
   const children = route.routes?.map((child) => filterMenuRoute(child, permissions, menuKeys)).filter((child): child is MenuRoute => child !== null);
   // A group route is only a container. Its visibility follows its surviving
   // children; requiring one specific child key here would hide sibling-only roles.
@@ -333,8 +380,8 @@ export function filterMenuRoute(route: MenuRoute, permissions: string[], menuKey
       if (!canViewPathWithMenus(route.path, permissions, menuKeys)) return null;
       return { ...route };
     }
-    const menu = menuKeys.length > 0 ? requiredMenuForPath(route.path) : undefined;
-    if (menu && !hasMenu(menu, menuKeys)) return null;
+    const menu = menuKeys !== undefined ? requiredMenuForPath(route.path) : undefined;
+    if (menu && !hasMenu(menu, menuKeys!) && !hasPageOperation(menu, permissions)) return null;
     if (!menu && !canViewPath(route.path, permissions)) return null;
   }
   if (route.routes && (!children || children.length === 0)) return null;

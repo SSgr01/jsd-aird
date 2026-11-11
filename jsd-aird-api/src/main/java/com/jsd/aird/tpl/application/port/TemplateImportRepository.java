@@ -39,6 +39,11 @@ public interface TemplateImportRepository {
     int countManualReruns(UUID importJobId);
 
     List<ImportJobView> list(UUID organizationId);
+    default List<ImportJobView> list(UUID organizationId, com.jsd.aird.iam.api.RecordDataScope scope) {
+        return list(organizationId);
+    }
+    record ImportTarget(UUID id, String name) { }
+    List<ImportTarget> listTargets(UUID organizationId, com.jsd.aird.iam.api.RecordDataScope scope);
 
     Optional<ImportJobView> findDuplicate(UUID organizationId, String sourceSha256, TemplateFormat format);
 

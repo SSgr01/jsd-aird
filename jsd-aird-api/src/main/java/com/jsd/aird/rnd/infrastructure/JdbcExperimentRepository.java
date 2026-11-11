@@ -26,16 +26,20 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         if(text(q.status())){where.append(" AND e.status=?");args.add(q.status());} if(text(q.sourceType())){where.append(" AND e.source_type=?");args.add(q.sourceType());}
         if(q.projectId()!=null){where.append(" AND e.project_id=?");args.add(q.projectId());} if(q.stageId()!=null){where.append(" AND e.stage_id=?");args.add(q.stageId());} if(q.taskId()!=null){where.append(" AND e.task_id=?");args.add(q.taskId());} if(q.categoryId()!=null){where.append(" AND e.category_id=?");args.add(q.categoryId());}
         if(text(q.ownerName())){where.append(" AND lower(e.owner_name)=lower(?)");args.add(q.ownerName().trim());} if(q.dateFrom()!=null){where.append(" AND e.experiment_date>=?");args.add(q.dateFrom());} if(q.dateTo()!=null){where.append(" AND e.experiment_date<=?");args.add(q.dateTo());}
+        if(text(q.format())){where.append(" AND ").append(DOCUMENT_FORMAT).append("=?");args.add(q.format());}
+        appendScope(where, args, q.scope(), org);
         args.add(q.size()); args.add(Math.max(0,q.page()-1)*q.size());
         return jdbc.query(BASE+where+" ORDER BY e.updated_at DESC LIMIT ? OFFSET ?", this::summary, args.toArray());
     }
     @Override public long count(UUID org, Search q) {
-        var where=new StringBuilder(" WHERE organization_id=? AND deleted=false");var args=new ArrayList<Object>();args.add(org);
-        if(text(q.keyword())){where.append(" AND (lower(title) LIKE ? OR lower(experiment_no) LIKE ?)");var k="%"+q.keyword().toLowerCase()+"%";args.add(k);args.add(k);}
-        if(text(q.status())){where.append(" AND status=?");args.add(q.status());}if(text(q.sourceType())){where.append(" AND source_type=?");args.add(q.sourceType());}
-        if(q.projectId()!=null){where.append(" AND project_id=?");args.add(q.projectId());}if(q.stageId()!=null){where.append(" AND stage_id=?");args.add(q.stageId());}if(q.taskId()!=null){where.append(" AND task_id=?");args.add(q.taskId());}if(q.categoryId()!=null){where.append(" AND category_id=?");args.add(q.categoryId());}
-        if(text(q.ownerName())){where.append(" AND lower(owner_name)=lower(?)");args.add(q.ownerName().trim());}if(q.dateFrom()!=null){where.append(" AND experiment_date>=?");args.add(q.dateFrom());}if(q.dateTo()!=null){where.append(" AND experiment_date<=?");args.add(q.dateTo());}
-        return Optional.ofNullable(jdbc.queryForObject("SELECT count(*) FROM rnd.experiment"+where,Long.class,args.toArray())).orElse(0L);
+        var where=new StringBuilder(" WHERE e.organization_id=? AND e.deleted=false");var args=new ArrayList<Object>();args.add(org);
+        if(text(q.keyword())){where.append(" AND (lower(e.title) LIKE ? OR lower(e.experiment_no) LIKE ?)");var k="%"+q.keyword().toLowerCase()+"%";args.add(k);args.add(k);}
+        if(text(q.status())){where.append(" AND e.status=?");args.add(q.status());}if(text(q.sourceType())){where.append(" AND e.source_type=?");args.add(q.sourceType());}
+        if(q.projectId()!=null){where.append(" AND e.project_id=?");args.add(q.projectId());}if(q.stageId()!=null){where.append(" AND e.stage_id=?");args.add(q.stageId());}if(q.taskId()!=null){where.append(" AND e.task_id=?");args.add(q.taskId());}if(q.categoryId()!=null){where.append(" AND e.category_id=?");args.add(q.categoryId());}
+        if(text(q.ownerName())){where.append(" AND lower(e.owner_name)=lower(?)");args.add(q.ownerName().trim());}if(q.dateFrom()!=null){where.append(" AND e.experiment_date>=?");args.add(q.dateFrom());}if(q.dateTo()!=null){where.append(" AND e.experiment_date<=?");args.add(q.dateTo());}
+        if(text(q.format())){where.append(" AND ").append(DOCUMENT_FORMAT).append("=?");args.add(q.format());}
+        appendScope(where, args, q.scope(), org);
+        return Optional.ofNullable(jdbc.queryForObject("SELECT count(*) FROM rnd.experiment e JOIN rnd.experiment_version v ON v.id=e.current_version_id"+where,Long.class,args.toArray())).orElse(0L);
     }
     @Override public Optional<Detail> detail(UUID org,UUID id){return jdbc.query(BASE+" WHERE e.organization_id=? AND e.id=? AND e.deleted=false",(rs,n)->detailRow(rs),org,id).stream().findFirst();}
     @Override public Optional<Detail> detailForUpdate(UUID org, UUID id) {
@@ -223,11 +227,14 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         if (q.categoryId() != null) { where.append(" AND e.category_id=?"); args.add(q.categoryId()); }
         var scope = q.scope();
         switch (scope.type()) {
-            case "ALL" -> { }
-            case "SELF" -> {
-                where.append(" AND (e.created_by=? OR e.owner_id=?)");
+            case "ALL", "ORG" -> { }
+            case "SELF", "CREATOR" -> {
+                where.append(" AND e.created_by=?");
                 args.add(scope.actorId());
-                args.add(scope.actorId());
+            }
+            case "DEPARTMENT" -> {
+                where.append(" AND e.department_id IS NOT NULL AND e.department_id=(SELECT u.department_id FROM iam.app_user u WHERE u.id=? AND u.organization_id=?)");
+                args.add(scope.actorId()); args.add(org);
             }
             case "ASSIGNED" -> {
                 where.append(" AND e.owner_id=?");
@@ -235,10 +242,22 @@ public class JdbcExperimentRepository implements ExperimentRepository {
             }
             case "PROJECT" -> appendIn(where, args, "e.project_id", scope.targetIds());
             case "CATEGORY" -> appendIn(where, args, "e.category_id", scope.targetIds());
-            case "SELECTED" -> appendIn(where, args, "e.id", scope.targetIds());
+            case "SELECTED" -> appendSelectedOrCreated(where, args, scope);
             default -> where.append(" AND 1=0");
         }
         return new CompletedQuery(where.toString(), List.copyOf(args));
+    }
+
+    private void appendSelectedOrCreated(StringBuilder where, List<Object> args, DataScopeFilter scope) {
+        if (scope.targetIds().isEmpty()) {
+            where.append(" AND 1=0");
+            return;
+        }
+        where.append(" AND (e.project_id IN (")
+                .append(String.join(",", scope.targetIds().stream().map(ignored -> "?").toList()))
+                .append(") OR e.created_by=?)");
+        args.addAll(scope.targetIds());
+        args.add(scope.actorId());
     }
 
     private void appendIn(StringBuilder where, List<Object> args, String column, Set<UUID> ids) {
@@ -249,6 +268,19 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         where.append(" AND ").append(column).append(" IN (")
                 .append(String.join(",", ids.stream().map(ignored -> "?").toList())).append(')');
         args.addAll(ids);
+    }
+
+    private void appendScope(StringBuilder where, List<Object> args, DataScopeFilter scope, UUID organizationId) {
+        switch (scope.type()) {
+            case "ALL", "ORG" -> { }
+            case "SELF", "CREATOR" -> { where.append(" AND e.created_by=?"); args.add(scope.actorId()); }
+            case "DEPARTMENT" -> {
+                where.append(" AND e.department_id IS NOT NULL AND e.department_id=(SELECT u.department_id FROM iam.app_user u WHERE u.id=? AND u.organization_id=?)");
+                args.add(scope.actorId()); args.add(organizationId);
+            }
+            case "SELECTED" -> appendSelectedOrCreated(where, args, scope);
+            default -> where.append(" AND 1=0");
+        }
     }
 
     private record CompletedQuery(String where, List<Object> args) {}
@@ -263,12 +295,13 @@ public class JdbcExperimentRepository implements ExperimentRepository {
     private Detail detailRow(ResultSet r)throws SQLException{var s=summary(r,0);var vid=r.getObject("current_version_id",UUID.class);return new Detail(s,vid,r.getObject("source_file_id",UUID.class),r.getObject("template_version_id",UUID.class),r.getString("template_snapshot_hash"),node(r,"template_snapshot_jsonb"),node(r,"edit_model_jsonb"),reviews(s.id()),attachments(s.id()));}
     private List<Review> reviews(UUID id){return jdbc.query("SELECT * FROM rnd.experiment_review WHERE experiment_id=? ORDER BY created_at DESC",(r,n)->new Review(r.getObject("id",UUID.class),r.getString("action"),r.getString("comment"),r.getString("operator_name"),r.getTimestamp("created_at").toInstant()),id);}
     private List<Attachment> attachments(UUID id){return jdbc.query("SELECT * FROM rnd.experiment_attachment WHERE experiment_id=? ORDER BY created_at DESC",(r,n)->new Attachment(r.getObject("id",UUID.class),r.getObject("file_id",UUID.class),r.getObject("file_version_id",UUID.class),r.getString("attachment_type"),r.getString("section_key"),r.getString("file_name"),r.getString("description"),r.getTimestamp("created_at").toInstant()),id);}
-    private Summary summary(ResultSet r,int n)throws SQLException{return new Summary(r.getObject("id",UUID.class),r.getString("experiment_no"),r.getString("title"),r.getObject("category_id",UUID.class),r.getString("category_name"),r.getString("source_type"),ExperimentStatus.valueOf(r.getString("status")),r.getObject("project_id",UUID.class),r.getString("project_name"),r.getObject("stage_id",UUID.class),r.getString("stage_name"),r.getObject("task_id",UUID.class),r.getString("task_name"),r.getString("owner_name"),r.getObject("experiment_date",LocalDate.class),r.getInt("version_no"),r.getLong("revision"),r.getTimestamp("updated_at").toInstant());}
+    private Summary summary(ResultSet r,int n)throws SQLException{return new Summary(r.getObject("id",UUID.class),r.getString("experiment_no"),r.getString("title"),r.getObject("category_id",UUID.class),r.getString("category_name"),r.getString("source_type"),ExperimentStatus.valueOf(r.getString("status")),r.getObject("project_id",UUID.class),r.getString("project_name"),r.getObject("stage_id",UUID.class),r.getString("stage_name"),r.getObject("task_id",UUID.class),r.getString("task_name"),r.getString("owner_name"),r.getObject("experiment_date",LocalDate.class),r.getInt("version_no"),r.getLong("revision"),r.getTimestamp("updated_at").toInstant(),r.getString("document_format"));}
     private Version version(ResultSet r,int n)throws SQLException{return new Version(r.getObject("id",UUID.class),r.getInt("version_no"),r.getString("status"),r.getObject("template_version_id",UUID.class),r.getString("template_snapshot_hash"),node(r,"template_snapshot_jsonb"),node(r,"edit_model_jsonb"),r.getString("revision_reason"),instant(r,"submitted_at"),instant(r,"published_at"),r.getTimestamp("created_at").toInstant(),r.getObject("created_by",UUID.class));}
     private void audit(UUID o,UUID e,UUID v,String a,JsonNode before,JsonNode after,UUID actor,String name){jdbc.update("INSERT INTO rnd.experiment_audit(id,organization_id,experiment_id,experiment_version_id,action,before_jsonb,after_jsonb,operator_id,operator_name) VALUES(?,?,?,?,?,?,?,?,?)",UUID.randomUUID(),o,e,v,a,pg(before),pg(after),actor,name);}
     private void event(UUID o,UUID e,String type,UUID v,int no){var p=json.createObjectNode().put("experimentId",e.toString()).put("versionId",v.toString()).put("versionNo",no);jdbc.update("INSERT INTO rnd.experiment_outbox(id,organization_id,aggregate_id,event_type,payload_jsonb) VALUES(?,?,?,?,?)",UUID.randomUUID(),o,e,type,pg(p));}
     private JsonNode node(ResultSet r,String c)throws SQLException{var value=r.getString(c);if(value==null||value.isBlank())return null;try{return json.readTree(value);}catch(Exception e){throw new SQLException("Invalid JSON in "+c,e);}}private PGobject pg(JsonNode n){if(n==null)return null;try{var p=new PGobject();p.setType("jsonb");p.setValue(json.writeValueAsString(n));return p;}catch(Exception e){throw new IllegalArgumentException(e);}}
     private static List<String> strings(JsonNode value){if(value==null||!value.isArray())return List.of();var result=new ArrayList<String>();value.forEach(item->{var text=item.asText("").trim();if(!text.isEmpty()&&!result.contains(text))result.add(text);});return List.copyOf(result);}
     private static Instant instant(ResultSet r,String c)throws SQLException{var t=r.getTimestamp(c);return t==null?null:t.toInstant();}private static boolean text(String s){return s!=null&&!s.isBlank();}private static void lock(int n){if(n!=1)throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"实验已被其他会话修改，请刷新后重试");}private static void conflict(String m){throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,m);}private static void invalid(String m){throw new ApiException(ApiErrorCode.VALIDATION_ERROR,m);}
-    private static final String BASE="SELECT e.*,p.name AS project_name,s.name AS stage_name,t.name AS task_name,v.version_no,v.template_version_id,v.template_snapshot_hash,v.template_snapshot_jsonb,v.edit_model_jsonb FROM rnd.experiment e LEFT JOIN mdm.project p ON p.id=e.project_id AND p.deleted=false LEFT JOIN mdm.project_stage s ON s.id=e.stage_id AND s.deleted=false LEFT JOIN mdm.project_task t ON t.id=e.task_id AND t.deleted=false JOIN rnd.experiment_version v ON v.id=e.current_version_id";
+    private static final String DOCUMENT_FORMAT="(CASE WHEN v.edit_model_jsonb->'documentSnapshot'->'sheets' IS NOT NULL OR v.template_snapshot_jsonb->'sheets' IS NOT NULL OR upper(v.edit_model_jsonb->>'documentFormat')='EXCEL' OR lower(v.edit_model_jsonb->>'sourceFileName') ~ '\\.(xlsx|xls|csv)$' OR e.source_type='EXCEL_IMPORT' OR (SELECT t.format FROM tpl.template_version tv JOIN tpl.template t ON t.id=tv.template_id WHERE tv.id=v.template_version_id)='XLSX' THEN 'EXCEL' ELSE 'WORD' END)";
+    private static final String BASE="SELECT e.*,p.name AS project_name,s.name AS stage_name,t.name AS task_name,v.version_no,v.template_version_id,v.template_snapshot_hash,v.template_snapshot_jsonb,v.edit_model_jsonb,"+DOCUMENT_FORMAT+" AS document_format FROM rnd.experiment e LEFT JOIN mdm.project p ON p.id=e.project_id AND p.deleted=false LEFT JOIN mdm.project_stage s ON s.id=e.stage_id AND s.deleted=false LEFT JOIN mdm.project_task t ON t.id=e.task_id AND t.deleted=false JOIN rnd.experiment_version v ON v.id=e.current_version_id";
 }

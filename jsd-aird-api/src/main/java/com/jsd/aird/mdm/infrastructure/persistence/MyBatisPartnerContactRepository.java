@@ -86,7 +86,8 @@ public class MyBatisPartnerContactRepository implements PartnerContactRepository
         if (projectIds == null) return;
         for (var pid : projectIds) {
             try {
-                mapper.insertContactProject(contactId, UUID.fromString(pid));
+                mapper.insertContactProject(contactId, UUID.fromString(pid),
+                        com.jsd.aird.shared.security.ActorContext.required().userId().toString());
             } catch (IllegalArgumentException ignore) {
             }
         }

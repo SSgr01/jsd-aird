@@ -10,6 +10,7 @@ import com.jsd.aird.mfg.adapter.in.web.ProductionOrderController;
 import com.jsd.aird.mfg.application.*;
 import com.jsd.aird.quality.adapter.in.web.QualityDataController;
 import com.jsd.aird.quality.application.*;
+import com.jsd.aird.shared.review.WorkspaceReviewService;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -25,7 +26,7 @@ class BusinessWriteVersionContractTest {
     private MockMvc mvc(Object controller){return MockMvcBuilders.standaloneSetup(controller).setControllerAdvice(new GlobalExceptionHandler()).setMessageConverters(new MappingJackson2HttpMessageConverter(new ObjectMapper().findAndRegisterModules())).build();}
     @Test void productionSubmitCancelAndDeleteRequireAnExplicitNonNegativeVersion() throws Exception {
         var service=mock(ProductionOrderService.class);
-        var mvc=mvc(new ProductionOrderController(service,mock(ProductionOfficeExportService.class)));
+        var mvc=mvc(new ProductionOrderController(service,mock(ProductionOfficeExportService.class),mock(WorkspaceReviewService.class)));
         for(String action:new String[]{"submit","cancel"}){
             mvc.perform(post("/api/v1/production-orders/"+ID+"/"+action).contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isUnprocessableEntity());
             mvc.perform(post("/api/v1/production-orders/"+ID+"/"+action).contentType(MediaType.APPLICATION_JSON).content("{\"lockVersion\":-1}")).andExpect(status().isUnprocessableEntity());
@@ -34,7 +35,7 @@ class BusinessWriteVersionContractTest {
         verifyNoInteractions(service);
     }
     @Test void qualityDeletionPublicationAndLegacyBatchDeletesCannotOmitVersions() throws Exception {
-        var service=mock(QualityDataService.class);var mvc=mvc(new QualityDataController(service,mock(QualityDataExportService.class)));
+        var service=mock(QualityDataService.class);var mvc=mvc(new QualityDataController(service,mock(QualityDataExportService.class),mock(WorkspaceReviewService.class)));
         mvc.perform(delete("/api/v1/quality/records/"+ID)).andExpect(status().isUnprocessableEntity());
         mvc.perform(post("/api/v1/quality/records/"+ID+"/publish").contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isUnprocessableEntity());
         mvc.perform(put("/api/v1/quality/records/batch").contentType(MediaType.APPLICATION_JSON).content("{\"type\":\"coa\",\"categoryId\":\""+ID+"\",\"records\":[],\"deleteIds\":[\""+ID+"\"]}")).andExpect(status().isUnprocessableEntity());
@@ -49,7 +50,7 @@ class BusinessWriteVersionContractTest {
     }
     @Test void sourceMetadataAndCorrectionsRejectMissingClientRevisions() throws Exception {
         var service=mock(com.jsd.aird.data.application.DataImportService.class);
-        var mvc=mvc(new com.jsd.aird.data.adapter.in.web.DataController(service,null,null,null,null,null));
+        var mvc=mvc(new com.jsd.aird.data.adapter.in.web.DataController(service,null,null,null,null,null,null));
         mvc.perform(put("/api/v1/data/import-jobs/"+ID+"/records/"+ID+"/values").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"bindingId\":\"field\",\"valuePath\":\"\",\"correctedValue\":3,\"reason\":\"test\"}")).andExpect(status().isUnprocessableEntity());
         mvc.perform(put("/api/v1/data/import-jobs/"+ID+"/mappings").contentType(MediaType.APPLICATION_JSON).content("{\"items\":[]}")).andExpect(status().isUnprocessableEntity());

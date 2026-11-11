@@ -6,6 +6,7 @@ import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -17,21 +18,32 @@ import java.util.function.Supplier;
 public class MeetingMinutesService {
 
     private final MeetingMinutesRepository repository;
+    private final ProjectService projectAccess;
+
+    @Autowired
+    public MeetingMinutesService(MeetingMinutesRepository repository, ProjectService projectAccess) {
+        this.repository = repository;
+        this.projectAccess = projectAccess;
+    }
 
     public MeetingMinutesService(MeetingMinutesRepository repository) {
-        this.repository = repository;
+        this(repository, null);
     }
 
     public PageResponse<MeetingMinutes> listByProject(UUID projectId, int page, int size) {
+        requireProject(projectId);
         return repository.findByProject(projectId, Math.max(page, 1), clamp(size));
     }
 
     public MeetingMinutes get(UUID id) {
-        return repository.findById(id).orElseThrow(notFound("会议纪要不存在"));
+        var meeting = repository.findById(id).orElseThrow(notFound("会议纪要不存在"));
+        requireProject(meeting.projectId());
+        return meeting;
     }
 
     @Transactional
     public UUID create(MeetingMinutes input) {
+        requireAction(input.projectId(), "project.meeting.create");
         var now = Instant.now();
         var value = new MeetingMinutes(
                 UUID.randomUUID(),
@@ -45,13 +57,17 @@ public class MeetingMinutesService {
                 now,
                 now
         );
-        repository.insert(value, CrmServiceSupport.OPERATOR);
+        repository.insert(value, CrmServiceSupport.operator());
         return value.id();
     }
 
     @Transactional
     public void update(UUID id, MeetingMinutes input) {
         var current = get(id);
+        requireAction(current.projectId(), "project.meeting.update");
+        if (current.archivedToKb()) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "已归档会议纪要不可编辑");
+        }
         var value = new MeetingMinutes(
                 id,
                 current.projectId(),
@@ -64,18 +80,19 @@ public class MeetingMinutesService {
                 current.createdAt(),
                 Instant.now()
         );
-        if (!repository.update(value, input.version(), CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
+        if (!repository.update(value, input.version(), CrmServiceSupport.operator())) CrmServiceSupport.conflict();
     }
 
     @Transactional
     public void delete(UUID id, long version) {
-        get(id);
+        requireAction(get(id).projectId(), "project.meeting.delete");
         if (!repository.delete(id, version)) CrmServiceSupport.conflict();
     }
 
     @Transactional
     public void archiveToKb(UUID id,long expectedVersion) {
         var current = get(id);
+        requireAction(current.projectId(), "project.meeting.archive");
         if(current.version()!=expectedVersion)CrmServiceSupport.conflict();
         if (current.archivedToKb()) return;
         var value = new MeetingMinutes(
@@ -83,11 +100,19 @@ public class MeetingMinutesService {
                 current.summary(), current.occurredAt(), true, current.version(),
                 current.createdAt(), Instant.now()
         );
-        if (!repository.update(value, expectedVersion, CrmServiceSupport.OPERATOR)) CrmServiceSupport.conflict();
+        if (!repository.update(value, expectedVersion, CrmServiceSupport.operator())) CrmServiceSupport.conflict();
     }
 
     private static int clamp(int value) {
         return Math.min(Math.max(value, 1), 100);
+    }
+
+    private void requireProject(UUID projectId) {
+        if (projectAccess != null) projectAccess.get(projectId);
+    }
+
+    private void requireAction(UUID projectId, String permissionCode) {
+        if (projectAccess != null) projectAccess.requireAccess(projectId, permissionCode);
     }
 
     private static Supplier<ApiException> notFound(String message) {

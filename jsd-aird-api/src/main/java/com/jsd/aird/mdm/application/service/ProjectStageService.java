@@ -11,6 +11,7 @@ import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -20,14 +21,21 @@ import java.util.UUID;
 
 @Service
 public class ProjectStageService {
-    static final String OPERATOR = "system";
+    static String operator() { return com.jsd.aird.shared.security.ActorContext.required().userId().toString(); }
 
     private final ProjectRepository projects;
     private final ProjectStageRepository stages;
+    private final ProjectService projectAccess;
 
-    public ProjectStageService(ProjectRepository projects, ProjectStageRepository stages) {
+    @Autowired
+    public ProjectStageService(ProjectRepository projects, ProjectStageRepository stages, ProjectService projectAccess) {
         this.projects = projects;
         this.stages = stages;
+        this.projectAccess = projectAccess;
+    }
+
+    public ProjectStageService(ProjectRepository projects, ProjectStageRepository stages) {
+        this(projects, stages, null);
     }
 
     public List<ProjectStage> listByProject(UUID projectId) {
@@ -36,10 +44,17 @@ public class ProjectStageService {
     }
 
     public ProjectStage get(UUID id) {
-        return stages.findById(id).orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "阶段不存在或已删除"));
+        var stage = stages.findById(id).orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "阶段不存在或已删除"));
+        requireProject(stage.projectId());
+        return stage;
     }
 
     public PageResponse<ProjectStage> search(ProjectStageQuery query) {
+        if (projectAccess != null) {
+            var actor = com.jsd.aird.shared.security.ActorContext.required();
+            var scope = projectAccess.scope();
+            query = query.withDataScope(actor.organizationId(), scope.scopeType(), actor.userId(), scope.targetIds());
+        }
         var items = stages.findPage(query);
         long total = stages.count(query);
         long pages = (total + query.size() - 1) / query.size();
@@ -48,6 +63,7 @@ public class ProjectStageService {
 
     @Transactional
     public ProjectStage create(UUID projectId, ProjectStageCommands.Create command) {
+        requireAction(projectId, "project.stage.create");
         var project = requireProject(projectId);
         if (project.status() == ProjectStatus.COMPLETED) {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "已完成项目不能新增阶段");
@@ -71,13 +87,14 @@ public class ProjectStageService {
             name, orderNo, status, clean(command.owner()), clean(command.description()),
             command.plannedStart(), command.plannedEnd(), status == StageStatus.IN_PROGRESS ? now : null,
             null, 0, 0, 0, 0, 0, now, now);
-        stages.insert(stage, OPERATOR);
+        stages.insert(stage, operator());
         return stage;
     }
 
     @Transactional
     public ProjectStage update(UUID id, ProjectStageCommands.Update command) {
         ProjectStage current = get(id);
+        requireAction(current.projectId(), "project.stage.update");
         String name = validateName(command.name());
         validateDates(command.plannedStart(), command.plannedEnd());
         StageStatus target = command.status() == null ? current.status() : command.status();
@@ -101,7 +118,7 @@ public class ProjectStageService {
             current.stageCode(), name, current.orderNo(), target, clean(command.owner()), clean(command.description()),
             command.plannedStart(), command.plannedEnd(), actualStart, actualEnd, current.taskCount(),
             current.openTaskCount(), current.experimentCount(), current.materialCount(), current.version() + 1, current.createdAt(), now);
-        if (!stages.update(updated, command.version(), OPERATOR)) {
+        if (!stages.update(updated, command.version(), operator())) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "阶段已被其他用户修改，请刷新后重试");
         }
         return updated;
@@ -110,10 +127,11 @@ public class ProjectStageService {
     @Transactional
     public ProjectStage delete(UUID id, long version) {
         ProjectStage stage = get(id);
+        requireAction(stage.projectId(), "project.stage.delete");
         if (stage.taskCount() > 0 || stage.openTaskCount() > 0) {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "阶段下存在任务，不能删除");
         }
-        if (!stages.softDelete(id, version, OPERATOR)) {
+        if (!stages.softDelete(id, version, operator())) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "阶段已被其他用户修改，请刷新后重试");
         }
         return stage;
@@ -121,6 +139,7 @@ public class ProjectStageService {
 
     @Transactional
     public List<ProjectStage> reorder(UUID projectId, ProjectStageCommands.Reorder command) {
+        requireAction(projectId, "project.stage.update");
         List<ProjectStage> current = stages.findByProject(projectId);
         if (command.items().size() != current.size()) {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "排序请求必须包含项目下全部有效阶段");
@@ -138,7 +157,7 @@ public class ProjectStageService {
             return stage;
         }).toList();
         try {
-            stages.reorder(projectId, ordered, OPERATOR);
+            stages.reorder(projectId, ordered, operator());
         } catch (IllegalStateException exception) {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "阶段排序发生并发冲突，请刷新后重试");
         }
@@ -146,7 +165,12 @@ public class ProjectStageService {
     }
 
     private com.jsd.aird.mdm.domain.model.Project requireProject(UUID id) {
+        if (projectAccess != null) return projectAccess.get(id);
         return projects.findById(id).orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "项目不存在或已删除"));
+    }
+
+    private void requireAction(UUID projectId, String permissionCode) {
+        if (projectAccess != null) projectAccess.requireAccess(projectId, permissionCode);
     }
 
     private static String validateName(String value) {

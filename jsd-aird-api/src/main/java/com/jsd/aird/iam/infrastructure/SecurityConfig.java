@@ -121,9 +121,10 @@ public class SecurityConfig {
     PermissionRouteFilter permissionRouteFilter(
             com.jsd.aird.iam.api.AuthorizationService authorization,
             ObjectMapper objectMapper,
+            FileBusinessPermissionResolver fileBusinessPermissions,
             @Value("${app.identity.development-mode:false}") boolean developmentMode
     ) {
-        return new PermissionRouteFilter(authorization, objectMapper, developmentMode);
+        return new PermissionRouteFilter(authorization, objectMapper, developmentMode, fileBusinessPermissions);
     }
 
     @Bean

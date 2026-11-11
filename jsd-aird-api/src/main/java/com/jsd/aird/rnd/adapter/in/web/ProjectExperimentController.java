@@ -3,6 +3,7 @@ package com.jsd.aird.rnd.adapter.in.web;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jsd.aird.platform.web.RequestIdHolder;
 import com.jsd.aird.rnd.application.ExperimentExportService;
+import com.jsd.aird.mdm.application.service.ProjectService;
 import com.jsd.aird.rnd.application.ExperimentService;
 import com.jsd.aird.rnd.application.port.ExperimentRepository;
 import com.jsd.aird.rnd.domain.ExperimentModels.Detail;
@@ -23,12 +24,14 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
@@ -46,10 +49,23 @@ public class ProjectExperimentController {
 
     private final ExperimentService service;
     private final ExperimentExportService exportService;
+    private final ProjectService projectAccess;
 
-    public ProjectExperimentController(ExperimentService service, ExperimentExportService exportService) {
+    @Autowired
+    public ProjectExperimentController(ExperimentService service, ExperimentExportService exportService,
+                                       ProjectService projectAccess) {
         this.service = service;
         this.exportService = exportService;
+        this.projectAccess = projectAccess;
+    }
+
+    public ProjectExperimentController(ExperimentService service, ExperimentExportService exportService) {
+        this(service, exportService, null);
+    }
+
+    @ModelAttribute
+    void requireProjectAccess(@PathVariable("projectId") UUID projectId) {
+        if (projectAccess != null) projectAccess.get(projectId);
     }
 
     @GetMapping

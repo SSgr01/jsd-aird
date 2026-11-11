@@ -12,6 +12,10 @@ import { formatTime } from '@/utils/date';
 import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
 import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
 import { downloadBlob } from '@/services/files/file-api';
+import { Can } from '@/components/auth/Can';
+import { usePermission } from '@/components/auth/usePermission';
+import { WorkspaceReviewActions } from '@/components/workspace-review/WorkspaceReviewActions';
+import type { WorkspaceReviewState } from '@/services/reviews/workspace-review-api';
 
 const SheetsEditor = lazy(async () => ({ default: (await import('@/features/template-workspace/UniverSheetsEditor')).UniverSheetsEditor }));
 const DocsEditor = lazy(async () => ({ default: (await import('@/features/template-workspace/UniverDocsEditor')).UniverDocsEditor }));
@@ -66,11 +70,13 @@ export function ProjectDocumentWorkspacePage() {
   const [mapping, setMapping] = useState<TemplateBinding[]>([]);
   const [data, setData] = useState<Record<string, unknown>>({});
   const [documentStructure, setDocumentStructure] = useState<DocumentStructure>();
-  const [view, setView] = useState<'preview' | 'edit' | 'versions'>('edit');
+  const canUpdate = usePermission('project.document.update');
+  const [view, setView] = useState<'preview' | 'edit' | 'versions'>(canUpdate ? 'edit' : 'preview');
   const [error, setError] = useState<string>();
   const [versions, setVersions] = useState<ProjectDocumentVersion[]>([]);
   const [versionLoading, setVersionLoading] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>('SAVED');
+  const [reviewStatus, setReviewStatus] = useState<WorkspaceReviewState['status']>();
   const [selectedVersion, setSelectedVersion] = useState<ProjectDocumentVersion>();
 
   useEffect(() => {
@@ -91,12 +97,12 @@ export function ProjectDocumentWorkspacePage() {
             const template = await templateApi.getEditModel(doc.templateVersionId);
             nextStructure = template.documentStructure;
             nextSnapshot = template.snapshotFileId && template.snapshotHash
-              ? await templateApi.downloadSnapshot(template.snapshotFileId)
+              ? await templateApi.downloadSnapshot(template.versionId)
               : template.inlineSnapshot ?? {};
             nextSchema = template.schema;
             nextMapping = template.mapping;
             nextData = template.data ?? {};
-            await projectDocumentApi.saveContent(projectId, documentId, { snapshot: nextSnapshot, schema: nextSchema, mapping: nextMapping, data: nextData });
+            if (canUpdate) await projectDocumentApi.saveContent(projectId, documentId, { snapshot: nextSnapshot, schema: nextSchema, mapping: nextMapping, data: nextData });
           } catch (snapshotError) {
             // 模板快照对象存储读取失败时降级为空白模板，保证页面可打开
             console.warn('模板快照加载失败，降级为空白文档', snapshotError);
@@ -113,7 +119,7 @@ export function ProjectDocumentWorkspacePage() {
           const looksExcel = doc.format === 'XLSX'
             || lowerTitle.endsWith('.xlsx') || lowerTitle.endsWith('.xls');
           nextSnapshot = blankSnapshot(looksExcel ? 'XLSX' : 'DOCX', doc.id, doc.title);
-          await projectDocumentApi.saveContent(projectId, documentId, {
+          if (canUpdate) await projectDocumentApi.saveContent(projectId, documentId, {
             snapshot: nextSnapshot,
             schema: nextSchema,
             mapping: nextMapping,
@@ -123,12 +129,12 @@ export function ProjectDocumentWorkspacePage() {
         if (!active) return;
         setDocument(doc); setVersions(history); setSnapshot(nextSnapshot ?? {}); setSchema(nextSchema); setMapping(nextMapping); setData(nextData); setDocumentStructure(nextStructure);
         setSelectedVersion(undefined);
-        setView('edit');
+        setView(canUpdate && doc.status !== 'ARCHIVED' ? 'edit' : 'preview');
         setSaveState('SAVED');
       } catch (reason) { if (active) setError(reason instanceof Error ? reason.message : '项目文档加载失败'); }
     })();
     return () => { active = false; };
-  }, [documentId, projectId]);
+  }, [documentId, projectId, canUpdate]);
 
   const save = async () => {
     if (!document) return;
@@ -183,6 +189,7 @@ export function ProjectDocumentWorkspacePage() {
   };
 
   const changeView = (key: 'preview' | 'edit' | 'versions') => {
+    if (key === 'edit' && (!canUpdate || document?.status === 'ARCHIVED')) return;
     if (saveState !== 'SAVED' && key === 'versions') {
       message.warning('当前内容尚未保存，请先保存后再查看版本记录');
       return;
@@ -211,14 +218,14 @@ export function ProjectDocumentWorkspacePage() {
   if (error) return <Result status="error" title="项目文档加载失败" subTitle={error} />;
   if (!document || !snapshot) return <Skeleton active paragraph={{ rows: 12 }} />;
   const word = document.format === 'DOCX';
-  const editable = document.status !== 'ARCHIVED' && view === 'edit' && !selectedVersion;
+  const editable = canUpdate && document.status !== 'ARCHIVED' && view === 'edit' && !selectedVersion;
   return <WorkspaceFrame maximizable className="workspace-shell template-business-workspace project-document-workspace">
     <header className="workspace-header"><div className="workspace-identity">
       <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate(`/projects/${projectId}?section=documents`)}>返回</Button>
       <div className="workspace-title-block"><Typography.Text type="secondary" className="workspace-breadcrumb">项目管理 / 项目文档</Typography.Text><h1 className="workspace-document-title" title={document.title}>{document.title}</h1></div>
       <Tag color="blue">{versions.length ? `V${versions[0]?.versionNo ?? ''}` : '未发布'}</Tag>
-    </div><Space wrap><SaveStateBadge state={saveState} /><Button icon={<DownloadOutlined />} onClick={() => void exportDocument()}>导出</Button>{document.status !== 'ARCHIVED' && <Button type={saveState === 'SAVED' ? 'default' : 'primary'} className="workspace-save-button" icon={<SaveOutlined />} loading={saveState === 'SAVING'} disabled={!editable} onClick={() => void save()}>保存草稿</Button>}{document.status !== 'ARCHIVED' && <Button type="primary" className="workspace-publish-button" icon={<CloudUploadOutlined />} loading={saveState === 'SAVING'} disabled={!editable || saveState !== 'SAVED'} onClick={() => void publish()}>发布</Button>}<WorkspaceMaximizeButton /></Space></header>
-    <nav className="workspace-view-tabs"><Tabs activeKey={view} onChange={(key) => changeView(key as 'preview' | 'edit' | 'versions')} items={[{ key: 'preview', label: <><EyeOutlined /> 预览</> }, { key: 'edit', label: '编辑', disabled: document.status === 'ARCHIVED' }, { key: 'versions', label: <><HistoryOutlined /> 版本记录</> }]} /></nav>
+    </div><Space wrap><SaveStateBadge state={saveState} /><Can permission="project.document.view"><Button icon={<DownloadOutlined />} onClick={() => void exportDocument()}>导出</Button></Can>{document.status !== 'ARCHIVED' && <WorkspaceReviewActions type="PROJECT_DOCUMENT" id={documentId} saved={saveState === 'SAVED'} enabled={!selectedVersion} onStatusChange={setReviewStatus} />}{document.status !== 'ARCHIVED' && <Can permission="project.document.update"><Button type="primary" className="workspace-save-button" icon={<SaveOutlined />} loading={saveState === 'SAVING'} disabled={!editable} onClick={() => void save()}>保存草稿</Button></Can>}{document.status !== 'ARCHIVED' && <Can permission="project.document.publish"><Button type="primary" className="workspace-publish-button" icon={<CloudUploadOutlined />} loading={saveState === 'SAVING'} disabled={view !== 'edit' || Boolean(selectedVersion) || saveState !== 'SAVED' || reviewStatus !== 'APPROVED'} onClick={() => void publish()}>发布</Button></Can>}<WorkspaceMaximizeButton /></Space></header>
+    <nav className="workspace-view-tabs"><Tabs activeKey={view} onChange={(key) => changeView(key as 'preview' | 'edit' | 'versions')} items={[{ key: 'preview', label: <><EyeOutlined /> 预览</> }, { key: 'edit', label: '编辑', disabled: !canUpdate || document.status === 'ARCHIVED' }, { key: 'versions', label: <><HistoryOutlined /> 版本记录</> }]} /></nav>
     <div className="workspace-main-stage">
       {view === 'versions' ? (
         <main className="workspace-canvas project-versions-panel">

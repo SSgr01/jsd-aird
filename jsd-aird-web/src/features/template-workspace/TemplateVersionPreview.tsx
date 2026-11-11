@@ -45,7 +45,7 @@ export default function TemplateVersionPreview({ versionId, height = 560 }: Prop
         preloadWorkspaceEditor(model.format);
         const loaded =
           model.snapshotFileId && model.snapshotHash
-            ? await trackSnapshot(templateApi.downloadSnapshot(model.snapshotFileId))
+            ? await trackSnapshot(templateApi.downloadSnapshot(model.versionId))
             : (model.inlineSnapshot ?? {});
         if (model.format === 'DOCX' && snapshotVersion(loaded, 0) < 5) {
           throw new Error('该 Word 模板使用旧编辑快照，请在模板中心重新导入原始 DOCX 后再查看');

@@ -1,6 +1,10 @@
 package com.jsd.aird.iam.application;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import com.jsd.aird.iam.api.PermissionDefinitionContributor.PermissionDefinition;
 
@@ -14,11 +18,29 @@ public final class IamPermissionCatalog {
 
     private IamPermissionCatalog() { }
 
+    /**
+     * Every code an administrator can hand out through the permission UI. Shared by
+     * the authorization fallback so a page-scoped grant is never offered for a code
+     * that the catalog does not define.
+     */
+    public static Set<String> codes() {
+        return Codes.ALL;
+    }
+
+    private static final class Codes {
+        private static final Set<String> ALL = definitions().stream()
+                .map(PermissionDefinition::code)
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
     public static List<PermissionDefinition> definitions() {
-        return List.of(
+        var definitions = new ArrayList<>(List.of(
                 // System administration is intentionally outside this atomic business-permission migration.
                 p("system.user.view", "system", "查看用户", "HIGH", "ALL"),
                 p("system.user.manage", "system", "管理用户", "CRITICAL", "ALL"),
+                p("system.users.status", "system", "启用或停用用户", "HIGH", "ALL"),
+                p("system.users.reset", "system", "重置用户密码", "CRITICAL", "ALL"),
+                p("system.users.logout", "system", "强制用户下线", "HIGH", "ALL"),
                 p("system.role.view", "system", "查看角色", "HIGH", "ALL"),
                 p("system.role.create", "system", "创建角色", "CRITICAL", "ALL"),
                 p("system.role.manage", "system", "管理角色", "CRITICAL", "ALL"),
@@ -30,7 +52,31 @@ public final class IamPermissionCatalog {
                 p("customer.view", "customer", "查看客户", "LOW", "ALL"),
                 p("customer.create", "customer", "新建客户", "MEDIUM", "SELF"),
                 p("customer.update", "customer", "编辑客户", "MEDIUM", "SELF"),
+                p("customer.copy", "customer", "复制客户", "MEDIUM", "ALL"),
                 p("customer.delete", "customer", "删除客户资料", "HIGH", "SELF"),
+                p("customer.export", "customer", "导出客户", "HIGH", "ALL"),
+                p("customer.link", "customer", "关联客户需求", "MEDIUM", "SELF"),
+                p("customer.unlink", "customer", "解除客户关联", "HIGH", "SELF"),
+                p("customer.list.view", "customer", "查看客户列表", "LOW", "ALL"),
+                p("customer.list.create", "customer", "新增客户", "MEDIUM", "SELF"),
+                p("customer.list.update", "customer", "编辑客户列表", "MEDIUM", "SELF"),
+                p("customer.list.delete", "customer", "删除客户", "HIGH", "SELF"),
+                p("customer.overview.view", "customer", "查看客户概览", "LOW", "ALL"),
+                p("customer.overview.create", "customer", "新增负责人", "MEDIUM", "SELF"),
+                p("customer.overview.update", "customer", "编辑客户概览", "MEDIUM", "SELF"),
+                p("customer.overview.delete", "customer", "删除负责人", "HIGH", "SELF"),
+                p("customer.needs.view", "customer", "查看客户需求", "LOW", "ALL"),
+                p("customer.needs.create", "customer", "新增客户需求", "MEDIUM", "SELF"),
+                p("customer.needs.update", "customer", "编辑客户需求", "MEDIUM", "SELF"),
+                p("customer.needs.delete", "customer", "删除客户需求", "HIGH", "SELF"),
+                p("customer.projects.view", "customer", "查看关联项目", "LOW", "ALL"),
+                p("customer.projects.create", "customer", "新增关联项目", "MEDIUM", "SELF"),
+                p("customer.projects.update", "customer", "编辑关联项目", "MEDIUM", "SELF"),
+                p("customer.projects.delete", "customer", "删除关联项目", "HIGH", "SELF"),
+                p("customer.followup.view", "customer", "查看跟进记录", "LOW", "ALL"),
+                p("customer.followup.create", "customer", "新增跟进记录", "MEDIUM", "SELF"),
+                p("customer.followup.update", "customer", "编辑跟进记录", "MEDIUM", "SELF"),
+                p("customer.followup.delete", "customer", "删除跟进记录", "HIGH", "SELF"),
 
                 p("project.view", "project", "查看项目", "LOW", "ALL"),
                 p("project.export", "project", "导出项目", "HIGH", "ALL"),
@@ -39,6 +85,33 @@ public final class IamPermissionCatalog {
                 p("project.copy", "project", "复制项目", "MEDIUM", "SELF"),
                 p("project.delete", "project", "删除项目", "HIGH", "SELF"),
                 p("project.assign", "project", "关联项目资料/分配项目成员", "HIGH", "PROJECT"),
+                p("project.list.create", "project", "新建项目", "MEDIUM", "SELF"),
+                p("project.list.update", "project", "编辑项目", "MEDIUM", "SELF"),
+                p("project.list.delete", "project", "删除项目", "HIGH", "SELF"),
+                p("project.list.import", "project", "导入项目", "MEDIUM", "SELF"),
+                p("project.list.copy", "project", "复制项目", "MEDIUM", "SELF"),
+                p("project.list.export", "project", "导出项目", "HIGH", "ALL"),
+                p("project.stage.create", "project", "新增阶段", "MEDIUM", "SELF"),
+                p("project.stage.update", "project", "编辑阶段", "MEDIUM", "SELF"),
+                p("project.stage.delete", "project", "删除阶段", "HIGH", "SELF"),
+                p("project.task.create", "project", "新增任务", "MEDIUM", "SELF"),
+                p("project.task.update", "project", "编辑任务", "MEDIUM", "SELF"),
+                p("project.task.delete", "project", "删除任务", "HIGH", "SELF"),
+                p("project.document.create", "project", "新建项目文档", "MEDIUM", "SELF"),
+                p("project.document.update", "project", "编辑项目文档", "MEDIUM", "SELF"),
+                p("project.document.delete", "project", "删除项目文档", "HIGH", "SELF"),
+                p("project.document.download", "project", "下载项目文档", "MEDIUM", "ALL"),
+                p("project.document.export", "project", "导出项目文档", "HIGH", "ALL"),
+                p("project.document.publish", "project", "发布项目文档", "HIGH", "SELF"),
+                p("project.customer-needs.create", "project", "新增客户需求", "MEDIUM", "SELF"),
+                p("project.customer-needs.update", "project", "编辑客户需求", "MEDIUM", "SELF"),
+                p("project.customer-needs.delete", "project", "删除客户需求", "HIGH", "SELF"),
+                p("project.reference.update", "project", "移除或恢复资料参考", "MEDIUM", "SELF"),
+                p("project.meeting.create", "project", "新增会议纪要", "MEDIUM", "SELF"),
+                p("project.meeting.update", "project", "编辑会议纪要", "MEDIUM", "SELF"),
+                p("project.meeting.delete", "project", "删除会议纪要", "HIGH", "SELF"),
+                p("project.meeting.archive", "project", "归档会议纪要到知识库", "HIGH", "SELF"),
+                p("project.materials.download", "project", "下载关联资料", "MEDIUM", "ALL"),
 
                 p("template.view", "template", "查看模板", "LOW", "ALL"),
                 p("template.create", "template", "新建模板", "MEDIUM", "SELF"),
@@ -47,10 +120,21 @@ public final class IamPermissionCatalog {
                 p("template.copy", "template", "复制模板", "MEDIUM", "ALL"),
                 p("template.recognition", "template", "识别与复核模板字段", "HIGH", "ALL"),
                 p("template.review", "template", "提交/通过/驳回模板审核", "HIGH", "ALL"),
+                p("template.approve", "template", "审核模板", "HIGH", "ALL"),
                 p("template.publish", "template", "发布模板", "HIGH", "ALL"),
+                p("template.disable", "template", "停用模板", "HIGH", "ALL"),
+                p("template.retry", "template", "重试模板处理", "MEDIUM", "ALL"),
                 p("template.rollback", "template", "回退历史模板版本", "HIGH", "ALL"),
                 p("template.delete", "template", "删除/停用模板", "CRITICAL", "ALL"),
                 p("template.export", "template", "导出模板", "HIGH", "ALL"),
+                p("template.view.copy", "template", "复制模板", "MEDIUM", "SELF"),
+                p("template.view.disable", "template", "停用模板", "HIGH", "SELF"),
+                p("template.view.export", "template", "导出模板", "HIGH", "ALL"),
+                p("template.view.submit", "template", "提交模板审核", "MEDIUM", "SELF"),
+                p("template.view.review", "template", "驳回模板审核", "HIGH", "ASSIGNED"),
+                p("template.upload.download", "template", "下载模板上传原文件", "HIGH", "ALL"),
+                p("template.upload.retry", "template", "重试模板识别", "MEDIUM", "SELF"),
+                p("template.upload.delete", "template", "删除模板上传记录", "HIGH", "SELF"),
                 p("category.create", "template", "新建模板分类", "MEDIUM", "ALL"),
                 p("category.update", "template", "编辑模板分类", "MEDIUM", "ALL"),
                 p("category.delete", "template", "删除模板分类", "HIGH", "ALL"),
@@ -62,6 +146,14 @@ public final class IamPermissionCatalog {
                 p("experiment.submit", "experiment", "提交实验审核", "MEDIUM", "SELF"),
                 p("experiment.approve", "experiment", "通过实验审核", "HIGH", "ASSIGNED"),
                 p("experiment.review", "experiment", "退回/作废实验记录", "HIGH", "ASSIGNED"),
+                p("eln.view.copy", "experiment", "复制实验记录", "MEDIUM", "SELF"),
+                p("eln.view.export", "experiment", "导出实验记录", "HIGH", "ALL"),
+                p("eln.view.download", "experiment", "下载实验文件", "HIGH", "ALL"),
+                p("eln.view.submit", "experiment", "提交实验审核", "MEDIUM", "SELF"),
+                p("eln.view.review", "experiment", "退回实验修改", "HIGH", "ASSIGNED"),
+                p("eln.upload.delete", "experiment", "删除实验导入记录", "HIGH", "SELF"),
+                p("eln.upload.retry", "experiment", "重试实验文件导入", "MEDIUM", "SELF"),
+                p("eln.upload.download", "experiment", "下载实验导入原文件", "HIGH", "ALL"),
 
                 p("research-test.report.view", "research-test", "查看综合测试报告", "LOW", "ALL"),
                 p("research-test.report.create", "research-test", "新建综合测试报告", "MEDIUM", "SELF"),
@@ -79,6 +171,20 @@ public final class IamPermissionCatalog {
                 p("research-test.standard.approve", "research-test", "审核测试标准", "HIGH", "ASSIGNED"),
                 p("research-test.standard.publish", "research-test", "发布测试标准", "HIGH", "ASSIGNED"),
                 p("research-test.standard.export", "research-test", "导出测试标准", "MEDIUM", "ALL"),
+                p("research-test.report.view.copy", "research-test", "复制综合测试报告", "MEDIUM", "SELF"),
+                p("research-test.report.view.download", "research-test", "下载综合测试报告", "MEDIUM", "ALL"),
+                p("research-test.report.view.export", "research-test", "导出综合测试报告", "HIGH", "ALL"),
+                p("research-test.report.view.submit", "research-test", "提交综合测试报告审核", "MEDIUM", "SELF"),
+                p("research-test.report.view.archive", "research-test", "归档综合测试报告", "HIGH", "SELF"),
+                p("research-test.standard.copy", "research-test", "复制测试标准", "MEDIUM", "SELF"),
+                p("research-test.standard.download", "research-test", "下载测试标准", "MEDIUM", "ALL"),
+                p("research-test.standard.archive", "research-test", "归档测试标准", "HIGH", "SELF"),
+                p("research-test.report.upload.download", "research-test", "下载报告上传原文件", "HIGH", "ALL"),
+                p("research-test.report.upload.retry", "research-test", "重试报告上传", "MEDIUM", "SELF"),
+                p("research-test.report.upload.delete", "research-test", "删除报告上传记录", "HIGH", "SELF"),
+                p("research-test.standard.upload.download", "research-test", "下载标准上传原文件", "HIGH", "ALL"),
+                p("research-test.standard.upload.retry", "research-test", "重试标准上传", "MEDIUM", "SELF"),
+                p("research-test.standard.upload.delete", "research-test", "删除标准上传记录", "HIGH", "SELF"),
 
                 p("production.view", "production", "查看生产单", "LOW", "ALL"),
                 p("production.create", "production", "新建生产单", "MEDIUM", "SELF"),
@@ -87,6 +193,14 @@ public final class IamPermissionCatalog {
                 p("production.submit", "production", "提交生产单", "HIGH", "SELF"),
                 p("production.cancel", "production", "取消生产单", "HIGH", "ASSIGNED"),
                 p("production.export", "production", "导出生产单", "HIGH", "ALL"),
+                p("production.view.copy", "production", "复制生产单", "MEDIUM", "SELF"),
+                p("production.view.export", "production", "导出生产单列表", "HIGH", "ALL"),
+                p("production.view.download", "production", "下载生产单", "HIGH", "ALL"),
+                p("production.view.submit", "production", "提交生产单", "HIGH", "SELF"),
+                p("production.view.approve", "production", "审核生产单", "HIGH", "ASSIGNED"),
+                p("production.upload.download", "production", "下载生产单上传原文件", "HIGH", "ALL"),
+                p("production.upload.retry", "production", "重试生产单识别", "MEDIUM", "SELF"),
+                p("production.upload.delete", "production", "删除生产单上传记录", "HIGH", "SELF"),
 
                 p("quotation.view", "quotation", "查看报价记录", "LOW", "ALL"),
                 p("quotation.create", "quotation", "上传报价记录", "MEDIUM", "SELF"),
@@ -96,16 +210,24 @@ public final class IamPermissionCatalog {
                 p("quotation.delete", "quotation", "删除报价记录", "HIGH", "SELF"),
 
                 p("knowledge.view", "knowledge", "查看知识文档", "LOW", "ALL"),
+                p("knowledge.view.submit", "knowledge", "提交知识文档审核", "MEDIUM", "SELF"),
+                p("knowledge.view.approve", "knowledge", "审核知识文档", "HIGH", "ASSIGNED"),
                 p("knowledge.upload", "knowledge", "上传知识文档", "MEDIUM", "SELF"),
                 p("knowledge.create", "knowledge", "新建知识文档", "MEDIUM", "SELF"),
                 p("knowledge.update", "knowledge", "编辑/移动知识文档", "MEDIUM", "SELF"),
                 p("knowledge.delete", "knowledge", "删除知识文档", "HIGH", "SELF"),
                 p("knowledge.submit", "knowledge", "提交知识文档审核", "MEDIUM", "SELF"),
                 p("knowledge.review", "knowledge", "审核/驳回知识文档", "HIGH", "ASSIGNED"),
+                p("knowledge.review.update", "knowledge", "校对知识识别内容", "MEDIUM", "ASSIGNED"),
+                p("knowledge.review.reject", "knowledge", "驳回知识识别结果", "HIGH", "ASSIGNED"),
+                p("knowledge.review.publish", "knowledge", "确认发布知识识别结果", "HIGH", "ASSIGNED"),
                 p("knowledge.approve", "knowledge", "通过知识文档审核", "HIGH", "ASSIGNED"),
                 p("knowledge.publish", "knowledge", "发布知识文档", "HIGH", "ALL"),
                 p("knowledge.export", "knowledge", "导出知识文档", "HIGH", "ALL"),
                 p("knowledge.download", "knowledge", "下载知识文档", "HIGH", "ALL"),
+                p("knowledge.upload.download", "knowledge", "下载知识上传原文件", "HIGH", "ALL"),
+                p("knowledge.upload.retry", "knowledge", "重试知识文件上传", "MEDIUM", "SELF"),
+                p("knowledge.upload.delete", "knowledge", "删除知识上传记录", "HIGH", "SELF"),
                 p("data.view", "data", "查看数据", "LOW", "ALL"),
                 p("data.create", "data", "新建/导入数据任务", "MEDIUM", "SELF"),
                 p("data.update", "data", "编辑数据任务", "MEDIUM", "SELF"),
@@ -114,6 +236,14 @@ public final class IamPermissionCatalog {
                 p("data.approve", "data", "审核训练数据", "HIGH", "ASSIGNED"),
                 p("data.export", "data", "导出数据", "HIGH", "ALL"),
                 p("data.download", "data", "下载数据", "HIGH", "ALL"),
+                p("data.view.download", "data", "下载数据来源文件", "HIGH", "ALL"),
+                p("data.view.submit", "data", "提交数据审核", "MEDIUM", "SELF"),
+                p("data.upload.submit", "data", "提交导入数据审核", "MEDIUM", "SELF"),
+                p("data.upload.approve", "data", "审核导入数据", "HIGH", "ASSIGNED"),
+                p("data.upload.publish", "data", "发布导入数据", "HIGH", "ASSIGNED"),
+                p("data.upload.download", "data", "下载数据导入原文件", "HIGH", "ALL"),
+                p("data.upload.retry", "data", "重试数据导入", "MEDIUM", "SELF"),
+                p("data.upload.delete", "data", "删除数据导入记录", "HIGH", "SELF"),
 
                 p("quality.view", "quality", "查看品管数据", "LOW", "ALL"),
                 p("quality.upload", "quality", "上传品管源文件", "MEDIUM", "ALL"),
@@ -122,11 +252,32 @@ public final class IamPermissionCatalog {
                 p("quality.delete", "quality", "删除品管数据", "HIGH", "ALL"),
                 p("quality.publish", "quality", "发布品管版本", "HIGH", "ALL"),
                 p("quality.export", "quality", "导出品管数据", "HIGH", "ALL"),
+                p("quality.view.copy", "quality", "复制品管数据", "MEDIUM", "ALL"),
+                p("quality.view.download", "quality", "下载品管源文件", "HIGH", "ALL"),
+                p("quality.view.export", "quality", "导出品管数据", "HIGH", "ALL"),
+                p("quality.upload.download", "quality", "下载品管上传原文件", "HIGH", "ALL"),
+                p("quality.upload.retry", "quality", "重试品管文件解析", "MEDIUM", "ALL"),
+                p("quality.upload.delete", "quality", "删除品管上传记录", "HIGH", "ALL"),
 
                 p("inventory.view", "inventory", "查看库存", "LOW", "ALL"),
                 p("inventory.create", "inventory", "新增库存业务", "MEDIUM", "ALL"),
                 p("inventory.update", "inventory", "维护库存策略", "MEDIUM", "ALL"),
                 p("inventory.reverse", "inventory", "冲销库存流水", "HIGH", "ALL"),
+                p("inventory.query.update", "inventory", "维护库存查询策略", "MEDIUM", "ALL"),
+                p("inventory.rnd.reverse", "inventory", "冲销研发库存流水", "HIGH", "ALL"),
+                p("inventory.rnd.import", "inventory", "导入研发库存流水", "MEDIUM", "ALL"),
+                p("inventory.rnd.export", "inventory", "导出研发库存流水", "HIGH", "ALL"),
+                p("inventory.rnd.download", "inventory", "下载研发库存模板", "MEDIUM", "ALL"),
+                p("inventory.production.reverse", "inventory", "冲销生产库存流水", "HIGH", "ALL"),
+                p("inventory.production.import", "inventory", "导入生产库存流水", "MEDIUM", "ALL"),
+                p("inventory.production.export", "inventory", "导出生产库存流水", "HIGH", "ALL"),
+                p("inventory.production.download", "inventory", "下载生产库存模板", "MEDIUM", "ALL"),
+                p("inventory.sample.import", "inventory", "导入发样记录", "MEDIUM", "ALL"),
+                p("inventory.sample.export", "inventory", "导出发样记录", "HIGH", "ALL"),
+                p("inventory.sample.download", "inventory", "下载发样模板", "MEDIUM", "ALL"),
+                p("inventory.shipment.import", "inventory", "导入出货记录", "MEDIUM", "ALL"),
+                p("inventory.shipment.export", "inventory", "导出出货记录", "HIGH", "ALL"),
+                p("inventory.shipment.download", "inventory", "下载出货模板", "MEDIUM", "ALL"),
 
                 p("spectrum.view", "spectrum", "查看谱图/图谱", "LOW", "ALL"),
                 p("spectrum.create", "spectrum", "新建图谱", "MEDIUM", "SELF"),
@@ -134,7 +285,14 @@ public final class IamPermissionCatalog {
                 p("spectrum.delete", "spectrum", "删除图谱", "HIGH", "SELF"),
                 p("spectrum.export", "spectrum", "导出图谱", "HIGH", "ALL"),
                 p("spectrum.download", "spectrum", "下载谱图数据", "HIGH", "ALL"),
+                p("spectrum.view.export", "spectrum", "导出图谱", "HIGH", "ALL"),
+                p("spectrum.view.download", "spectrum", "下载图谱源文件", "HIGH", "ALL"),
+                p("spectrum.ai.delete", "spectrum", "删除图谱分析对话", "HIGH", "SELF"),
                 p("ai.use", "ai", "使用 AI 能力", "MEDIUM", "ALL"),
+                p("ai.qa.create", "ai", "新建AI问答", "MEDIUM", "SELF"),
+                p("ai.qa.update", "ai", "编辑AI对话", "MEDIUM", "SELF"),
+                p("ai.qa.delete", "ai", "删除AI对话", "HIGH", "SELF"),
+                p("ai.qa.download", "ai", "下载AI引用文件", "HIGH", "ALL"),
                 p("ai.modeling.read", "ai", "使用建模工具", "LOW", "ALL"),
                 p("ai.model.read", "ai", "查看模型", "LOW", "ALL"),
                 p("ai.performance.predict", "ai", "性能预测", "MEDIUM", "ALL"),
@@ -149,10 +307,81 @@ public final class IamPermissionCatalog {
                 p("ops.file.view", "ops", "查看文件", "LOW", "ALL"),
                 p("ops.file.upload", "ops", "上传文件", "MEDIUM", "SELF"),
                 p("ops.file.download", "ops", "下载文件", "HIGH", "ALL")
-        );
+        ));
+        var existing = definitions.stream().map(PermissionDefinition::code).collect(Collectors.toSet());
+        PermissionModelCatalog.menus().stream().filter(menu -> menu.parent() != null).forEach(menu -> {
+            var module = "eln".equals(menu.parent()) ? "experiment" : menu.parent();
+            var actions = PAGE_ACTIONS.getOrDefault(menu.key(), "view");
+            for (var action : actions.split(",")) {
+                var code = menu.key() + "." + action;
+                if (existing.add(code)) definitions.add(p(code, module,
+                        ("project.meeting".equals(menu.key()) && "publish".equals(action) ? "归档" : ACTION_NAMES.get(action)) + menu.label(),
+                        "view".equals(action) ? ("system".equals(menu.parent()) ? "HIGH" : "LOW")
+                                : Set.of("delete", "approve", "publish").contains(action) ? "HIGH" : "MEDIUM",
+                        "view".equals(action) || "publish".equals(action) ? "ALL"
+                                : "approve".equals(action) ? "ASSIGNED" : "SELF"));
+            }
+        });
+        return List.copyOf(definitions);
     }
 
+    private static final Map<String, String> ACTION_NAMES = Map.of(
+            "view", "查看", "create", "新增", "update", "编辑", "delete", "删除",
+            "submit", "提交审核", "approve", "审核", "publish", "发布");
+
+    // Only actions supported by each feature are registered; the UI displays registered codes.
+    private static final Map<String, String> PAGE_ACTIONS = Map.ofEntries(
+            Map.entry("template.upload", "view,create"),
+            Map.entry("template.view", "view,create,update,delete,submit,approve,publish"),
+            Map.entry("template.category", "view,create,update,delete"),
+            Map.entry("project.list", "view,create,update,delete"),
+            Map.entry("project.stage", "view,create,update,delete"),
+            Map.entry("project.task", "view,create,update,delete"),
+            Map.entry("project.document", "view,create,update,delete,submit,approve,publish"),
+            Map.entry("project.customer-needs", "view,create,update,delete"),
+            Map.entry("project.reference", "view,update"),
+            Map.entry("project.meeting", "view,create,update,delete,publish"),
+            Map.entry("project.log", "view"),
+            Map.entry("project.materials", "view"),
+            Map.entry("eln.create", "view,create"),
+            Map.entry("eln.upload", "view,create"),
+            Map.entry("eln.view", "view,create,update,delete,submit,approve,publish"),
+            Map.entry("eln.category", "view,create,update,delete"),
+            Map.entry("research-test.report.upload", "view,create"),
+            Map.entry("research-test.report.view", "view,create,update,delete,submit,approve,publish"),
+            Map.entry("research-test.standard.upload", "view,create"),
+            Map.entry("research-test.standard", "view,create,update,delete,submit,approve,publish"),
+            Map.entry("quality.upload", "view,create"),
+            Map.entry("quality.view", "view,create,update,delete,submit,approve,publish"),
+            Map.entry("quality.category", "view,create,update,delete"),
+            Map.entry("spectrum.upload", "view,create,delete"),
+            Map.entry("spectrum.view", "view,create,update,delete"),
+            Map.entry("spectrum.ai", "view,create,update"),
+            Map.entry("spectrum.category", "view,create,update,delete"),
+            Map.entry("production.upload", "view,create"),
+            Map.entry("production.view", "view,create,update,delete,submit,approve,publish"),
+            Map.entry("ai.formula", "view,create,update,delete"),
+            Map.entry("ai.analysis", "view,create,update,delete"),
+            Map.entry("ai.optimization", "view,create,update,delete"),
+            Map.entry("ai.model", "view,create,update,delete,publish"),
+            Map.entry("knowledge.review", "view,approve"),
+            Map.entry("knowledge.upload", "view,create,delete"),
+            Map.entry("knowledge.view", "view,create,update,delete,approve,publish"),
+            Map.entry("knowledge.category", "view,create,update,delete"),
+            Map.entry("data.upload", "view,create,delete"),
+            Map.entry("data.view", "view,create,update,delete,approve,publish"),
+            Map.entry("data.category", "view,create,update,delete"),
+            Map.entry("inventory.rnd", "view,create,update,delete"),
+            Map.entry("inventory.production", "view,create,update,delete"),
+            Map.entry("inventory.sample", "view,create,update,delete"),
+            Map.entry("inventory.shipment", "view,create,update,delete"),
+            Map.entry("system.users", "view,create,update,delete"),
+            Map.entry("system.permissions", "view,create,update,delete"),
+            Map.entry("system.dictionary", "view,create,update,delete"),
+            Map.entry("system.parameters", "view,create,update,delete"));
+
     private static PermissionDefinition p(String code, String module, String name, String risk, String scope) {
-        return new PermissionDefinition(code, module, name, risk, scope);
+        // Keep the catalog's data-scope default consistent across every page operation.
+        return new PermissionDefinition(code, module, name, risk, "ALL");
     }
 }

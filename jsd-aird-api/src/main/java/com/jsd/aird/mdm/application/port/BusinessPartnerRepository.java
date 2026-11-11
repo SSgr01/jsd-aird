@@ -5,6 +5,7 @@ import com.jsd.aird.mdm.api.PartnerStatus;
 import com.jsd.aird.mdm.api.PartnerCommands;
 import com.jsd.aird.mdm.domain.model.*;
 import com.jsd.aird.shared.api.PageResponse;
+import com.jsd.aird.iam.api.DataScopeResolver.ResolvedDataScope;
 
 import java.util.List;
 import java.util.Optional;
@@ -15,6 +16,12 @@ public interface BusinessPartnerRepository {
     PageResponse<BusinessPartner> findPage(String keyword, String industry, String customerLevel,
                                            String cooperationStatus, String owner, PartnerStatus status,
                                            int page, int size);
+
+    default PageResponse<BusinessPartner> findPage(String keyword, String industry, String customerLevel,
+            String cooperationStatus, String owner, PartnerStatus status, int page, int size,
+            UUID organizationId, UUID userId, ResolvedDataScope scope) {
+        return findPage(keyword, industry, customerLevel, cooperationStatus, owner, status, page, size);
+    }
 
     Optional<BusinessPartner> findById(UUID id);
 

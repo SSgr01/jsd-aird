@@ -116,7 +116,7 @@ public class JdbcProjectDocumentRepository implements ProjectDocumentRepository 
                     id, project_id, title, format, source,
                     template_id, template_version_id, file_object_id, status,
                     current_version_id, version, created_at, created_by, updated_at, updated_by, deleted
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, now(), ?, now(), ?, false)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, now(), ?::uuid, now(), ?::uuid, false)
                 """,
                 id,
                 cmd.projectId(),
@@ -134,7 +134,7 @@ public class JdbcProjectDocumentRepository implements ProjectDocumentRepository 
         jdbc.update("""
                 INSERT INTO mdm.project_document_version (
                     id, document_id, version_no, status, content_jsonb, created_by, created_at
-                ) VALUES (?, ?, 1, ?, ?::jsonb, ?, now())
+                ) VALUES (?, ?, 1, ?, ?::jsonb, ?::uuid, now())
                 """, versionId, id, cmd.status().name(), "{}".toString(), cmd.createdBy());
         return id;
     }
@@ -143,7 +143,7 @@ public class JdbcProjectDocumentRepository implements ProjectDocumentRepository 
     public void delete(UUID id, String updatedBy) {
         var sql = """
                 UPDATE mdm.project_document
-                SET deleted = true, version = version + 1, updated_at = now(), updated_by = ?
+                SET deleted = true, version = version + 1, updated_at = now(), updated_by = ?::uuid
                 WHERE id = ? AND deleted = false
                 """;
         jdbc.update(sql, updatedBy, id);
@@ -158,7 +158,7 @@ public class JdbcProjectDocumentRepository implements ProjectDocumentRepository 
                 SET content_snapshot = ?::jsonb, content_schema = ?::jsonb,
                     content_mapping = ?::jsonb, content_data = ?::jsonb,
                     content_recognition = ?::jsonb,
-                    version = version + 1, updated_at = now(), updated_by = ?
+                    version = version + 1, updated_at = now(), updated_by = ?::uuid
                 WHERE id = ? AND deleted = false
                 """, snapshot.toString(), schema.toString(), mapping.toString(), data.toString(),
                 recognition.toString(), updatedBy, id);
@@ -243,7 +243,7 @@ public class JdbcProjectDocumentRepository implements ProjectDocumentRepository 
                 INSERT INTO mdm.project_document_version (
                     id, document_id, version_no, status, content_jsonb, snapshot_reason,
                     template_version_id, created_by, created_at
-                ) VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, ?, now())
+                ) VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, ?::uuid, now())
                 ON CONFLICT (document_id, version_no) DO UPDATE
                 SET status = EXCLUDED.status, content_jsonb = EXCLUDED.content_jsonb,
                     snapshot_reason = EXCLUDED.snapshot_reason,
@@ -314,14 +314,14 @@ public class JdbcProjectDocumentRepository implements ProjectDocumentRepository 
                 INSERT INTO mdm.project_document_version (
                     id, document_id, version_no, status, content_jsonb, snapshot_reason,
                     template_version_id, created_by, created_at, published_at
-                ) VALUES (?, ?, ?, 'PUBLISHED', ?::jsonb, ?, ?, ?, now(), now())
+                ) VALUES (?, ?, ?, 'PUBLISHED', ?::jsonb, ?, ?, ?::uuid, now(), now())
                 """, versionId, documentId, nextNo,
                 contentJsonb == null ? null : contentJsonb.toString(),
                 snapshotReason, templateVersionId, createdBy);
         jdbc.update("""
                 UPDATE mdm.project_document
                 SET status = 'PUBLISHED', current_version_id = ?, version = version + 1,
-                    updated_at = now(), updated_by = ?
+                    updated_at = now(), updated_by = ?::uuid
                 WHERE id = ?
                 """, versionId, createdBy, documentId);
         return versionId;

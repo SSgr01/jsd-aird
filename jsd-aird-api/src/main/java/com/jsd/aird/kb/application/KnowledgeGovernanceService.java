@@ -23,6 +23,7 @@ import com.jsd.aird.ops.application.port.OpsAsyncFacade;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
+import com.jsd.aird.shared.review.WorkspaceReviewService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -45,6 +46,7 @@ public class KnowledgeGovernanceService {
     private final TransactionTemplate itemTransaction;
     private final ProjectResourceFacade projectResources;
     private final AuthorizationService authorization;
+    private final WorkspaceReviewService workspaceReviews;
 
     public KnowledgeGovernanceService(KnowledgeGovernanceRepository governance,
                                       KnowledgeRepository knowledgeRepository,
@@ -57,7 +59,8 @@ public class KnowledgeGovernanceService {
                                       SystemParsingPolicy systemParsingPolicy,
                                       PlatformTransactionManager transactionManager,
                                       ProjectResourceFacade projectResources,
-                                      AuthorizationService authorization) {
+                                      AuthorizationService authorization,
+                                      WorkspaceReviewService workspaceReviews) {
         this.governance = governance;
         this.knowledgeRepository = knowledgeRepository;
         this.knowledge = knowledge;
@@ -69,6 +72,7 @@ public class KnowledgeGovernanceService {
         this.systemParsingPolicy = systemParsingPolicy;
         this.projectResources = projectResources;
         this.authorization = authorization;
+        this.workspaceReviews = workspaceReviews;
         this.itemTransaction = new TransactionTemplate(transactionManager);
         this.itemTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -166,6 +170,9 @@ public class KnowledgeGovernanceService {
     @Transactional
     public KnowledgeGovernanceRepository.ReviewView saveReview(UUID documentId, UUID versionId, ReviewCommand command) {
         var actor = ActorContext.required();
+        var reviewStatus = workspaceReviews.get("KNOWLEDGE_VERSION", versionId).status();
+        if ("SUBMITTED".equals(reviewStatus) || "APPROVED".equals(reviewStatus))
+            throw new ApiException(ApiErrorCode.REVIEW_STATE_CONFLICT, "当前版本已提交审核，不能继续修改");
         requireReviewIdentity(documentId, versionId, command.documentId(), command.versionId());
         var scope = normalizeScope(command.libraryScope());
         var update = reviewUpdate(documentId, versionId, command.reviewRevisionId(), command.lockVersion(),
@@ -184,6 +191,7 @@ public class KnowledgeGovernanceService {
     public IndexBuildView publish(UUID documentId, UUID versionId, UUID reviewRevisionId,
                                   int lockVersion, UUID basePublicationId, boolean authorizeAi) {
         var actor = ActorContext.required();
+        workspaceReviews.requireApproved("KNOWLEDGE_VERSION", versionId);
         if (authorizeAi) {
             authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "ai.external",
                     "KNOWLEDGE", documentId, "WRITE"));

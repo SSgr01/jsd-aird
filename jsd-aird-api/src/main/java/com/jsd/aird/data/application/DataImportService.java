@@ -17,6 +17,9 @@ import com.jsd.aird.core.api.ProjectResourceFacade;
 import com.jsd.aird.core.api.ProjectResourceFacade.ProjectRelationTarget;
 import com.jsd.aird.core.api.ProjectResourceFacade.ResourceType;
 import com.jsd.aird.data.application.port.DataRepository;
+import com.jsd.aird.iam.api.AuthorizationService;
+import com.jsd.aird.iam.api.PermissionCheck;
+import com.jsd.aird.iam.api.RecordDataScope;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.ops.application.port.FileObjectRepository;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
@@ -42,6 +45,10 @@ public class DataImportService {
     private final StructuredDataExtractor structuredExtractor;
     private final ImportCompatibilityEvaluator compatibilityEvaluator;
     private final ProjectResourceFacade projectResources;
+    private AuthorizationService authorization;
+
+    @Autowired
+    public void setAuthorization(AuthorizationService authorization) { this.authorization = authorization; }
     private final ExperimentDocumentDataParser documentParser;
     private DataReviewGuard reviewGuard;
     @Autowired
@@ -188,7 +195,16 @@ public class DataImportService {
 
     public PageResponse<DataRepository.Job> listExperimentJobs(UUID templateVersionId,
                                                                String status, String keyword, int page, int size) {
-        return listJobs(templateVersionId, status, keyword, "EXPERIMENT", page, size);
+        var actor = ActorContext.required();
+        var scope = RecordDataScope.all();
+        if (authorization != null) {
+            var resolved = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
+                    "eln.upload.view", "DATA", null, "READ"));
+            if (!resolved.allowed()) throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有实验上传查看权限");
+            scope = new RecordDataScope(resolved.scopeType(), actor.userId(), resolved.targetIds());
+        }
+        return repository.listJobs(actor.organizationId(), templateVersionId, status, keyword, "EXPERIMENT",
+                Math.max(1, page), Math.min(100, Math.max(1, size)), scope);
     }
 
     @Transactional
@@ -294,10 +310,17 @@ public class DataImportService {
                                                                String status, String keyword,
                                                                UUID projectId, int page, int size) {
         var actor = ActorContext.required();
+        var dataScope = RecordDataScope.all();
+        if (authorization != null) {
+            var resolved = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
+                    "data.view", "DATA", null, "READ"));
+            if (!resolved.allowed()) throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有数据中心查看权限");
+            dataScope = new RecordDataScope(resolved.scopeType(), actor.userId(), resolved.targetIds());
+        }
         var allowed = projectId == null || projectResources == null ? null
                 : projectResources.resourceIdsForProject(actor, ResourceType.DATA_IMPORT_JOB, projectId);
         var result = repository.listSourceFiles(actor.organizationId(), categoryId, uncategorized, status, keyword, allowed,
-                Math.max(1, page), Math.min(100, Math.max(1, size)));
+                Math.max(1, page), Math.min(100, Math.max(1, size)), dataScope);
         if (projectResources == null || result.items().isEmpty()) return result;
         var links = projectResources.links(actor, ResourceType.DATA_IMPORT_JOB,
                 result.items().stream().map(DataRepository.SourceFile::importJobId).toList());

@@ -9,12 +9,16 @@ import java.util.UUID;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.mfg.application.port.ProductionOrderRepository;
+import com.jsd.aird.iam.api.AuthorizationService;
+import com.jsd.aird.iam.api.PermissionCheck;
+import com.jsd.aird.iam.api.RecordDataScope;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.json.JsonCanonicalizer;
 import com.jsd.aird.shared.security.ActorContext;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -27,6 +31,7 @@ public class ProductionOrderService {
     private final ObjectMapper objectMapper;
     private final RecordProjectionService recordProjectionService;
     private final AuditLogFacade auditLog;
+    private final AuthorizationService authorization;
 
     public ProductionOrderService(
             ProductionOrderRepository repository,
@@ -35,11 +40,19 @@ public class ProductionOrderService {
             RecordProjectionService recordProjectionService,
             AuditLogFacade auditLog
     ) {
+        this(repository, canonicalizer, objectMapper, recordProjectionService, auditLog, null);
+    }
+
+    @Autowired
+    public ProductionOrderService(ProductionOrderRepository repository, JsonCanonicalizer canonicalizer,
+            ObjectMapper objectMapper, RecordProjectionService recordProjectionService,
+            AuditLogFacade auditLog, AuthorizationService authorization) {
         this.repository = repository;
         this.canonicalizer = canonicalizer;
         this.objectMapper = objectMapper;
         this.recordProjectionService = recordProjectionService;
         this.auditLog = auditLog;
+        this.authorization = authorization;
     }
 
     @Transactional
@@ -118,13 +131,24 @@ public class ProductionOrderService {
     }
 
     public ProductionOrderRepository.ProductionWorkspace get(UUID orderId) {
+        if (authorization != null) {
+            var actor = ActorContext.required();
+            authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(),
+                    "production.view", "PRODUCTION", orderId, "READ"));
+        }
         return repository.findWorkspace(ActorContext.required().organizationId(), orderId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "生产单不存在"));
     }
 
     public ProductionOrderRepository.PageResult<ProductionOrderRepository.ProductionOrderListItem> list(
             ProductionOrderRepository.ListQuery query) {
-        return repository.list(ActorContext.required().organizationId(), query);
+        var actor = ActorContext.required();
+        if (authorization == null) return repository.list(actor.organizationId(), query);
+        var scope = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
+                "production.view", "PRODUCTION", null, "READ"));
+        if (!scope.allowed()) throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有生产单查看权限");
+        return repository.list(actor.organizationId(), query,
+                new RecordDataScope(scope.scopeType(), actor.userId(), scope.targetIds()));
     }
 
     public List<ProductionOrderRepository.LookupOption> productOptions() {

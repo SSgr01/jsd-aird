@@ -678,6 +678,120 @@
 .quality-record-card-field-wide {
   grid-column: 1 / -1;
 }
+/* “编辑品管数据”弹窗：复刻设计稿的 600px 两列表单 + 三列关系行。 */
+.quality-rename-modal .ant-modal-content {
+  padding: 0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.quality-rename-modal .ant-modal-header {
+  margin: 0;
+  padding: 20px 22px 6px;
+  border-bottom: 0;
+}
+.quality-rename-modal .ant-modal-title {
+  color: #1f2937;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 24px;
+}
+.quality-rename-modal .ant-modal-close {
+  top: 14px;
+  inset-inline-end: 12px;
+  width: 30px;
+  height: 30px;
+}
+.quality-rename-modal .ant-modal-body {
+  padding: 34px 22px 24px;
+}
+.quality-rename-modal .ant-modal-footer {
+  margin: 0;
+  padding: 16px 22px;
+  border-top: 1px solid #eaecf0;
+}
+.quality-rename-modal .ant-modal-footer .ant-btn {
+  min-width: 64px;
+  height: 34px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+.quality-rename-modal .ant-modal-footer .ant-btn + .ant-btn {
+  margin-inline-start: 12px;
+}
+.quality-rename-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px 16px;
+}
+.quality-rename-grid > div:not(.quality-rename-relations) {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+.quality-rename-grid .ant-form-item-label {
+  display: block;
+  padding: 0;
+  line-height: 1.3;
+}
+.quality-rename-grid .ant-form-item-label > label {
+  height: auto;
+  color: #1f2937;
+  font-size: 14px;
+  font-weight: 600;
+}
+.quality-rename-grid .ant-input,
+.quality-rename-grid .ant-select,
+.quality-rename-grid .ant-picker {
+  width: 100%;
+}
+.quality-rename-grid .ant-input,
+.quality-rename-grid .ant-picker,
+.quality-rename-grid .ant-select .ant-select-selector {
+  height: 34px;
+  min-height: 34px;
+  border-radius: 6px;
+}
+.quality-rename-grid .ant-input {
+  padding: 5px 11px;
+  font-size: 14px;
+}
+.quality-rename-grid .ant-picker {
+  padding: 0 11px;
+}
+.quality-rename-grid .ant-picker input {
+  font-size: 14px;
+}
+.quality-rename-grid .ant-select .ant-select-selector .ant-select-selection-item,
+.quality-rename-grid .ant-select .ant-select-selector .ant-select-selection-placeholder,
+.quality-rename-grid .ant-select .ant-select-selector .ant-select-selection-search-input {
+  font-size: 14px;
+  line-height: 32px;
+}
+.quality-rename-grid > .quality-rename-relations {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+}
+.quality-rename-relations > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+.quality-rename-relations .ant-select {
+  width: 100%;
+}
+@media (max-width: 640px) {
+  .quality-rename-grid {
+    grid-template-columns: 1fr;
+  }
+  .quality-rename-grid > .quality-rename-relations {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}
 .quality-record-card-meta {
   margin-top: 14px;
   padding-top: 10px;
@@ -718,6 +832,15 @@
 .quality-grid th {
   background: var(--app-surface-subtle);
   text-align: left;
+}
+/* 项目列与实验、报告页保持同一宽度。 */
+.quality-grid th.quality-project-column,
+.quality-grid td.quality-project-column {
+  width: 300px;
+  min-width: 180px;
+  max-width: 300px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .quality-grid input,
 .quality-grid select,

@@ -1,0 +1,42 @@
+.pm-relation-path {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.4;
+}
+
+.pm-relation-path-project,
+.pm-relation-path-sub,
+.pm-relation-path-empty {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pm-relation-path-project {
+  color: var(--app-text-primary, #1f2937);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.pm-relation-path-project.is-missing {
+  color: var(--app-text-tertiary, #98a2b3);
+  font-weight: 400;
+}
+
+.pm-relation-path-sub {
+  color: var(--app-text-secondary, #667085);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.pm-relation-path-empty {
+  color: var(--app-text-tertiary, #98a2b3);
+  font-size: 13px;
+  font-weight: 400;
+}

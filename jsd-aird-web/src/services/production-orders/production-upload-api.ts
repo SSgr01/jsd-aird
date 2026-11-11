@@ -29,6 +29,7 @@ export function productionStageLabel(stage?: string) {
 }
 
 export interface ProductionUpload {
+  workflowStatus?: 'NOT_SUBMITTED' | 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'PUBLISHED';
   id: string;
   fileId: string;
   originalName: string;
@@ -218,6 +219,7 @@ export const productionUploadApi = {
   async list(params: {
     keyword?: string;
     status?: string;
+    format?: 'XLSX' | 'PHOTO';
     projectId?: string;
     viewableOnly?: boolean;
     page: number;

@@ -505,7 +505,14 @@ public class ExperimentImportService implements com.jsd.aird.rnd.api.ExperimentS
 
     public List<ExperimentImportRepository.Job> list() {
         var actor = ActorContext.required();
-        return imports.list(actor.organizationId()).stream()
+        var scope = com.jsd.aird.iam.api.RecordDataScope.all();
+        if (authorization != null) {
+            var resolved = authorization.resolveScope(new com.jsd.aird.iam.api.PermissionCheck(
+                    actor.organizationId(), actor.userId(), "eln.upload.view", "EXPERIMENT_IMPORT", null, "READ"));
+            if (!resolved.allowed()) throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有实验上传查看权限");
+            scope = new com.jsd.aird.iam.api.RecordDataScope(resolved.scopeType(), actor.userId(), resolved.targetIds());
+        }
+        return imports.list(actor.organizationId(), scope).stream()
                 .map(job -> enrichProgress(actor.organizationId(), job))
                 .toList();
     }

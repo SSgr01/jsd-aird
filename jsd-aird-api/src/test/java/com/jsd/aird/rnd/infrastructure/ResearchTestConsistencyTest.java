@@ -21,12 +21,16 @@ class ResearchTestConsistencyTest {
         doReturn(List.of(detail)).when(jdbc).query(anyString(),any(RowMapper.class),any(Object[].class));
     }
     @Test void staleApprovalCannotCreatePublicationOrAuditRows(){
-        assertConflict(()->repository.transition(org,id,11,Status.PUBLISHED,null,actor,"reviewer"),ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
+        assertConflict(()->repository.transition(org,id,11,Status.APPROVED,null,actor,"reviewer"),ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
         verify(jdbc,never()).update(anyString(),any(Object[].class));
     }
     @Test void currentVersionWithInvalidStatusCannotBeApproved(){
         when(summary.status()).thenReturn(Status.DRAFT);
-        assertConflict(()->repository.transition(org,id,12,Status.PUBLISHED,null,actor,"reviewer"),ApiErrorCode.RESOURCE_CONFLICT);
+        assertConflict(()->repository.transition(org,id,12,Status.APPROVED,null,actor,"reviewer"),ApiErrorCode.RESOURCE_CONFLICT);
+        verify(jdbc,never()).update(anyString(),any(Object[].class));
+    }
+    @Test void pendingReviewCannotBePublishedBeforeApproval(){
+        assertConflict(()->repository.transition(org,id,12,Status.PUBLISHED,null,actor,"publisher"),ApiErrorCode.RESOURCE_CONFLICT);
         verify(jdbc,never()).update(anyString(),any(Object[].class));
     }
     @Test void publicationCannotBeEditedThroughTheRenameEndpoint(){

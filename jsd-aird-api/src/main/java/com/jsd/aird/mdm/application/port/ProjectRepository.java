@@ -19,7 +19,7 @@ public interface ProjectRepository {
 
     boolean existsByProjectCode(String projectCode, UUID excludedId);
 
-    void insert(Project project, String operator);
+    void insert(Project project, UUID organizationId, String operator);
 
     boolean update(Project project, long version, String operator);
 

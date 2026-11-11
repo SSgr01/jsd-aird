@@ -143,7 +143,6 @@ public class ResearchKnowledgeService implements ResearchKnowledgeFacade {
         var scope=authorization.resolveScope(new com.jsd.aird.iam.api.PermissionCheck(actor.organizationId(),actor.userId(),"knowledge.view","KNOWLEDGE",null,"READ"));
         if(scope==null||!scope.allowed())return Set.of();
         if("ALL".equals(scope.scopeType()))return null;
-        if("SELECTED".equals(scope.scopeType()))return scope.targetIds();
         // Complex IAM scopes use the same per-document policy; never infer PROJECT/CATEGORY/SELF membership.
         var allowed=new LinkedHashSet<UUID>();
         for(int offset=0;offset<=100000;offset+=500) {

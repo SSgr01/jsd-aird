@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
+import com.jsd.aird.iam.api.AuthorizationService;
+import com.jsd.aird.iam.api.PermissionCheck;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
 import com.jsd.aird.rnd.application.port.ExperimentRepository;
 import com.jsd.aird.rnd.domain.ExperimentModels.Audit;
@@ -40,6 +42,7 @@ public class ExperimentService {
     private final AuditLogFacade audit;
     private final TemplateDataImportFacade templates;
     private final JsonCanonicalizer canonicalizer;
+    private final AuthorizationService authorization;
 
     public ExperimentService(ExperimentRepository repository, ObjectMapper json, FileStorageFacade files,
                              ExperimentEditModelNormalizer editModels) {
@@ -51,10 +54,17 @@ public class ExperimentService {
         this(repository, json, files, editModels, audit, null, null);
     }
 
-    @Autowired
     public ExperimentService(ExperimentRepository repository, ObjectMapper json, FileStorageFacade files,
                              ExperimentEditModelNormalizer editModels, AuditLogFacade audit,
                              TemplateDataImportFacade templates, JsonCanonicalizer canonicalizer) {
+        this(repository, json, files, editModels, audit, templates, canonicalizer, null);
+    }
+
+    @Autowired
+    public ExperimentService(ExperimentRepository repository, ObjectMapper json, FileStorageFacade files,
+                             ExperimentEditModelNormalizer editModels, AuditLogFacade audit,
+                             TemplateDataImportFacade templates, JsonCanonicalizer canonicalizer,
+                             AuthorizationService authorization) {
         this.repository = repository;
         this.json = json;
         this.files = files;
@@ -62,11 +72,19 @@ public class ExperimentService {
         this.audit = audit;
         this.templates = templates;
         this.canonicalizer = canonicalizer;
+        this.authorization = authorization;
     }
 
     public PageResponse<Summary> search(ExperimentRepository.Search query) {
         var actor = ActorContext.required();
         var normalized = normalize(query);
+        if (authorization != null) {
+            var scope = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
+                    "eln.view.view", "EXPERIMENT", null, "READ"));
+            if (!scope.allowed()) throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有实验查看权限");
+            normalized = normalized.withScope(new ExperimentRepository.DataScopeFilter(
+                    scope.scopeType(), actor.userId(), scope.targetIds()));
+        }
         var items = repository.search(actor.organizationId(), normalized);
         var total = repository.count(actor.organizationId(), normalized);
         return new PageResponse<>(items, normalized.page(), normalized.size(), total,
@@ -75,15 +93,24 @@ public class ExperimentService {
 
     public Detail detail(UUID id) {
         var actor = ActorContext.required();
+        requireView(id);
         return normalize(repository.detail(actor.organizationId(), id)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验不存在")));
     }
 
     public List<ExperimentRepository.SourceReference> sourceReferences(UUID id) {
         var actor = ActorContext.required();
+        requireView(id);
         repository.detail(actor.organizationId(), id)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验不存在"));
         return repository.sourceReferences(actor.organizationId(), id);
+    }
+
+    private void requireView(UUID id) {
+        if (authorization == null) return;
+        var actor = ActorContext.required();
+        authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(),
+                "eln.view.view", "EXPERIMENT", id, "READ"));
     }
 
     @Transactional
@@ -223,6 +250,7 @@ public class ExperimentService {
     }
 
     public Summary copy(UUID id) {
+        requireView(id);
         var actor = ActorContext.required();
         var result = repository.copy(actor.organizationId(), id, actor.userId(), actor.username());
         return result;
@@ -581,17 +609,20 @@ public class ExperimentService {
     }
 
     public void delete(UUID id, long revision) {
+        requireView(id);
         var actor = ActorContext.required();
         repository.delete(actor.organizationId(), id, revision, actor.userId(), actor.username());
     }
 
     public Detail publish(UUID id, long revision) {
+        requireView(id);
         var actor = ActorContext.required();
         var result = normalize(repository.publish(actor.organizationId(), id, revision, actor.userId(), actor.username()));
         return result;
     }
 
     public Detail transition(UUID id, long revision, ExperimentStatus target, String comment) {
+        requireView(id);
         if (target == null) {
             throw validation("实验目标状态不能为空");
         }
@@ -649,6 +680,7 @@ public class ExperimentService {
     }
 
     public Detail revision(UUID id, long revision, String reason) {
+        requireView(id);
         var actor = ActorContext.required();
         var result = normalize(repository.createRevision(
                 actor.organizationId(), id, revision, reason, actor.userId(), actor.username()));
@@ -656,6 +688,7 @@ public class ExperimentService {
     }
 
     public Detail rollback(UUID id, long revision, int targetVersion, String reason) {
+        requireView(id);
         var actor = ActorContext.required();
         var result = normalize(repository.rollback(
                 actor.organizationId(), id, revision, targetVersion, reason, actor.userId(), actor.username()));
@@ -663,16 +696,19 @@ public class ExperimentService {
     }
 
     public List<Version> versions(UUID id) {
+        requireView(id);
         var actor = ActorContext.required();
         return repository.versions(actor.organizationId(), id).stream().map(this::normalize).toList();
     }
 
     public JsonNode compare(UUID id, int from, int to) {
+        requireView(id);
         var actor = ActorContext.required();
         return repository.compare(actor.organizationId(), id, from, to);
     }
 
     public List<Audit> audits(UUID id) {
+        requireView(id);
         var actor = ActorContext.required();
         return repository.audits(actor.organizationId(), id);
     }
@@ -686,7 +722,7 @@ public class ExperimentService {
         var actor = ActorContext.required();
         var result = repository.createCategory(
                 actor.organizationId(), requiredText(code, "分类编码不能为空"),
-                requiredText(name, "分类名称不能为空"), requiredText(description, "分类说明不能为空"),
+                requiredText(name, "分类名称不能为空"), defaultText(description, ""),
                 actor.userId());
         audit(actor, "EXPERIMENT_CATEGORY_CREATED", "EXPERIMENT_CATEGORY", result.id(), result.name());
         return result;

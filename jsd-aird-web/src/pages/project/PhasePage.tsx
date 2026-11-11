@@ -4,6 +4,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import dayjs from '@/utils/dayjs';
+import { Can } from '@/components/auth/Can';
 import { ListFeedback } from '@/components/loading/ListQueryFeedback';
 
 import { deleteStage, formatStageStatus, getProjects, getStages, stageStatuses, type ProjectStage, type StageStatus } from '@/services/project/project-api';
@@ -93,7 +94,7 @@ export function PhasePage() {
     { title: '操作', key: 'actions', width: 120, render: (_, row) => (
       <Space className="management-table-actions" size={0}>
         <Button type="link" onClick={() => navigate(`/projects/${row.projectId}?section=stages&stageId=${row.id}`)}>查看</Button>
-        <Popconfirm
+        <Can permission="project.stage.delete"><Popconfirm
           title="确认删除该阶段？"
           description={row.taskCount > 0 ? '阶段下存在任务，不能删除。' : '删除后不可恢复。'}
           disabled={row.taskCount > 0}
@@ -102,7 +103,7 @@ export function PhasePage() {
           <Button type="link" danger disabled={row.taskCount > 0 || deletingStageId === row.id} loading={deletingStageId === row.id}>
             删除
           </Button>
-        </Popconfirm>
+        </Popconfirm></Can>
       </Space>
     ) },
   ];
@@ -190,14 +191,14 @@ export function PhasePage() {
                     </div>
                     <div className="pm-card-actions">
                       <Button type="link" onClick={() => navigate(`/projects/${row.projectId}?section=stages&stageId=${row.id}`)}>查看</Button>
-                      <Popconfirm
+                      <Can permission="project.stage.delete"><Popconfirm
                         title="确认删除该阶段？"
                         description={row.taskCount > 0 ? '阶段下存在任务，不能删除。' : '删除后不可恢复。'}
                         disabled={row.taskCount > 0}
                         onConfirm={() => void handleDelete(row)}
                       >
                         <Button type="link" danger disabled={row.taskCount > 0 || deletingStageId === row.id} loading={deletingStageId === row.id}>删除</Button>
-                      </Popconfirm>
+                      </Popconfirm></Can>
                     </div>
                   </div>
                 );

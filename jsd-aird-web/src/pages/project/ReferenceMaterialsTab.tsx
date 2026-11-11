@@ -82,7 +82,7 @@ export function ReferenceMaterialsTab({ projectId }: { projectId: string }) {
     { title: '添加人', dataIndex: 'addedByName', width: 110, render: (value?: string, record?: ReferenceMaterial) => value || record?.addedBy || '—' },
     { title: '添加时间', dataIndex: 'addedAt', width: 160, render: (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm') },
     { title: '状态', dataIndex: 'status', width: 90, render: (value: string) => <Tag color={value === 'ACTIVE' ? 'success' : 'default'}>{value === 'ACTIVE' ? '有效' : '已移除'}</Tag> },
-    { title: '操作', width: 150, render: (_: unknown, record) => <Space className="management-table-actions" size={0}><Button type="link" disabled={!record.sourceAvailable} onClick={() => source(record)}>查看来源</Button><Can permission="project.assign"><Button type="link" danger={record.status === 'ACTIVE'} onClick={() => changeStatus(record)}>{record.status === 'ACTIVE' ? '移除' : '恢复'}</Button></Can></Space> },
+    { title: '操作', width: 150, render: (_: unknown, record) => <Space className="management-table-actions" size={0}><Button type="link" disabled={!record.sourceAvailable} onClick={() => source(record)}>查看来源</Button><Can permission="project.reference.update"><Button type="link" danger={record.status === 'ACTIVE'} onClick={() => changeStatus(record)}>{record.status === 'ACTIVE' ? '移除' : '恢复'}</Button></Can></Space> },
   ];
 
   return <div className="pm-ref-tab">

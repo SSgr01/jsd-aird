@@ -23,6 +23,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 
 import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
 import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
+import { WorkspaceReviewActions } from '@/components/workspace-review/WorkspaceReviewActions';
+import type { WorkspaceReviewState } from '@/services/reviews/workspace-review-api';
 import { editorUnchanged, flushEditorChanges, pauseWorkspaceInputs, useSaveSession } from '@/features/template-workspace/editor-save';
 import { usePermission } from '@/components/auth/usePermission';
 import {
@@ -165,9 +167,11 @@ async function parseExcelSnapshot(blob: Blob, fileName: string): Promise<Record<
 export function ProductionUploadWorkspacePage() {
   const { uploadId = '' } = useParams();
   const navigate = useNavigate();
-  const canUpdate = usePermission('production.update');
-  const canSubmit = usePermission('production.submit');
-  const canCreateTemplate = usePermission('template.create');
+  const canUpdate = usePermission('production.view.update');
+  const canPublish = usePermission('production.view.publish');
+  const canExport = usePermission('production.view.export');
+  const canDownload = usePermission('production.view.download');
+  const canCreateTemplate = usePermission('template.view.create');
   const editorRef = useRef<EditorHandle>(null);
   const saveSession = useSaveSession(uploadId);
   const workspaceRootRef = useRef<HTMLElement>(null);
@@ -178,6 +182,7 @@ export function ProductionUploadWorkspacePage() {
   const saveOwnerRef = useRef<object>();
   const saveDraftRef = useRef<(business?: ProductionBusinessSnapshot, silent?: boolean) => Promise<false | { lockVersion: number }>>(() => Promise.resolve(false));
   const [record, setRecord] = useState<ProductionUpload>();
+  const [reviewStatus, setReviewStatus] = useState<WorkspaceReviewState['status']>();
   const [versions, setVersions] = useState<ProductionUploadVersion[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<ProductionUploadVersion>();
   const [snapshot, setSnapshot] = useState<Record<string, unknown>>();
@@ -381,6 +386,10 @@ export function ProductionUploadWorkspacePage() {
 
   const publish = async () => {
     if (!record || selectedVersion) return;
+    if (reviewStatus !== 'APPROVED') {
+      msg.warning('请先完成审核');
+      return;
+    }
     if (!record.productionName?.trim() || !record.orderNo?.trim()) {
       msg.error('发布前请先填写生产单名称和订单号');
       return;
@@ -403,17 +412,17 @@ export function ProductionUploadWorkspacePage() {
           return;
         }
       }
-      // 编辑中的内容随发布一起落库，不需要先手动保存草稿。
-      let version=record.lockVersion;
-      const baseline = savedEditorRef.current?.editor === editor ? savedEditorRef.current.revision : 0;
-      if (generation !== savedGenerationRef.current || (editor?.getContentRevision && revision !== baseline) || savePromiseRef.current || !record.workbookSnapshot) {
-        const saved = await saveDraft(undefined, true);
-        if (!saved) return;
-        version=saved.lockVersion;
+      const savedEditor = savedEditorRef.current;
+      if (dirty || generation !== savedGenerationRef.current ||
+        (savedEditor?.editor === editor && editor?.getContentRevision && revision !== savedEditor.revision) ||
+        savePromiseRef.current || !record.workbookSnapshot) {
+        msg.warning('内容已变化，请保存草稿并重新提交审核');
+        setDirty(true);
+        return;
       }
       if (!isCurrent()) return;
       if (generation !== editGenerationRef.current || !editorUnchanged(editorRef.current, editor, revision)) { setDirty(true); return; }
-      await productionOrderRecordApi.publish(record.id,version);
+      await productionOrderRecordApi.publish(record.id,record.lockVersion);
       if (!isCurrent()) return;
       msg.success('生产单已发布，并生成新版本');
       const [detail, history] = await Promise.all([
@@ -748,19 +757,21 @@ export function ProductionUploadWorkspacePage() {
     editorRef.current?.focusBinding(binding);
   };
   const latestVersion = versions[0];
-  const readonly = !['edit', 'material', 'attachments'].includes(view) || Boolean(selectedVersion);
+  const currentReviewStatus = reviewStatus ?? record.workflowStatus;
+  const reviewLocked = currentReviewStatus === 'SUBMITTED' || currentReviewStatus === 'APPROVED';
+  const readonly = !['edit', 'material', 'attachments'].includes(view) || Boolean(selectedVersion) || reviewLocked;
   const editable = (isWorkbook || format === 'DOCX') && !readonly && canUpdate;
   const waitingForEditor = isWorkbook && view === 'edit' && !editorReady;
   const saveState: SaveState = saving ? 'SAVING' : dirty ? 'DIRTY' : 'SAVED';
   const workspaceActions = () => (
     <>
       <SaveStateBadge state={saveState} />
-      <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportRecord()}>
+      {canExport && <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportRecord()}>
         导出
-      </Button>
-      <Button icon={<DownloadOutlined />} loading={downloadingSource} onClick={() => void downloadSource()}>
+      </Button>}
+      {canDownload && <Button icon={<DownloadOutlined />} loading={downloadingSource} onClick={() => void downloadSource()}>
         原文下载
-      </Button>
+      </Button>}
       {isExcel && canCreateTemplate && (
         <Button disabled={Boolean(selectedVersion)} onClick={() => void openTemplateDraft()}>
           另存为模板
@@ -769,7 +780,11 @@ export function ProductionUploadWorkspacePage() {
       {selectedVersion && <Button onClick={() => setSelectedVersion(undefined)}>返回</Button>}
       {!selectedVersion && (
         <>
-          <Button
+          {record && ['SAVED', 'REVIEW_REQUIRED', 'PUBLISHED'].includes(record.status) &&
+            <WorkspaceReviewActions type="PRODUCTION_UPLOAD" id={record.id} saved={!dirty && !saving}
+              enabled={record.status === 'SAVED' && !recognizing}
+              published={record.status === 'PUBLISHED'} onStatusChange={setReviewStatus} />}
+          {canUpdate && <Button
             type="primary"
             icon={<SaveOutlined />}
             loading={saving}
@@ -777,15 +792,15 @@ export function ProductionUploadWorkspacePage() {
             onClick={() => void saveDraft()}
           >
             保存草稿
-          </Button>
-          <Button
+          </Button>}
+          {canPublish && record?.status !== 'PUBLISHED' && <Button
             type="primary"
             loading={publishing}
-            disabled={!canSubmit || saving || recognizing}
+            disabled={saving || recognizing || dirty || reviewStatus !== 'APPROVED'}
             onClick={() => void publish()}
           >
             发布
-          </Button>
+          </Button>}
         </>
       )}
     </>

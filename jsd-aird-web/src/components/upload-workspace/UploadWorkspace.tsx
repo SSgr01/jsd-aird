@@ -8,6 +8,7 @@ import {
   FileTextOutlined,
   FileWordOutlined,
   InboxOutlined,
+  LockOutlined,
   ReloadOutlined,
   SearchOutlined,
   StopOutlined,
@@ -26,6 +27,8 @@ import {
 } from 'antd';
 import type { BreadcrumbProps, UploadFile, UploadProps } from 'antd';
 import type { ReactNode } from 'react';
+import { useAuthStore } from '@/stores/auth-store';
+import { hasPermission } from '@/routes/route-permissions';
 
 export interface UploadWorkspaceFilter {
   key: string;
@@ -35,6 +38,7 @@ export interface UploadWorkspaceFilter {
 
 export interface UploadWorkspaceAction {
   onClick: () => void;
+  permission?: string;
   disabled?: boolean;
   loading?: boolean;
   title?: string;
@@ -81,6 +85,13 @@ export interface UploadWorkspaceProps {
   uploadMainText?: string;
   uploadHint?: string;
   uploadDisabled?: boolean;
+  /**
+   * The signed-in role may open this workspace but holds no upload grant.
+   * The drop zone and the file queue are then hidden instead of merely
+   * disabled, so a read-only visitor only sees the upload history.
+   */
+  uploadReadOnly?: boolean;
+  uploadReadOnlyText?: string;
   uploadIcon?: ReactNode;
   previewEmptyText?: string;
   submitLabel: string;
@@ -89,6 +100,7 @@ export interface UploadWorkspaceProps {
   submitting?: boolean;
   onCancelSubmit?: () => void;
   submitDisabled?: boolean;
+  showSubmit?: boolean;
   rightTitle: string;
   rightCount?: number;
   rightFilters?: UploadWorkspaceFilter[];
@@ -140,6 +152,8 @@ export function UploadWorkspace({
   uploadMainText = '拖拽文件到此处/点击选择文件/点击拍照上传',
   uploadHint,
   uploadDisabled = false,
+  uploadReadOnly = false,
+  uploadReadOnlyText = '当前账号只有查看权限，可以浏览上传记录；如需上传文件请联系管理员开通上传权限。',
   uploadIcon,
   previewEmptyText = '暂无待上传文件，点击上方区域选择文件',
   submitLabel,
@@ -148,6 +162,7 @@ export function UploadWorkspace({
   submitting = false,
   onCancelSubmit,
   submitDisabled = false,
+  showSubmit = true,
   rightTitle,
   rightCount,
   rightFilters,
@@ -161,6 +176,10 @@ export function UploadWorkspace({
   pagination,
   onPageChange,
 }: UploadWorkspaceProps) {
+  const user = useAuthStore((state) => state.user);
+  const permissions = user?.permissions ?? [];
+  const canShow = (action?: UploadWorkspaceAction) =>
+    Boolean(action && (!action.permission || hasPermission(action.permission, permissions)));
   return (
     <div className="upload-workspace-page">
       <div className="upload-workspace-heading">
@@ -177,27 +196,29 @@ export function UploadWorkspace({
           <div className="upload-workspace-section-title" id="upload-workspace-left-title">{leftTitle}</div>
           <div className="upload-workspace-classification">{classification}</div>
 
-          {showDropzone ? <Upload.Dragger
-            className="upload-workspace-drop"
-            accept={accept}
-            disabled={uploadDisabled}
-            multiple={multiple}
-            maxCount={maxCount}
-            fileList={files}
-            showUploadList={false}
-            beforeUpload={beforeUpload || (() => false)}
-            onChange={({ fileList }) => onFilesChange(fileList)}
-          >
-            <div className="upload-workspace-drop-icon">{uploadIcon || <InboxOutlined />}</div>
-            <div className="upload-workspace-drop-main">{uploadMainText}</div>
-            {uploadHint && <div className="upload-workspace-drop-hint">{uploadHint}</div>}
-          </Upload.Dragger> : <div className="upload-workspace-mode-placeholder"><FileTextOutlined /><span>当前录入方式无需上传文件，请完成左侧信息后继续。</span></div>}
+          {uploadReadOnly
+            ? <div className="upload-workspace-mode-placeholder upload-workspace-read-only"><LockOutlined /><span>{uploadReadOnlyText}</span></div>
+            : showDropzone ? <Upload.Dragger
+              className="upload-workspace-drop"
+              accept={accept}
+              disabled={uploadDisabled}
+              multiple={multiple}
+              maxCount={maxCount}
+              fileList={files}
+              showUploadList={false}
+              beforeUpload={beforeUpload || (() => false)}
+              onChange={({ fileList }) => onFilesChange(fileList)}
+            >
+              <div className="upload-workspace-drop-icon">{uploadIcon || <InboxOutlined />}</div>
+              <div className="upload-workspace-drop-main">{uploadMainText}</div>
+              {uploadHint && <div className="upload-workspace-drop-hint">{uploadHint}</div>}
+            </Upload.Dragger> : <div className="upload-workspace-mode-placeholder"><FileTextOutlined /><span>当前录入方式无需上传文件，请完成左侧信息后继续。</span></div>}
 
-          {showPreview ? <div className="upload-workspace-preview-heading">
+          {uploadReadOnly ? null : showPreview ? <div className="upload-workspace-preview-heading">
             <div className="upload-workspace-section-title">文件预览区 <span>({files.length})</span></div>
             <Space size={8} wrap>
               <Button onClick={onClearFiles} disabled={uploadDisabled || !files.length}>清空</Button>
-              <Button
+              {showSubmit && <Button
                 type="primary"
                 icon={submitIcon}
                 loading={submitting}
@@ -205,12 +226,12 @@ export function UploadWorkspace({
                 onClick={onSubmit}
               >
                 {submitLabel}
-              </Button>
+              </Button>}
               {submitting && onCancelSubmit ? <Button icon={<StopOutlined />} onClick={onCancelSubmit}>停止后续文件</Button> : null}
             </Space>
-          </div> : <div className="upload-workspace-mode-actions"><Button type="primary" icon={submitIcon} loading={submitting} disabled={submitDisabled} onClick={onSubmit}>{submitLabel}</Button></div>}
+          </div> : showSubmit ? <div className="upload-workspace-mode-actions"><Button type="primary" icon={submitIcon} loading={submitting} disabled={submitDisabled} onClick={onSubmit}>{submitLabel}</Button></div> : null}
 
-          {showPreview && <div className="upload-workspace-preview-list" aria-live="polite">
+          {uploadReadOnly ? null : showPreview && <div className="upload-workspace-preview-list" aria-live="polite">
             {files.length ? files.map((file) => (
               <div className="upload-workspace-preview-item" key={file.uid}>
                 <span className="upload-workspace-file-icon">{fileIcon(file.name)}</span>
@@ -292,10 +313,10 @@ export function UploadWorkspace({
                   {record.status && <Tag color={record.status.color}>{record.status.label}</Tag>}
                 </div>
                 {(record.commonActions || record.actions) && <div className="upload-workspace-record-actions">
-                  {record.commonActions?.view && <Button type="link" icon={<EyeOutlined />} title={record.commonActions.view.title} disabled={record.commonActions.view.disabled} onClick={record.commonActions.view.onClick}>查看</Button>}
-                  {record.commonActions?.download && <Button type="link" icon={<DownloadOutlined />} title={record.commonActions.download.title} disabled={record.commonActions.download.disabled} onClick={record.commonActions.download.onClick}>下载</Button>}
-                  {record.commonActions?.retry && <Button type="link" icon={<ReloadOutlined />} title={record.commonActions.retry.title} loading={record.commonActions.retry.loading} disabled={record.commonActions.retry.disabled} onClick={record.commonActions.retry.onClick}>重试</Button>}
-                  {record.commonActions?.delete && <Button type="link" danger icon={<DeleteOutlined />} title={record.commonActions.delete.title} loading={record.commonActions.delete.loading} disabled={record.commonActions.delete.disabled} onClick={record.commonActions.delete.onClick}>删除</Button>}
+                  {canShow(record.commonActions?.view) && <Button type="link" icon={<EyeOutlined />} title={record.commonActions!.view!.title} disabled={record.commonActions!.view!.disabled} onClick={record.commonActions!.view!.onClick}>查看</Button>}
+                  {canShow(record.commonActions?.download) && <Button type="link" icon={<DownloadOutlined />} title={record.commonActions!.download!.title} disabled={record.commonActions!.download!.disabled} onClick={record.commonActions!.download!.onClick}>下载</Button>}
+                  {canShow(record.commonActions?.retry) && <Button type="link" icon={<ReloadOutlined />} title={record.commonActions!.retry!.title} loading={record.commonActions!.retry!.loading} disabled={record.commonActions!.retry!.disabled} onClick={record.commonActions!.retry!.onClick}>重试</Button>}
+                  {canShow(record.commonActions?.delete) && <Button type="link" danger icon={<DeleteOutlined />} title={record.commonActions!.delete!.title} loading={record.commonActions!.delete!.loading} disabled={record.commonActions!.delete!.disabled} onClick={record.commonActions!.delete!.onClick}>删除</Button>}
                   {record.actions}
                 </div>}
               </article>

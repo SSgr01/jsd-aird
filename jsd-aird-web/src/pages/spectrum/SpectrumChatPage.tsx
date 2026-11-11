@@ -18,6 +18,7 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { usePermission } from '@/components/auth/usePermission';
 
 import {
   AiConversationWorkspace,
@@ -649,6 +650,9 @@ function SpectrumStreamAnswer({
 }
 
 export function SpectrumChatPage() {
+  const canCreate = usePermission('spectrum.ai.create');
+  const canUpdate = usePermission('spectrum.ai.update');
+  const canDelete = usePermission('spectrum.ai.delete');
   const { message: toast } = App.useApp();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -1277,6 +1281,7 @@ export function SpectrumChatPage() {
         </div>
       </div>
       <AiConversationWorkspace
+        canCreate={canCreate}
         conversations={conversationItems}
         activeConversationId={activeSessionId}
         messages={conversationMessages}
@@ -1297,7 +1302,7 @@ export function SpectrumChatPage() {
           </div>
         }
         pendingLabel={streamStage}
-        welcomeContent={
+        welcomeContent={canCreate ?
           <div className="spectrum-quick-questions">
             <Typography.Text strong>可以这样问</Typography.Text>
             <Space wrap>
@@ -1308,12 +1313,12 @@ export function SpectrumChatPage() {
               ))}
             </Space>
           </div>
-        }
+        : undefined}
         question={question}
         streaming={streaming}
         onNewConversation={() => void createConversation()}
         onSelectConversation={(id) => void selectSession(id)}
-        onEditMessage={(item, value) => {
+        onEditMessage={canCreate ? (item, value) => {
           const expectedLastMessageId = messages.at(-1)?.id;
           if (!item.editableText || !item.id || !expectedLastMessageId) {
             toast.error('该问题没有可恢复的图谱范围，无法安全重跑');
@@ -1323,9 +1328,9 @@ export function SpectrumChatPage() {
             replaceFromMessageId: item.id,
             expectedLastMessageId,
           });
-        }}
-        onRenameConversation={renameConversation}
-        onDeleteConversation={deleteConversation}
+        } : undefined}
+        onRenameConversation={canUpdate ? renameConversation : undefined}
+        onDeleteConversation={canDelete ? deleteConversation : undefined}
         onQuestionChange={setQuestion}
         onSubmit={() => void submit()}
       />

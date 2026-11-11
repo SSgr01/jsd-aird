@@ -17,6 +17,7 @@ import { preloadWorkspaceEditor } from '@/features/template-workspace/preload-ed
 import { parseExperimentSnapshot } from '@/features/experiment-workspace/experiment-workbook';
 import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
 import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
+import { ReviewHistoryButton } from '@/components/workspace-review/ReviewHistoryButton';
 import {
   actResearchTest,
   createResearchTestRevision,
@@ -30,14 +31,17 @@ import {
 import { httpClient } from '@/services/http/client';
 import { downloadBlob, fetchFileBlob, fetchFilePreviewBlob, fileContentUrl } from '@/services/files/file-api';
 import { FilePreviewModal } from '@/components/file-preview';
+import { usePermission } from '@/components/auth/usePermission';
 import './research-test.css';
 const text: Record<string, string> = {
   DRAFT: '草稿',
   PENDING_REVIEW: '待审核',
   RETURNED: '已退回',
+  APPROVED: '审核通过',
   PUBLISHED: '已发布',
   ARCHIVED: '已归档',
 };
+const editableStatuses = ['DRAFT', 'RETURNED'];
 function resolveReturnTo(state: unknown, fallback: string) {
   if (typeof state !== 'object' || state === null || !('returnTo' in state)) return fallback;
   const value = (state as { returnTo?: unknown }).returnTo;
@@ -217,6 +221,13 @@ function isUntouchedExperimentWorkbook(snapshot: Record<string, unknown>, title:
   return values.every((value) => allowed.has(value));
 }
 export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) {
+  const pageKey = type === 'REPORT' ? 'research-test.report.view' : 'research-test.standard';
+  const canUpdate = usePermission(`${pageKey}.update`);
+  const canExport = usePermission(`${pageKey}.export`);
+  const canSubmit = usePermission(`${pageKey}.submit`);
+  const canReview = usePermission(`${pageKey}.approve`);
+  const canPublish = usePermission(`${pageKey}.publish`);
+  const canArchive = usePermission(`${pageKey}.archive`);
   const { id = '' } = useParams(),
     nav = useNavigate(),
     location = useLocation(),
@@ -247,12 +258,12 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
       const s = await trackSnapshot(loadResearchTestSnapshot(d));
       if (!isCurrent()) return;
       setSnapshot(s);
-      setView(['DRAFT', 'RETURNED'].includes(d.summary.status) ? 'edit' : 'preview');
+      setView(canUpdate && editableStatuses.includes(d.summary.status) ? 'edit' : 'preview');
       setSaveState('SAVED');
     } catch (e) {
       if (isCurrent()) setError(e instanceof Error ? e.message : '加载失败');
     }
-  }, [id, type, beginLoad]);
+  }, [id, type, beginLoad, canUpdate]);
   useEffect(() => {
     setDetail(undefined); setSnapshot(undefined);
     void load();
@@ -313,7 +324,7 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
     autosaveTimer.current = window.setTimeout(() => void saveRef.current(), 1500);
   };
   const action = async (
-    a: 'submit-review' | 'approve' | 'return' | 'archive',
+    a: 'submit-review' | 'approve' | 'publish' | 'return' | 'archive',
     comment?: string,
   ) => {
     if (!detail) return;
@@ -387,7 +398,7 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
       />
     );
   if (!detail || !snapshot) return <ContentLoading label="下载文档…" />;
-  const editable = ['DRAFT', 'RETURNED'].includes(detail.summary.status) && view === 'edit';
+  const editable = canUpdate && editableStatuses.includes(detail.summary.status) && view === 'edit';
   return (
     <section className="workspace-shell template-business-workspace research-test-workspace">
       <header className="workspace-header">
@@ -408,18 +419,19 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
         </div>
         <Space className="research-test-workspace-actions" wrap>
           <SaveStateBadge state={saveState} />
-          <Button className="workspace-export-button" icon={<DownloadOutlined />} onClick={() => void exportFile()}>
+          <ReviewHistoryButton items={detail.reviews} />
+          {canExport && <Button className="workspace-export-button" icon={<DownloadOutlined />} onClick={() => void exportFile()}>
             导出
-          </Button>
+          </Button>}
           {(detail.summary.sourceFileId || stringValue(detail.editModel.sourceFileId)) && (
             <Button icon={<FileOutlined />} onClick={() => setPreviewOpen(true)}>
               原文
             </Button>
           )}
-          {['PUBLISHED', 'ARCHIVED'].includes(detail.summary.status) && (
+          {canUpdate && ['PUBLISHED', 'ARCHIVED'].includes(detail.summary.status) && (
             <Button onClick={() => revise()}>创建修订</Button>
           )}
-          <Button
+          {canUpdate && <Button
             type="primary"
             icon={<SaveOutlined />}
             disabled={!editable}
@@ -427,28 +439,31 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
             onClick={() => void save()}
           >
             保存草稿
-          </Button>
-          {['DRAFT', 'RETURNED'].includes(detail.summary.status) && (
+          </Button>}
+          {canSubmit && ['DRAFT', 'RETURNED'].includes(detail.summary.status) && (
             <Button
               type="primary"
               className="workspace-publish-button"
               loading={busy}
               onClick={() => void action('submit-review')}
             >
-              发布
+              提交审核
             </Button>
           )}
           {detail.summary.status === 'PENDING_REVIEW' && (
             <>
-              <Button danger onClick={reject}>
+              {canReview && <Button danger onClick={reject}>
                 驳回
-              </Button>
-              <Button type="primary" loading={busy} onClick={() => void action('approve')}>
-                发布
-              </Button>
+              </Button>}
+              {canReview && <Button type="primary" loading={busy} onClick={() => void action('approve')}>
+                审核通过
+              </Button>}
             </>
           )}
-          {detail.summary.status === 'PUBLISHED' && (
+          {canPublish && detail.summary.status === 'APPROVED' && (
+            <Button type="primary" loading={busy} onClick={() => void action('publish')}>发布</Button>
+          )}
+          {canArchive && detail.summary.status === 'PUBLISHED' && (
             <Button onClick={() => void action('archive')}>归档</Button>
           )}
         </Space>
@@ -474,7 +489,7 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
           {
             key: 'edit',
             label: '编辑',
-            disabled: !['DRAFT', 'RETURNED'].includes(detail.summary.status),
+            disabled: !canUpdate || !editableStatuses.includes(detail.summary.status),
           },
           { key: 'versions', label: '版本记录' },
         ]}
@@ -509,6 +524,7 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
                 snapshot={snapshot}
                 bindings={[]}
                 editable={editable}
+                permissionDialogVisible={editable}
                 onEditorValue={() => undefined}
                 onDirty={markDirty}
               />

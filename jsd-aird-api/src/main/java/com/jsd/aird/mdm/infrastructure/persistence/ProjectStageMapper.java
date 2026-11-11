@@ -25,7 +25,8 @@ public interface ProjectStageMapper {
         "s.version,s.created_at createdAt,s.updated_at updatedAt FROM mdm.project_stage s " +
         "JOIN mdm.project p ON p.id=s.project_id ";
 
-    String FILTERS = "<if test='keyword != null'> AND (s.name ILIKE concat('%',#{keyword},'%') OR p.name ILIKE concat('%',#{keyword},'%') OR p.project_code ILIKE concat('%',#{keyword},'%') OR s.stage_code ILIKE concat('%',#{keyword},'%'))</if>" +
+    String FILTERS = "<if test='organizationId != null'> AND p.organization_id=#{organizationId}</if>" + ProjectMapper.SCOPE_FILTER +
+        "<if test='keyword != null'> AND (s.name ILIKE concat('%',#{keyword},'%') OR p.name ILIKE concat('%',#{keyword},'%') OR p.project_code ILIKE concat('%',#{keyword},'%') OR s.stage_code ILIKE concat('%',#{keyword},'%'))</if>" +
         "<if test='projectId != null'> AND s.project_id=#{projectId}</if>" +
         "<if test='status != null'> AND s.status=#{status}</if>" +
         "<if test='owner != null'> AND s.owner=#{owner}</if>" +
@@ -43,13 +44,17 @@ public interface ProjectStageMapper {
     List<ProjectStageRow> findPage(@Param("keyword") String keyword, @Param("projectId") UUID projectId,
                                    @Param("status") String status, @Param("owner") String owner,
                                    @Param("plannedFrom") LocalDate plannedFrom, @Param("plannedTo") LocalDate plannedTo,
-                                   @Param("offset") int offset, @Param("size") int size);
+                                   @Param("offset") int offset, @Param("size") int size,
+                                   @Param("organizationId") UUID organizationId, @Param("scopeType") String scopeType,
+                                   @Param("scopeUserId") UUID scopeUserId, @Param("scopeTargetIds") java.util.Set<UUID> scopeTargetIds);
 
     @Select("<script>SELECT count(*) FROM mdm.project_stage s JOIN mdm.project p ON p.id=s.project_id " +
         "WHERE s.deleted=false AND p.deleted=false " + FILTERS + "</script>")
     long count(@Param("keyword") String keyword, @Param("projectId") UUID projectId,
                @Param("status") String status, @Param("owner") String owner,
-               @Param("plannedFrom") LocalDate plannedFrom, @Param("plannedTo") LocalDate plannedTo);
+               @Param("plannedFrom") LocalDate plannedFrom, @Param("plannedTo") LocalDate plannedTo,
+               @Param("organizationId") UUID organizationId, @Param("scopeType") String scopeType,
+               @Param("scopeUserId") UUID scopeUserId, @Param("scopeTargetIds") java.util.Set<UUID> scopeTargetIds);
 
     @Select("<script>SELECT EXISTS(SELECT 1 FROM mdm.project_stage WHERE project_id=#{projectId} AND deleted=false " +
         "AND lower(name)=lower(#{name}) <if test='excludedId != null'>AND id&lt;&gt;#{excludedId}</if>)</script>")
@@ -62,7 +67,7 @@ public interface ProjectStageMapper {
     @Insert("INSERT INTO mdm.project_stage(id,project_id,stage_code,name,order_no,status,owner,description,planned_start,planned_end," +
         "actual_start,actual_end,version,deleted,created_at,updated_at,created_by,updated_by) VALUES(" +
         "#{id},#{projectId},#{stageCode},#{name},#{orderNo},#{status},#{owner},#{description},#{plannedStart},#{plannedEnd}," +
-        "#{actualStart},#{actualEnd},0,false,#{now},#{now},#{operator},#{operator})")
+        "#{actualStart},#{actualEnd},0,false,#{now},#{now},CAST(#{operator} AS uuid),CAST(#{operator} AS uuid))")
     void insert(@Param("id") UUID id, @Param("projectId") UUID projectId, @Param("stageCode") String stageCode,
                 @Param("name") String name, @Param("orderNo") int orderNo, @Param("status") String status,
                 @Param("owner") String owner, @Param("description") String description,
@@ -72,7 +77,7 @@ public interface ProjectStageMapper {
 
     @Update("UPDATE mdm.project_stage SET stage_code=#{stageCode},name=#{name},status=#{status},owner=#{owner},description=#{description}," +
         "planned_start=#{plannedStart},planned_end=#{plannedEnd},actual_start=#{actualStart},actual_end=#{actualEnd}," +
-        "version=version+1,updated_at=now(),updated_by=#{operator} WHERE id=#{id} AND deleted=false AND version=#{version}")
+        "version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) WHERE id=#{id} AND deleted=false AND version=#{version}")
     int update(@Param("id") UUID id, @Param("stageCode") String stageCode, @Param("name") String name,
                @Param("status") String status, @Param("owner") String owner, @Param("description") String description,
                @Param("plannedStart") LocalDate plannedStart, @Param("plannedEnd") LocalDate plannedEnd,
@@ -80,13 +85,13 @@ public interface ProjectStageMapper {
                @Param("version") long version, @Param("operator") String operator);
 
     @Update("UPDATE mdm.project_stage SET deleted=true,deleted_at=now(),deleted_by=#{operator},version=version+1," +
-        "updated_at=now(),updated_by=#{operator} WHERE id=#{id} AND deleted=false AND version=#{version}")
+        "updated_at=now(),updated_by=CAST(#{operator} AS uuid) WHERE id=#{id} AND deleted=false AND version=#{version}")
     int softDelete(@Param("id") UUID id, @Param("version") long version, @Param("operator") String operator);
 
     @Update("UPDATE mdm.project_stage SET order_no=order_no+1000000 WHERE project_id=#{projectId} AND deleted=false")
     void parkOrderNumbers(@Param("projectId") UUID projectId);
 
-    @Update("UPDATE mdm.project_stage SET order_no=#{orderNo},version=version+1,updated_at=now(),updated_by=#{operator} " +
+    @Update("UPDATE mdm.project_stage SET order_no=#{orderNo},version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) " +
         "WHERE id=#{id} AND project_id=#{projectId} AND deleted=false AND version=#{version}")
     int updateOrder(@Param("id") UUID id, @Param("projectId") UUID projectId, @Param("orderNo") int orderNo,
                     @Param("version") long version, @Param("operator") String operator);

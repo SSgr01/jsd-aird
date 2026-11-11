@@ -242,7 +242,7 @@ function UserMenu() {
     </Modal></>;
 }
 
-function AppHeaderTools() {
+function AppHeaderTools({ permissions, menuKeys }: { permissions: string[]; menuKeys: string[] }) {
   const navigate = useNavigate();
   const searchRef = useRef<InputRef>(null);
 
@@ -265,7 +265,7 @@ function AppHeaderTools() {
 
   return (
     <div className="app-header-tools">
-      <Input
+      {canViewPathWithMenus('/knowledge/search', permissions, menuKeys) && <Input
         ref={searchRef}
         className="app-command-search"
         aria-label="全局搜索"
@@ -274,14 +274,14 @@ function AppHeaderTools() {
         placeholder="搜索知识库、文档、问题…"
         suffix={<kbd>Ctrl K</kbd>}
         onPressEnter={(event) => search(event.currentTarget.value)}
-      />
+      />}
       {appEnv.version && <span className="app-version" title="系统版本" aria-label={`系统版本 ${appEnv.version}`}>{appEnv.version}</span>}
       <UserMenu />
     </div>
   );
 }
 
-function AccessDenied({ permissions, menuKeys }: { permissions: string[]; menuKeys: string[] }) {
+function AccessDenied({ permissions, menuKeys }: { permissions: string[]; menuKeys?: string[] }) {
   const navigate = useNavigate();
   const home = firstAccessiblePath(permissions, menuKeys);
   return <Result status="403" title="暂无权限访问此页面" subTitle="请联系系统管理员开通查看权限" extra={<Button type="primary" onClick={() => navigate(home || '/login', { replace: true })}>{home ? '返回工作台' : '返回登录'}</Button>} />;
@@ -312,7 +312,7 @@ export function BasicLayout() {
   useSidebarAutoCollapse(layoutCollapsed, changeNavigationCollapsed);
   const user = useAuthStore((state) => state.user);
   const permissions = user?.permissions ?? [];
-  const menuKeys = user?.menuKeys ?? [];
+  const menuKeys = user?.menuKeys;
   const visibleRoute = useMemo(() => filterMenuRoute(route, permissions, menuKeys) ?? { path: '/', routes: [] }, [permissions, menuKeys]);
   const requiredPermission = requiredPermissionForPath(location.pathname);
 
@@ -320,7 +320,7 @@ export function BasicLayout() {
     <AuthGate>
       <div className={`app-shell${layoutCollapsed ? ' app-shell-sidebar-collapsed' : ''}${isAssistant ? ' app-shell-assistant' : ''}${isPermissionManagement ? ' permission-management-shell' : ''}`}>
       <div className="app-topbar" aria-label="全局工具区">
-        <AppHeaderTools />
+        <AppHeaderTools permissions={permissions} menuKeys={menuKeys ?? []} />
       </div>
       <ProLayout
         title={appEnv.title}

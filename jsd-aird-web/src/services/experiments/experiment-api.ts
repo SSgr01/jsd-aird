@@ -25,6 +25,7 @@ export interface ExperimentSummary {
   versionNo: number;
   revision: number;
   updatedAt: string;
+  documentFormat?: 'WORD' | 'EXCEL';
   allowedActions?: string[];
 }
 export interface ExperimentSourceRef extends Record<string, unknown> {

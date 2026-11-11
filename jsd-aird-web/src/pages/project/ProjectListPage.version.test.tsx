@@ -18,7 +18,7 @@ const first: api.Project = {
 const result = (project: api.Project) => ({ items: [project], page: 1, size: 10, total: 1, totalPages: 1 });
 beforeEach(() => {
   queryClient.clear();
-  useAuthStore.setState({ user: testUser, status: 'authenticated' });
+  useAuthStore.setState({ user: { ...testUser, permissions: [...testUser.permissions, 'project.list.create', 'project.list.delete', 'project.list.view'] }, status: 'authenticated' });
   vi.clearAllMocks();
   vi.mocked(api.getProjects).mockResolvedValue(result(first));
   vi.mocked(api.deleteProjects).mockResolvedValue(undefined);

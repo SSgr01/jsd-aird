@@ -35,19 +35,19 @@ public class BusinessManufacturingReader implements BusinessReadPort {
         var keyword = filter.path("query").asText("");
         switch (type) {
             case "INVENTORY_BALANCE" -> {
-                var rows = inventory.balances(org, keyword, scope, null, page, size, null);
+                var rows = inventory.balances(org, keyword, scope, null, page, size, null, com.jsd.aird.iam.api.RecordDataScope.all());
                 rows.items().forEach(row -> refs.add(ref(type, row.productId()).put("scope", row.scope().name()))); more = page < rows.totalPages();
             }
             case "INVENTORY_TRANSACTION" -> {
-                var rows = inventory.transactions(org, scope, keyword, null, null, page, size);
+                var rows = inventory.transactions(org, scope, keyword, null, null, page, size, com.jsd.aird.iam.api.RecordDataScope.all());
                 rows.items().forEach(row -> refs.add(ref(type, row.id()))); more = page < rows.totalPages();
             }
             case "SAMPLE_DISPATCH" -> {
-                var rows = inventory.samples(org, keyword, filter.path("status").asText(null), null, null, page, size);
+                var rows = inventory.samples(org, keyword, filter.path("status").asText(null), null, null, page, size, com.jsd.aird.iam.api.RecordDataScope.all());
                 rows.items().forEach(row -> refs.add(ref(type, row.id()))); more = page < rows.totalPages();
             }
             case "SHIPMENT" -> {
-                var rows = inventory.shipments(org, keyword, page, size);
+                var rows = inventory.shipments(org, keyword, page, size, com.jsd.aird.iam.api.RecordDataScope.all());
                 rows.items().forEach(row -> refs.add(ref(type, row.id()))); more = page < rows.totalPages();
             }
             case "PRODUCTION_ORDER" -> {
@@ -55,7 +55,7 @@ public class BusinessManufacturingReader implements BusinessReadPort {
                 rows.items().forEach(row -> refs.add(ref(type, row.id()))); more = page < rows.totalPages();
             }
             case "PRODUCTION_UPLOAD" -> {
-                var rows = uploads.list(org, keyword, filter.path("status").asText(null), optionalId(filter, "project_id"), true, page, size);
+                var rows = uploads.list(org, keyword, filter.path("status").asText(null), null, optionalId(filter, "project_id"), true, page, size);
                 rows.items().forEach(row -> refs.add(ref(type, row.id()))); more = page < rows.totalPages();
             }
             default -> throw missing();

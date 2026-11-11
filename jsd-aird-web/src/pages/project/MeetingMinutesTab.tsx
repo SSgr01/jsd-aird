@@ -3,6 +3,7 @@ import { App, Button, DatePicker, Form, Input, Modal, Popconfirm, Space, Tag } f
 import { DeleteOutlined, EditOutlined, PlusOutlined, TeamOutlined, EyeOutlined, FileTextOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useEffect, useMemo, useState } from 'react';
+import { Can } from '@/components/auth/Can';
 
 import {
   archiveMeetingToKb,
@@ -78,6 +79,7 @@ export function MeetingMinutesTab({ projectId }: Props) {
   };
 
   const openEdit = (record: MeetingMinutes) => {
+    if (record.archivedToKb) return;
     setEditing(record);
     form.resetFields();
     form.setFieldsValue({
@@ -157,9 +159,9 @@ export function MeetingMinutesTab({ projectId }: Props) {
     <div className="pm-mm-tab">
       <div className="pm-mm-tab-head">
         <div className="pm-mm-tip">按项目归档所有会议纪要，支持新增、编辑、查看与归档到知识库。</div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+        <Can permission="project.meeting.create"><Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
           新增会议纪要
-        </Button>
+        </Button></Can>
       </div>
 
       {loading ? (
@@ -197,14 +199,14 @@ export function MeetingMinutesTab({ projectId }: Props) {
                 <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setViewing(item)}>
                   查看
                 </Button>
-                <Button type="link" size="small" icon={<FileTextOutlined />} onClick={() => handleArchive(item)} disabled={item.archivedToKb}>
+                <Can permission="project.meeting.publish"><Button type="link" size="small" icon={<FileTextOutlined />} onClick={() => handleArchive(item)} disabled={item.archivedToKb}>
                   归档知识库
-                </Button>
-                <Popconfirm title="确认删除该会议纪要？" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => handleDelete(item)}>
+                </Button></Can>
+                <Can permission="project.meeting.delete"><Popconfirm title="确认删除该会议纪要？" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => handleDelete(item)}>
                   <Button type="link" size="small" danger icon={<DeleteOutlined />}>
                     删除
                   </Button>
-                </Popconfirm>
+                </Popconfirm></Can>
               </div>
             </li>
           ))}
@@ -247,14 +249,14 @@ export function MeetingMinutesTab({ projectId }: Props) {
             <Button onClick={() => setViewing(null)}>关闭</Button>
             {viewing ? (
               <>
-                <Button
+                <Can permission="project.meeting.publish"><Button
                   icon={<FileTextOutlined />}
                   onClick={() => handleArchive(viewing)}
                   disabled={viewing.archivedToKb}
                 >
                   归档知识库
-                </Button>
-                <Button
+                </Button></Can>
+                {!viewing.archivedToKb && <Can permission="project.meeting.update"><Button
                   type="primary"
                   icon={<EditOutlined />}
                   onClick={() => {
@@ -264,7 +266,7 @@ export function MeetingMinutesTab({ projectId }: Props) {
                   }}
                 >
                   编辑
-                </Button>
+                </Button></Can>}
               </>
             ) : null}
           </Space>

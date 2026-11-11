@@ -10,6 +10,7 @@ import com.jsd.aird.quality.application.port.QualityDataStore;
 import com.jsd.aird.shared.api.ApiResponse;
 import com.jsd.aird.shared.api.PageResponse;
 import com.jsd.aird.shared.api.ResponseFactory;
+import com.jsd.aird.shared.review.WorkspaceReviewService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -29,19 +30,21 @@ import java.util.UUID;
 public class QualityDataController {
     private final QualityDataService service;
     private final QualityDataExportService exportService;
-    public QualityDataController(QualityDataService service, QualityDataExportService exportService){this.service=service;this.exportService=exportService;}
+    private final WorkspaceReviewService reviews;
+    public QualityDataController(QualityDataService service, QualityDataExportService exportService, WorkspaceReviewService reviews){this.service=service;this.exportService=exportService;this.reviews=reviews;}
     @GetMapping("/data-types") public ApiResponse<List<QualityDataDefinitions.Type>> types(){return ok(service.definitions());}
     @GetMapping("/categories") public ApiResponse<List<QualityDataStore.Category>> categories(@RequestParam String type){return ok(service.categories(type));}
     @PostMapping("/categories") public ApiResponse<QualityDataStore.Category> createCategory(@Valid @RequestBody CategoryRequest r){return ok(service.createCategory(r.type(),r.name(),r.description()));}
     @PutMapping("/categories/{id}") public ApiResponse<QualityDataStore.Category> updateCategory(@PathVariable UUID id,@Valid @RequestBody RenameCategoryRequest r){return ok(service.updateCategory(id,r.name(),r.description(),r.revision()));}
-    @DeleteMapping("/categories/{id}") public ApiResponse<Void> deleteCategory(@PathVariable UUID id,@RequestParam String revision){service.deleteCategory(id,revision);return ok(null);}
-    @GetMapping("/records") public ApiResponse<PageResponse<QualityDataStore.RecordView>> records(@RequestParam String type,@RequestParam(required=false) UUID categoryId,@RequestParam(required=false) String keyword,@RequestParam(required=false) UUID projectId,@RequestParam(required=false) String status,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int size){return ok(service.records(type,categoryId,keyword,projectId,status,page,size));}
+    @DeleteMapping("/categories/{id}") public ApiResponse<Void> deleteCategory(@PathVariable UUID id,@RequestParam String revision,@RequestParam(required=false) UUID replacementCategoryId){service.deleteCategory(id,revision,replacementCategoryId);return ok(null);}
+    @GetMapping("/records") public ApiResponse<PageResponse<QualityDataStore.RecordView>> records(@RequestParam String type,@RequestParam(required=false) UUID categoryId,@RequestParam(required=false) String keyword,@RequestParam(required=false) UUID projectId,@RequestParam(required=false) String status,@RequestParam(required=false) String format,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int size){return ok(service.records(type,categoryId,keyword,projectId,status,format,page,size));}
     @GetMapping("/records/by-number") public ApiResponse<QualityDataStore.RecordView> recordByBusinessNo(@RequestParam String type,@RequestParam String businessNo){return ok(service.recordByBusinessNo(type,businessNo));}
     @GetMapping("/records/{id}/export") public ResponseEntity<byte[]> export(@PathVariable UUID id){return download(exportService.export(id));}
     @GetMapping("/records/{id:[0-9a-fA-F-]+}") public ApiResponse<QualityDataStore.RecordView> record(@PathVariable UUID id){return ok(service.record(id));}
-    @PutMapping("/records/{id}/rename") public ApiResponse<QualityDataStore.RecordView> rename(@PathVariable UUID id,@Valid @RequestBody RenameRecordRequest r){return ok(service.rename(id,new QualityDataService.RenameCommand(r.revision(),r.name(),r.projectId(),r.projectName(),r.stageId(),r.stageName(),r.taskId(),r.taskName())));}
+    @PutMapping("/records/{id}/rename") public ApiResponse<QualityDataStore.RecordView> rename(@PathVariable UUID id,@Valid @RequestBody RenameRecordRequest r){return ok(service.rename(id,new QualityDataService.RenameCommand(r.revision(),r.name(),r.businessNo(),r.data(),r.projectId(),r.projectName(),r.stageId(),r.stageName(),r.taskId(),r.taskName())));}
     @DeleteMapping("/records/{id}") public ApiResponse<Void> deleteRecord(@PathVariable UUID id,@RequestParam @jakarta.validation.constraints.PositiveOrZero long revision){service.deleteRecord(id,revision);return ok(null);}
-    @PostMapping("/records/{id}/publish") public ApiResponse<QualityDataStore.VersionView> publishRecord(@PathVariable UUID id,@Valid @RequestBody VersionRequest r){return ok(service.publishRecord(id,r.revision()));}
+    @PostMapping("/records/{id}/publish") public ApiResponse<QualityDataStore.VersionView> publishRecord(@PathVariable UUID id,@Valid @RequestBody VersionRequest r){reviews.requireApproved("QUALITY_RECORD",id);return ok(service.publishRecord(id,r.revision()));}
+    @PostMapping("/records/{id}/revisions") public ApiResponse<QualityDataStore.RecordView> createRevision(@PathVariable UUID id,@Valid @RequestBody VersionRequest r){return ok(service.createRevision(id,r.revision()));}
     @GetMapping("/records/{id}/versions") public ApiResponse<List<QualityDataStore.VersionView>> versions(@PathVariable UUID id){return ok(service.versions(id));}
     @PostMapping("/records/delete") public ApiResponse<Void> deleteRecords(@Valid @RequestBody DeleteRecordsRequest r){service.deleteBatch(r.records());return ok(null);}
     @PutMapping("/records/batch") public ApiResponse<Void> save(@Valid @RequestBody BatchRequest r){service.saveBatch(r.type(),r.categoryId(),r.records().stream().map(x->new QualityDataService.RecordInput(x.id(),x.businessNo(),x.data(),x.workbookSnapshot(),x.projectId(),x.projectName(),x.stageId(),x.stageName(),x.taskId(),x.taskName(),x.lockVersion())).toList(),r.deletes());return ok(null);}
@@ -64,9 +67,9 @@ public class QualityDataController {
         return ResponseEntity.ok().contentType(MediaType.parseMediaType(file.contentType()))
                 .header(HttpHeaders.CONTENT_DISPOSITION,disposition.toString()).contentLength(file.content().length).body(file.content());
     }
-    public record CategoryRequest(@NotBlank String type,@NotBlank @Size(max=20) String name,@NotBlank @Size(max=80) String description){}
-    public record RenameCategoryRequest(@NotBlank String revision,@NotBlank @Size(max=20) String name,@NotBlank @Size(max=80) String description){}
-    public record RenameRecordRequest(@NotNull @jakarta.validation.constraints.PositiveOrZero Long revision,@NotBlank @Size(max=300) String name,UUID projectId,String projectName,UUID stageId,String stageName,UUID taskId,String taskName){}
+    public record CategoryRequest(@NotBlank String type,@NotBlank @Size(max=20) String name,@Size(max=80) String description){}
+    public record RenameCategoryRequest(@NotBlank String revision,@NotBlank @Size(max=20) String name,@Size(max=80) String description){}
+    public record RenameRecordRequest(@NotNull @jakarta.validation.constraints.PositiveOrZero Long revision,@NotBlank @Size(max=300) String name,String businessNo,JsonNode data,UUID projectId,String projectName,UUID stageId,String stageName,UUID taskId,String taskName){}
     public record RecordRequest(UUID id,@NotBlank String businessNo,@NotNull JsonNode data,JsonNode workbookSnapshot,
                                 UUID projectId,String projectName,UUID stageId,String stageName,
                                 UUID taskId,String taskName,@NotNull @jakarta.validation.constraints.PositiveOrZero Long lockVersion){}

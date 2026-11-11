@@ -25,14 +25,13 @@
   max-width: 100%;
   border-radius: 12px;
 }
+/* 六个筛选项（关键词、项目/类别、状态、格式、日期、重置）同处一行，
+   所以需要 6 个列轨道；少一列会把重置按钮挤到第二行。 */
 .research-test-filter .ant-space {
   display: grid;
   width: 100%;
-  grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(140px, 1fr)) auto;
+  grid-template-columns: minmax(220px, 2fr) repeat(4, minmax(130px, 1fr)) auto;
   gap: 8px;
-}
-.research-test-filter.has-create-action .ant-space {
-  grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(140px, 1fr)) auto auto;
 }
 .research-test-filter .ant-space-item { min-width: 0; }
 .research-test-filter .ant-input-search,
@@ -40,6 +39,12 @@
 .research-test-filter .ant-picker {
   width: 100% !important;
   min-width: 0;
+}
+/* 重置按钮保持单行，不随网格收缩换行。 */
+.research-test-filter .pm-filter-reset {
+  width: 82px;
+  min-width: 82px;
+  white-space: nowrap;
 }
 .research-test-table-wrap {
   min-width: 0;
@@ -339,11 +344,18 @@
   }
 }
 .pm-unified-list-page .research-test-list-table .ant-table-thead > tr > th.research-test-name-column,
-.pm-unified-list-page .research-test-list-table .ant-table-tbody > tr > td.research-test-name-column,
+.pm-unified-list-page .research-test-list-table .ant-table-tbody > tr > td.research-test-name-column {
+  width: 300px;
+  max-width: 360px;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+/* 项目列与实验、品管页保持同一宽度。 */
 .pm-unified-list-page .research-test-list-table .ant-table-thead > tr > th.research-test-project-column,
 .pm-unified-list-page .research-test-list-table .ant-table-tbody > tr > td.research-test-project-column {
   width: 300px;
-  max-width: 360px;
+  max-width: 300px;
   white-space: normal !important;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -359,6 +371,7 @@
 }
 .pm-unified-list-page .research-test-list-table .research-test-name-column .ant-btn,
 .pm-unified-list-page .research-test-list-table .research-test-project-column .ant-table-cell-content,
+.pm-unified-list-page .research-test-list-table .research-test-project-text,
 .pm-unified-list-page .research-test-list-table .research-test-category-column .ant-table-cell-content,
 .pm-unified-list-page .research-test-list-table .research-test-scope-column .ant-table-cell-content {
   display: block;
@@ -437,8 +450,8 @@
   overflow: hidden;
 }
 @media (max-width: 1100px) {
-  .research-test-filter .ant-space { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .research-test-filter.has-create-action .ant-space { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  /* 中等宽度下压缩各筛选项，而不是把重置按钮挤到下一行。 */
+  .research-test-filter .ant-space { grid-template-columns: repeat(5, minmax(0, 1fr)) auto; }
   .upload-columns {
     grid-template-columns: 1fr;
   }

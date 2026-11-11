@@ -37,6 +37,7 @@ import {
   type InventoryProductOption,
 } from '@/services/inventory/inventory-api';
 import { generateUUID } from '@/utils/uuid';
+import { useAuthStore } from '@/stores/auth-store';
 
 import './inventory-pages.css';
 import './inventory-control.css';
@@ -101,6 +102,9 @@ function dateValue(value: Dayjs | undefined) {
 }
 
 export function InventoryControlPage({ mode }: { mode: ControlMode }) {
+  const canCreateInventory = useAuthStore((state) => state.user?.permissions.includes('inventory.create') ?? false);
+  const canUpdateInventory = useAuthStore((state) => state.user?.permissions.includes('inventory.update') ?? false);
+  const canUpdateParameters = useAuthStore((state) => state.user?.permissions.includes('system.parameters.update') ?? false);
   const [products, setProducts] = useState<Product[]>([]);
   const [balances, setBalances] = useState<InventoryBalance[]>([]);
   const [transactions, setTransactions] = useState<InventoryTransaction[]>([]);
@@ -129,8 +133,9 @@ export function InventoryControlPage({ mode }: { mode: ControlMode }) {
   }, []);
 
   useEffect(() => {
+    if (mode === 'settings') return;
     void reload().catch(() => message.error('库存控制数据加载失败'));
-  }, [reload]);
+  }, [reload, mode]);
 
   useEffect(() => {
     form.resetFields();
@@ -254,6 +259,8 @@ export function InventoryControlPage({ mode }: { mode: ControlMode }) {
   const productOptions = (scope?: InventoryScope) => (scope ? productsByScope[scope] : products).map((product) => ({ value: product.id, label: `${product.code} · ${product.name} · ${scopeLabels[product.scope]}` }));
 
   const renderForm = () => {
+    if (mode !== 'settings' && mode !== 'permissions' && mode !== 'audit'
+      && !(mode === 'warnings' ? canUpdateInventory : canCreateInventory)) return null;
     if (mode === 'products') {
       return <Card title="新增产品主档" extra={<PlusOutlined />}><Row gutter={16}><Col span={8}><Form.Item name="name" label="产品名称" rules={[{ required: true, message: '请输入产品名称' }]}><Input placeholder="请输入产品名称" /></Form.Item></Col><Col span={8}><Form.Item name="category" label="产品类别" rules={[{ required: true, message: '请选择产品类别' }]}><Select options={[{ value: '研发产品', label: '研发产品' }, { value: '生产产品', label: '生产产品' }, { value: '原材料', label: '原材料' }]} placeholder="请选择类别" /></Form.Item></Col><Col span={8}><Form.Item name="scope" label="库存域" rules={[{ required: true, message: '请选择库存域' }]}><Select options={scopeOptions} /></Form.Item></Col></Row><Button type="primary" htmlType="button" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>保存产品</Button></Card>;
     }
@@ -271,7 +278,7 @@ export function InventoryControlPage({ mode }: { mode: ControlMode }) {
       return <Card title={modeLabels[mode]} extra={<LinkOutlined />}><Row gutter={16}><Col span={8}><Form.Item name="productId" label="产品" rules={[{ required: true, message: '请选择产品' }]}><Select showSearch optionFilterProp="label" options={productOptions(scope)} /></Form.Item></Col><Col span={8}><Form.Item name="quantityKg" label="扣减数量 KG" rules={[{ required: true, message: '请输入数量' }]}><InputNumber min={0.000001} precision={6} className="inventory-full" /></Form.Item></Col><Col span={8}><Form.Item name="linkNo" label={mode === 'production-link' ? '生产单号' : '实验记录本号'} rules={[{ required: true, message: '请输入关联单号' }]}><Input /></Form.Item></Col></Row><Row gutter={16}><Col span={12}><Form.Item name="documentNo" label="库存业务单号"><Input placeholder="可自动生成" /></Form.Item></Col><Col span={12}><Form.Item name="businessDate" label="业务日期"><DatePicker className="inventory-full" /></Form.Item></Col></Row><Button type="primary" icon={<LinkOutlined />} loading={saving} onClick={() => void save()}>确认联动扣减</Button></Card>;
     }
     if (mode === 'settings') {
-      return <Card title="库存参数联动" extra={<SettingOutlined />}><Form.Item name="defaultLowStock" label="全局默认低库存阈值（KG）" rules={[{ required: true, message: '请输入默认阈值' }]}><InputNumber min={0} precision={6} className="inventory-full" /></Form.Item><Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>保存参数</Button></Card>;
+      return <Card title="库存参数联动" extra={<SettingOutlined />}><Form.Item name="defaultLowStock" label="全局默认低库存阈值（KG）" rules={[{ required: true, message: '请输入默认阈值' }]}><InputNumber min={0} precision={6} disabled={!canUpdateParameters} className="inventory-full" /></Form.Item>{canUpdateParameters && <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>保存参数</Button>}</Card>;
     }
     if (mode === 'permissions') {
       return <Card title="库存权限" extra={<SafetyCertificateOutlined />}><Form.Item label="当前测试角色"><Select value={inventoryRole} onChange={(role) => { setInventoryRole(role); window.localStorage.setItem('inventory-role', role); }} options={[{ value: 'WAREHOUSE_ADMIN', label: '仓库管理员（可读写）' }, { value: 'PRODUCTION_USER', label: '生产人员（生产域读写）' }, { value: 'RND_USER', label: '研发工程师（研发域读写）' }, { value: 'READ_ONLY', label: '只读用户（仅查询）' }]} /></Form.Item><div className="inventory-permission-grid"><Tag color="green">库存查询：允许</Tag><Tag color={selectedRole === 'READ_ONLY' ? 'default' : 'green'}>新增流水：{selectedRole === 'READ_ONLY' ? '拒绝' : '允许'}</Tag><Tag color={selectedRole === 'READ_ONLY' ? 'default' : 'green'}>调拨：{selectedRole === 'READ_ONLY' ? '拒绝' : '允许'}</Tag><Tag color={selectedRole === 'READ_ONLY' ? 'default' : 'green'}>冲销：{selectedRole === 'READ_ONLY' ? '拒绝' : '允许'}</Tag></div><Alert type="info" showIcon message="只读角色在库存控制台禁用写入动作；所有操作仍按业务单号写入可追溯流水。" /></Card>;

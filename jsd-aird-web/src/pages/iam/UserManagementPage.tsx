@@ -6,6 +6,7 @@ import { forwardRef, type ReactNode, useEffect, useImperativeHandle, useMemo, us
 import { generateAdminPassword } from '@/services/auth/password-generator';
 import { iamApi, type IamRole, type IamUser } from '@/services/iam/iam-api';
 import { HttpError } from '@/services/http/errors';
+import { useAuthStore } from '@/stores/auth-store';
 import './iam.css';
 import '@/styles/management-list.css';
 
@@ -42,6 +43,14 @@ PasswordField.displayName = 'PasswordField';
 
 export function UserManagementPage() {
   const { message } = App.useApp();
+  const permissions = useAuthStore((state) => state.user?.permissions ?? []);
+  // 权限配置页按功能行发放原子操作（system.users.update 等）；历史角色仍持有统一的
+  // system.user.manage。账号维护（停用/启用、重置密码、强制下线）与「编辑用户」同权，
+  // 因为权限矩阵的用户管理行只发放查看/新增/编辑/删除。
+  const can = (action: 'create' | 'update' | 'status' | 'reset' | 'logout') =>
+    permissions.includes(`system.users.${action}`)
+    || permissions.includes('system.user.manage')
+    || (action !== 'create' && permissions.includes('system.users.update'));
   const [users, setUsers] = useState<IamUser[]>([]);
   const [roles, setRoles] = useState<IamRole[]>([]);
   const [total, setTotal] = useState(0);
@@ -164,11 +173,11 @@ export function UserManagementPage() {
     { title: '系统角色', key: 'role', render: (_: unknown, user: IamUser) => <Tag color={user.roleCode === 'SYSTEM_ADMIN' ? 'blue' : 'default'}>{user.roleName || '未分配'}</Tag> },
     { title: '状态', key: 'status', render: (_: unknown, user: IamUser) => <Tag color={user.status === 'ACTIVE' ? 'success' : 'error'}>{user.status === 'ACTIVE' ? '启用' : '停用'}</Tag> },
     { title: '最后登录', dataIndex: 'lastLoginAt', key: 'lastLoginAt', render: (value?: string) => value ? new Date(value).toLocaleString('zh-CN') : '尚未登录' },
-    { title: '操作', key: 'actions', render: (_: unknown, user: IamUser) => <Space><Button type="link" icon={<EditOutlined />} onClick={() => openEdit(user)}>编辑</Button><Dropdown trigger={['click']} menu={{ items: [{ key: user.status === 'ACTIVE' ? 'disable' : 'enable', label: user.status === 'ACTIVE' ? '停用账号' : '启用账号', danger: user.status === 'ACTIVE' }, { key: 'reset', label: '重置密码' }, { key: 'logout', label: '强制下线' }], onClick: ({ key }) => void action(key, user) }}><Button type="text" icon={<MoreOutlined />} /></Dropdown></Space> },
+    ...(can('update') || can('status') || can('reset') || can('logout') ? [{ title: '操作', key: 'actions', render: (_: unknown, user: IamUser) => <Space>{can('update') && <Button type="link" icon={<EditOutlined />} onClick={() => openEdit(user)}>编辑</Button>}{(can('status') || can('reset') || can('logout')) && <Dropdown trigger={['click']} menu={{ items: [...(can('status') ? [{ key: user.status === 'ACTIVE' ? 'disable' : 'enable', label: user.status === 'ACTIVE' ? '停用账号' : '启用账号', danger: user.status === 'ACTIVE' }] : []), ...(can('reset') ? [{ key: 'reset', label: '重置密码' }] : []), ...(can('logout') ? [{ key: 'logout', label: '强制下线' }] : [])], onClick: ({ key }) => void action(key, user) }}><Button type="text" icon={<MoreOutlined />} aria-label="更多操作" /></Dropdown>}</Space> }] : []),
   ];
 
   return <div className="iam-page pm-unified-list-page iam-user-management-page">
-    <div className="page-heading"><div><Typography.Title level={2}>用户管理</Typography.Title><Typography.Text type="secondary">维护系统账号、部门归属和主角色，账号状态变化会立即影响当前会话。</Typography.Text></div><Space><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button><Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增用户</Button></Space></div>
+    <div className="page-heading"><div><Typography.Title level={2}>用户管理</Typography.Title><Typography.Text type="secondary">维护系统账号、部门归属和主角色，账号状态变化会立即影响当前会话。</Typography.Text></div><Space><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>{can('create') && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增用户</Button>}</Space></div>
     <Row gutter={[12, 12]}><Col xs={12} sm={12} lg={6}><Card className="iam-stat-card"><Statistic title="用户总数" value={total} prefix={<UserOutlined />} /></Card></Col><Col xs={12} sm={12} lg={6}><Card className="iam-stat-card"><Statistic title="启用账号" value={users.filter((user) => user.status === 'ACTIVE').length} /></Card></Col><Col xs={12} sm={12} lg={6}><Card className="iam-stat-card"><Statistic title="部门数量" value={departments} /></Card></Col><Col xs={12} sm={12} lg={6}><Card className="iam-stat-card"><Statistic title="系统角色" value={roles.length} /></Card></Col></Row>
     <Card className="iam-card" variant="borderless"><div className="iam-toolbar"><Input.Search allowClear value={keyword} onChange={(event) => setKeyword(event.target.value)} onSearch={() => { setCurrentPage(1); void load(1); }} placeholder="搜索用户名、姓名或部门" /><Typography.Text type="secondary">共 {total} 个账号</Typography.Text></div><Table rowKey="id" loading={loading} columns={columns} dataSource={users} scroll={{ x: 'max-content' }} pagination={{ current: currentPage, total, pageSize: 20, onChange: (nextPage) => { setCurrentPage(nextPage); void load(nextPage); } }} /></Card>
     <Modal title={editing ? '编辑用户' : '新增用户'} open={modalOpen} onCancel={() => { setModalOpen(false); clearPasswordInputs(); }} destroyOnHidden width={520} footer={<Space><Button onClick={() => { setModalOpen(false); clearPasswordInputs(); }}>取消</Button><Button type="primary" htmlType="submit" form="iam-user-form">保存</Button></Space>}>

@@ -23,7 +23,8 @@ import type { RangePickerProps } from 'antd/es/date-picker';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { CategoryCardGrid, CatalogListPanel, type CatalogCategoryCard } from '@/components/catalog-workspace';
+import { CategoryCardGrid, CategoryDeleteModal, CatalogListPanel, type CatalogCategoryCard } from '@/components/catalog-workspace';
+import { useAuthStore } from '@/stores/auth-store';
 import type { TemplateFormat, TemplateListItem, TemplateStatus } from '@/features/template-workspace/types';
 import {
   templateApi,
@@ -45,9 +46,12 @@ type EditOperation = { type: 'RENAME' | 'COPY'; item: TemplateListItem };
 
 function templateStatus(record: TemplateListItem) {
   const hasUnpublishedChanges = record.hasDraft && record.status !== 'DRAFT';
+  const reviewStatus = record.hasDraft ? record.draftReviewStatus : undefined;
+  const reviewLabel = reviewStatus === 'SUBMITTED' ? '待审核' : reviewStatus === 'APPROVED' ? '审核通过' : reviewStatus === 'REJECTED' ? '已退回' : '草稿';
+  const reviewColor = reviewStatus === 'SUBMITTED' ? 'processing' : reviewStatus === 'APPROVED' ? 'success' : reviewStatus === 'REJECTED' ? 'error' : 'gold';
   return <Space size={4} wrap>
-    <Tag color={statusLabels[record.status].color}>{statusLabels[record.status].label}</Tag>
-    {hasUnpublishedChanges ? <Tag color="gold">有未发布修改</Tag> : null}
+    {record.status !== 'DRAFT' && <Tag color={statusLabels[record.status].color}>{statusLabels[record.status].label}</Tag>}
+    {(record.status === 'DRAFT' || hasUnpublishedChanges) && <Tag color={reviewColor}>{reviewLabel}</Tag>}
   </Space>;
 }
 
@@ -68,6 +72,9 @@ function templateVersion(record: TemplateListItem) {
 }
 
 export function TemplatesPage() {
+  const permissions = useAuthStore((state) => state.user?.permissions ?? []);
+  const can = (action: string) => permissions.includes(`template.view.${action}`);
+  const canCategory = (action: string) => permissions.includes(`template.category.${action}`);
   const { message, modal } = App.useApp();
   const navigate = useNavigate();
   const [items, setItems] = useState<TemplateListItem[]>([]);
@@ -325,18 +332,21 @@ export function TemplatesPage() {
       render: (_, record) => <Space>{record.format === 'XLSX' ? <FileExcelOutlined /> : <FileWordOutlined />}<Typography.Link strong onClick={(event) => { event.stopPropagation(); navigate(`/templates/${record.versionId}/workspace`); }}>{record.name}</Typography.Link></Space>,
     },
     { title: '分类', dataIndex: 'category', render: (_, record) => record.category || '未分类' },
+    { title: '文件格式', dataIndex: 'format', width: 105, render: (value: TemplateFormat) => value === 'XLSX' ? 'Excel' : value === 'DOCX' ? 'Word' : '—' },
     { title: '状态', key: 'status', render: (_, record) => templateStatus(record) },
     { title: '版本', key: 'version', render: (_, record) => templateVersion(record) },
     { title: '创建人', dataIndex: 'createdByName', responsive: ['md'], render: (_, record) => record.createdByName || '—' },
     { title: '最近更新', dataIndex: 'updatedAt', responsive: ['sm'], render: (_, record) => new Date(record.updatedAt).toLocaleString('zh-CN') },
     {
       title: '操作', key: 'actions', render: (_, record) => <Space size={0} onClick={(event) => event.stopPropagation()}>
-        <Button type="link" onClick={() => navigate(`/templates/${record.versionId}/workspace`)}>{record.hasDraft || record.status === 'DRAFT' ? '编辑模板' : '查看模板'}</Button>
+        {/* 打开工作台属于查看动作，草稿能否保存由工作台内的编辑权限决定 */}
+        {can('view') && <Button type="link" onClick={() => navigate(`/templates/${record.versionId}/workspace`)}>{record.hasDraft || record.status === 'DRAFT' ? '编辑模板' : '查看模板'}</Button>}
         <Dropdown trigger={['click']} menu={{ items: [
-          { key: 'copy', icon: <CopyOutlined />, label: '复制模板' }, { key: 'rename', label: '重命名' },
-          { key: 'move', icon: <FolderAddOutlined />, label: '移动分类' }, { key: 'history', icon: <HistoryOutlined />, label: '版本历史' },
-          ...(record.allowedActions?.includes('DELETE') ? [{ key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除草稿' }] : []),
-          ...(record.allowedActions?.includes('RETIRE') ? [{ key: 'retire', danger: true, icon: <StopOutlined />, label: '停用模板' }] : []),
+          ...(can('copy') ? [{ key: 'copy', icon: <CopyOutlined />, label: '复制模板' }] : []),
+          ...(can('update') ? [{ key: 'rename', label: '重命名' }, { key: 'move', icon: <FolderAddOutlined />, label: '移动分类' }] : []),
+          { key: 'history', icon: <HistoryOutlined />, label: '版本历史' },
+          ...(can('delete') && record.allowedActions?.includes('DELETE') ? [{ key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除草稿' }] : []),
+          ...(can('disable') && record.allowedActions?.includes('RETIRE') ? [{ key: 'retire', danger: true, icon: <StopOutlined />, label: '停用模板' }] : []),
         ], onClick: ({ key }) => {
           if (key === 'copy' || key === 'rename') { setOperation({ type: key === 'copy' ? 'COPY' : 'RENAME', item: record }); setOperationName(key === 'copy' ? `${record.name} - 副本` : record.name); setOperationCategoryId(record.categoryId); }
           if (key === 'move') setMovingTemplate(record); if (key === 'history') navigate(`/templates/${record.versionId}/workspace?view=versions`);
@@ -347,12 +357,12 @@ export function TemplatesPage() {
   ];
 
   return <div className="business-page templates-catalog-page">
-    <div className="page-heading"><div><Typography.Title level={2}>模板查看</Typography.Title><Typography.Text type="secondary">查看模板，管理草稿和已发布版本。</Typography.Text></div><Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建模板</Button></div>
+    <div className="page-heading"><div><Typography.Title level={2}>模板查看</Typography.Title><Typography.Text type="secondary">查看模板，管理草稿和已发布版本。</Typography.Text></div>{can('create') && <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建模板</Button>}</div>
     <CategoryCardGrid categories={categoryCards} activeId={uncategorized ? 'UNCATEGORIZED' : categoryId ?? 'ALL'}
       onSelect={(id) => changeFilter(() => { setCategoryId(id === 'ALL' || id === 'UNCATEGORIZED' ? undefined : id); setUncategorized(id === 'UNCATEGORIZED'); })}
-      onCreate={() => { categoryForm.resetFields(); setCategoryEditor('NEW'); }}
-      onRename={(item) => { const target = categoryItems.find((value) => value.id === item.id); if (target) { categoryForm.setFieldsValue(target); setCategoryEditor(target); } }}
-      onDelete={(item) => setDeletingCategory(categoryItems.find((value) => value.id === item.id))}
+      onCreate={canCategory('create') ? () => { categoryForm.resetFields(); setCategoryEditor('NEW'); } : undefined}
+      onRename={canCategory('update') ? (item) => { const target = categoryItems.find((value) => value.id === item.id); if (target) { categoryForm.setFieldsValue(target); setCategoryEditor(target); } } : undefined}
+      onDelete={canCategory('delete') ? (item) => setDeletingCategory(categoryItems.find((value) => value.id === item.id)) : undefined}
       countLabel="个模板" />
 
     <CatalogListPanel title="模板列表" count={total} countLabel="个模板"
@@ -369,11 +379,11 @@ export function TemplatesPage() {
       actions={<>
         <Typography.Text type="secondary">已选 {selected.length} 个模板</Typography.Text>
         {selected.length > 0 && <>
-          <Button icon={<CopyOutlined />} loading={batchOperating} onClick={() => void runBatch('COPY')}>批量复制</Button>
-          <Button icon={<FolderAddOutlined />} disabled={batchOperating} onClick={() => setBatchMoveOpen(true)}>移动分类</Button>
-          <Button danger icon={<DeleteOutlined />} disabled={!selected.some((item) => item.allowedActions?.includes('DELETE'))} loading={batchOperating} onClick={() => void runBatch('DELETE_DRAFT')}>删除纯草稿</Button>
-          <Button danger icon={<StopOutlined />} disabled={!selected.some((item) => item.allowedActions?.includes('RETIRE'))} loading={batchOperating} onClick={() => void runBatch('RETIRE')}>停用发布版</Button>
-          <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportTemplates()}>导出选中</Button>
+          {can('copy') && <Button icon={<CopyOutlined />} loading={batchOperating} onClick={() => void runBatch('COPY')}>批量复制</Button>}
+          {can('update') && <Button icon={<FolderAddOutlined />} disabled={batchOperating} onClick={() => setBatchMoveOpen(true)}>移动分类</Button>}
+          {can('delete') && <Button danger icon={<DeleteOutlined />} disabled={!selected.some((item) => item.allowedActions?.includes('DELETE'))} loading={batchOperating} onClick={() => void runBatch('DELETE_DRAFT')}>删除纯草稿</Button>}
+          {can('disable') && <Button danger icon={<StopOutlined />} disabled={!selected.some((item) => item.allowedActions?.includes('RETIRE'))} loading={batchOperating} onClick={() => void runBatch('RETIRE')}>停用发布版</Button>}
+          {can('export') && <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void exportTemplates()}>导出选中</Button>}
         </>}
       </>}
     >
@@ -404,9 +414,19 @@ export function TemplatesPage() {
       </Form>
     </FormModal>
 
-    <Modal title={deletingCategory ? `删除分类“${deletingCategory.name}”` : '删除分类'} open={Boolean(deletingCategory)} confirmLoading={savingCategory} okText="删除并迁移" okButtonProps={{ danger: true }} onOk={() => void deleteCategory()} onCancel={() => setDeletingCategory(undefined)}>
-      <Typography.Paragraph>模板不会被删除。请选择迁移目标，留空则移到未分类。</Typography.Paragraph><Select allowClear value={replacementCategoryId} onChange={setReplacementCategoryId} options={categoryItems.filter((item) => item.id !== deletingCategory?.id).map((item) => ({ value: item.id, label: item.name }))} style={{ width: '100%' }} />
-    </Modal>
+    <CategoryDeleteModal
+      open={Boolean(deletingCategory)}
+      title={deletingCategory ? `删除分类“${deletingCategory.name}”` : '删除分类'}
+      description="模板不会被删除。请选择迁移目标，留空则移到未分类。"
+      confirmLoading={savingCategory}
+      replacement={{
+        value: replacementCategoryId,
+        onChange: setReplacementCategoryId,
+        options: categoryItems.filter((item) => item.id !== deletingCategory?.id).map((item) => ({ value: item.id, label: item.name })),
+      }}
+      onCancel={() => { setDeletingCategory(undefined); setReplacementCategoryId(undefined); }}
+      onConfirm={() => void deleteCategory()}
+    />
 
     <Modal title={movingTemplate ? `移动“${movingTemplate.name}”` : '移动模板'} open={Boolean(movingTemplate)} footer={null} onCancel={() => setMovingTemplate(undefined)}><Space direction="vertical" style={{ width: '100%' }}><Button block onClick={() => void moveTemplate(undefined)}>移到未分类</Button>{categoryItems.map((item) => <Button block key={item.id} onClick={() => void moveTemplate(item.id)}>{item.name}</Button>)}</Space></Modal>
 

@@ -15,7 +15,17 @@ class PageErrorBoundary extends Component<PropsWithChildren<{ resetKey: string }
     if (previous.resetKey !== this.props.resetKey && this.state.error) this.setState({ error: undefined });
   }
   render(): ReactNode {
-    if (this.state.error) return <div className="content-error" role="alert"><h3>当前页面加载失败</h3><p>请检查网络后重试。</p><button type="button" onClick={() => { resetFailedPages(); resetFailedEditors(); this.setState({ error: undefined }); }}>重试当前页面</button></div>;
+    if (this.state.error) {
+      const chunkError = isChunkError(this.state.error);
+      return <div className="content-error" role="alert">
+        <h3>当前页面加载失败</h3>
+        <p>{chunkError ? '页面资源加载失败，请重新加载。' : this.state.error.message || '页面运行时发生错误。'}</p>
+        <button type="button" onClick={() => {
+          if (chunkError) { window.location.reload(); return; }
+          resetFailedPages(); resetFailedEditors(); this.setState({ error: undefined });
+        }}>{chunkError ? '重新加载页面' : '重试当前页面'}</button>
+      </div>;
+    }
     return this.props.children;
   }
 }

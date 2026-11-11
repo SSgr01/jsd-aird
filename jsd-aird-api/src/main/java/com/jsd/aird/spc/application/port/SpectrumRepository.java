@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import com.jsd.aird.iam.api.RecordDataScope;
 
 public interface SpectrumRepository {
     void lockCategory(UUID organizationId, UUID categoryId);
@@ -12,12 +13,13 @@ public interface SpectrumRepository {
     List<CategoryRow> listCategories(UUID organizationId);
     Optional<CategoryRow> findCategory(UUID organizationId, UUID categoryId);
     Optional<CategoryRow> findCategoryByCode(UUID organizationId, String code);
+    UUID ensureUncategorizedCategory(UUID organizationId, UUID createdBy);
     void lockCategoryName(UUID organizationId, String name);
     boolean categoryNameExists(UUID organizationId, String name, UUID excludingCategoryId);
     void lockCategoryCode(UUID organizationId, String code);
     CategoryRow createCategory(NewCategory command);
     CategoryRow renameCategory(UUID organizationId, UUID categoryId, String name, String description, String analysisHint, String fieldsJson);
-    void deleteCategory(UUID organizationId, UUID categoryId);
+    void deleteCategory(UUID organizationId, UUID categoryId, UUID replacementCategoryId);
 
     Optional<ChartRow> findChart(UUID organizationId, UUID chartId);
     Optional<ChartRow> findChartByHash(UUID organizationId, String sha256);
@@ -26,6 +28,14 @@ public interface SpectrumRepository {
     void lockChartRequest(UUID organizationId, UUID requestId);
     List<ChartRow> listCharts(UUID organizationId, String keyword, UUID categoryId, String status, int page, int size);
     long countCharts(UUID organizationId, String keyword, UUID categoryId, String status);
+    default List<ChartRow> listCharts(UUID organizationId, String keyword, UUID categoryId, String status,
+                                     int page, int size, RecordDataScope scope) {
+        return listCharts(organizationId, keyword, categoryId, status, page, size);
+    }
+    default long countCharts(UUID organizationId, String keyword, UUID categoryId, String status,
+                             RecordDataScope scope) {
+        return countCharts(organizationId, keyword, categoryId, status);
+    }
     ChartRow insertChart(NewChart command);
     void updateChart(UUID organizationId, UUID chartId, String title, String sampleName, String batchNo,
                      String testConditions, String metadataJson);

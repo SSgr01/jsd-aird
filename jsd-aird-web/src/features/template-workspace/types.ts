@@ -77,6 +77,7 @@ export interface TemplateListItem {
   draftVersionId?: string;
   draftVersionNo?: number;
   hasDraft: boolean;
+  draftReviewStatus?: 'NOT_SUBMITTED' | 'SUBMITTED' | 'APPROVED' | 'REJECTED';
   createdBy?: string;
   createdByName?: string;
   createdAt: string;

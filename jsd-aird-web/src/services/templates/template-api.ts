@@ -852,7 +852,7 @@ export const templateApi = {
     );
     const response = await httpClient.post<
       ApiResponse<{ fileId: string; sha256: string; status: 'STAGED' }>
-    >('/api/v1/files/staged?kind=SNAPSHOT', body);
+    >('/api/v1/files/staged?kind=TEMPLATE_SNAPSHOT', body);
     return response.data.data;
   },
 
@@ -907,6 +907,13 @@ export const templateApi = {
   async listImports() {
     const response = await httpClient.get<ApiResponse<TemplateImportJob[]>>(
       '/api/v1/template-imports',
+    );
+    return response.data.data;
+  },
+
+  async listImportTargets() {
+    const response = await httpClient.get<ApiResponse<Array<{ id: string; name: string }>>>(
+      '/api/v1/template-imports/scope-targets',
     );
     return response.data.data;
   },
@@ -1003,9 +1010,9 @@ export const templateApi = {
     return response.data.data;
   },
 
-  async downloadSnapshot(fileId: string) {
+  async downloadSnapshot(versionId: string) {
     const response = await httpClient.get<Record<string, unknown>>(
-      `/api/v1/files/${fileId}/content`,
+      `/api/v1/template-versions/${versionId}/snapshot`,
     );
     return response.data;
   },

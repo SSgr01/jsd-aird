@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { AppProviders } from '@/app/providers/AppProviders';
 import type { TemplateListItem } from '@/features/template-workspace/types';
 import { templateApi } from '@/services/templates/template-api';
+import { useAuthStore } from '@/stores/auth-store';
 import { TemplatesPage } from './TemplatesPage';
 
 vi.mock('@/services/templates/template-api', () => ({
@@ -47,6 +48,7 @@ const publishedWithDraft: TemplateListItem = {
   draftVersionId: 'draft-version',
   draftVersionNo: 2,
   hasDraft: true,
+  draftReviewStatus: 'SUBMITTED',
   lockVersion: 3,
   updatedAt: '2026-08-13T00:00:00Z',
   createdAt: '2026-08-01T00:00:00Z',
@@ -66,6 +68,7 @@ const retiredWithDraft: TemplateListItem = {
   retiredVersionNo: 3,
   draftVersionId: 'retired-draft-version',
   draftVersionNo: 4,
+  draftReviewStatus: 'APPROVED',
   versionNo: 4,
 };
 
@@ -76,6 +79,11 @@ function page(items: TemplateListItem[], total = items.length) {
 describe('TemplatesPage catalog presentation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useAuthStore.setState({ user: {
+      userId: 'user-1', organizationId: 'org-1', organizationName: 'Test',
+      username: 'tester', displayName: '测试用户', status: 'ACTIVE', authVersion: 1,
+      permissions: ['template.view.view', 'template.view.create', 'template.view.update', 'template.view.delete', 'template.view.export', 'template.category.update'],
+    } });
     listMock.mockImplementation((params) => Promise.resolve(page(
       [publishedWithDraft, retiredWithDraft],
       params?.uncategorized ? 89 : params?.categoryId ? 5 : 94,
@@ -109,7 +117,8 @@ describe('TemplatesPage catalog presentation', () => {
     expect(screen.getByRole('columnheader', { name: '状态' })).toBeInTheDocument();
     expect(screen.queryByText('TPL-PUBLISHED')).not.toBeInTheDocument();
     expect(screen.queryByText('TPL-RETIRED')).not.toBeInTheDocument();
-    expect(screen.getAllByText('有未发布修改')).toHaveLength(2);
+    expect(screen.getByText('待审核')).toBeInTheDocument();
+    expect(screen.getByText('审核通过')).toBeInTheDocument();
     expect(screen.getByText('发布 V1')).toBeInTheDocument();
     expect(screen.getByText('草稿 V2')).toBeInTheDocument();
     expect(screen.getByText('停用 V3')).toBeInTheDocument();

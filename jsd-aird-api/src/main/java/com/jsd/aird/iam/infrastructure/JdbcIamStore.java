@@ -6,6 +6,7 @@ import java.sql.ResultSet;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
@@ -16,11 +17,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.iam.application.port.IamStore;
 import com.jsd.aird.iam.application.port.IamStore.Binding;
 import com.jsd.aird.iam.application.port.IamStore.Organization;
+import com.jsd.aird.iam.application.port.IamStore.PermissionLevelBinding;
 import com.jsd.aird.iam.application.port.IamStore.Role;
 import com.jsd.aird.iam.application.port.IamStore.Session;
 import com.jsd.aird.iam.application.port.IamStore.SessionSummary;
 import com.jsd.aird.iam.application.port.IamStore.User;
 import com.jsd.aird.iam.api.PermissionDefinitionContributor.PermissionDefinition;
+import com.jsd.aird.iam.api.RecordDataScope;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -65,21 +68,58 @@ public class JdbcIamStore implements IamStore {
                 .stream().findFirst();
     }
 
-    public List<User> users(UUID organizationId, String keyword, int page, int size) {
+    private static final String USER_KEYWORD_WHERE =
+            "u.organization_id = ? AND (CAST(? AS text) IS NULL OR u.username ILIKE ? OR u.display_name ILIKE ? OR COALESCE(u.department_name, '') ILIKE ?)";
+
+    public List<User> users(UUID organizationId, String keyword, int page, int size, RecordDataScope dataScope) {
         var like = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
         var offset = Math.max(0, (page - 1) * size);
-        return jdbc.query(userSql("u.organization_id = ? AND (CAST(? AS text) IS NULL OR u.username ILIKE ? OR u.display_name ILIKE ? OR COALESCE(u.department_name, '') ILIKE ?)")
-                        + " ORDER BY u.created_at DESC LIMIT ? OFFSET ?", (rs, row) -> user(rs, row),
-                organizationId, like, like, like, like, size, offset);
+        var args = new ArrayList<Object>();
+        args.add(organizationId); args.add(like); args.add(like); args.add(like); args.add(like);
+        var where = USER_KEYWORD_WHERE + userScopeCondition(dataScope, args);
+        args.add(size); args.add(offset);
+        return jdbc.query(userSql(where) + " ORDER BY u.created_at DESC LIMIT ? OFFSET ?",
+                (rs, row) -> user(rs, row), args.toArray());
     }
 
-    public long countUsers(UUID organizationId, String keyword) {
+    public long countUsers(UUID organizationId, String keyword, RecordDataScope dataScope) {
         var like = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
-        return jdbc.queryForObject("""
-                SELECT count(*) FROM iam.app_user u
-                WHERE u.organization_id = ?
-                  AND (CAST(? AS text) IS NULL OR u.username ILIKE ? OR u.display_name ILIKE ? OR COALESCE(u.department_name, '') ILIKE ?)
-                """, Long.class, organizationId, like, like, like, like);
+        var args = new ArrayList<Object>();
+        args.add(organizationId); args.add(like); args.add(like); args.add(like); args.add(like);
+        return jdbc.queryForObject("SELECT count(*) FROM iam.app_user u WHERE "
+                + USER_KEYWORD_WHERE + userScopeCondition(dataScope, args), Long.class, args.toArray());
+    }
+
+    public boolean userInScope(UUID organizationId, UUID userId, RecordDataScope dataScope) {
+        var args = new ArrayList<Object>();
+        args.add(organizationId); args.add(userId);
+        return jdbc.queryForObject("SELECT count(*) FROM iam.app_user u WHERE u.organization_id = ? AND u.id = ?"
+                + userScopeCondition(dataScope, args), Long.class, args.toArray()) > 0;
+    }
+
+    /**
+     * 用户数据范围：本部门按 department_id 限制，指定按用户 id 限制。
+     * 历史记录只有明确的创建人审计记录才会回填 created_by。
+     */
+    private String userScopeCondition(RecordDataScope scope, List<Object> args) {
+        if (scope == null) return "";
+        return switch (scope.type()) {
+            case "ALL", "ORG" -> "";
+            case "SELF", "CREATOR" -> {
+                args.add(scope.actorId());
+                yield " AND u.created_by = ?";
+            }
+            case "DEPARTMENT" -> {
+                args.add(scope.actorId());
+                yield " AND u.department_id = (SELECT me.department_id FROM iam.app_user me WHERE me.id = ? AND me.organization_id = u.organization_id)";
+            }
+            case "SELECTED", "PROJECT", "CATEGORY" -> {
+                if (scope.targetIds().isEmpty()) yield " AND false";
+                args.addAll(scope.targetIds());
+                yield " AND u.id IN (" + String.join(",", scope.targetIds().stream().map(id -> "?").toList()) + ")";
+            }
+            default -> " AND false";
+        };
     }
 
     public long countUsersByStatus(UUID organizationId, String status) {
@@ -89,11 +129,16 @@ public class JdbcIamStore implements IamStore {
 
     public void insertUser(UUID id, UUID organizationId, String username, String displayName, String email,
                            String phone, String department, UUID roleId, String passwordHash) {
+        insertUser(id, organizationId, username, displayName, email, phone, department, roleId, passwordHash, null);
+    }
+
+    public void insertUser(UUID id, UUID organizationId, String username, String displayName, String email,
+                           String phone, String department, UUID roleId, String passwordHash, UUID createdBy) {
         jdbc.update("""
                 INSERT INTO iam.app_user (id, organization_id, username, display_name, email, phone,
-                    department_name, role_id, password_hash)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, id, organizationId, username, displayName, email, phone, department, roleId, passwordHash);
+                    department_name, role_id, password_hash, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, id, organizationId, username, displayName, email, phone, department, roleId, passwordHash, createdBy);
     }
 
     public void updateUser(UUID organizationId, UUID userId, String displayName, String email, String phone,
@@ -201,9 +246,11 @@ public class JdbcIamStore implements IamStore {
         if (jdbc.queryForObject("SELECT builtin FROM iam.role WHERE organization_id = ? AND id = ?", Boolean.class, organizationId, roleId)) {
             throw new IllegalArgumentException("内置角色不可删除");
         }
-        if (jdbc.queryForObject("SELECT count(*) FROM iam.app_user WHERE organization_id = ? AND role_id = ?", Long.class, organizationId, roleId) > 0) {
-            throw new IllegalArgumentException("仍有用户绑定该角色");
-        }
+        // v2 role deletion follows the prototype: remove this business role
+        // from users, but keep their optional level and personal overrides.
+        jdbc.update("DELETE FROM iam.user_role WHERE organization_id = ? AND role_id = ?", organizationId, roleId);
+        jdbc.update("UPDATE iam.app_user SET role_id = NULL, auth_version = auth_version + 1 WHERE organization_id = ? AND role_id = ?",
+                organizationId, roleId);
         jdbc.update("DELETE FROM iam.role WHERE organization_id = ? AND id = ?", organizationId, roleId);
     }
 
@@ -380,6 +427,260 @@ public class JdbcIamStore implements IamStore {
         revokeUserSessions(organizationId, userId);
     }
 
+    @Override
+    public List<Role> userRoles(UUID organizationId, UUID userId) {
+        return jdbc.query(roleSql("organization_id = ? AND id IN (SELECT role_id FROM iam.user_role WHERE organization_id = ? AND user_id = ?) ORDER BY builtin DESC, name"),
+                (rs, row) -> role(rs, row), organizationId, organizationId, userId);
+    }
+
+    @Override
+    public void replaceUserRoles(UUID organizationId, UUID userId, List<UUID> roleIds, UUID primaryRoleId) {
+        jdbc.update("DELETE FROM iam.user_role WHERE organization_id = ? AND user_id = ?", organizationId, userId);
+        if (roleIds != null) {
+            roleIds.stream().filter(java.util.Objects::nonNull).distinct().forEach(roleId -> jdbc.update(
+                    "INSERT INTO iam.user_role (organization_id, user_id, role_id, primary_role) VALUES (?, ?, ?, ?)",
+                    organizationId, userId, roleId, roleId.equals(primaryRoleId)));
+        }
+        jdbc.update("UPDATE iam.app_user SET role_id = ?, auth_version = auth_version + 1 WHERE organization_id = ? AND id = ?",
+                primaryRoleId, organizationId, userId);
+        revokeUserSessions(organizationId, userId);
+    }
+
+    @Override
+    public List<String> roleMenus(UUID organizationId, UUID roleId) {
+        return jdbc.queryForList("SELECT menu_key FROM iam.role_menu_binding WHERE organization_id = ? AND role_id = ? ORDER BY menu_key",
+                String.class, organizationId, roleId);
+    }
+
+    @Override
+    public void replaceRoleMenus(UUID organizationId, UUID roleId, long expectedVersion, List<String> menuKeys) {
+        var updated = jdbc.update("""
+                UPDATE iam.role SET policy_version = policy_version + 1, updated_at = now()
+                WHERE organization_id = ? AND id = ? AND policy_version = ?
+                """, organizationId, roleId, expectedVersion);
+        if (updated != 1) throw new PolicyVersionConflict();
+        jdbc.update("DELETE FROM iam.role_menu_binding WHERE organization_id = ? AND role_id = ?", organizationId, roleId);
+        if (menuKeys != null) menuKeys.stream().filter(key -> key != null && !key.isBlank()).distinct().forEach(key -> jdbc.update(
+                "INSERT INTO iam.role_menu_binding (id, organization_id, role_id, menu_key) VALUES (?, ?, ?, ?)",
+                UUID.randomUUID(), organizationId, roleId, key));
+        jdbc.update("""
+                UPDATE iam.app_user u SET auth_version = auth_version + 1
+                WHERE u.organization_id = ? AND (
+                    u.role_id = ? OR EXISTS (
+                        SELECT 1 FROM iam.user_role ur
+                        WHERE ur.organization_id = u.organization_id AND ur.user_id = u.id AND ur.role_id = ?
+                    )
+                )
+                """, organizationId, roleId, roleId);
+        jdbc.update("""
+                UPDATE iam.login_session s SET revoked_at = now()
+                WHERE s.organization_id = ? AND s.revoked_at IS NULL AND EXISTS (
+                    SELECT 1 FROM iam.app_user u
+                    WHERE u.organization_id = s.organization_id AND u.id = s.user_id AND (
+                        u.role_id = ? OR EXISTS (
+                            SELECT 1 FROM iam.user_role ur
+                            WHERE ur.organization_id = u.organization_id AND ur.user_id = u.id AND ur.role_id = ?
+                        )
+                    )
+                )
+                """, organizationId, roleId, roleId);
+    }
+
+    @Override
+    public List<PermissionLevel> permissionLevels(UUID organizationId) {
+        return jdbc.query(permissionLevelSql("organization_id = ? ORDER BY builtin DESC, tier, name"),
+                (rs, row) -> permissionLevel(rs, row), organizationId);
+    }
+
+    @Override
+    public Optional<PermissionLevel> permissionLevel(UUID organizationId, UUID levelId) {
+        return jdbc.query(permissionLevelSql("organization_id = ? AND id = ?"),
+                (rs, row) -> permissionLevel(rs, row), organizationId, levelId).stream().findFirst();
+    }
+
+    @Override
+    public PermissionLevel ensurePermissionLevel(UUID organizationId, String code, String name, String description,
+                                                 boolean builtin, int tier) {
+        var existing = jdbc.query(permissionLevelSql("organization_id = ? AND code = ?"),
+                (rs, row) -> permissionLevel(rs, row), organizationId, code).stream().findFirst();
+        if (existing.isPresent()) {
+            if (builtin && existing.get().builtin()) {
+                jdbc.update("""
+                        UPDATE iam.permission_level SET name = ?, description = ?, tier = ?, updated_at = now()
+                        WHERE organization_id = ? AND code = ? AND builtin = TRUE
+                        """, name, description, tier, organizationId, code);
+                return jdbc.query(permissionLevelSql("organization_id = ? AND code = ?"),
+                        (rs, row) -> permissionLevel(rs, row), organizationId, code).stream().findFirst().orElse(existing.get());
+            }
+            return existing.get();
+        }
+        var id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO iam.permission_level (id, organization_id, code, name, description, builtin, tier)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, id, organizationId, code, name, description, builtin, tier);
+        return new PermissionLevel(id, organizationId, code, name, description, builtin, true, tier, 0);
+    }
+
+    @Override
+    public void renamePermissionLevel(UUID organizationId, UUID levelId, String name, String description) {
+        jdbc.update("""
+                UPDATE iam.permission_level SET name = ?, description = ?, policy_version = policy_version + 1,
+                    updated_at = now() WHERE organization_id = ? AND id = ? AND NOT builtin
+                """, name, description, organizationId, levelId);
+    }
+
+    @Override
+    public void deletePermissionLevel(UUID organizationId, UUID levelId) {
+        var builtin = jdbc.queryForObject("SELECT builtin FROM iam.permission_level WHERE organization_id = ? AND id = ?",
+                Boolean.class, organizationId, levelId);
+        if (Boolean.TRUE.equals(builtin)) throw new IllegalArgumentException("内置权限等级不可删除");
+        jdbc.update("""
+                UPDATE iam.app_user SET auth_version = auth_version + 1
+                WHERE organization_id = ? AND id IN (
+                    SELECT user_id FROM iam.user_permission_profile
+                    WHERE organization_id = ? AND permission_level_id = ?
+                )
+                """, organizationId, organizationId, levelId);
+        jdbc.update("""
+                UPDATE iam.login_session SET revoked_at = now()
+                WHERE organization_id = ? AND user_id IN (
+                    SELECT user_id FROM iam.user_permission_profile
+                    WHERE organization_id = ? AND permission_level_id = ?
+                ) AND revoked_at IS NULL
+                """, organizationId, organizationId, levelId);
+        jdbc.update("DELETE FROM iam.permission_level WHERE organization_id = ? AND id = ?", organizationId, levelId);
+    }
+
+    @Override
+    public List<PermissionLevelBinding> permissionLevelBindings(UUID organizationId, UUID levelId) {
+        return jdbc.query("""
+                SELECT menu_key, permission_code, 'ALLOW' AS effect, scope_type, target_ids
+                FROM iam.permission_level_binding
+                WHERE organization_id = ? AND permission_level_id = ? ORDER BY menu_key NULLS FIRST, permission_code
+                """, (rs, row) -> permissionLevelBinding(rs), organizationId, levelId);
+    }
+
+    @Override
+    public void replacePermissionLevelBindings(UUID organizationId, UUID levelId, long expectedVersion,
+                                               List<PermissionLevelBinding> bindings) {
+        var updated = jdbc.update("""
+                UPDATE iam.permission_level SET policy_version = policy_version + 1, updated_at = now()
+                WHERE organization_id = ? AND id = ? AND policy_version = ?
+                """, organizationId, levelId, expectedVersion);
+        if (updated != 1) throw new PolicyVersionConflict();
+        jdbc.update("DELETE FROM iam.permission_level_binding WHERE organization_id = ? AND permission_level_id = ?",
+                organizationId, levelId);
+        if (bindings != null) bindings.stream().filter(binding -> binding != null).forEach(binding -> jdbc.update("""
+                INSERT INTO iam.permission_level_binding
+                    (id, organization_id, permission_level_id, menu_key, permission_code, scope_type, target_ids)
+                VALUES (?, ?, ?, ?, ?, ?, ?::jsonb)
+                """, UUID.randomUUID(), organizationId, levelId, binding.menuKey(), binding.permissionCode(), binding.scopeType(),
+                json(binding.targetIds())));
+        // An assigned permission level is part of the effective login profile.
+        // Revoke sessions when its policy changes so users cannot keep an old
+        // permission snapshot after an administrator saves the level.
+        jdbc.update("""
+                UPDATE iam.app_user SET auth_version = auth_version + 1
+                WHERE organization_id = ? AND id IN (
+                    SELECT user_id FROM iam.user_permission_profile
+                    WHERE organization_id = ? AND permission_level_id = ?
+                )
+                """, organizationId, organizationId, levelId);
+        jdbc.update("""
+                UPDATE iam.login_session SET revoked_at = now()
+                WHERE organization_id = ? AND user_id IN (
+                    SELECT user_id FROM iam.user_permission_profile
+                    WHERE organization_id = ? AND permission_level_id = ?
+                ) AND revoked_at IS NULL
+                """, organizationId, organizationId, levelId);
+    }
+
+    @Override
+    public long permissionLevelVersion(UUID organizationId, UUID levelId) {
+        return jdbc.queryForObject("SELECT policy_version FROM iam.permission_level WHERE organization_id = ? AND id = ?",
+                Long.class, organizationId, levelId);
+    }
+
+    @Override
+    public Optional<UUID> userPermissionLevel(UUID organizationId, UUID userId) {
+        return jdbc.query("SELECT permission_level_id FROM iam.user_permission_profile WHERE organization_id = ? AND user_id = ? AND permission_level_id IS NOT NULL",
+                (rs, row) -> rs.getObject("permission_level_id", UUID.class), organizationId, userId).stream().findFirst();
+    }
+
+    @Override
+    public void saveUserPermissionLevel(UUID organizationId, UUID userId, long expectedVersion, UUID levelId) {
+        var updated = jdbc.update("""
+                UPDATE iam.app_user SET auth_version = auth_version + 1
+                WHERE organization_id = ? AND id = ? AND auth_version = ?
+                """, organizationId, userId, expectedVersion);
+        if (updated != 1) throw new PolicyVersionConflict();
+        jdbc.update("""
+                INSERT INTO iam.user_permission_profile (organization_id, user_id, permission_level_id, revision, updated_at)
+                VALUES (?, ?, ?, 1, now())
+                ON CONFLICT (user_id) DO UPDATE SET permission_level_id = EXCLUDED.permission_level_id,
+                    revision = iam.user_permission_profile.revision + 1, updated_at = now()
+                """, organizationId, userId, levelId);
+        revokeUserSessions(organizationId, userId);
+    }
+
+    @Override
+    public List<MenuOverride> userMenuOverrides(UUID organizationId, UUID userId) {
+        return jdbc.query("SELECT menu_key, effect FROM iam.user_menu_override WHERE organization_id = ? AND user_id = ? ORDER BY menu_key",
+                (rs, row) -> new MenuOverride(rs.getString("menu_key"), rs.getString("effect")), organizationId, userId);
+    }
+
+    @Override
+    public void replaceUserMenuOverrides(UUID organizationId, UUID userId, List<MenuOverride> overrides) {
+        jdbc.update("DELETE FROM iam.user_menu_override WHERE organization_id = ? AND user_id = ?", organizationId, userId);
+        if (overrides != null) overrides.stream().filter(item -> item != null && item.menuKey() != null).forEach(item -> jdbc.update("""
+                INSERT INTO iam.user_menu_override (organization_id, user_id, menu_key, effect)
+                VALUES (?, ?, ?, ?)
+                """, organizationId, userId, item.menuKey(), item.effect()));
+    }
+
+    @Override
+    public List<Binding> userOperationOverrides(UUID organizationId, UUID userId) {
+        return jdbc.query("""
+                SELECT menu_key, permission_code, effect, 'ALL' AS scope_type, '[]'::jsonb AS target_ids
+                FROM iam.user_operation_override WHERE organization_id = ? AND user_id = ? ORDER BY menu_key, permission_code
+                """, (rs, row) -> menuBinding(rs), organizationId, userId);
+    }
+
+    @Override
+    public List<Binding> userScopeOverrides(UUID organizationId, UUID userId) {
+        return jdbc.query("""
+                SELECT menu_key, permission_code, 'ALLOW' AS effect, scope_type, target_ids
+                FROM iam.user_scope_override WHERE organization_id = ? AND user_id = ? ORDER BY menu_key, permission_code
+                """, (rs, row) -> menuBinding(rs), organizationId, userId);
+    }
+
+    @Override
+    public void replaceUserModelOverrides(UUID organizationId, UUID userId, List<MenuOverride> menus,
+                                          List<Binding> operations, List<Binding> scopes) {
+        replaceUserMenuOverrides(organizationId, userId, menus);
+        jdbc.update("DELETE FROM iam.user_operation_override WHERE organization_id = ? AND user_id = ?", organizationId, userId);
+        if (operations != null) operations.forEach(binding -> jdbc.update("""
+                INSERT INTO iam.user_operation_override (organization_id, user_id, menu_key, permission_code, effect)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (organization_id, user_id, menu_key, permission_code)
+                DO UPDATE SET effect = EXCLUDED.effect, updated_at = now()
+                """, organizationId, userId, binding.menuKey() == null ? "" : binding.menuKey(), binding.permissionCode(), binding.effect()));
+        jdbc.update("DELETE FROM iam.user_scope_override WHERE organization_id = ? AND user_id = ?", organizationId, userId);
+        if (scopes != null) scopes.forEach(binding -> jdbc.update("""
+                INSERT INTO iam.user_scope_override
+                    (organization_id, user_id, menu_key, permission_code, scope_type, target_ids)
+                VALUES (?, ?, ?, ?, ?, ?::jsonb)
+                ON CONFLICT (organization_id, user_id, menu_key, permission_code)
+                DO UPDATE SET scope_type = EXCLUDED.scope_type,
+                              target_ids = EXCLUDED.target_ids,
+                              updated_at = now()
+                """, organizationId, userId, binding.menuKey() == null ? "" : binding.menuKey(), binding.permissionCode(), binding.scopeType(), json(binding.targetIds())));
+        jdbc.update("UPDATE iam.app_user SET auth_version = auth_version + 1 WHERE organization_id = ? AND id = ?",
+                organizationId, userId);
+        revokeUserSessions(organizationId, userId);
+    }
+
     public static String hash(String token) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(token.getBytes(StandardCharsets.UTF_8)));
@@ -417,6 +718,12 @@ public class JdbcIamStore implements IamStore {
         }
     }
 
+    private Binding menuBinding(ResultSet rs) throws java.sql.SQLException {
+        var binding = binding(rs);
+        return new Binding(rs.getString("menu_key"), binding.permissionCode(), binding.effect(),
+                binding.scopeType(), binding.targetIds());
+    }
+
     private Organization organization(ResultSet rs, int ignored) throws java.sql.SQLException {
         return new Organization(rs.getObject("id", UUID.class), rs.getString("name"));
     }
@@ -432,6 +739,24 @@ public class JdbcIamStore implements IamStore {
     private Role role(ResultSet rs, int ignored) throws java.sql.SQLException {
         return new Role(rs.getObject("id", UUID.class), rs.getObject("organization_id", UUID.class), rs.getString("code"),
                 rs.getString("name"), rs.getBoolean("builtin"), rs.getBoolean("enabled"), rs.getLong("policy_version"));
+    }
+
+    private PermissionLevelBinding permissionLevelBinding(ResultSet rs) throws java.sql.SQLException {
+        try {
+            var values = objectMapper.readValue(rs.getString("target_ids"), STRING_LIST);
+            return new PermissionLevelBinding(rs.getString("menu_key"), rs.getString("permission_code"),
+                    rs.getString("effect"), rs.getString("scope_type"),
+                    values.stream().map(value -> { try { return UUID.fromString(value); } catch (Exception ignored) { return null; } }).filter(java.util.Objects::nonNull).toList());
+        } catch (Exception exception) {
+            return new PermissionLevelBinding(rs.getString("menu_key"), rs.getString("permission_code"),
+                    rs.getString("effect"), rs.getString("scope_type"), List.of());
+        }
+    }
+
+    private PermissionLevel permissionLevel(ResultSet rs, int ignored) throws java.sql.SQLException {
+        return new PermissionLevel(rs.getObject("id", UUID.class), rs.getObject("organization_id", UUID.class),
+                rs.getString("code"), rs.getString("name"), rs.getString("description"), rs.getBoolean("builtin"),
+                rs.getBoolean("enabled"), rs.getInt("tier"), rs.getLong("policy_version"));
     }
 
     private Session session(ResultSet rs, int ignored) throws java.sql.SQLException {
@@ -456,6 +781,11 @@ public class JdbcIamStore implements IamStore {
 
     private String roleSql(String where) {
         return "SELECT id, organization_id, code, name, builtin, enabled, policy_version FROM iam.role WHERE " + where;
+    }
+
+    private String permissionLevelSql(String where) {
+        return "SELECT id, organization_id, code, name, description, builtin, enabled, tier, policy_version "
+                + "FROM iam.permission_level WHERE " + where;
     }
 
 }

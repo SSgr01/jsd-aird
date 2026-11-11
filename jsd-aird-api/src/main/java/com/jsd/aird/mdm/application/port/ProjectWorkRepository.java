@@ -4,10 +4,11 @@ import com.jsd.aird.mdm.domain.model.*;
 import java.util.*;
 public interface ProjectWorkRepository {
  boolean stageBelongs(UUID stageId, UUID projectId);
- void insertTask(ProjectTask task);
+ Optional<UUID> stageProjectId(UUID stageId);
+ void insertTask(ProjectTask task, String operator);
  Optional<ProjectTask> task(UUID id);
- int updateTask(ProjectTask task);
- int deleteTask(UUID id,long version);
+ int updateTask(ProjectTask task, String operator);
+ int deleteTask(UUID id,long version,String operator);
 
 List<ProjectTask> tasks(UUID stageId);
 int moveTaskExperiments(UUID taskId, UUID toStageId);
@@ -22,5 +23,5 @@ int dropShadowedTaskReferences(UUID taskId, UUID toStageId);
 int moveTaskReferences(UUID taskId, UUID toStageId);
 List<ProjectTaskSummaryRow> findTaskPage(ProjectTaskQuery query, long offset, int limit);
 long countTasks(ProjectTaskQuery query);
-List<String> findTaskOwners();
+List<String> findTaskOwners(ProjectTaskQuery query);
 }

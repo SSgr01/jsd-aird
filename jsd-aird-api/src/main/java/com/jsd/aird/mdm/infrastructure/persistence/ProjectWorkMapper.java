@@ -13,13 +13,14 @@ public interface ProjectWorkMapper extends com.jsd.aird.mdm.application.port.Pro
   "FROM mdm.project_task t WHERE t.stage_id=#{stageId} AND t.deleted=false ORDER BY t.created_at")
  List<ProjectTask> tasks(UUID stageId);
  @Select("SELECT count(*) FROM mdm.project_stage WHERE id=#{stageId} AND project_id=#{projectId} AND deleted=false") boolean stageBelongs(UUID stageId,UUID projectId);
- @Insert("INSERT INTO mdm.project_task(id,task_code,project_id,stage_id,name,owner,priority,planned_date,planned_end,status,created_by,updated_by) VALUES(#{id},#{taskCode},#{projectId},#{stageId},#{name},#{owner},#{priority},#{plannedDate},#{plannedEnd},#{status},'system','system')") void insertTask(ProjectTask task);
+ @Select("SELECT project_id FROM mdm.project_stage WHERE id=#{stageId} AND deleted=false") Optional<UUID> stageProjectId(UUID stageId);
+ @Insert("INSERT INTO mdm.project_task(id,task_code,project_id,stage_id,name,owner,priority,planned_date,planned_end,status,created_by,updated_by) VALUES(#{task.id},#{task.taskCode},#{task.projectId},#{task.stageId},#{task.name},#{task.owner},#{task.priority},#{task.plannedDate},#{task.plannedEnd},#{task.status},CAST(#{operator} AS uuid),CAST(#{operator} AS uuid))") void insertTask(@Param("task") ProjectTask task,@Param("operator") String operator);
  @Select("SELECT t.id,t.task_code taskCode,t.project_id projectId,t.stage_id stageId,t.name,t.owner,t.priority,t.planned_date plannedDate,t.planned_end plannedEnd,t.status,"+
   "(SELECT count(*) FROM rnd.experiment e WHERE e.task_id=t.id AND e.deleted=false) experimentCount,t.version,t.created_at createdAt,t.updated_at updatedAt FROM mdm.project_task t WHERE t.id=#{id} AND t.deleted=false") Optional<ProjectTask> task(UUID id);
  // 任务可以调整所属阶段：updateTask 必须一并写入 stage_id，否则前端改了“关联阶段”保存后
  // 仍停留在原阶段（服务层已用 stageBelongs 校验目标阶段属于同一项目）。
- @Update("UPDATE mdm.project_task SET stage_id=#{stageId},name=#{name},owner=#{owner},priority=#{priority},planned_date=#{plannedDate},planned_end=#{plannedEnd},status=#{status},version=version+1,updated_at=now() WHERE id=#{id} AND version=#{version} AND deleted=false") int updateTask(ProjectTask task);
- @Update("UPDATE mdm.project_task SET deleted=true,version=version+1,updated_at=now() WHERE id=#{id} AND version=#{version} AND deleted=false") int deleteTask(@Param("id") UUID id,@Param("version") long version);
+ @Update("UPDATE mdm.project_task SET stage_id=#{task.stageId},name=#{task.name},owner=#{task.owner},priority=#{task.priority},planned_date=#{task.plannedDate},planned_end=#{task.plannedEnd},status=#{task.status},version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) WHERE id=#{task.id} AND version=#{task.version} AND deleted=false") int updateTask(@Param("task") ProjectTask task,@Param("operator") String operator);
+ @Update("UPDATE mdm.project_task SET deleted=true,version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) WHERE id=#{id} AND version=#{version} AND deleted=false") int deleteTask(@Param("id") UUID id,@Param("version") long version,@Param("operator") String operator);
 
  // ===================== 任务换阶段：过程产物一起迁移 =====================
  // 任务下的实验、资料、记录等都以 (stage_id, task_id) 成对存储，且多处查询要求两者一致
@@ -74,6 +75,6 @@ public interface ProjectWorkMapper extends com.jsd.aird.mdm.application.port.Pro
  List<ProjectTaskSummaryRow> findTaskPage(@Param("query") ProjectTaskQuery query, @Param("offset") long offset, @Param("limit") int limit);
  @SelectProvider(type = ProjectWorkSqlProvider.class, method = "count")
  long countTasks(@Param("query") ProjectTaskQuery query);
- @Select("SELECT DISTINCT t.owner FROM mdm.project_task t WHERE t.deleted = false AND t.owner IS NOT NULL AND t.owner <> '' ORDER BY t.owner")
- List<String> findTaskOwners();
+ @SelectProvider(type = ProjectWorkSqlProvider.class, method = "owners")
+ List<String> findTaskOwners(@Param("query") ProjectTaskQuery query);
 }

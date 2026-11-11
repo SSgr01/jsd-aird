@@ -18,6 +18,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ops.application.port.AuditLogFacade;
+import com.jsd.aird.iam.api.AuthorizationService;
+import com.jsd.aird.iam.api.PermissionCheck;
+import com.jsd.aird.iam.api.RecordDataScope;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
 import com.jsd.aird.spc.application.port.SpectrumRepository;
 import com.jsd.aird.shared.api.PageResponse;
@@ -48,24 +51,32 @@ public class SpectrumService {
     private final FileStorageFacade storage;
     private final ObjectMapper objectMapper;
     private final AuditLogFacade audit;
+    private final AuthorizationService authorization;
 
     public SpectrumService(SpectrumRepository repository, FileStorageFacade storage, ObjectMapper objectMapper) {
-        this(repository, storage, objectMapper, null);
+        this(repository, storage, objectMapper, null, null);
+    }
+
+    public SpectrumService(SpectrumRepository repository, FileStorageFacade storage, ObjectMapper objectMapper,
+                           AuditLogFacade audit) {
+        this(repository, storage, objectMapper, audit, null);
     }
 
     @Autowired
     public SpectrumService(SpectrumRepository repository, FileStorageFacade storage, ObjectMapper objectMapper,
-                           AuditLogFacade audit) {
+                           AuditLogFacade audit, AuthorizationService authorization) {
         this.repository = repository;
         this.storage = storage;
         this.objectMapper = objectMapper;
         this.audit = audit;
+        this.authorization = authorization;
     }
 
     @Transactional
     public List<CategoryView> categories() {
         var actor = ActorContext.required();
         ensureBuiltIns(actor.organizationId(), actor.userId());
+        repository.ensureUncategorizedCategory(actor.organizationId(), actor.userId());
         return repository.listCategories(actor.organizationId()).stream().map(this::categoryView).toList();
     }
 
@@ -110,14 +121,22 @@ public class SpectrumService {
     }
 
     @Transactional
-    public void deleteCategory(UUID categoryId, String revision) {
+    public void deleteCategory(UUID categoryId, String revision, UUID replacementCategoryId) {
         var actor = ActorContext.required();
         repository.lockCategory(actor.organizationId(),categoryId);
         var category = requireCategory(actor.organizationId(), categoryId);
         com.jsd.aird.shared.json.RevisionToken.require(revision,categoryView(category).getRevision());
         if (category.systemCategory()) throw new ApiException(ApiErrorCode.BAD_REQUEST, "内置图谱分类不可删除");
-        if (category.chartCount() > 0) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "分类中仍有图谱，请先移动图谱");
-        repository.deleteCategory(actor.organizationId(), categoryId);
+        var target = replacementCategoryId;
+        if (target == null && category.chartCount() > 0)
+            target = repository.ensureUncategorizedCategory(actor.organizationId(), actor.userId());
+        if (target != null) {
+            if (target.equals(categoryId))
+                throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "迁移目标不能是当前分类");
+            if (repository.findCategory(actor.organizationId(), target).isEmpty())
+                throw new ApiException(ApiErrorCode.NOT_FOUND, "迁移目标分类不存在");
+        }
+        repository.deleteCategory(actor.organizationId(), categoryId, target);
         audit(actor, "SPECTRUM_CATEGORY_DELETED", "SPECTRUM_CATEGORY", categoryId, category.name());
     }
 
@@ -169,18 +188,24 @@ public class SpectrumService {
         var actor = ActorContext.required();
         var safePage = Math.max(1, page);
         var safeSize = Math.min(100, Math.max(1, size));
+        var scope = RecordDataScope.all();
+        if (authorization != null) {
+            var resolved = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
+                    "spectrum.view", "SPECTRUM", null, "READ"));
+            if (!resolved.allowed()) throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有图谱查看权限");
+            scope = new RecordDataScope(resolved.scopeType(), actor.userId(), resolved.targetIds());
+        }
         var rows = repository.listCharts(actor.organizationId(), keyword, categoryId,
-                StringUtils.hasText(status) ? status : "READY", safePage, safeSize);
+                StringUtils.hasText(status) ? status : "READY", safePage, safeSize, scope);
         var total = repository.countCharts(actor.organizationId(), keyword, categoryId,
-                StringUtils.hasText(status) ? status : "READY");
+                StringUtils.hasText(status) ? status : "READY", scope);
         return new PageResponse<>(rows.stream().map(this::chartView).toList(), safePage, safeSize, total,
                 (total + safeSize - 1) / safeSize);
     }
 
     public ChartView chart(UUID chartId) {
         var actor = ActorContext.required();
-        return chartView(repository.findChart(actor.organizationId(), chartId)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "图谱不存在")));
+        return chartView(requireChart(actor.organizationId(), chartId));
     }
 
     @Transactional
@@ -383,6 +408,11 @@ public class SpectrumService {
     }
 
     public SpectrumRepository.ChartRow requireChart(UUID organizationId, UUID chartId) {
+        if (authorization != null) {
+            var actor = ActorContext.required();
+            authorization.require(new PermissionCheck(organizationId, actor.userId(),
+                    "spectrum.view", "SPECTRUM", chartId, "READ"));
+        }
         return repository.findChart(organizationId, chartId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "图谱不存在"));
     }

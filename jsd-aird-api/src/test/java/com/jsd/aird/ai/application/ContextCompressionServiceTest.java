@@ -58,12 +58,12 @@ class ContextCompressionServiceTest {
         var data = new DataSourceFileSearchFacade.SourceFileHit(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                 12, "B", "检测报告.xlsx", "b".repeat(500), 0.7, "DATA_CENTER:Sheet1:B12");
 
-        var context = new ContextCompressionService().compress(List.of(hit), List.of(data), 200);
+        var context = new ContextCompressionService().compress(List.of(hit), List.of(data), 400);
 
-        assertThat(context.characterCount()).isLessThanOrEqualTo(200);
+        assertThat(context.characterCount()).isLessThanOrEqualTo(400);
         assertThat(context.characterCount()).isEqualTo(context.text().length());
-        // Mixed-source small budgets reserve a stable half for knowledge. A
-        // source that cannot fit its metadata must not leak a partial citation.
+        // Mixed-source budgets reserve a stable half for knowledge.
+        // Compact business metadata permits both complete citations at this budget.
         assertThat(context.text()).contains("evidenceRef=K1")
                 .doesNotContain("ref=")
                 .doesNotContain(hit.chunkId().toString())
@@ -71,7 +71,11 @@ class ContextCompressionServiceTest {
                 .doesNotContain(hit.versionId().toString())
                 .doesNotContain(data.hitId().toString())
                 .doesNotContain(data.fileObjectId().toString());
-        assertThat(context.evidenceRefs()).containsExactly("K1");
+        assertThat(context.evidenceRefs()).containsExactly("K1", "D1");
+        var tight = new ContextCompressionService().compress(List.of(hit), List.of(data), 160);
+        assertThat(tight.characterCount()).isLessThanOrEqualTo(160);
+        assertThat(tight.text()).doesNotContain("evidenceRef=D1");
+        assertThat(tight.evidenceRefs()).doesNotContain("D1");
     }
 
     @Test

@@ -8,14 +8,20 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 
 class ProjectConsistencyTest {
     private final ProjectRepository repository = mock(ProjectRepository.class);
-    private final ProjectService service = new ProjectService(repository);
+    private final ProjectService service = new ProjectService(repository, check ->
+            new com.jsd.aird.iam.api.PermissionDecision(true, check.permissionCode(), "ALLOW", "ALL", "TEST"));
     private final UUID id = UUID.randomUUID();
+
+    @BeforeEach void setActor() { com.jsd.aird.shared.security.ActorContext.set(com.jsd.aird.shared.security.ActorContext.developmentDefault()); }
+    @AfterEach void clearActor() { com.jsd.aird.shared.security.ActorContext.clear(); }
 
     @Test void missingOrNegativeVersionCannotBypassUpdateProtection() {
         for (Long version : new Long[]{null, -1L}) {
@@ -52,9 +58,9 @@ class ProjectConsistencyTest {
 
     @Test void deleteStillUsesCompareAndSwapAfterTheInitialRead() {
         when(repository.findById(id)).thenReturn(Optional.of(project(12, ProjectStatus.IN_PROGRESS)), Optional.of(project(13, ProjectStatus.IN_PROGRESS)));
-        when(repository.softDelete(id, 12, "system")).thenReturn(false);
+        when(repository.softDelete(id, 12, operator())).thenReturn(false);
         assertCode(() -> service.delete(id, 12), ApiErrorCode.RESOURCE_CONFLICT);
-        verify(repository).softDelete(id, 12, "system");
+        verify(repository).softDelete(id, 12, operator());
     }
 
     @Test void missingAndConcurrentlyDeletedRowsReturnNotFound() {
@@ -66,14 +72,15 @@ class ProjectConsistencyTest {
 
     @Test void freshDeleteSucceedsOnce() {
         when(repository.findById(id)).thenReturn(Optional.of(project(12, ProjectStatus.IN_PROGRESS)));
-        when(repository.softDelete(id, 12, "system")).thenReturn(true);
+        when(repository.softDelete(id, 12, operator())).thenReturn(true);
         service.delete(id, 12);
-        verify(repository, times(1)).softDelete(id, 12, "system");
+        verify(repository, times(1)).softDelete(id, 12, operator());
     }
 
     private Project project(long version, ProjectStatus status) {
         return new Project(id,"P-1","项目",null,null,"owner",null,null,ProjectPriority.MEDIUM,status,1,null,null,null,version,Instant.now(),Instant.now());
     }
+    private String operator() { return com.jsd.aird.shared.security.ActorContext.required().userId().toString(); }
     private ProjectCommands.SaveProject command(Long version) {
         return new ProjectCommands.SaveProject("P-1","修改",null,null,"owner",null,null,ProjectPriority.MEDIUM,ProjectStatus.IN_PROGRESS,1,null,null,null,version);
     }

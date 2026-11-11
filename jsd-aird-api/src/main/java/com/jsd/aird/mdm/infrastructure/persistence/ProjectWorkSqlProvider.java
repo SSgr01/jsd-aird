@@ -23,9 +23,9 @@ public class ProjectWorkSqlProvider {
             case "DEPARTMENT" -> sql.WHERE("p.department_id IS NOT NULL AND p.department_id = (SELECT u.department_id FROM iam.app_user u WHERE u.id = #{query.scopeUserId} AND u.organization_id = #{query.organizationId})");
             case "SELECTED", "PROJECT" -> {
                 if (query.scopeTargetIds().isEmpty()) sql.WHERE("1 = 0");
-                else sql.WHERE("p.id IN (" + java.util.stream.IntStream.range(0, query.scopeTargetIds().size())
+                else sql.WHERE("(p.created_by = #{query.scopeUserId} OR p.id IN (" + java.util.stream.IntStream.range(0, query.scopeTargetIds().size())
                         .mapToObj(index -> "#{query.scopeTargetIds[" + index + "]}")
-                        .collect(java.util.stream.Collectors.joining(",")) + ")");
+                        .collect(java.util.stream.Collectors.joining(",")) + "))");
             }
             default -> sql.WHERE("1 = 0");
         }

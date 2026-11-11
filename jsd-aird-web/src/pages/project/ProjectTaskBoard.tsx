@@ -11,6 +11,7 @@ import {
   projectPriorities, type ProjectPriority, type ProjectStage, type ProjectTask,
 } from '@/services/project/project-api';
 import '../experiments/experiments.css';
+import '../experiments/experiment-create-relations.css';
 import '@/styles/management-list.css';
 
 const taskStatuses: Record<string, string> = { PENDING: '待开始', IN_PROGRESS: '进行中', COMPLETED: '已完成', CANCELLED: '已取消' };
@@ -325,11 +326,11 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
       </div>}>
       <div className="pm-task-form-body">
         <Form form={taskForm} layout="vertical" requiredMark={false}>
-          <Form.Item name="stageId" label={<FieldLabel text="关联阶段" required />} rules={[{ required: true, message: '请选择阶段' }]}>
-            <Select placeholder="请选择阶段" options={stages.map((s) => ({ value: s.id, label: s.name }))} />
-          </Form.Item>
           <Form.Item name="name" label={<FieldLabel text="任务名称" required />} rules={[{ required: true, message: '请输入任务名称' }, { max: 300 }]}>
             <Input placeholder="请输入任务名称" />
+          </Form.Item>
+          <Form.Item name="stageId" label={<FieldLabel text="关联阶段" required />} rules={[{ required: true, message: '请选择阶段' }]}>
+            <Select placeholder="请选择阶段" options={stages.map((s) => ({ value: s.id, label: s.name }))} />
           </Form.Item>
           <Form.Item name="owner" label={<FieldLabel text="负责人" />}>
             <Input placeholder="请输入负责人" />

@@ -46,7 +46,7 @@ public class PartnerContactService {
     public PartnerCommands.Created addContact(UUID partnerId, PartnerCommands.SaveContact c) {
         BusinessPartnerService.requireWrite();
         partnerService.requireAccess(partnerId, "customer.overview.create");
-        var partner = partnerService.get(partnerId);
+        var partner = partnerService.findExisting(partnerId);
         requireNotDuplicate(partnerId, c.phone(), c.name(), null);
         var now = Instant.now();
         var contact = new PartnerContact(UUID.randomUUID(), partnerId, trim(c.name()), c.department(), c.title(),
@@ -61,7 +61,7 @@ public class PartnerContactService {
     public void updateContact(UUID partnerId, UUID contactId, PartnerCommands.SaveContact c) {
         BusinessPartnerService.requireWrite();
         partnerService.requireAccess(partnerId, "customer.overview.update");
-        var partner = partnerService.get(partnerId);
+        var partner = partnerService.findExisting(partnerId);
         BusinessPartnerService.requireVersion(c.version());
         requireNotDuplicate(partnerId, c.phone(), c.name(), contactId);
         var previousProjects = repository.findContacts(partnerId).stream()
@@ -91,7 +91,7 @@ public class PartnerContactService {
     public void changeContactStatus(UUID partnerId, UUID contactId, PartnerCommands.ChangeStatus c) {
         BusinessPartnerService.requireWrite();
         partnerService.requireAccess(partnerId, "customer.overview.update");
-        var partner = partnerService.get(partnerId);
+        var partner = partnerService.findExisting(partnerId);
         var assignedProjects = repository.findContacts(partnerId).stream()
             .filter(item -> item.id().equals(contactId))
             .findFirst()
@@ -112,7 +112,7 @@ public class PartnerContactService {
     public void deleteContact(UUID partnerId, UUID contactId, long version) {
         BusinessPartnerService.requireWrite();
         partnerService.requireAccess(partnerId, "customer.overview.delete");
-        partnerService.get(partnerId);
+        partnerService.findExisting(partnerId);
         var assignedProjects = repository.findContacts(partnerId).stream()
             .filter(item -> item.id().equals(contactId))
             .findFirst()
@@ -143,7 +143,7 @@ public class PartnerContactService {
 
     private void ensureProjectPartners(UUID partnerId, String partnerName, Set<UUID> projectIds) {
         for (UUID projectId : projectIds) {
-            partnerService.requireProjectWrite(projectId);
+            partnerService.requireProjectVisible(projectId);
             projectRepository.assignPartner(projectId, partnerId, partnerName, BusinessPartnerService.operator());
         }
     }
@@ -154,7 +154,7 @@ public class PartnerContactService {
 
     private void clearProjectPartnersWhenUnassigned(UUID partnerId, Set<UUID> projectIds) {
         for (UUID projectId : projectIds) {
-            partnerService.requireProjectWrite(projectId);
+            partnerService.requireProjectVisible(projectId);
             if (!repository.hasActiveProjectAssignment(partnerId, projectId)) {
                 projectRepository.clearPartner(projectId, partnerId, BusinessPartnerService.operator());
             }

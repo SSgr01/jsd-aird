@@ -49,7 +49,7 @@ public interface CustomerRequirementMapper {
         "delivery_date,status,custom_status_name,project_id,assigned_project_ids,custom_fields,version,created_at,updated_at,created_by,updated_by) " +
         "VALUES(#{id},#{requirementCode},#{partnerId},#{title},#{rawRequirement},#{urgency},#{raisedAt}," +
         "#{deliveryDate},#{status},#{customStatusName},#{projectId},CAST(#{assignedProjectIds} AS jsonb),CAST(#{customFields} AS jsonb)," +
-        "0,#{now},#{now},#{operator},#{operator})")
+        "0,#{now},#{now},CAST(#{operator} AS uuid),CAST(#{operator} AS uuid))")
     void insertRequirement(@Param("id") UUID id, @Param("requirementCode") String requirementCode,
                            @Param("partnerId") UUID partnerId, @Param("title") String title,
                            @Param("rawRequirement") String rawRequirement, @Param("urgency") String urgency,
@@ -62,7 +62,7 @@ public interface CustomerRequirementMapper {
     @Update("UPDATE mdm.customer_requirement SET title=#{title},raw_requirement=#{rawRequirement},urgency=#{urgency}," +
         "raised_at=#{raisedAt},delivery_date=#{deliveryDate},status=#{status},custom_status_name=#{customStatusName}," +
         "project_id=#{projectId},assigned_project_ids=CAST(#{assignedProjectIds} AS jsonb),custom_fields=CAST(#{customFields} AS jsonb)," +
-        "version=version+1,updated_at=now(),updated_by=#{operator} WHERE id=#{id} AND version=#{version}")
+        "version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) WHERE id=#{id} AND version=#{version}")
     int updateRequirement(@Param("id") UUID id, @Param("title") String title,
                           @Param("rawRequirement") String rawRequirement, @Param("urgency") String urgency,
                           @Param("raisedAt") LocalDate raisedAt, @Param("deliveryDate") LocalDate deliveryDate,
@@ -72,7 +72,7 @@ public interface CustomerRequirementMapper {
                           @Param("version") long version, @Param("operator") String operator);
 
     @Update("UPDATE mdm.customer_requirement SET deleted=true, deleted_at=now(), deleted_by=#{operator}, " +
-        "version=version+1, updated_at=now(), updated_by=#{operator} " +
+        "version=version+1, updated_at=now(), updated_by=CAST(#{operator} AS uuid) " +
         "WHERE id=#{id} AND version=#{version} AND deleted=false")
     int deleteRequirement(@Param("id") UUID id, @Param("version") long version, @Param("operator") String operator);
 }

@@ -1149,7 +1149,13 @@ public class JdbcDataSourceFileSearchRepository implements DataSourceFileSearchF
             case "ASSIGNED" -> experiment
                     ? new ScopeClause("p.experiment_owner_id = ?", List.of(scope.actorId()))
                     : new ScopeClause("1 = 0", List.of());
-            case "SELECTED" -> idsClause((experiment ? "p.experiment_project_id" : idColumn) + " IN (%s)", scope.targetIds());
+            case "SELECTED" -> {
+                var selected = idsClause((experiment ? "p.experiment_project_id" : idColumn) + " IN (%s)", scope.targetIds());
+                if (scope.actorId() == null || scope.targetIds().isEmpty()) yield selected;
+                var parameters = new ArrayList<>(selected.parameters());
+                parameters.add(scope.actorId());
+                yield new ScopeClause("(" + selected.sql() + " OR " + selfColumn + " = ?)", parameters);
+            }
             case "CATEGORY" -> idsClause((experiment ? "p.experiment_category_id" : "p.data_category_id")
                     + " IN (%s)", scope.targetIds());
             case "PROJECT" -> experiment

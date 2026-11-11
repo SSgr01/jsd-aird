@@ -129,8 +129,9 @@ public class QualityDataRepository implements QualityDataStore {
             case "SELECTED", "PROJECT" -> {
                 if (scope.targetIds().isEmpty()) where += " AND 1=0";
                 else {
-                    where += " AND r.project_id IN (" + String.join(",",scope.targetIds().stream().map(id -> "?").toList()) + ")";
+                    where += " AND (r.project_id IN (" + String.join(",",scope.targetIds().stream().map(id -> "?").toList()) + ") OR r.created_by=?)";
                     args.addAll(scope.targetIds());
+                    args.add(scope.actorId());
                 }
             }
             default -> where += " AND 1=0";
@@ -230,13 +231,19 @@ public class QualityDataRepository implements QualityDataStore {
     }
     public Optional<String> findBusinessNoByField(UUID org,String type,String field,String value){if(value==null||value.isBlank()||!List.of("batchNumber","productName","chemicalName","fileName").contains(field))return Optional.empty();var rows=jdbc.query("SELECT business_no FROM quality.data_record WHERE organization_id=? AND business_type=? AND deleted=false AND data_jsonb ->> ? = ? ORDER BY updated_at DESC LIMIT 1",(rs,n)->rs.getString("business_no"),org,type,field,value.trim());return rows.stream().findFirst();}
     public PageResponse<UploadView> uploads(UUID org,UUID userId,String role,String keyword,String status,UUID projectId,int page,int size){
+        return uploads(org,userId,role,keyword,status,projectId,page,size,com.jsd.aird.iam.api.RecordDataScope.all());
+    }
+    @Override public PageResponse<UploadView> uploads(UUID org,UUID userId,String role,String keyword,String status,UUID projectId,int page,int size,com.jsd.aird.iam.api.RecordDataScope scope){
         var q=keyword==null?"":keyword.trim();
         var like="%"+q+"%";
         var statusValue=status==null?"":status.trim();
         var where=" organization_id=? AND deleted=false AND (?='' OR original_name ILIKE ?) AND (?='' OR status=?) AND (?::uuid IS NULL OR project_id=?) AND (visibility='ALL' OR created_by=? OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND visibility='RND'))";
-        var total=jdbc.queryForObject("SELECT count(*) FROM quality.upload_file WHERE"+where,Long.class,org,q,like,statusValue,statusValue,projectId,projectId,userId,role,role,role);
-        var rows=jdbc.query("SELECT u.*,(SELECT name FROM quality.data_category c WHERE c.id=u.category_id) category_name FROM quality.upload_file u WHERE"+where+" ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                (rs,n)->upload(rs),org,q,like,statusValue,statusValue,projectId,projectId,userId,role,role,role,size,(page-1)*size);
+        var args=new java.util.ArrayList<Object>(java.util.Arrays.asList(org,q,like,statusValue,statusValue,projectId,projectId,userId,role,role,role));
+        var scoped=new StringBuilder(where).append(scope.sqlCondition("u",args));
+        var total=jdbc.queryForObject("SELECT count(*) FROM quality.upload_file u WHERE"+scoped,Long.class,args.toArray());
+        args.add(size);args.add((page-1)*size);
+        var rows=jdbc.query("SELECT u.*,(SELECT name FROM quality.data_category c WHERE c.id=u.category_id) category_name FROM quality.upload_file u WHERE"+scoped+" ORDER BY u.created_at DESC LIMIT ? OFFSET ?",
+                (rs,n)->upload(rs),args.toArray());
         return new PageResponse<>(rows,page,size,total,(total+size-1)/size);
     }
     public void deleteUpload(UUID org,UUID id){jdbc.update("UPDATE quality.upload_file SET deleted=true WHERE organization_id=? AND id=?",org,id);}

@@ -25,11 +25,11 @@ public interface MeetingMinutesMapper {
     @Select("SELECT " + COLS + " FROM mdm.meeting_minutes WHERE id=#{id}")
     MeetingMinutesRow findById(@Param("id") UUID id);
 
-    @Insert("INSERT INTO mdm.meeting_minutes(id, project_id, title, attendees, summary, occurred_at, archived_to_kb, version, created_at, created_by, updated_at) " +
-            "VALUES(#{row.id}, #{row.projectId}, #{row.title}, #{row.attendees}::jsonb, #{row.summary}, #{row.occurredAt}, #{row.archivedToKb}, #{row.version}, #{row.createdAt}, #{operator}, #{row.updatedAt})")
+    @Insert("INSERT INTO mdm.meeting_minutes(id, project_id, title, attendees, summary, occurred_at, archived_to_kb, version, created_at, created_by, updated_at, updated_by) " +
+            "VALUES(#{row.id}, #{row.projectId}, #{row.title}, #{row.attendees}::jsonb, #{row.summary}, #{row.occurredAt}, #{row.archivedToKb}, #{row.version}, #{row.createdAt}, CAST(#{operator} AS uuid), #{row.updatedAt}, CAST(#{operator} AS uuid))")
     void insert(@Param("row") MeetingMinutesRow row, @Param("operator") String operator);
 
-    @Update("UPDATE mdm.meeting_minutes SET title=#{row.title}, attendees=#{row.attendees}::jsonb, summary=#{row.summary}, occurred_at=#{row.occurredAt}, archived_to_kb=#{row.archivedToKb}, version=#{row.version}, updated_at=#{row.updatedAt}, updated_by=#{operator} WHERE id=#{row.id} AND version=#{currentVersion}")
+    @Update("UPDATE mdm.meeting_minutes SET title=#{row.title}, attendees=#{row.attendees}::jsonb, summary=#{row.summary}, occurred_at=#{row.occurredAt}, archived_to_kb=#{row.archivedToKb}, version=#{row.version}, updated_at=#{row.updatedAt}, updated_by=CAST(#{operator} AS uuid) WHERE id=#{row.id} AND version=#{currentVersion}")
     int update(@Param("row") MeetingMinutesRow row, @Param("currentVersion") long currentVersion, @Param("operator") String operator);
 
     @Delete("DELETE FROM mdm.meeting_minutes WHERE id=#{id} AND version=#{version}")

@@ -252,10 +252,11 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
             case "SELECTED", "PROJECT" -> {
                 if (scope.targetIds().isEmpty()) where.append(" AND false");
                 else {
-                    where.append(" AND pu.project_id IN (")
+                    where.append(" AND (pu.").append("SELECTED".equals(scope.type()) && !viewableOnly ? "id" : "project_id").append(" IN (")
                             .append(String.join(",", scope.targetIds().stream().map(id -> "?").toList()))
-                            .append(")");
+                            .append(") OR pu.created_by = ?)");
                     args.addAll(scope.targetIds());
+                    args.add(scope.actorId());
                 }
             }
             default -> where.append(" AND false");

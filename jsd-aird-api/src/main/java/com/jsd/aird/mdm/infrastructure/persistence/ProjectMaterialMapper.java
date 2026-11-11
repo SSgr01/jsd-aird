@@ -53,10 +53,10 @@ public interface ProjectMaterialMapper {
                         @Param("keyword") String keyword);
 
     @Insert("INSERT INTO mdm.project_material(id, project_id, material_id, created_at, updated_at, created_by, updated_by) " +
-            "VALUES(#{row.id}, #{row.projectId}, #{row.materialId}, now(), now(), #{operator}, #{operator})")
+            "VALUES(#{row.id}, #{row.projectId}, #{row.materialId}, now(), now(), CAST(#{operator} AS uuid), CAST(#{operator} AS uuid))")
     void insert(@Param("row") ProjectMaterialRow row, @Param("operator") String operator);
 
-    @Update("UPDATE mdm.project_material SET updated_at=now(), updated_by=#{operator} WHERE id=#{row.id}")
+    @Update("UPDATE mdm.project_material SET updated_at=now(), updated_by=CAST(#{operator} AS uuid) WHERE id=#{row.id}")
     int updateRemark(@Param("row") ProjectMaterialRow row, @Param("operator") String operator);
 
     @Delete("DELETE FROM mdm.project_material WHERE project_id=#{projectId} AND material_id=#{materialId}")

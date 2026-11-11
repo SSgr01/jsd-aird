@@ -36,13 +36,19 @@ const scopeOptions = [
 ];
 const projectTargetMenus = new Set(['eln.view', 'research-test.report.view', 'quality.view', 'production.view']);
 const selectedScopeLabels: Record<string, string> = {
-  'project.list': '指定项目',
-  'customer.list': '指定客户',
-  'template.view': '指定模板',
-  'spectrum.view': '指定文件',
-  'knowledge.view': '指定文件',
-  'data.view': '指定文件',
-  'research-test.standard': '指定文件',
+  'project.list': '指定项目及我创建',
+  'customer.list': '指定客户及我创建',
+  'template.view': '指定模板及我创建',
+  'template.upload': '指定文件及我创建',
+  'eln.upload': '指定文件及我创建',
+  'research-test.report.upload': '指定文件及我创建',
+  'research-test.standard.upload': '指定文件及我创建',
+  'quality.upload': '指定文件及我创建',
+  'production.upload': '指定文件及我创建',
+  'spectrum.view': '指定文件及我创建',
+  'knowledge.view': '指定文件及我创建',
+  'data.view': '指定文件及我创建',
+  'research-test.standard': '指定文件及我创建',
 };
 
 // Modules / functional rows that do not offer the 指定 data scope.
@@ -66,11 +72,11 @@ const dataScopeOptionsFor = (menuKey: string, definition: PermissionDefinition, 
     (option.value !== 'SELECTED' || !withoutSelected)
     && (unrestricted || grant?.scopeType === 'ALL' || grant?.scopeType === 'ORG' || normalizedScope(grant?.scopeType || '') === option.value)
     && (option.value !== 'DEPARTMENT' || userScopeMenus.has(menuKey)
-      || ['quality.view', 'spectrum.view', 'production.view', 'knowledge.view', 'data.view'].includes(menuKey)
+      || ['quality.view', 'quality.upload', 'spectrum.view', 'production.view', 'production.upload', 'knowledge.view', 'data.view'].includes(menuKey)
       || ['customer', 'project', 'experiment', 'research-test', 'template', 'inventory'].includes(definition.module)))
     .map((option) => option.value === 'SELECTED'
       ? { ...option, label: selectedScopeLabels[menuKey]
-          || (projectTargetMenus.has(menuKey) ? '指定项目' : menuKey.startsWith('inventory.') ? '指定产品' : option.label) }
+          || (projectTargetMenus.has(menuKey) ? '指定项目及我创建' : menuKey.startsWith('inventory.') ? '指定产品及我创建' : '指定及我创建') }
       : option);
 };
 
@@ -152,14 +158,8 @@ const menusWithoutDataScope = new Set([
   'knowledge.review',
   'knowledge.upload',
   'data.upload',
-  'template.upload',
   'eln.create',
-  'eln.upload',
-  'research-test.report.upload',
-  'research-test.standard.upload',
-  'quality.upload',
   'spectrum.upload',
-  'production.upload',
   // Category maintenance configures organization level classification; it is
   // granted or revoked as a capability, so no data scope applies.
   'template.category',

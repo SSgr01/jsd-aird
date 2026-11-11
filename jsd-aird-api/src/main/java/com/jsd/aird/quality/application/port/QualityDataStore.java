@@ -117,5 +117,10 @@ public interface QualityDataStore {
                                   UUID generatedRecordId, String errorMessage);
     Optional<String> findBusinessNoByField(UUID organizationId, String businessType, String field, String value);
     PageResponse<UploadView> uploads(UUID organizationId, UUID userId, String role, String keyword, String status, UUID projectId, int page, int size);
+    default PageResponse<UploadView> uploads(UUID organizationId, UUID userId, String role, String keyword,
+                                             String status, UUID projectId, int page, int size,
+                                             com.jsd.aird.iam.api.RecordDataScope scope) {
+        return uploads(organizationId, userId, role, keyword, status, projectId, page, size);
+    }
     void deleteUpload(UUID organizationId, UUID id);
 }

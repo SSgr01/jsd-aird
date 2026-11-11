@@ -67,7 +67,7 @@ public interface ProjectStageMapper {
     @Insert("INSERT INTO mdm.project_stage(id,project_id,stage_code,name,order_no,status,owner,description,planned_start,planned_end," +
         "actual_start,actual_end,version,deleted,created_at,updated_at,created_by,updated_by) VALUES(" +
         "#{id},#{projectId},#{stageCode},#{name},#{orderNo},#{status},#{owner},#{description},#{plannedStart},#{plannedEnd}," +
-        "#{actualStart},#{actualEnd},0,false,#{now},#{now},#{operator},#{operator})")
+        "#{actualStart},#{actualEnd},0,false,#{now},#{now},CAST(#{operator} AS uuid),CAST(#{operator} AS uuid))")
     void insert(@Param("id") UUID id, @Param("projectId") UUID projectId, @Param("stageCode") String stageCode,
                 @Param("name") String name, @Param("orderNo") int orderNo, @Param("status") String status,
                 @Param("owner") String owner, @Param("description") String description,
@@ -77,7 +77,7 @@ public interface ProjectStageMapper {
 
     @Update("UPDATE mdm.project_stage SET stage_code=#{stageCode},name=#{name},status=#{status},owner=#{owner},description=#{description}," +
         "planned_start=#{plannedStart},planned_end=#{plannedEnd},actual_start=#{actualStart},actual_end=#{actualEnd}," +
-        "version=version+1,updated_at=now(),updated_by=#{operator} WHERE id=#{id} AND deleted=false AND version=#{version}")
+        "version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) WHERE id=#{id} AND deleted=false AND version=#{version}")
     int update(@Param("id") UUID id, @Param("stageCode") String stageCode, @Param("name") String name,
                @Param("status") String status, @Param("owner") String owner, @Param("description") String description,
                @Param("plannedStart") LocalDate plannedStart, @Param("plannedEnd") LocalDate plannedEnd,
@@ -85,13 +85,13 @@ public interface ProjectStageMapper {
                @Param("version") long version, @Param("operator") String operator);
 
     @Update("UPDATE mdm.project_stage SET deleted=true,deleted_at=now(),deleted_by=#{operator},version=version+1," +
-        "updated_at=now(),updated_by=#{operator} WHERE id=#{id} AND deleted=false AND version=#{version}")
+        "updated_at=now(),updated_by=CAST(#{operator} AS uuid) WHERE id=#{id} AND deleted=false AND version=#{version}")
     int softDelete(@Param("id") UUID id, @Param("version") long version, @Param("operator") String operator);
 
     @Update("UPDATE mdm.project_stage SET order_no=order_no+1000000 WHERE project_id=#{projectId} AND deleted=false")
     void parkOrderNumbers(@Param("projectId") UUID projectId);
 
-    @Update("UPDATE mdm.project_stage SET order_no=#{orderNo},version=version+1,updated_at=now(),updated_by=#{operator} " +
+    @Update("UPDATE mdm.project_stage SET order_no=#{orderNo},version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) " +
         "WHERE id=#{id} AND project_id=#{projectId} AND deleted=false AND version=#{version}")
     int updateOrder(@Param("id") UUID id, @Param("projectId") UUID projectId, @Param("orderNo") int orderNo,
                     @Param("version") long version, @Param("operator") String operator);

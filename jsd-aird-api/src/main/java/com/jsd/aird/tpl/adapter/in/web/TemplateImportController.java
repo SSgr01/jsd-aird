@@ -40,6 +40,11 @@ public class TemplateImportController {
         return success(service.list());
     }
 
+    @GetMapping("/scope-targets")
+    public ApiResponse<List<TemplateImportRepository.ImportTarget>> scopeTargets() {
+        return success(service.listTargets());
+    }
+
     @GetMapping("/{importJobId}")
     public ApiResponse<TemplateImportRepository.ImportJobView> get(@PathVariable UUID importJobId) {
         return success(service.get(importJobId));

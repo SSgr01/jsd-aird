@@ -25,6 +25,9 @@ public interface ExperimentImportRepository {
     boolean isParsing(UUID organizationId, UUID id);
     int delete(UUID organizationId, UUID id);
     List<Job> list(UUID organizationId);
+    default List<Job> list(UUID organizationId, com.jsd.aird.iam.api.RecordDataScope scope) {
+        return list(organizationId);
+    }
     /** Free uploads keep their owner in RND and still need an immutable source reference. */
     void linkSourceReference(UUID organizationId, UUID importJobId, UUID experimentId,
                              UUID experimentVersionId, String experimentBoundaryId,

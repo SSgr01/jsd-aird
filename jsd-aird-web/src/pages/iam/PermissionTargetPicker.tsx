@@ -2,13 +2,16 @@ import { Select, Typography } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { dataApi } from '@/services/data/data-api';
+import { listExperimentImports } from '@/services/experiments/experiment-api';
+import { qualityApi } from '@/services/quality/quality-api';
+import { productionUploadApi } from '@/services/production-orders/production-upload-api';
 import { inventoryApi } from '@/services/inventory/inventory-api';
 import { knowledgeApi } from '@/services/knowledge/knowledge-api';
 import { getPartner, getPartners } from '@/services/partners/partner-api';
 import { getProject, getProjects } from '@/services/project/project-api';
 import { spectrumApi } from '@/services/spectrum/spectrum-api';
 import { templateApi } from '@/services/templates/template-api';
-import { getResearchTest, listResearchTests } from '@/services/research-test/research-test-api';
+import { getResearchTest, listResearchTests, listResearchTestUploads } from '@/services/research-test/research-test-api';
 
 type TargetScope = 'PROJECT' | 'CATEGORY' | 'SELECTED';
 type TargetSource = 'project' | 'template' | 'knowledge' | 'data' | 'spectrum' | 'customer' | 'test-standard' | 'inventory' | 'inventory-ledger-rnd' | 'inventory-ledger-production' | 'inventory-sample' | 'inventory-shipment';
@@ -78,6 +81,36 @@ export function PermissionTargetPicker({
         else if (source === 'data') next = optionsFrom(await dataApi.listCategories());
         else if (source === 'spectrum') next = optionsFrom(await spectrumApi.categories());
         else next = optionsFrom(await templateApi.listCategories());
+      } else if (permissionCode.startsWith('template.upload.')) {
+        next = optionsFrom(await templateApi.listImportTargets());
+      } else if (permissionCode.startsWith('eln.upload.')) {
+        const [free, imports] = await Promise.all([
+          listExperimentImports(), dataApi.listExperimentJobs({ page: 1, size: 100 }),
+        ]);
+        const more = await Promise.all(Array.from({ length: imports.totalPages - 1 }, (_, index) =>
+          dataApi.listExperimentJobs({ page: index + 2, size: 100 })));
+        next = [...free.map((item) => ({ value: item.id, label: item.sourceFileName || item.id })),
+          ...[imports, ...more].flatMap((page) => page.items.map((item) =>
+            ({ value: item.id, label: item.sourceFileName || item.id })))];
+      } else if (permissionCode.startsWith('research-test.report.upload.') || permissionCode.startsWith('research-test.standard.upload.')) {
+        const type = permissionCode.startsWith('research-test.report.') ? 'REPORT' : 'STANDARD';
+        const first = await listResearchTestUploads(type, { page: 1, size: 100 });
+        const pages = await Promise.all(Array.from({ length: first.totalPages - 1 }, (_, index) =>
+          listResearchTestUploads(type, { page: index + 2, size: 100 })));
+        next = [first, ...pages].flatMap((page) => page.items.map((item) =>
+          ({ value: item.id, label: item.originalName || item.id })));
+      } else if (permissionCode.startsWith('quality.upload.')) {
+        const first = await qualityApi.uploads({ page: 1, size: 100 });
+        const pages = await Promise.all(Array.from({ length: first.totalPages - 1 }, (_, index) =>
+          qualityApi.uploads({ page: index + 2, size: 100 })));
+        next = [first, ...pages].flatMap((page) => page.items.map((item) =>
+          ({ value: item.id, label: item.originalName || item.id })));
+      } else if (permissionCode.startsWith('production.upload.')) {
+        const first = await productionUploadApi.list({ page: 1, size: 100 });
+        const pages = await Promise.all(Array.from({ length: first.totalPages - 1 }, (_, index) =>
+          productionUploadApi.list({ page: index + 2, size: 100 })));
+        next = [first, ...pages].flatMap((page) => page.items.map((item) =>
+          ({ value: item.id, label: item.originalName || item.id })));
       } else if (source === 'template') {
         const page = await templateApi.list({ size: 100 });
         next = page.items.map((item) => ({ value: item.templateId, label: item.name || item.templateCode || item.templateId }));
@@ -200,7 +233,9 @@ export function PermissionTargetPicker({
     ...(!inventorySource && !allowedTargetIds ? value.filter((id) => !options.some((option) => option.value === id)).map((id) => ({ value: id, label: id })) : []),
     ...options,
   ], [allowedTargetIds, inventorySource, options, value]);
-  const placeholder = scopeType === 'PROJECT' ? '选择项目'
+  const uploadFileSource = ['eln.upload.', 'research-test.report.upload.', 'research-test.standard.upload.', 'quality.upload.', 'production.upload.', 'template.upload.']
+    .some((prefix) => permissionCode.startsWith(prefix));
+  const placeholder = uploadFileSource ? '选择文件' : scopeType === 'PROJECT' ? '选择项目'
     : scopeType === 'CATEGORY' ? '选择分类'
       : source === 'template' ? '选择模板'
         : source === 'knowledge' ? '选择资料'
@@ -213,7 +248,7 @@ export function PermissionTargetPicker({
                       : source === 'inventory-shipment' ? '选择出货单'
                   : source === 'test-standard' ? '选择测试标准'
                   : '选择项目';
-  const help = scopeType === 'PROJECT' ? '仅授权所选项目及其关联数据'
+  const help = uploadFileSource ? '仅授权所选上传文件' : scopeType === 'PROJECT' ? '仅授权所选项目及其关联数据'
     : scopeType === 'CATEGORY' ? '仅授权所选分类及其子分类'
       : source === 'template' ? '仅授权所选模板'
         : source === 'knowledge' ? '仅授权所选资料'

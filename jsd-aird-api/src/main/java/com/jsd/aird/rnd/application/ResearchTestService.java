@@ -40,7 +40,7 @@ public class ResearchTestService {
         var a=ActorContext.required();
         var code=upload?(type==Type.REPORT?"research-test.report.upload.view":"research-test.standard.upload.view")
                 :(type==Type.REPORT?"research-test.report.view.view":"research-test.standard.view");
-        var resolved=authorization.resolveScope(new PermissionCheck(a.organizationId(),a.userId(),code,"RESEARCH_TEST",null,"READ"));
+        var resolved=authorization.resolveScope(new PermissionCheck(a.organizationId(),a.userId(),code,upload?"RESEARCH_TEST_UPLOAD":"RESEARCH_TEST",null,"READ"));
         if(!resolved.allowed())throw new ApiException(ApiErrorCode.PERMISSION_DENIED,"当前用户没有研发测试查看权限");
         return new ExperimentRepository.DataScopeFilter(resolved.scopeType(),a.userId(),resolved.targetIds());
     }
@@ -102,7 +102,11 @@ public class ResearchTestService {
         return result;
     }
     public void deleteUpload(Type type,UUID id){var a=ActorContext.required();var current=repository.findUpload(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在"));requireUploadType(a.organizationId(),current,type);repository.deleteUpload(a.organizationId(),id);audit(a,"RESEARCH_TEST_UPLOAD_DELETED","RESEARCH_TEST_UPLOAD",id,current.originalName());}
-    private void requireUploadType(UUID organizationId,Upload upload,Type expected){var detail=detail(upload.recordId());if(detail.summary().recordType()!=expected)throw new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在");}
+    private void requireUploadType(UUID organizationId,Upload upload,Type expected){
+        var detail=repository.detail(organizationId,upload.recordId())
+                .orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在"));
+        if(detail.summary().recordType()!=expected)throw new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在");
+    }
     private void audit(com.jsd.aird.shared.security.Actor actor,String action,String type,UUID id,String name){if(audit==null)return;var detail=JsonNodeFactory.instance.objectNode();if(name!=null&&!name.isBlank())detail.put("objectName",name);audit.append(actor.organizationId(),actor.userId(),action,type,id,detail);}
     private JsonNode importedEditModel(UUID organizationId,CreateCommand c){
         if(sourceParser==null||c.type()!=Type.STANDARD||c.sourceFileId()==null||!"IMPORT".equalsIgnoreCase(c.sourceType()))return c.editModel();

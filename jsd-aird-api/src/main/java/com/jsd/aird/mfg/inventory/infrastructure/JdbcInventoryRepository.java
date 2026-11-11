@@ -216,7 +216,8 @@ public class JdbcInventoryRepository implements InventoryRepository {
     private String selectedRecordCondition(String alias,RecordDataScope scope,List<Object> args){
         if(scope.targetIds().isEmpty())return " AND false";
         args.addAll(scope.targetIds());
-        return " AND "+alias+".id IN ("+String.join(",",scope.targetIds().stream().map(id->"?").toList())+")";
+        args.add(scope.actorId());
+        return " AND ("+alias+".id IN ("+String.join(",",scope.targetIds().stream().map(id->"?").toList())+") OR "+alias+".actor_id = ?)";
     }
     public Optional<ShipmentHeader> shipmentHeader(UUID org,String shipmentNo){return jdbc.query(
             "SELECT h.id,h.shipment_no,h.business_date,h.note,count(s.id) detail_count,"+

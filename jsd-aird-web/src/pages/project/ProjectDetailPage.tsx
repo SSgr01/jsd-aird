@@ -261,7 +261,7 @@ export function ProjectDetailPage() {
           <Form.Item name="owner" label="负责人">
             <Input placeholder="请输入负责人" maxLength={100} />
           </Form.Item>
-          <Form.Item name="dates" label="项目日期" className="pm-form-span-2">
+          <Form.Item name="dates" label="项目日期">
             <DatePicker.RangePicker style={{ width: '100%' }} placeholder={['开始日期', '结束日期']} allowEmpty={[true, true]} />
           </Form.Item>
           <Form.Item name="priority" label="优先级">

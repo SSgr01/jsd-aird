@@ -58,6 +58,7 @@ public class TemplateImportService {
     private final PhysicalStructureFieldCompiler physicalFieldCompiler;
     private final ColumnTableLayoutCompiler columnTableLayoutCompiler;
     private final ExperimentMatrixCandidateDetector experimentMatrixCandidateDetector;
+    private final com.jsd.aird.iam.api.AuthorizationService authorization;
 
     public TemplateImportService(
             TemplateImportRepository repository,
@@ -71,7 +72,8 @@ public class TemplateImportService {
             WorkbookQualityAnalyzer qualityAnalyzer,
             JsonCanonicalizer canonicalizer,
             TemplateRepository templateRepository,
-            TemplateVisualRenderer visualRenderer
+            TemplateVisualRenderer visualRenderer,
+            com.jsd.aird.iam.api.AuthorizationService authorization
     ) {
         this.repository = repository;
         this.fileRepository = fileRepository;
@@ -91,6 +93,7 @@ public class TemplateImportService {
         this.physicalFieldCompiler = new PhysicalStructureFieldCompiler(objectMapper);
         this.columnTableLayoutCompiler = new ColumnTableLayoutCompiler(objectMapper);
         this.experimentMatrixCandidateDetector = new ExperimentMatrixCandidateDetector(objectMapper);
+        this.authorization = authorization;
     }
 
     @Transactional
@@ -252,7 +255,8 @@ public class TemplateImportService {
                         .put("sourceSha256", file.sha256())
                         .put("duplicateSourceJobId", duplicate == null ? "" : duplicate.id().toString())
                         .put("operationSource", operationSource == null ? "UPLOAD" : operationSource));
-        return get(importJobId);
+        return repository.find(actor.organizationId(), importJobId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
     }
 
     @Transactional
@@ -328,7 +332,10 @@ public class TemplateImportService {
     }
 
     public TemplateImportRepository.ImportJobView get(UUID importJobId) {
-        return repository.find(ActorContext.required().organizationId(), importJobId)
+        var actor = ActorContext.required();
+        authorization.require(new com.jsd.aird.iam.api.PermissionCheck(actor.organizationId(), actor.userId(),
+                "template.upload.view", "TEMPLATE_IMPORT", importJobId, "READ"));
+        return repository.find(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
     }
 
@@ -372,20 +379,32 @@ public class TemplateImportService {
     }
 
     public List<TemplateImportRepository.ImportJobView> list() {
-        return repository.list(ActorContext.required().organizationId());
+        var actor = ActorContext.required();
+        return repository.list(actor.organizationId(), uploadScope());
+    }
+
+    public List<TemplateImportRepository.ImportTarget> listTargets() {
+        var actor = ActorContext.required();
+        return repository.listTargets(actor.organizationId(), uploadScope());
+    }
+
+    private com.jsd.aird.iam.api.RecordDataScope uploadScope() {
+        var actor = ActorContext.required();
+        var scope = authorization.resolveScope(new com.jsd.aird.iam.api.PermissionCheck(actor.organizationId(),
+                actor.userId(), "template.upload.view", "TEMPLATE_IMPORT", null, "READ"));
+        if (!scope.allowed()) throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "没有模板上传文件查看权限");
+        return new com.jsd.aird.iam.api.RecordDataScope(scope.scopeType(), actor.userId(), scope.targetIds());
     }
 
     public List<TemplateImportRepository.RecognitionSuggestionView> listSuggestions(UUID importJobId) {
         var actor = ActorContext.required();
-        repository.find(actor.organizationId(), importJobId)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
+        get(importJobId);
         return repository.listSuggestions(actor.organizationId(), importJobId);
     }
 
     public List<TemplateImportRepository.RecognitionCallView> listRecognitionCalls(UUID importJobId) {
         var actor = ActorContext.required();
-        repository.find(actor.organizationId(), importJobId)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
+        get(importJobId);
         return repository.listRecognitionCalls(actor.organizationId(), importJobId);
     }
 

@@ -24,7 +24,9 @@ public record RecordDataScope(String type, UUID actorId, Set<UUID> targetIds) {
             case "SELECTED" -> {
                 if (targetIds.isEmpty()) yield " AND false";
                 args.addAll(targetIds);
-                yield " AND " + alias + ".id IN (" + String.join(",", targetIds.stream().map(id -> "?").toList()) + ")";
+                args.add(actorId);
+                yield " AND (" + alias + ".id IN (" + String.join(",", targetIds.stream().map(id -> "?").toList())
+                        + ") OR " + alias + ".created_by = ?)";
             }
             default -> " AND false";
         };

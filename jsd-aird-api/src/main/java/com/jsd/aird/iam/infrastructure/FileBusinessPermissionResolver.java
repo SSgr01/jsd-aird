@@ -12,7 +12,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class FileBusinessPermissionResolver {
     private static final String ASSOCIATIONS = """
-            SELECT 'data.view.view' AS permission_code, id AS resource_id FROM data.import_job
+            SELECT CASE WHEN source_owner = 'EXPERIMENT' THEN 'eln.upload.view' ELSE 'data.view.view' END AS permission_code,
+                   id AS resource_id FROM data.import_job
              WHERE organization_id = ? AND source_file_id = ?
             UNION ALL SELECT 'knowledge.view.view', v.document_id FROM kb.document_version v
              JOIN kb.document d ON d.id = v.document_id
@@ -76,10 +77,56 @@ public class FileBusinessPermissionResolver {
             var scope = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
                     association.permissionCode(), "FILE", null, "READ"));
             if (!scope.allowed()) continue;
+            var uploadTable = switch (association.permissionCode()) {
+                case "eln.upload.view" -> "rnd.experiment_import_job";
+                case "quality.upload.view" -> "quality.upload_file";
+                case "production.upload.view" -> "mfg.production_upload";
+                case "research-test.report.upload.view", "research-test.standard.upload.view" -> "rnd.research_test_upload";
+                case "template.upload.view" -> "tpl.template_import_job";
+                default -> null;
+            };
+            if ("eln.upload.view".equals(association.permissionCode())
+                    && Boolean.TRUE.equals(jdbc.queryForObject(
+                            "SELECT EXISTS (SELECT 1 FROM data.import_job WHERE organization_id = ? AND id = ? AND source_owner = 'EXPERIMENT')",
+                            Boolean.class, actor.organizationId(), association.resourceId()))) {
+                uploadTable = "data.import_job";
+            }
             if ("ALL".equals(scope.scopeType()) || "ORG".equals(scope.scopeType())) return true;
-            if (("SELF".equals(scope.scopeType()) || "CREATOR".equals(scope.scopeType()))
+            if (uploadTable != null
+                    && ("SELF".equals(scope.scopeType()) || "CREATOR".equals(scope.scopeType()))
+                    && Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS (SELECT 1 FROM " + uploadTable
+                            + " job WHERE job.organization_id = ? AND job.id = ? AND job.created_by = ?)",
+                            Boolean.class, actor.organizationId(), association.resourceId(), actor.userId()))) return true;
+            if (uploadTable == null
+                    && ("SELF".equals(scope.scopeType()) || "CREATOR".equals(scope.scopeType()))
                     && actor.userId().equals(creator.getFirst())) return true;
-            if ("SELECTED".equals(scope.scopeType()) && scope.targetIds().contains(association.resourceId())) return true;
+            if ("SELECTED".equals(scope.scopeType())) {
+                var resourceType = switch (association.permissionCode()) {
+                    case "data.view.view" -> "DATA";
+                    case "knowledge.view.view" -> "KNOWLEDGE";
+                    case "knowledge.upload.view" -> "KNOWLEDGE_UPLOAD";
+                    case "quality.upload.view" -> "QUALITY_UPLOAD";
+                    case "quality.view.view" -> "QUALITY";
+                    case "production.upload.view" -> "PRODUCTION_UPLOAD";
+                    case "production.view.view" -> "PRODUCTION";
+                    case "research-test.report.upload.view", "research-test.standard.upload.view" -> "RESEARCH_TEST_UPLOAD";
+                    case "research-test.report.view.view", "research-test.standard.view" -> "RESEARCH_TEST";
+                    case "spectrum.view.view" -> "SPECTRUM";
+                    case "spectrum.upload.view" -> "SPECTRUM_UPLOAD";
+                    case "template.upload.view" -> "TEMPLATE_IMPORT";
+                    case "eln.upload.view" -> "data.import_job".equals(uploadTable) ? "DATA" : "EXPERIMENT_IMPORT";
+                    default -> null;
+                };
+                if (resourceType != null && authorization.check(new PermissionCheck(actor.organizationId(), actor.userId(),
+                        association.permissionCode(), resourceType, association.resourceId(), "READ")).allowed()) return true;
+                if (resourceType == null && scope.targetIds().contains(association.resourceId())) return true;
+            }
+            if (uploadTable != null && "DEPARTMENT".equals(scope.scopeType())
+                    && Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS (SELECT 1 FROM " + uploadTable
+                            + " job JOIN iam.app_user viewer ON viewer.id = ? AND viewer.organization_id = job.organization_id"
+                            + " WHERE job.organization_id = ? AND job.id = ?"
+                            + " AND job.department_id IS NOT NULL AND job.department_id = viewer.department_id)",
+                            Boolean.class, actor.userId(), actor.organizationId(), association.resourceId()))) return true;
         }
         return false;
     }

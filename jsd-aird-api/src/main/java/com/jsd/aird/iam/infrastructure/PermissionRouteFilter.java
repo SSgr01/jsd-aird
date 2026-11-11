@@ -387,7 +387,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         // resource path from /experiments. Keep their API permissions aligned
         // with the upload page and ExperimentImportService checks.
         if (path.startsWith("/api/v1/experiment-imports")) {
-            if (read) return permission("eln.upload.view", "EXPERIMENT", "READ");
+            if (read) return permission("eln.upload.view", "EXPERIMENT_IMPORT", "READ");
             if (method.equals("DELETE")) return permission("eln.upload.delete", "EXPERIMENT", "WRITE");
             if (method.equals("PUT") || method.equals("PATCH"))
                 return permission("eln.upload.create", "EXPERIMENT", "WRITE");
@@ -435,7 +435,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         if (path.startsWith("/api/v1/production-uploads")) {
             if (read) return request.getParameter("projectId") != null
                     ? permission("project.materials.view", "PROJECT", "READ")
-                    : permission("production.upload.view", "PRODUCTION", "READ");
+                    : permission("production.upload.view", "PRODUCTION_UPLOAD", "READ");
             if (path.endsWith("/retry")) return permission("production.upload.create", "PRODUCTION", "WRITE");
             if (path.equals("/api/v1/production-uploads") && method.equals("POST"))
                 return permission("production.upload.create", "PRODUCTION", "WRITE");
@@ -489,13 +489,13 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         }
 
         if (path.startsWith("/api/v1/template-imports")) {
-            if (read) return permission("template.upload.view", "TEMPLATE", "READ");
+            if (read) return permission("template.upload.view", "TEMPLATE_IMPORT", "READ");
             if (path.endsWith("/retry"))
-                return permission("template.upload.create", "TEMPLATE", "WRITE");
+                return permission("template.upload.create", "TEMPLATE_IMPORT", "WRITE");
             if (path.contains("/suggestions/"))
-                return permission("template.recognition", "TEMPLATE", "WRITE");
-            if (method.equals("DELETE")) return permission("template.upload.delete", "TEMPLATE", "WRITE");
-            if (path.equals("/api/v1/template-imports")) return permission("template.upload", "TEMPLATE", "WRITE");
+                return permission("template.recognition", "TEMPLATE_IMPORT", "WRITE");
+            if (method.equals("DELETE")) return permission("template.upload.delete", "TEMPLATE_IMPORT", "WRITE");
+            if (path.equals("/api/v1/template-imports")) return permission("template.upload", "TEMPLATE_IMPORT", "WRITE");
             return null;
         }
         if (path.startsWith("/api/v1/template-files")) {
@@ -575,7 +575,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             var operationPrefix = report ? "research-test.report.view." : prefix;
             var uploadPrefix = prefix + "upload.";
             if (path.contains("/uploads")) {
-                if (read) return permission(uploadPrefix + "view", "RESEARCH_TEST", "READ");
+                if (read) return permission(uploadPrefix + "view", "RESEARCH_TEST_UPLOAD", "READ");
                 if (method.equals("DELETE")) return permission(uploadPrefix + "delete", "RESEARCH_TEST", "WRITE");
                 if (path.endsWith("/retry")) return permission(uploadPrefix + "create", "RESEARCH_TEST", "WRITE");
                 if (method.equals("POST")) return permission(uploadPrefix + "create", "RESEARCH_TEST", "WRITE");
@@ -626,7 +626,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         }
 
         if (path.startsWith("/api/v1/data/experiment-import-jobs")) {
-            if (read) return permission("eln.upload.view", "EXPERIMENT", "READ");
+            if (read) return permission("eln.upload.view", "DATA", "READ");
             if (method.equals("DELETE")) return permission("eln.upload.delete", "EXPERIMENT", "WRITE");
             if (method.equals("POST") && path.endsWith("/retry"))
                 return permission("eln.upload.retry", "EXPERIMENT", "WRITE");
@@ -662,7 +662,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
 
         if (path.startsWith("/api/v1/quality")) {
             if (path.contains("/uploads")) {
-                if (read) return permission("quality.upload.view", "QUALITY", "READ");
+                if (read) return permission("quality.upload.view", "QUALITY_UPLOAD", "READ");
                 if (method.equals("DELETE")) return permission("quality.upload.delete", "QUALITY", "WRITE");
                 if (path.endsWith("/retry")) return permission("quality.upload.create", "QUALITY", "WRITE");
                 if (method.equals("POST")) return permission("quality.upload.create", "QUALITY", "WRITE");

@@ -167,6 +167,14 @@ public class JdbcExperimentImportRepository implements ExperimentImportRepositor
 
     @Override
     public List<Job> list(UUID organizationId) {
+        return list(organizationId, com.jsd.aird.iam.api.RecordDataScope.all());
+    }
+
+    @Override
+    public List<Job> list(UUID organizationId, com.jsd.aird.iam.api.RecordDataScope scope) {
+        var args = new java.util.ArrayList<Object>();
+        args.add(organizationId);
+        var scopeSql = scope.sqlCondition("j", args);
         return jdbc.query("""
                 SELECT j.id, j.source_file_id, j.source_file_name, j.source_sha256, j.source_format, j.status,
                        j.experiment_id, j.error_message, j.category_name, j.project_id,
@@ -177,6 +185,7 @@ public class JdbcExperimentImportRepository implements ExperimentImportRepositor
                 LEFT JOIN mdm.project_stage s ON s.id=j.stage_id
                 LEFT JOIN mdm.project_task t ON t.id=j.task_id
                 WHERE j.organization_id=? AND j.status <> 'CANCELLED'
+                """ + scopeSql + "\n" + """
                 ORDER BY j.created_at DESC
                 """, (result, row) -> new Job(
                 result.getObject("id", UUID.class),
@@ -195,7 +204,7 @@ public class JdbcExperimentImportRepository implements ExperimentImportRepositor
                 result.getObject("task_id", UUID.class),
                 result.getString("task_name"),
                 result.getString("visibility"),
-                result.getTimestamp("created_at").toInstant(), 0, null), organizationId);
+                result.getTimestamp("created_at").toInstant(), 0, null), args.toArray());
     }
 
     @Override

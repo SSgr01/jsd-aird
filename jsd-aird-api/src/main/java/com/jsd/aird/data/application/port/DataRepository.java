@@ -25,6 +25,11 @@ public interface DataRepository {
 
     PageResponse<Job> listJobs(UUID organizationId, UUID templateVersionId,
                                String status, String keyword, String sourceOwner, int page, int size);
+    default PageResponse<Job> listJobs(UUID organizationId, UUID templateVersionId,
+                                       String status, String keyword, String sourceOwner, int page, int size,
+                                       RecordDataScope scope) {
+        return listJobs(organizationId, templateVersionId, status, keyword, sourceOwner, page, size);
+    }
 
     PageResponse<SourceFile> listSourceFiles(UUID organizationId, UUID categoryId, String status,
                                              String keyword, int page, int size);

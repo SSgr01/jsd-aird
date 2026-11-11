@@ -27,6 +27,7 @@ import { Can } from '@/components/auth/Can';
 import { httpClient } from '@/services/http/client';
 import type { ApiResponse } from '@/types/api';
 import { projectDocumentApi } from '@/services/project/project-document-api';
+import { errorMessage } from '@/services/http/errors';
 import { downloadBlob } from '@/services/files/file-api';
 import { projectTemplateApi, type ProjectTemplateOption } from '@/services/project/project-template-api';
 import TemplateVersionPreview from '@/features/template-workspace/TemplateVersionPreview';
@@ -374,6 +375,8 @@ function NewDocumentModal({ open, projectLabel, projectId, onCancel, onCreate, o
       setFileObjectId(null);
       setMode('TEMPLATE');
       onCancel();
+    } catch (error) {
+      message.error(errorMessage(error, '项目文档创建失败'));
     } finally {
       setSubmitting(false);
     }

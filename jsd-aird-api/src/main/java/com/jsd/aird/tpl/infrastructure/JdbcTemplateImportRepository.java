@@ -214,6 +214,33 @@ public class JdbcTemplateImportRepository implements TemplateImportRepository {
     }
 
     @Override
+    public List<ImportJobView> list(UUID organizationId, com.jsd.aird.iam.api.RecordDataScope scope) {
+        var args = new java.util.ArrayList<Object>();
+        args.add(organizationId);
+        var filter = scope.sqlCondition("tij", args);
+        return queryJobs(false, """
+                        WHERE tij.organization_id = ? AND tij.hidden_at IS NULL
+                          AND tij.operation_source <> 'EXPERIMENT_UPLOAD'
+                        """ + filter + " ORDER BY tij.created_at DESC LIMIT 100", args.toArray());
+    }
+
+    @Override
+    public List<ImportTarget> listTargets(UUID organizationId, com.jsd.aird.iam.api.RecordDataScope scope) {
+        var args = new java.util.ArrayList<Object>();
+        args.add(organizationId);
+        var filter = scope.sqlCondition("tij", args);
+        return jdbcTemplate.query("""
+                SELECT tij.id, COALESCE(original.original_name, source.original_name) AS name
+                FROM tpl.template_import_job tij
+                JOIN ops.file_object source ON source.id = tij.source_file_id
+                LEFT JOIN ops.file_object original ON original.id = tij.original_source_file_id
+                WHERE tij.organization_id = ? AND tij.hidden_at IS NULL
+                  AND tij.operation_source <> 'EXPERIMENT_UPLOAD'
+                """ + filter + " ORDER BY tij.created_at DESC",
+                (rs, row) -> new ImportTarget(rs.getObject("id", UUID.class), rs.getString("name")), args.toArray());
+    }
+
+    @Override
     public Optional<ImportJobView> findDuplicate(UUID organizationId, String sourceSha256, TemplateFormat format) {
         if (sourceSha256 == null || sourceSha256.isBlank()) return Optional.empty();
         return queryJobs("""

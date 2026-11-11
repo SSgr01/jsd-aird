@@ -911,6 +911,13 @@ export const templateApi = {
     return response.data.data;
   },
 
+  async listImportTargets() {
+    const response = await httpClient.get<ApiResponse<Array<{ id: string; name: string }>>>(
+      '/api/v1/template-imports/scope-targets',
+    );
+    return response.data.data;
+  },
+
   async getImport(importJobId: string) {
     const response = await httpClient.get<ApiResponse<TemplateImportJob>>(
       `/api/v1/template-imports/${importJobId}`,

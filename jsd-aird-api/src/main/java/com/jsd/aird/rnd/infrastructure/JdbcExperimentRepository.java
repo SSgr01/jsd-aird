@@ -238,10 +238,22 @@ public class JdbcExperimentRepository implements ExperimentRepository {
             }
             case "PROJECT" -> appendIn(where, args, "e.project_id", scope.targetIds());
             case "CATEGORY" -> appendIn(where, args, "e.category_id", scope.targetIds());
-            case "SELECTED" -> appendIn(where, args, "e.project_id", scope.targetIds());
+            case "SELECTED" -> appendSelectedOrCreated(where, args, scope);
             default -> where.append(" AND 1=0");
         }
         return new CompletedQuery(where.toString(), List.copyOf(args));
+    }
+
+    private void appendSelectedOrCreated(StringBuilder where, List<Object> args, DataScopeFilter scope) {
+        if (scope.targetIds().isEmpty()) {
+            where.append(" AND 1=0");
+            return;
+        }
+        where.append(" AND (e.project_id IN (")
+                .append(String.join(",", scope.targetIds().stream().map(ignored -> "?").toList()))
+                .append(") OR e.created_by=?)");
+        args.addAll(scope.targetIds());
+        args.add(scope.actorId());
     }
 
     private void appendIn(StringBuilder where, List<Object> args, String column, Set<UUID> ids) {
@@ -262,7 +274,7 @@ public class JdbcExperimentRepository implements ExperimentRepository {
                 where.append(" AND e.department_id IS NOT NULL AND e.department_id=(SELECT u.department_id FROM iam.app_user u WHERE u.id=? AND u.organization_id=?)");
                 args.add(scope.actorId()); args.add(organizationId);
             }
-            case "SELECTED" -> appendIn(where, args, "e.project_id", scope.targetIds());
+            case "SELECTED" -> appendSelectedOrCreated(where, args, scope);
             default -> where.append(" AND 1=0");
         }
     }

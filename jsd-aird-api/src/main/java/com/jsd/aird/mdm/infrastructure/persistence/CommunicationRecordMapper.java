@@ -37,7 +37,7 @@ public interface CommunicationRecordMapper {
     @Insert("INSERT INTO mdm.communication_record(id,record_code,name,partner_id,communicated_at,internal_participants," +
         "communication_method,content,status,custom_fields,version,created_at,updated_at,created_by,updated_by) " +
         "VALUES(#{id},#{recordCode},#{name},#{partnerId},#{communicatedAt},#{internalParticipants},#{communicationMethod}," +
-        "#{content},#{status},CAST(#{customFields} AS jsonb),0,#{now},#{now},#{operator},#{operator})")
+        "#{content},#{status},CAST(#{customFields} AS jsonb),0,#{now},#{now},CAST(#{operator} AS uuid),CAST(#{operator} AS uuid))")
     void insertCommunication(@Param("id") UUID id, @Param("recordCode") String recordCode, @Param("name") String name,
                              @Param("partnerId") UUID partnerId, @Param("communicatedAt") Instant communicatedAt,
                              @Param("internalParticipants") String internalParticipants,
@@ -47,7 +47,7 @@ public interface CommunicationRecordMapper {
 
     @Update("UPDATE mdm.communication_record SET name=#{name},communicated_at=#{communicatedAt},internal_participants=#{internalParticipants}," +
         "communication_method=#{communicationMethod},content=#{content},status=#{status},custom_fields=CAST(#{customFields} AS jsonb)," +
-        "version=version+1,updated_at=now(),updated_by=#{operator} WHERE id=#{id} AND version=#{version}")
+        "version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) WHERE id=#{id} AND version=#{version}")
     int updateCommunication(@Param("id") UUID id, @Param("name") String name,
                             @Param("communicatedAt") Instant communicatedAt,
                             @Param("internalParticipants") String internalParticipants,
@@ -56,6 +56,6 @@ public interface CommunicationRecordMapper {
                             @Param("version") long version, @Param("operator") String operator);
 
     @Update("UPDATE mdm.communication_record SET deleted=true, deleted_at=now(), deleted_by=#{operator}, " +
-        "version=version+1, updated_at=now(), updated_by=#{operator} WHERE id=#{id} AND version=#{version} AND deleted=false")
+        "version=version+1, updated_at=now(), updated_by=CAST(#{operator} AS uuid) WHERE id=#{id} AND version=#{version} AND deleted=false")
     int deleteCommunication(@Param("id") UUID id, @Param("version") long version, @Param("operator") String operator);
 }

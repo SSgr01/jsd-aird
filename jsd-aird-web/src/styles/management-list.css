@@ -286,7 +286,8 @@
 /* Reuse the project list's exact tag palette on customer status displays. */
 .pm-unified-list-page.pm-project-list-page .pm-tag,
 .pm-unified-list-page.cm-customer-list-page .pm-tag,
-.cm-partner-detail-page .pm-tag {
+.cm-partner-detail-page .pm-tag,
+.pm-cr-tab .pm-tag {
   display: inline-flex;
   min-height: 24px;
   align-items: center;
@@ -304,7 +305,8 @@
 .cm-partner-detail-page .pm-tag.priority-high,
 .pm-unified-list-page.pm-project-list-page .pm-tag.status-cancelled,
 .pm-unified-list-page.cm-customer-list-page .pm-tag.status-cancelled,
-.cm-partner-detail-page .pm-tag.status-cancelled {
+.cm-partner-detail-page .pm-tag.status-cancelled,
+.pm-cr-tab .pm-tag.status-cancelled {
   background: #fff1f0;
   border-color: #ffa39e;
   color: #d4380d;
@@ -315,7 +317,8 @@
 .cm-partner-detail-page .pm-tag.priority-medium,
 .pm-unified-list-page.pm-project-list-page .pm-tag.status-pending,
 .pm-unified-list-page.cm-customer-list-page .pm-tag.status-pending,
-.cm-partner-detail-page .pm-tag.status-pending {
+.cm-partner-detail-page .pm-tag.status-pending,
+.pm-cr-tab .pm-tag.status-pending {
   background: #fffbe6;
   border-color: #ffe58f;
   color: #d48806;
@@ -326,7 +329,8 @@
 .cm-partner-detail-page .pm-tag.priority-low,
 .pm-unified-list-page.pm-project-list-page .pm-tag.status-in_progress,
 .pm-unified-list-page.cm-customer-list-page .pm-tag.status-in_progress,
-.cm-partner-detail-page .pm-tag.status-in_progress {
+.cm-partner-detail-page .pm-tag.status-in_progress,
+.pm-cr-tab .pm-tag.status-in_progress {
   background: #e6f4ff;
   border-color: #91caff;
   color: #0958d9;
@@ -334,7 +338,8 @@
 
 .pm-unified-list-page.pm-project-list-page .pm-tag.status-completed,
 .pm-unified-list-page.cm-customer-list-page .pm-tag.status-completed,
-.cm-partner-detail-page .pm-tag.status-completed {
+.cm-partner-detail-page .pm-tag.status-completed,
+.pm-cr-tab .pm-tag.status-completed {
   background: #f6ffed;
   border-color: #b7eb8f;
   color: #389e0d;
@@ -342,7 +347,8 @@
 
 .pm-unified-list-page.pm-project-list-page .pm-tag.status-paused,
 .pm-unified-list-page.cm-customer-list-page .pm-tag.status-paused,
-.cm-partner-detail-page .pm-tag.status-paused {
+.cm-partner-detail-page .pm-tag.status-paused,
+.pm-cr-tab .pm-tag.status-paused {
   background: #fff7e6;
   border-color: #ffd591;
   color: #d46b08;
@@ -350,7 +356,8 @@
 
 .pm-unified-list-page.pm-project-list-page .pm-tag.status-not_started,
 .pm-unified-list-page.cm-customer-list-page .pm-tag.status-not_started,
-.cm-partner-detail-page .pm-tag.status-not_started {
+.cm-partner-detail-page .pm-tag.status-not_started,
+.pm-cr-tab .pm-tag.status-not_started {
   background: #f5f5f5;
   border-color: #d9d9d9;
   color: #595959;
@@ -401,7 +408,8 @@
   color: #595959;
 }
 
-.cm-partner-detail-page .pm-tag.status-custom {
+.cm-partner-detail-page .pm-tag.status-custom,
+.pm-cr-tab .pm-tag.status-custom {
   background: #f9f0ff;
   border-color: #d3adf7;
   color: #722ed1;

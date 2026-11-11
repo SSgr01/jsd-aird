@@ -272,7 +272,8 @@ public class JdbcTemplateRepository implements TemplateRepository {
             case "SELECTED" -> {
                 if (scope.targetIds().isEmpty()) sql.append(" AND 1 = 0\n");
                 else {
-                    sql.append(" AND lt.template_id IN (:scopeTargetIds)\n");
+                    sql.append(" AND (lt.created_by = :scopeActorId OR lt.template_id IN (:scopeTargetIds))\n");
+                    parameters.addValue("scopeActorId", scope.actorId());
                     parameters.addValue("scopeTargetIds", scope.targetIds());
                 }
             }

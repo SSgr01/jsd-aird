@@ -23,7 +23,7 @@ public interface ProjectMapper {
         "<when test='scopeType == &quot;DEPARTMENT&quot;'> AND p.department_id IS NOT NULL AND p.department_id=(SELECT u.department_id FROM iam.app_user u WHERE u.id=#{scopeUserId} AND u.organization_id=#{organizationId})</when>" +
         "<when test='scopeType == &quot;OWNER&quot; or scopeType == &quot;MANAGER&quot;'> AND EXISTS (SELECT 1 FROM iam.resource_owner_identity roi WHERE roi.organization_id=p.organization_id AND roi.resource_type='PROJECT' AND roi.resource_id=p.id AND roi.user_id=#{scopeUserId} AND roi.relation_type=#{scopeType})</when>" +
         "<when test='scopeType == &quot;PARTICIPANT&quot; or scopeType == &quot;PROJECT_GROUP&quot;'> AND EXISTS (SELECT 1 FROM iam.project_member pm WHERE pm.organization_id=p.organization_id AND pm.project_id=p.id AND pm.user_id=#{scopeUserId})</when>" +
-        "<when test='(scopeType == &quot;SELECTED&quot; or scopeType == &quot;PROJECT&quot;) and scopeTargetIds != null and scopeTargetIds.size() > 0'> AND p.id IN <foreach collection='scopeTargetIds' item='scopeId' open='(' separator=',' close=')'>#{scopeId,jdbcType=OTHER}</foreach></when>" +
+        "<when test='(scopeType == &quot;SELECTED&quot; or scopeType == &quot;PROJECT&quot;) and scopeTargetIds != null and scopeTargetIds.size() > 0'> AND (p.created_by::text = CAST(#{scopeUserId} AS text) OR p.id IN <foreach collection='scopeTargetIds' item='scopeId' open='(' separator=',' close=')'>#{scopeId,jdbcType=OTHER}</foreach>)</when>" +
         "<otherwise> AND 1=0</otherwise></choose>";
 
     // 日期筛选的是“开始日期”区间（与项目列表页的 开始日期 列、开始日期起/止 参数一致），
@@ -77,7 +77,7 @@ public interface ProjectMapper {
     @Insert("INSERT INTO mdm.project(id,organization_id,project_code,name,partner_id,partner_name,owner,start_date,end_date," +
         "priority,status,team_size,background,custom_fields,team_members,version,created_at,updated_at,created_by,updated_by) " +
         "VALUES(#{id},#{organizationId},#{projectCode},#{name},#{partnerId},#{partnerName},#{owner},#{startDate},#{endDate}," +
-        "#{priority},#{status},#{teamSize},#{background},CAST(#{customFields} AS jsonb),CAST(#{teamMembers} AS jsonb),0,#{now},#{now},#{operator},#{operator})")
+        "#{priority},#{status},#{teamSize},#{background},CAST(#{customFields} AS jsonb),CAST(#{teamMembers} AS jsonb),0,#{now},#{now},CAST(#{operator} AS uuid),CAST(#{operator} AS uuid))")
     void insert(@Param("id") UUID id, @Param("organizationId") UUID organizationId,
                 @Param("projectCode") String projectCode, @Param("name") String name,
                 @Param("partnerId") UUID partnerId, @Param("partnerName") String partnerName,
@@ -91,7 +91,7 @@ public interface ProjectMapper {
         "partner_name=#{partnerName},owner=#{owner},start_date=#{startDate},end_date=#{endDate}," +
         "priority=#{priority},status=#{status},team_size=#{teamSize},background=#{background}," +
         "custom_fields=CAST(#{customFields} AS jsonb),team_members=CAST(#{teamMembers} AS jsonb)," +
-        "version=version+1,updated_at=now(),updated_by=#{operator} " +
+        "version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) " +
         "WHERE organization_id=#{organizationId} AND id=#{id} AND deleted=false AND version=#{version}")
     int update(@Param("organizationId") UUID organizationId, @Param("id") UUID id, @Param("projectCode") String projectCode, @Param("name") String name,
                @Param("partnerId") UUID partnerId, @Param("partnerName") String partnerName,
@@ -101,19 +101,19 @@ public interface ProjectMapper {
                @Param("teamMembers") String teamMembers,
                @Param("version") long version, @Param("operator") String operator);
 
-    @Update("UPDATE mdm.project SET deleted=true,version=version+1,updated_at=now(),updated_by=#{operator} " +
+    @Update("UPDATE mdm.project SET deleted=true,version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) " +
         "WHERE organization_id=#{organizationId} AND id=#{id} AND deleted=false AND version=#{version} AND status <> 'COMPLETED'")
     int softDelete(@Param("organizationId") UUID organizationId, @Param("id") UUID id, @Param("version") long version, @Param("operator") String operator);
 
-    @Update("UPDATE mdm.project SET partner_id=#{partnerId},partner_name=#{partnerName},version=version+1,updated_at=now(),updated_by=#{operator} WHERE organization_id=#{organizationId} AND id=#{projectId} AND deleted=false AND (partner_id IS NULL OR partner_id=#{partnerId})")
+    @Update("UPDATE mdm.project SET partner_id=#{partnerId},partner_name=#{partnerName},version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) WHERE organization_id=#{organizationId} AND id=#{projectId} AND deleted=false AND (partner_id IS NULL OR partner_id=#{partnerId})")
     int assignPartner(@Param("organizationId") UUID organizationId, @Param("projectId") UUID projectId, @Param("partnerId") UUID partnerId,
                       @Param("partnerName") String partnerName, @Param("operator") String operator);
 
-    @Update("UPDATE mdm.project SET partner_id=NULL,partner_name=NULL,version=version+1,updated_at=now(),updated_by=#{operator} WHERE organization_id=#{organizationId} AND id=#{projectId} AND deleted=false AND partner_id=#{partnerId}")
+    @Update("UPDATE mdm.project SET partner_id=NULL,partner_name=NULL,version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) WHERE organization_id=#{organizationId} AND id=#{projectId} AND deleted=false AND partner_id=#{partnerId}")
     int clearPartner(@Param("organizationId") UUID organizationId, @Param("projectId") UUID projectId, @Param("partnerId") UUID partnerId,
                      @Param("operator") String operator);
 
-    @Update("UPDATE mdm.project SET partner_name=#{partnerName},version=version+1,updated_at=now(),updated_by=#{operator} WHERE organization_id=#{organizationId} AND partner_id=#{partnerId} AND deleted=false")
+    @Update("UPDATE mdm.project SET partner_name=#{partnerName},version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) WHERE organization_id=#{organizationId} AND partner_id=#{partnerId} AND deleted=false")
     int refreshPartnerName(@Param("organizationId") UUID organizationId, @Param("partnerId") UUID partnerId, @Param("partnerName") String partnerName,
                            @Param("operator") String operator);
 }

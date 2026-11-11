@@ -52,6 +52,10 @@ public class BusinessPartnerService {
 
     public BusinessPartner get(UUID id) {
         requireAccess(id, "customer.list.view");
+        return findExisting(id);
+    }
+
+    BusinessPartner findExisting(UUID id) {
         return repository.findById(id).orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "公司不存在"));
     }
 
@@ -71,8 +75,8 @@ public class BusinessPartnerService {
         return customerAccess == null || customerAccess.mayReadProject(projectId);
     }
 
-    public void requireProjectWrite(UUID projectId) {
-        if (customerAccess != null) customerAccess.requireProjectWrite(projectId);
+    public void requireProjectVisible(UUID projectId) {
+        if (customerAccess != null) customerAccess.requireProjectVisible(projectId);
     }
 
     public void requireProjectAction(UUID projectId, String permissionCode) {

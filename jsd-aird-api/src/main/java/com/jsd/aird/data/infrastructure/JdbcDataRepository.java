@@ -99,6 +99,14 @@ public class JdbcDataRepository implements DataRepository {
     @Override
     public PageResponse<Job> listJobs(UUID organizationId, UUID templateVersionId,
                                       String status, String keyword, String sourceOwner, int page, int size) {
+        return listJobs(organizationId, templateVersionId, status, keyword, sourceOwner, page, size,
+                com.jsd.aird.iam.api.RecordDataScope.all());
+    }
+
+    @Override
+    public PageResponse<Job> listJobs(UUID organizationId, UUID templateVersionId,
+                                      String status, String keyword, String sourceOwner, int page, int size,
+                                      com.jsd.aird.iam.api.RecordDataScope scope) {
         var conditions = new ArrayList<String>();
         var parameters = new ArrayList<Object>();
         conditions.add("organization_id = ?");
@@ -118,6 +126,7 @@ public class JdbcDataRepository implements DataRepository {
             conditions.add("lower(source_file_name) LIKE lower(?)");
             parameters.add("%" + keyword.trim() + "%");
         }
+        conditions.add("1=1" + scope.sqlCondition("data.import_job", parameters));
         var where = String.join(" AND ", conditions);
         var total = jdbc.queryForObject("SELECT count(*) FROM data.import_job WHERE " + where,
                 Long.class, parameters.toArray());
@@ -187,8 +196,9 @@ public class JdbcDataRepository implements DataRepository {
             case "SELECTED" -> {
                 if (dataScope.targetIds().isEmpty()) conditions.add("false");
                 else {
-                    conditions.add("entry_id IN (" + String.join(",", java.util.Collections.nCopies(dataScope.targetIds().size(), "?")) + ")");
+                    conditions.add("(entry_id IN (" + String.join(",", java.util.Collections.nCopies(dataScope.targetIds().size(), "?")) + ") OR created_by = ?)");
                     parameters.addAll(dataScope.targetIds());
+                    parameters.add(dataScope.actorId());
                 }
             }
             default -> conditions.add("false");

@@ -109,7 +109,7 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
             }
             case "SELECTED", "PROJECT" -> {
                 if (scope.targetIds().isEmpty()) where.append(" AND false");
-                else { where.append(" AND po.project_id IN (").append(String.join(",", scope.targetIds().stream().map(id -> "?").toList())).append(")"); args.addAll(scope.targetIds()); }
+                else { where.append(" AND (po.project_id IN (").append(String.join(",", scope.targetIds().stream().map(id -> "?").toList())).append(") OR po.created_by = ?)"); args.addAll(scope.targetIds()); args.add(scope.actorId()); }
             }
             default -> where.append(" AND false");
         }

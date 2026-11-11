@@ -16,7 +16,7 @@ class TemplateQualityIssueAggregationTest {
     void preservesDirectionIssueAndItsWordTableEvidence() {
         var service = new TemplateImportService(
                 null, null, null, List.of(), objectMapper, null, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
         var evidence = objectMapper.createObjectNode()
                 .put("nodeId", "table-a")
                 .put("sourcePath", "/document[1]/body[1]/tbl[2]")

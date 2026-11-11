@@ -249,7 +249,10 @@ public class QualityDataService {
 
     public PageResponse<QualityDataStore.UploadView> uploads(String keyword,String status,UUID projectId,int page,int size) {
         var a=ActorContext.required();
-        return repository.uploads(a.organizationId(),a.userId(),a.role(),keyword,status,projectId,Math.max(1,page),Math.min(100,Math.max(1,size)));
+        var resolved=authorization.resolveScope(new com.jsd.aird.iam.api.PermissionCheck(a.organizationId(),a.userId(),"quality.upload.view","QUALITY_UPLOAD",null,"READ"));
+        if(!resolved.allowed())throw new ApiException(ApiErrorCode.PERMISSION_DENIED,"当前用户没有品管上传查看权限");
+        return repository.uploads(a.organizationId(),a.userId(),a.role(),keyword,status,projectId,Math.max(1,page),Math.min(100,Math.max(1,size)),
+                new com.jsd.aird.iam.api.RecordDataScope(resolved.scopeType(),a.userId(),resolved.targetIds()));
     }
 
     public void deleteUpload(UUID id) { var a=ActorContext.required(); repository.deleteUpload(a.organizationId(),id); audit(a,"QUALITY_UPLOAD_DELETED","QUALITY_UPLOAD",id,null); }

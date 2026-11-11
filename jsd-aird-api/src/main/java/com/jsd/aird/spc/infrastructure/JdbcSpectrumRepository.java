@@ -263,7 +263,8 @@ public class JdbcSpectrumRepository implements SpectrumRepository {
             case "SELECTED" -> {
                 if (scope.targetIds().isEmpty()) yield " AND false";
                 args.addAll(scope.targetIds());
-                yield " AND a.id IN (" + String.join(",", scope.targetIds().stream().map(id -> "?").toList()) + ")";
+                args.add(scope.actorId());
+                yield " AND (a.id IN (" + String.join(",", scope.targetIds().stream().map(id -> "?").toList()) + ") OR a.created_by = ?)";
             }
             default -> " AND false";
         };

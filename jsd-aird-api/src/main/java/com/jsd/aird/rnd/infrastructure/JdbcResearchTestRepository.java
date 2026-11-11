@@ -45,7 +45,7 @@ public class JdbcResearchTestRepository implements ResearchTestRepository {
             case "DEPARTMENT" -> {where.append(" AND r.department_id IS NOT NULL AND r.department_id=(SELECT u.department_id FROM iam.app_user u WHERE u.id=? AND u.organization_id=?)");args.add(scope.actorId());args.add(org);}
             case "SELECTED", "PROJECT" -> {
                 if(scope.targetIds().isEmpty())where.append(" AND 1=0");
-                else{where.append(type==Type.STANDARD?" AND r.id IN (":" AND r.project_id IN (").append(String.join(",",scope.targetIds().stream().map(id->"?").toList())).append(')');args.addAll(scope.targetIds());}
+                else{where.append(type==Type.STANDARD?" AND (r.id IN (":" AND (r.project_id IN (").append(String.join(",",scope.targetIds().stream().map(id->"?").toList())).append(") OR r.created_by=?)");args.addAll(scope.targetIds());args.add(scope.actorId());}
             }
             default -> where.append(" AND 1=0");
         }
@@ -111,7 +111,16 @@ public class JdbcResearchTestRepository implements ResearchTestRepository {
         return findUpload(org,id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在"));
     }
     @Override public PageResponse<Upload> uploads(UUID org,Type type,String keyword,int page,int size){return uploads(org,type,keyword,page,size,ExperimentRepository.DataScopeFilter.all());}
-    @Override public PageResponse<Upload> uploads(UUID org,Type type,String keyword,int page,int size,ExperimentRepository.DataScopeFilter scope){var w=new StringBuilder(" WHERE u.organization_id=? AND u.deleted=false AND r.record_type=? AND r.deleted=false");var a=new ArrayList<Object>();a.add(org);a.add(type.name());if(text(keyword)){w.append(" AND lower(u.original_name) LIKE ?");a.add("%"+keyword.toLowerCase()+"%");}appendScope(w,a,scope,org,type);var joins=" FROM rnd.research_test_upload u JOIN rnd.research_test_record r ON r.id=u.record_id";long total=jdbc.queryForObject("SELECT count(*)"+joins+w,Long.class,a.toArray());a.add(size);a.add((page-1)*size);var items=jdbc.query("SELECT u.*,r.category,r.visibility,p.name project_name,s.name stage_name,t.name task_name"+joins+" LEFT JOIN mdm.project p ON p.id=r.project_id AND p.deleted=false LEFT JOIN mdm.project_stage s ON s.id=r.stage_id AND s.deleted=false LEFT JOIN mdm.project_task t ON t.id=r.task_id AND t.deleted=false"+w+" ORDER BY u.created_at DESC LIMIT ? OFFSET ?",this::upload,a.toArray());return new PageResponse<>(items,page,size,total,(total+size-1)/size);}
+    @Override public PageResponse<Upload> uploads(UUID org,Type type,String keyword,int page,int size,ExperimentRepository.DataScopeFilter scope){var w=new StringBuilder(" WHERE u.organization_id=? AND u.deleted=false AND r.record_type=? AND r.deleted=false");var a=new ArrayList<Object>();a.add(org);a.add(type.name());if(text(keyword)){w.append(" AND lower(u.original_name) LIKE ?");a.add("%"+keyword.toLowerCase()+"%");}appendUploadScope(w,a,scope,org);var joins=" FROM rnd.research_test_upload u JOIN rnd.research_test_record r ON r.id=u.record_id";long total=jdbc.queryForObject("SELECT count(*)"+joins+w,Long.class,a.toArray());a.add(size);a.add((page-1)*size);var items=jdbc.query("SELECT u.*,r.category,r.visibility,p.name project_name,s.name stage_name,t.name task_name"+joins+" LEFT JOIN mdm.project p ON p.id=r.project_id AND p.deleted=false LEFT JOIN mdm.project_stage s ON s.id=r.stage_id AND s.deleted=false LEFT JOIN mdm.project_task t ON t.id=r.task_id AND t.deleted=false"+w+" ORDER BY u.created_at DESC LIMIT ? OFFSET ?",this::upload,a.toArray());return new PageResponse<>(items,page,size,total,(total+size-1)/size);}
+    private void appendUploadScope(StringBuilder where,List<Object> args,ExperimentRepository.DataScopeFilter scope,UUID org){
+        switch(scope.type()){
+            case "ALL","ORG" -> { }
+            case "SELF","CREATOR" -> {where.append(" AND u.created_by=?");args.add(scope.actorId());}
+            case "DEPARTMENT" -> {where.append(" AND u.department_id=(SELECT department_id FROM iam.app_user WHERE id=? AND organization_id=?)");args.add(scope.actorId());args.add(org);}
+            case "SELECTED" -> {if(scope.targetIds().isEmpty())where.append(" AND 1=0");else{where.append(" AND (u.id IN (").append(String.join(",",scope.targetIds().stream().map(id->"?").toList())).append(") OR u.created_by=?)");args.addAll(scope.targetIds());args.add(scope.actorId());}}
+            default -> where.append(" AND 1=0");
+        }
+    }
     @Override public void deleteUpload(UUID org,UUID id){jdbc.update("UPDATE rnd.research_test_upload SET deleted=true WHERE organization_id=? AND id=?",org,id);}
 
     private void requireVersion(Detail current,long expected){if(expected<0||current.summary().lockVersion()!=expected)throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"记录已被其他会话修改，请核对最新版本后操作");}

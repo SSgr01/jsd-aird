@@ -56,11 +56,9 @@ public class CustomerDataAccess {
                 actor.userId(), "project.view", "PROJECT", projectId, "READ")).allowed();
     }
 
-    public void requireProjectWrite(UUID projectId) {
-        var actor = ActorContext.required();
-        if (!mayReadProject(projectId)) throw denied();
-        authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(),
-                "project.assign", "PROJECT", projectId, "WRITE"));
+    public void requireProjectVisible(UUID projectId) {
+        if (!mayReadProject(projectId))
+            throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "无权关联该项目");
     }
 
     public void requireProjectAction(UUID projectId, String permissionCode) {

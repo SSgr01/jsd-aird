@@ -3,6 +3,7 @@ package com.jsd.aird.iam.infrastructure;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -74,6 +75,56 @@ class JdbcDataScopeResolverTest {
         assertThat(listScope.targetIds()).containsExactly(resourceId);
         assertThat(resolver.resolve(check("TEMPLATE"), binding).allowed()).isTrue();
         assertThat(resolver.resolve(check("TEMPLATE", UUID.randomUUID()), binding).allowed()).isFalse();
+    }
+
+    @Test
+    void selectedCustomerScopeAlsoChecksRecordsCreatedByTheUser() {
+        var binding = new Binding("customer.list.view", "ALLOW", "SELECTED", List.of(resourceId));
+        var createdCustomer = UUID.randomUUID();
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+
+        assertThat(resolver.resolve(check("CUSTOMER", createdCustomer), binding).allowed()).isTrue();
+        verify(jdbc).queryForObject(contains("created_by = ? OR ?"), eq(Boolean.class),
+                eq(createdCustomer), any(), any(), eq(false));
+    }
+
+    @Test
+    void selectedKnowledgeUploadUsesItsActorColumn() {
+        var uploadId = UUID.randomUUID();
+        var binding = new Binding("knowledge.upload.view", "ALLOW", "SELECTED", List.of(resourceId));
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+
+        assertThat(resolver.resolve(check("KNOWLEDGE_UPLOAD", uploadId), binding).allowed()).isTrue();
+        verify(jdbc).queryForObject(contains("kb.upload_task WHERE organization_id = ? AND id = ? AND actor_id = ?"),
+                eq(Boolean.class), eq(organizationId), eq(uploadId), eq(userId));
+    }
+
+    @Test
+    void selectedTemplateScopeResolvesWorkspaceVersionToItsTemplate() {
+        var versionId = UUID.randomUUID();
+        var binding = new Binding("template.view.view", "ALLOW", "SELECTED", List.of(resourceId));
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+
+        assertThat(resolver.resolve(check("TEMPLATE", versionId), binding).allowed()).isTrue();
+        verify(jdbc).queryForObject(contains("v.template_id = t.id"), eq(Boolean.class),
+                eq(organizationId), eq(versionId), eq(versionId), eq(userId), eq(resourceId));
+    }
+
+    @Test
+    void templateUploadScopesUseImportJobs() {
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+        var creator = new Binding("template.upload.view", "ALLOW", "CREATOR", List.of());
+        var department = new Binding("template.upload.view", "ALLOW", "DEPARTMENT", List.of());
+        var selected = new Binding("template.upload.view", "ALLOW", "SELECTED", List.of(resourceId));
+
+        assertThat(resolver.resolve(check("TEMPLATE_IMPORT"), creator).allowed()).isTrue();
+        assertThat(resolver.resolve(check("TEMPLATE_IMPORT"), department).allowed()).isTrue();
+        assertThat(resolver.resolve(check("TEMPLATE_IMPORT"), selected).allowed()).isTrue();
+        assertThat(resolver.resolve(check("TEMPLATE_IMPORT", UUID.randomUUID()), selected).allowed()).isTrue();
+
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc, org.mockito.Mockito.times(3)).queryForObject(sql.capture(), eq(Boolean.class), any(Object[].class));
+        assertThat(sql.getAllValues()).allSatisfy(value -> assertThat(value).contains("tpl.template_import_job"));
     }
 
     @Test

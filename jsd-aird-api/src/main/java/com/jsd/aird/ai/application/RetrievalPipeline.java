@@ -466,7 +466,9 @@ public class RetrievalPipeline {
     }
     private <T> Ranked<T> rank(String query,List<T> values,java.util.function.Function<T,String> id,
             java.util.function.Function<T,String> text,java.util.function.ToDoubleFunction<T> rawScore,boolean enabled) {
-        if(!enabled||!rag.reranker.isConfigured()||values.isEmpty())return new Ranked<>(values,RerankerProvider.RerankOutcome.skipped(!enabled?"SKIPPED_POLICY":"NOT_CONFIGURED",0));
+        if(!enabled)return new Ranked<>(values,RerankerProvider.RerankOutcome.skipped("SKIPPED_POLICY",0));
+        if(values.isEmpty())return new Ranked<>(values,RerankerProvider.RerankOutcome.skipped("EMPTY_INPUT",0));
+        if(!rag.reranker.isConfigured())return new Ranked<>(values,RerankerProvider.RerankOutcome.skipped("NOT_CONFIGURED",0));
         var input=values.stream().limit(policy.rerankTop).map(v->new RerankerProvider.RankCandidate(id.apply(v),text.apply(v),rawScore.applyAsDouble(v),rawScore.applyAsDouble(v))).toList();
         RerankerProvider.RerankOutcome outcome;
         try {outcome=rag.reranker.rerank(query,input);}

@@ -80,6 +80,23 @@ class RetrievalPipelineTest {
         verifyNoInteractions(rewrite,ranker);
     }
 
+    @Test void emptyResearchRecallIsReportedAsEmptyInputWithoutCallingReranker() {
+        when(knowledge.recall(anyList(),anyString(),eq("auto"),any())).thenReturn(new ResearchKnowledgeFacade.Recall(
+            List.of(new ResearchKnowledgeFacade.RecallChannel("BM25",0,List.of())),Map.of("literal_only",false),null));
+        when(knowledge.parents(anyList(),anyInt(),anyInt(),anyInt())).thenReturn(new ResearchKnowledgeFacade.Result(List.of(),Map.of(),null));
+        var pipeline=new RetrievalPipeline(new RagRetrievalService(null,null,rewrite,ranker),new ContextCompressionService());
+        pipeline.sources(knowledge,null);
+        var scope=mapper.createObjectNode().put("scope_mode","SELECTED");
+        scope.putArray("documents").add(mapper.valueToTree(new ResearchKnowledgeFacade.DocumentRef(doc,pub)));
+        ActorContext.set(new Actor(UUID.randomUUID(),UUID.randomUUID(),"test","USER"));
+        try {
+            var result=pipeline.research(scope,mapper.createObjectNode().put("query","missing material"),false);
+            assertThat(result.path("trace").path("reranker").asText()).isEqualTo("EMPTY_INPUT");
+            assertThat(result.path("trace").path("rerank_calls").asInt()).isZero();
+            verifyNoInteractions(ranker);
+        } finally {ActorContext.clear();}
+    }
+
     @Test void nativeAgentQueriesNeverUseTheSeparatelyConfiguredRewriteModel() {
         var kb = mock(KnowledgeSearchFacade.class);
         var data = mock(com.jsd.aird.data.api.DataSourceFileSearchFacade.class);

@@ -35,7 +35,7 @@ class JdbcKnowledgeRepositoryTest {
         assertThat(sql.getAllValues().getFirst().indexOf("d.id IN (")).isLessThan(sql.getAllValues().getFirst().indexOf("), corpus AS"));
         assertThat(sql.getAllValues().getLast().indexOf("d.id IN (")).isLessThan(sql.getAllValues().getLast().indexOf("ORDER BY c.embedding"));
         assertThat(args.getAllValues().getFirst()).containsSubsequence(org,category,document,48,48);
-        assertThat(args.getAllValues().getLast()).containsSubsequence(org,category,document,2,48);
+        assertThat(args.getAllValues().getLast()).startsWith(org,category,document).endsWith(2,48);
     }
 
     @Test

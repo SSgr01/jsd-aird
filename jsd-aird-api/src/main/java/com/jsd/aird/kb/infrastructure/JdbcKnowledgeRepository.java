@@ -1094,8 +1094,19 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g WHERE g.document_id = d.id AND g.status = 'APPROVED')"
                 : "";
         var dimensionClause = dimension > 0 ? " AND vector_dims(c.embedding) = ?\n" : "";
+        // Resolve publication and access eligibility once per document. Repeating these
+        // joins per chunk magnifies cardinality errors from vector_dims predicates.
         var sql = """
-                WITH query_vectors AS MATERIALIZED (
+                WITH eligible_documents AS MATERIALIZED (
+                    SELECT d.id AS document_id, p.document_version_id, p.review_revision_id
+                    FROM kb.document d
+                    JOIN kb.publication p ON p.id = d.current_publication_id AND p.status = 'CURRENT'
+                    JOIN kb.document_version v ON v.id = p.document_version_id
+                    JOIN ops.file_object f ON f.id = v.file_object_id
+                        AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
+                    WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
+                """ + aiClause + categoryClause(categoryIds) + documentClause(documentIds) + """
+                ), query_vectors AS MATERIALIZED (
                     SELECT query_ordinal, CAST(vector_text AS vector) AS embedding
                     FROM unnest(?::int[], ?::text[]) AS q(query_ordinal, vector_text)
                 ), scored AS (
@@ -1103,17 +1114,12 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                     FROM query_vectors q
                     CROSS JOIN LATERAL (
                         SELECT c.id AS chunk_id, (1 - (c.embedding <=> q.embedding)) AS score
-                        FROM kb.document_chunk c
-                        JOIN kb.document d ON d.id = c.document_id
-                        JOIN kb.document_version v ON v.id = c.document_version_id
-                        JOIN ops.file_object f ON f.id = v.file_object_id
-                            AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
-                        JOIN kb.publication p ON p.id = d.current_publication_id
-                            AND p.document_version_id = c.document_version_id
-                            AND p.review_revision_id = c.review_revision_id AND p.status = 'CURRENT'
-                        WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
-                """ + aiClause + categoryClause(categoryIds) + documentClause(documentIds)
-                + " AND c.chunk_role = 'CHILD' AND c.embedding IS NOT NULL\n" + dimensionClause + """
+                        FROM eligible_documents e
+                        JOIN kb.document_chunk c ON c.document_id = e.document_id
+                            AND c.document_version_id = e.document_version_id
+                            AND c.review_revision_id = e.review_revision_id
+                        WHERE c.chunk_role = 'CHILD' AND c.embedding IS NOT NULL
+                """ + dimensionClause + """
                         ORDER BY c.embedding <=> q.embedding, c.id
                         LIMIT ?
                     ) hit
@@ -1126,11 +1132,11 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 FROM ranked ORDER BY query_ordinal, rank_no
                 """;
         var args = new java.util.ArrayList<Object>();
-        args.add(safeQueries.stream().map(VectorQuery::ordinal).toArray(Integer[]::new));
-        args.add(safeQueries.stream().map(VectorQuery::vector).toArray(String[]::new));
         args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
         if (documentIds != null) args.addAll(documentIds);
+        args.add(safeQueries.stream().map(VectorQuery::ordinal).toArray(Integer[]::new));
+        args.add(safeQueries.stream().map(VectorQuery::vector).toArray(String[]::new));
         if (dimension > 0) args.add(dimension);
         args.add(limit);
         return jdbc.query(sql, (rs, ignored) -> new RankedChunk(rs.getInt("query_ordinal"),

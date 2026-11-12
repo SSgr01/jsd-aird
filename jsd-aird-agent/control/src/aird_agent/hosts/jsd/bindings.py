@@ -75,6 +75,9 @@ class JsdBindings(RuntimeBindings):
                 await self.sandbox.cancel(digest([run["id"], call["execution_epoch"], call["call_id"]])[:32])
 
     async def authorized_topic(self, principal, run, *, execution=True):
+        if run.get("expert") and execution:
+            from aird_agent.hosts.jsd.experts import resolve
+            await resolve(self.runtime, principal, run["expert"])
         if run.get("pack_versions"):
             if execution:
                 try:
@@ -341,6 +344,7 @@ class JsdBindings(RuntimeBindings):
         return run
 
     def instructions_for(self, run):
+        from aird_agent.hosts.jsd.experts import role_instructions
         # Core policy applies to every JSD turn, even a selection without core
         # tools. Professional guidance follows the selected capabilities only.
         selected = run.get("pack_ids") or ["core", "literature", "files"]
@@ -351,7 +355,7 @@ class JsdBindings(RuntimeBindings):
             "当前命令沙箱未启用，不要调用 bash 或用命令探测环境；继续使用已有读取能力，"
             "需要程序执行才能完成的部分说明限制，不能改用宿主命令执行。"
         )
-        return instructions + "\n\n" + sandbox
+        return instructions + "\n\n" + sandbox + role_instructions(run.get("expert"))
 
     async def authorize_history(self, principal, conversation):
         await self.authorize_conversation(principal, conversation)
@@ -380,6 +384,11 @@ class JsdBindings(RuntimeBindings):
                     payload["research_requirements"].pop(option)
         if request.conversation_id:
             existing = await self.store.get(principal, "conversation", str(request.conversation_id))
+            if existing.get("expert"):
+                from aird_agent.hosts.jsd.experts import resolve
+                # Resolve the pinned revision, never silently adopt a newer role.
+                await resolve(self.runtime, principal, existing["expert"])
+                payload["expert"] = existing["expert"]
             if set(payload.get("private_source_ids", [])) - set(existing.get("private_source_ids") or []):
                 raise HTTPException(403, "PRIVATE_SOURCE_NOT_IN_CONVERSATION")
             # The conversation registers ownership, never default inputs or retrieval filters.

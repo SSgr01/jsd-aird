@@ -324,6 +324,9 @@ def create_app(settings=None, store=None, service=None):
             return await service.briefings.revoke(user)
         if action in {"context", "resource"}:
             return await service.session_view(user, action, body)
+        if action == "experts":
+            from aird_agent.hosts.jsd.experts import expert_action
+            return await expert_action(service, user, body)
         if action == "catalog":
             if settings.memory_enabled and not user.automation_grant_id:
                 await service.memory.preferences(user, initialize=True)

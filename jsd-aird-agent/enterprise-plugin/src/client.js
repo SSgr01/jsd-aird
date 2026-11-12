@@ -5,6 +5,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
   const sourceLinks = /* @source-links */ null;
   const memoryUI = /* @memory-ui */ null;
   const briefingEntry = /* @briefing-entry */ null;
+  const expertsUI = /* @experts-ui */ null;
   const base = '/agent/';
   async function api(action, body, signal) {
     const response = await fetch(base + 'business/' + action, { method: 'POST',
@@ -100,15 +101,16 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
         h('rect',{x:27,y:13,width:8,height:21,rx:3,fill:peach,stroke}),
         h('path',{d:'M19 10v19M30 17v12M8 24v5',stroke,strokeOpacity:.6,strokeLinecap:'round'})));
   }
-  function registerWelcomeCards(scope) {
+  function registerWelcomeCards(scope,useExpert) {
     const starters = [
       {kind:'read',title:'阅读文献',description:'提炼主要结论与关键依据',prompt:'这份文献的主要结论是什么？'},
       {kind:'compare',title:'比较方法',description:'对比实验方案与试验条件',prompt:'请比较我提供的资料或实验记录中的方法，说明条件差异与适用范围。'},
       {kind:'data',title:'整理数据',description:'梳理关键数据与试验结果',prompt:'请整理我提供的资料或实验记录中的关键试验条件与结果。'},
     ];
-    function WelcomeCards({useInput,fillPrompt}) {
+    function WelcomeCards({sessionId,useInput,fillPrompt}) {
       const hero = React.useContext(HeroContext), phase = useInput(value=>value.phase);
-      if (!hero) return null;
+      const {expert,loading}=useExpert(sessionId);
+      if (!hero || loading || expert) return null;
       return h('div',{className:'jsd-starters',role:'group','aria-label':'研发任务建议'},
         h('p',{className:'jsd-welcome-description'},'从一份资料、一个问题，开始今天的研发工作。'),
         starters.map(item=>h('button',{key:item.kind,type:'button','aria-label':item.title,
@@ -121,7 +123,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
     },HeroFrame));
     scope.slots.inject('conversation.input.dock',()=>scope.slots.register({
       name:'conversation.input.dock',id:'enterprise-welcome-cards',order:-20,
-      inject:sessionId=>({fillPrompt:prompt=>{
+      inject:sessionId=>({sessionId,fillPrompt:prompt=>{
         const binding=scope.sessions.binding(sessionId), input=scope.conversation.input.for(scope.sessions.scope(sessionId));
         if (!binding || scope.conversation.input.requestDraftInitialization(binding,
           {prompt,whenDraftExists:'append'}) !== 'applied') {
@@ -599,7 +601,11 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
       memoryUI.registerMemoryUI(scope,{React,api,Switch,Modal,Toast});
     });
     ctx.inject(['contextMenus'],registerPluginMenuPolicy);
-    ctx.inject(['conversation','sessions'],registerWelcomeCards);
+    ctx.inject(['uiWorkspace','conversation','sessions','layout'],scope=>{
+      const {Modal,Menu,MenuItemButton}=require('@deepseek-ai/dsh-client-ui-primitives');
+      const {useExpert}=expertsUI.registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton});
+      registerWelcomeCards(scope,useExpert);
+    });
     registerSourceMarkdown(ctx);
     ctx.inject(['uiWorkspace'],registerBusinessToolViews);
   }};

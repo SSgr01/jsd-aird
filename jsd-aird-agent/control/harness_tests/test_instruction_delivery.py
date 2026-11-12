@@ -48,6 +48,24 @@ def test_legacy_runs_keep_literature_guidance_and_shared_rules(settings):
     assert ANSWER_INSTRUCTIONS in prompt and LITERATURE_INSTRUCTIONS in prompt
 
 
+@pytest.mark.parametrize("sandbox_enabled", [False, True])
+def test_expert_role_keeps_selected_guidance_sandbox_policy_and_pack_versions(settings, sandbox_enabled):
+    from aird_agent.hosts.jsd.experts import role_instructions
+
+    bindings = policy(settings.model_copy(update={"sandbox_enabled": sandbox_enabled}))
+    expert = {"name": "材料研发参谋", "revision": "2", "instructions": "核对实验条件与适用边界。",
+              "skills": ["research-design"]}
+    prompt = bindings.instructions_for({"pack_ids": ["core", "literature"], "expert": expert})
+    assert prompt.count(ANSWER_INSTRUCTIONS) == 1
+    assert LITERATURE_INSTRUCTIONS in prompt and FILE_INSTRUCTIONS not in prompt
+    assert prompt.endswith(role_instructions(expert))
+    assert ("当前命令沙箱已启用" in prompt) == sandbox_enabled
+    assert ("当前命令沙箱未启用" in prompt) != sandbox_enabled
+    versions = bindings.packs.pin(["core", "literature"])
+    assert versions["core"]["version"] == "3"
+    assert versions["literature"]["version"] == "5"
+
+
 def test_instruction_delta_tracks_actual_policy_and_sandbox_availability(settings):
     bindings = policy(settings.model_copy(update={"sandbox_enabled": False}))
     run = {"id": "run", "dsh_turn": 1, "epoch": 1, "pack_ids": ["core", "literature"]}

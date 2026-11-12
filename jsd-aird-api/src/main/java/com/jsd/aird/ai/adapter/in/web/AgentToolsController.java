@@ -70,6 +70,9 @@ public class AgentToolsController {
     @org.springframework.beans.factory.annotation.Autowired
     private com.jsd.aird.ai.application.ResearchBriefingService briefings;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.jsd.aird.ai.application.ExpertCatalogService experts;
+
     public record ToolRequest(String action, ObjectNode arguments) { }
 
     @PostMapping("/internal/v1/agent-tools")
@@ -99,6 +102,7 @@ public class AgentToolsController {
             return switch (command.action()) {
                 case "topic" -> topic(UUID.fromString(args.path("id").asText()));
                 case "runtime_context" -> host.context(args);
+                case "expert_catalog" -> experts.invoke(args);
                 case "context_choices" -> host.contextChoices(args);
                 case "context_resource" -> host.contextResource(args);
                 case "research_report_get" -> research.get("report", UUID.fromString(args.path("id").asText()));

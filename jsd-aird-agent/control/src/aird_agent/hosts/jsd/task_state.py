@@ -5,6 +5,7 @@ import json
 from fastapi import HTTPException
 
 from aird_agent.capabilities.files.completion import check_file_completion
+from aird_agent.capabilities.literature.quality import uses_source_review
 from aird_agent.core.contracts import digest
 
 
@@ -79,7 +80,7 @@ def check_delivery(run):
         if missing or not any(output["kind"] == kind for output in outputs):
             raise HTTPException(422, "USER_DELIVERABLES_MISSING: " + kind + " for " + json.dumps(missing))
     check_file_completion(run)
-    if (requirements.get("require_report") or run.get("report_requested")) and run.get("pack_versions", {}).get("literature", {}).get("version") == "4":
+    if (requirements.get("require_report") or run.get("report_requested")) and uses_source_review(run):
         checks = run.get("report_checks", {})
         if not any(
             output.get("kind") == "report"

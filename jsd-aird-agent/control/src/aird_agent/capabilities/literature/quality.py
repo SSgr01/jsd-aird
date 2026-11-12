@@ -25,6 +25,15 @@ from aird_agent.evidence.quotes import review_quotes
 REVIEW_CONTEXT_POLICY = "complete-cited-block-review-boundaries-v10"
 
 
+def uses_source_review(run):
+    """Only pre-review legacy packs bypass the source-review protocol.
+
+    Guidance version bumps must retain quote, table-header and report checks.
+    """
+    version = run.get("pack_versions", {}).get("literature", {}).get("version")
+    return version is not None and version not in {"1", "2", "3"}
+
+
 def update_matrix(run, args):
     matrix = json.loads(json.dumps(run.get("research_matrix", {"revision": 0, "questions": {}})))
     question = args["question"].strip()

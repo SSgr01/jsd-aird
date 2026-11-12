@@ -17,6 +17,12 @@ export function configuration(env = process.env) {
     ? env.JSD_AIRD_DSH_INPUT_MODALITIES.split(',').map(value => value.trim()).filter(Boolean) : undefined;
   if (inputModalities && (!inputModalities.includes('text') || inputModalities.some(value => !['text','image'].includes(value))))
     throw new Error('Model input modalities must include text and may include verified image support');
+  const piProfile = env.JSD_AIRD_DSH_PI_PROFILE_FILE
+    ? JSON.parse(readFileSync(resolve(repository, env.JSD_AIRD_DSH_PI_PROFILE_FILE), 'utf8')) : undefined;
+  if (env.JSD_AIRD_DSH_PI_PROFILE_FILE && (!piProfile || typeof piProfile !== 'object' || Array.isArray(piProfile)))
+    throw new Error('Pi provider profile must be an object');
+  if (piProfile && (!env.JSD_AIRD_DSH_PROVIDER || env.JSD_AIRD_DSH_PROVIDER === 'deepseek-official'))
+    throw new Error('Pi provider profile requires a distinct provider route');
   return {
     repository, secret, origin, hostStartTimeoutMs,
     port: Number(env.JSD_AIRD_DSH_PORT || 8092),
@@ -36,6 +42,7 @@ export function configuration(env = process.env) {
       ...(inputModalities ? {inputModalities:[...new Set(inputModalities)]} : {}),
       ...(env.JSD_AIRD_DSH_MAX_OUTPUT_TOKENS ? { maxTokens: Number(env.JSD_AIRD_DSH_MAX_OUTPUT_TOKENS) } : {}),
       reasoning: env.JSD_AIRD_DSH_REASONING || undefined,
+      ...(piProfile ? { piProfile } : {}),
     },
     maxHosts: Number(env.JSD_AIRD_DSH_MAX_HOSTS || 32),
   };
@@ -106,7 +113,8 @@ export function enterprisePatch(config) {
           ...(config.model.inputModalities ? {inputModalities:config.model.inputModalities} : {}) }] } : {}),
     } },
     // Native Models settings own additional providers, protocols and catalogs.
-    { id: 'llm-pi-ai', disabled: false, config: { providers: {} } },
+    { id: 'llm-pi-ai', disabled: false, config: { providers: config.model.piProfile
+      ? { [config.model.provider]: config.model.piProfile } : {} } },
     { id: 'ui-settings-models', disabled: false, config: { credentialOnboarding: false } },
     { id: 'ui-model-selection', disabled: false },
     { id: 'ui-schedule', disabled: false },

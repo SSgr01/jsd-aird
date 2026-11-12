@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -13,6 +13,13 @@ const {Context} = await import(pathToFileURL(require.resolve('@deepseek-ai/cordi
 
 test('native tool resolution binds the claimed batch before the first prompt and each new turn', async t => {
   const previous = {...process.env}, calls = [], events = new Map(), definitions = [], exposed = [];
+  const sharedRules = (await readFile(new URL('../../control/src/aird_agent/capabilities/answer_guidelines.txt',import.meta.url),'utf8')).trim();
+  const repairs = new Map();
+  const repairFor = body => {
+    const key=body.session_id+'-'+body.turn;
+    if(!repairs.has(key))repairs.set(key,{model_calls:0,tool_calls:0,max_model_calls:body.session_id==='qa'?1:2,max_tool_calls:2});
+    return repairs.get(key);
+  };
   const attachmentRoot = await mkdtemp(join(tmpdir(),'dsh-native-input-'));
   t.after(()=>rm(attachmentRoot,{recursive:true,force:true}));
   const attachmentContext = new Context();
@@ -24,6 +31,11 @@ test('native tool resolution binds the claimed batch before the first prompt and
   t.after(()=>{for(const key of Object.keys(process.env))if(!Object.hasOwn(previous,key))delete process.env[key];Object.assign(process.env,previous);});
   t.mock.method(globalThis,'fetch',async(url,options)=>{
     const action=url.split('/').at(-1), body=JSON.parse(options.body); calls.push({action,body});
+    const repair=repairFor(body);
+    if(action==='gate' && body.kind==='model') {
+      assert.ok(repair.model_calls < repair.max_model_calls);
+      repair.model_calls++;
+    }
     return {ok:true,json:async()=>action==='catalog'
       ? {tools:['search_projects','search_experiments'].map(name=>({name,parameters:{type:'object'}})),instructions:'unbound fallback',max_output_tokens:1000}
       : action==='register' ? {id:body.session_id+'-'+body.turn,dsh_turn:body.turn,
@@ -31,20 +43,21 @@ test('native tool resolution binds the claimed batch before the first prompt and
         pack_ids:['files'],
         ...(body.binding_etags?.tools==='tools-v1' ? {} : {
           tools:[{name:'search_experiments'}], active_tools:['search_experiments'],
-          instructions:'authorized policy '+body.profile+' turn '+body.turn}),
+          instructions:'authorized policy '+body.profile+' turn '+body.turn+'\n'+sharedRules+'\n当前命令沙箱未启用，不要调用 bash。'}),
         context:JSON.stringify({task_state:{registered_outputs:body.request?[]:[{kind:'experiment_draft',id:'created-once'}]},
           ...(body.request?{authorized_context:{request:body.request}}:{})})}
       : ['builtin-state','builtin-sync'].includes(action) ? {tasks:{}}
       : action==='builtin-pending' ? {sessions:[]}
-      : action==='complete' ? {status:'FAILED',completion:{gaps:['CITATION_INVALID']}}
-      : action==='output-repair' ? {repair:{max_model_calls:2,max_tool_calls:2,
-        diagnostics:{issues:[{code:'UNKNOWN_EVIDENCE_ID',citation:'[E:missing]',line:3}],
+      : action==='complete' ? (body.session_id==='research' && body.turn===2 && repair.model_calls===2
+        ? {status:'SUCCEEDED'} : {status:'FAILED',completion:{gaps:['CITATION_INVALID']}})
+      : action==='output-repair' ? {repair:{...repair,
+        diagnostics:{issues:[{code:'UNKNOWN_EVIDENCE_ID',citation:repair.model_calls?'[E:still-wrong]':'[E:missing]',line:repair.model_calls?1:3}],
           available_evidence:[{evidence_id:'actual',excerpt:'A measured fact'}]}}}
       : {allowed:true}};
   });
   let section, context, enterpriseRoute;
   const ctx={tools:{register:(definition,options)=>{definitions.push({definition,options});return ()=>{};},guard:()=>()=>{}},
-    plugin:()=>{},web:{registerSearchProvider:()=>{}},fs:{hostPath:path=>path,exposeAttachment:async(...args)=>exposed.push(args)},agents:{},sessions:{},systemPrompt:{section:value=>{if(value.name==='enterprise-policy')section=value;return ()=>{};},
+    plugin:()=>{},web:{registerSearchProvider:()=>{}},fs:{hostPath:path=>path,exposeAttachment:async(...args)=>exposed.push(args)},agents:{get:()=>undefined},sessions:{},systemPrompt:{section:value=>{if(value.name==='enterprise-policy')section=value;return ()=>{};},
       context:value=>{context=value;return ()=>{};}},llm:{},
     agentPresets:{presetForSession:()=> 'enterprise'},
     workingDirectory:{get:()=>tmpdir(),ensure:async()=>tmpdir()},workspaceRegistry:{},sessionController:{},
@@ -73,6 +86,9 @@ test('native tool resolution binds the claimed batch before the first prompt and
     for(const {definition,options} of definitions)if(await options.when({agent,signal}))selected.push(definition.name);
     assert.deepEqual(selected,['search_experiments']);
     assert.match(section.text({agent}),new RegExp('authorized policy '+'agent'+' turn '+turn));
+    assert.equal(section.text({agent}).split(sharedRules).length-1,1);
+    assert.match(section.text({agent}),/涉及过程总耗时时/);
+    assert.doesNotMatch(section.text({agent}),/原生文件与 bash 命令在 Linux 沙箱的同一执行空间/);
     assert.notEqual(section.complete,true); // retain the upstream base prompt
     assert.equal(JSON.parse(context.text({agent})).authorized_context.request,text);
     assert.equal(context.required,true);
@@ -91,6 +107,7 @@ test('native tool resolution binds the claimed batch before the first prompt and
     assert.equal(calls.filter(c=>c.action==='register').at(-1).body.binding_etags.tools,'tools-v1');
     assert.equal(refreshed.authorized_context.request,text);
     assert.deepEqual(refreshed.task_state.registered_outputs,[{kind:'experiment_draft',id:'created-once'}]);
+    assert.equal(section.text({agent}).split(sharedRules).length-1,1);
     await events.get('agent/pre-step')({agent,turn,step:2,messages:[],signal},async()=>({kind:'enter',messages:[]}));
     const stop=()=>events.get('agent/turn-stopping')({agent,turn,signal});
     {
@@ -99,12 +116,31 @@ test('native tool resolution binds the claimed batch before the first prompt and
       assert.equal(steered[0].source.turn,turn);
       assert.match(steered[0].content[0].text,/\[E:/);
       assert.match(steered[0].content[0].text,/UNKNOWN_EVIDENCE_ID/);
-      assert.match(steered[0].content[0].text,/最多 2 次模型请求、2 次定向补读/);
+      assert.match(steered[0].content[0].text,/不输出修复说明/);
+      assert.match(steered[0].content[0].text,/不得在正文、引号或代码中复述无效引用句柄/);
       assert.equal(calls.filter(c=>c.action==='complete').at(-1).body.check_only,true);
     }
-    // The native message is inserted once; the service separately bounds every repair request.
-    await assert.rejects(stop(),/引用/);
-    assert.equal(steered.length,1);
+    // Repeated stopping before another model call does not enqueue duplicate
+    // repair messages or prematurely commit a terminal failure.
+    await stop();assert.equal(steered.length,1);
+    assert.equal(calls.filter(c=>c.action==='complete').at(-1).body.check_only,true);
+    const repair=repairFor({session_id:id,turn});
+    for(let used=0;used<repair.max_model_calls;used++) {
+      if(used) {
+        await stop();
+        assert.equal(steered.length,used+1);
+        assert.match(steered.at(-1).content[0].text,/\[E:still-wrong\]/);
+      }
+      assert.equal(steered.at(-1).source.model_calls,used);
+      assert.equal(steered.at(-1).source.run_id,id+'-'+turn);
+      assert.match(steered.at(-1).content[0].text,new RegExp('剩余 '+(repair.max_model_calls-used)+' 次模型请求'));
+      if(used===repair.max_model_calls-1)assert.match(steered.at(-1).content[0].text,/0 次定向补读/);
+      // Exercise the native model admission hook; no real provider is called.
+      for await(const _ of events.get('llm/stream')({sessionId:id,signal},async function*(){})) {}
+    }
+    if(id==='research' && turn===2)await stop();
+    else await assert.rejects(stop(),/引用/);
+    assert.equal(steered.length,repair.max_model_calls);
     assert.equal(calls.filter(c=>c.action==='complete').at(-1).body.check_only,undefined);
   }
   const agent={id:'truncated',session:{id:'truncated',snapshotEvents:()=>[]},options:{},

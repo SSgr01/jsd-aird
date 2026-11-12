@@ -237,7 +237,7 @@ export async function apply(ctx) {
       ? undefined : 'ENTERPRISE_TOOL_DENIED';
   }));
   ctx.effect(() => ctx.systemPrompt.section({ name: 'enterprise-policy', order: 0,
-    interpolate: false, text: ({ agent }) => (runs.get(agent?.id)?.instructions || catalog.instructions) + '\n化学式和反应式使用 $ 或 $$ 内的 \\ce{...}。已知且有依据的分子结构使用 smiles 代码块，反应结构使用 reaction-smiles 代码块（反应物>试剂>产物）。不得猜测文献结构对应的 SMILES；不确定时展示原图并说明。绘图成功仅表示语法可解析，不代表原文结构核验。' + '\n原生文件与 bash 命令在 Linux 沙箱的同一执行空间中运行。使用会话相对路径，不在脚本中使用宿主 Windows 路径。' }));
+    interpolate: false, text: ({ agent }) => (runs.get(agent?.id)?.instructions || catalog.instructions) + '\n化学式和反应式使用 $ 或 $$ 内的 \\ce{...}。已知且有依据的分子结构使用 smiles 代码块，反应结构使用 reaction-smiles 代码块（反应物>试剂>产物）。不得猜测文献结构对应的 SMILES；不确定时展示原图并说明。绘图成功仅表示语法可解析，不代表原文结构核验。' }));
   ctx.effect(() => ctx.systemPrompt.context({ name: 'enterprise-business', order: 0, required: true,
     interpolate: false, text: ({ agent }) => runs.get(agent?.id)?.context || '' }));
   ctx.effect(() => ctx.systemPrompt.section({name:'enterprise-document-references',order:1,
@@ -410,15 +410,18 @@ export async function apply(ctx) {
         }
       }
       const correctionSource = 'enterprise-citation-correction';
-      const alreadyCorrected = agent.session.snapshotEvents().some(event => event.type === 'user/message'
-        && event.data.source?.kind === correctionSource && event.data.source.turn === turn);
       if (checked.status === 'FAILED' && checked.completion?.gaps?.[0] === 'CITATION_INVALID'
-          && profileOf(agent) === 'agent' && !alreadyCorrected) {
+          && profileOf(agent) === 'agent') {
         const {repair} = await business('output-repair', input, signal);
         bound.output_repair = repair;
-        agent.steer(createUserMessage({source:{kind:correctionSource,turn},content:[{type:'text',text:
-          repairInstruction(repair)}]}));
-        return;
+        if (repair.model_calls < repair.max_model_calls) {
+          const alreadyQueued = agent.session.snapshotEvents().some(event => event.type === 'user/message'
+            && event.data.source?.kind === correctionSource && event.data.source.turn === turn
+            && event.data.source.run_id === bound.id && event.data.source.model_calls === repair.model_calls);
+          if (!alreadyQueued) agent.steer(createUserMessage({source:{kind:correctionSource,turn,
+            run_id:bound.id,model_calls:repair.model_calls},content:[{type:'text',text:repairInstruction(repair)}]}));
+          return;
+        }
       }
       const result = await business('complete', input, signal);
       if (result.status === 'FAILED') throw deliveryError(result);

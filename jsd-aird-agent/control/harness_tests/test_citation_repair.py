@@ -157,6 +157,22 @@ async def test_repair_model_admission_is_durable_and_repeated_start_does_not_res
     assert first["repair"]["diagnostics"]["issues"][0]["line"] == 1
     for i in range(2):
         await BusinessService.gate_dsh(service, principal, {**body, "kind": "model", "call_id": f"repair-{i}"})
+        if i == 0:
+            async with store.transaction(principal, run["id"]) as conn:
+                current_run = await store.get(principal, "run", run["id"], conn)
+                current_run["last_text"] = f"Measured 12 mg [E:{eid}].\nRepair note: `[E:still-wrong]`."
+                current_run["output_repair"]["tool_calls"] = 1
+                await store.update(principal, "run", current_run, conn)
+            # A reconstructed caller must see the latest answer and the original
+            # durable budget rather than starting a fresh repair round.
+            recovered = SimpleNamespace(**vars(service))
+            refreshed = await BusinessService.begin_output_repair(recovered, principal, body)
+            repair = refreshed["repair"]
+            assert repair["diagnostics"]["issues"][0]["citation"] == "[E:still-wrong]"
+            assert repair["diagnostics"]["issues"][0]["line"] == 2
+            assert repair["model_calls"] == repair["tool_calls"] == 1
+            assert repair["allowed_evidence_ids"] == first["repair"]["allowed_evidence_ids"]
+            assert repair["max_model_calls"] == first["repair"]["max_model_calls"] == 2
     repeated = await BusinessService.begin_output_repair(service, principal, body)
     assert repeated["repair"]["model_calls"] == 2
     with pytest.raises(HTTPException, match="CITATION_REPAIR_BUDGET_EXCEEDED"):
@@ -168,3 +184,45 @@ async def test_repair_model_admission_is_durable_and_repeated_start_does_not_res
     assert len(current_run["dsh_model_attempts"]) == 2
     assert current_run["status"] == "RUNNING"
     assert len(json.dumps(current_run["output_repair"]["diagnostics"], ensure_ascii=False)) < 4000
+
+
+@pytest.mark.parametrize("final_valid", [True, False])
+async def test_two_repairs_keep_the_run_active_and_only_commit_the_checked_final_answer(
+    store, principal, settings, final_valid,
+):
+    eid = "e" + "b" * 24
+    async with store.transaction(principal, "repair-delivery") as conn:
+        run = await store.create(principal, "run", {"status": "RUNNING", "epoch": 1, "dsh_turn": 1,
+            "last_text": "Measured 12 mg [E:unknown].", "evidence": {eid: candidate(eid)},
+            "steps": 1, "model_calls": 1, "tool_calls": 0, "active_seconds": 0,
+            "started_at": time.time(), "dsh_usage": [], "turn_evidence_ids": [eid]}, conn)
+
+    async def current(user, body):
+        return await store.get(user, "run", run["id"])
+
+    async def active(user, rid, epoch, conn):
+        return await store.get(user, "run", rid, conn)
+
+    service = SimpleNamespace(store=store, settings=settings, bindings=bindings(settings),
+        authorized_topic=AsyncMock(), session_run=current, active=active)
+    body = {"run_id": run["id"], "session_id": "native", "turn": 1, "epoch": 1}
+    for attempt in range(2):
+        checked = await BusinessService.complete_dsh(service, principal, {**body, "check_only": True})
+        assert checked["status"] == "FAILED" and checked["completion"]["gaps"] == ["CITATION_INVALID"]
+        assert (await store.get(principal, "run", run["id"]))["status"] == "RUNNING"
+        repair = (await BusinessService.begin_output_repair(service, principal, body))["repair"]
+        assert repair["model_calls"] == attempt
+        await BusinessService.gate_dsh(service, principal, {**body, "kind": "model", "call_id": f"fix-{attempt}"})
+        async with store.transaction(principal, run["id"]) as conn:
+            draft = await store.get(principal, "run", run["id"], conn)
+            draft["last_text"] = f"Measured 12 mg [E:{eid}]." + (
+                "\nRepair note: `[E:still-wrong]`." if attempt == 0 or not final_valid else "")
+            await store.update(principal, "run", draft, conn)
+
+    result = await BusinessService.complete_dsh(service, principal, body)
+    assert result["status"] == ("SUCCEEDED" if final_valid else "FAILED")
+    saved = await store.get(principal, "run", run["id"])
+    assert saved["output_repair"]["model_calls"] == saved["output_repair"]["max_model_calls"] == 2
+    assert saved["last_text"]  # Failed drafts remain available for review.
+    assert saved["error"] == (None if final_valid else "CITATION_INVALID")
+    assert saved["dsh_completed_turn"] == 1

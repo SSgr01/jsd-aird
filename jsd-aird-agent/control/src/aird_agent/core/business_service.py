@@ -622,6 +622,19 @@ class BusinessService:
                 await self.store.event(principal, run["id"], "output.repair.started", {
                     "turn": run["dsh_turn"], "diagnostics": run["output_repair"]["diagnostics"],
                 }, conn)
+            else:
+                # Each stop checks the latest answer. Refresh only diagnostics;
+                # retries and restarts must not reset counters or allowed sources.
+                diagnostics = self.bindings.output_diagnostics(run, run.get("last_text", ""))
+                if not diagnostics:
+                    raise HTTPException(409, "OUTPUT_REPAIR_NOT_REQUIRED")
+                if diagnostics != run["output_repair"]["diagnostics"]:
+                    run["output_repair"]["diagnostics"] = diagnostics
+                    await self.store.update(principal, "run", run, conn)
+                    await self.store.event(principal, run["id"], "output.repair.diagnosed", {
+                        "turn": run["dsh_turn"], "model_calls": run["output_repair"]["model_calls"],
+                        "diagnostics": diagnostics,
+                    }, conn)
         return {"repair": run["output_repair"]}
 
     async def gate_dsh(self, principal, body):

@@ -12,7 +12,6 @@ from aird_agent.capabilities.files.handler import FILE_TOOL_NAMES, FileTools
 from aird_agent.capabilities.literature.export import validate_literature_export
 from aird_agent.capabilities.literature.handler import LiteratureTools
 from aird_agent.capabilities.literature.quality import matrix_summary
-from aird_agent.capabilities.registry import CORE_INSTRUCTIONS
 from aird_agent.core.bindings import RuntimeBindings
 from aird_agent.core.contracts import digest
 from aird_agent.core.workspace import Workspace
@@ -342,7 +341,17 @@ class JsdBindings(RuntimeBindings):
         return run
 
     def instructions_for(self, run):
-        return CORE_INSTRUCTIONS
+        # Core policy applies to every JSD turn, even a selection without core
+        # tools. Professional guidance follows the selected capabilities only.
+        selected = run.get("pack_ids") or ["core", "literature", "files"]
+        instructions = self.packs.instructions(["core", *(pid for pid in selected if pid != "core")])
+        sandbox = (
+            "当前命令沙箱已启用，原生 bash 命令在 Linux 隔离执行空间中运行。"
+            if self.settings.sandbox_enabled else
+            "当前命令沙箱未启用，不要调用 bash 或用命令探测环境；继续使用已有读取能力，"
+            "需要程序执行才能完成的部分说明限制，不能改用宿主命令执行。"
+        )
+        return instructions + "\n\n" + sandbox
 
     async def authorize_history(self, principal, conversation):
         await self.authorize_conversation(principal, conversation)

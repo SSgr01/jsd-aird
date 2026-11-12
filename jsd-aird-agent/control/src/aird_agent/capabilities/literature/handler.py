@@ -24,6 +24,7 @@ from aird_agent.capabilities.literature.quality import (
     reusable_unit_reviews,
     unavailable_review,
     update_matrix,
+    uses_source_review,
 )
 from aird_agent.capabilities.literature.rcs import RCS, canonical_excerpt
 from aird_agent.core.contracts import digest
@@ -176,7 +177,7 @@ class LiteratureTools:
                 raise HTTPException(
                     422, "UNKNOWN_EVIDENCE_ID: use an exact ID returned by retrieval/read tools"
                 )
-            if run.get("pack_versions", {}).get("literature", {}).get("version") != "4":
+            if not uses_source_review(run):
                 return candidate
             run = await self.ensure_table_headers(principal, run, candidate)
             spans = quotes(candidate)
@@ -483,7 +484,7 @@ class LiteratureTools:
         if name == "report_save":
             args = {**args, "text": normalize_citations(args["text"], run["evidence"])}
             quality = {}
-            if run.get("pack_versions", {}).get("literature", {}).get("version") == "4":
+            if uses_source_review(run):
                 matrix = run.get("research_matrix", {})
                 review = run.get("report_checks", {}).get(report_digest(args["title"], args["text"], matrix))
                 if not review or not review.get("passed"):

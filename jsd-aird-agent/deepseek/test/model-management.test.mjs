@@ -52,6 +52,25 @@ test('verified custom routes declare image input without borrowing official prot
   assert.throws(()=>configuration({JSD_AIRD_HARNESS_RUNTIME_SECRET:'x'.repeat(32),JSD_AIRD_DSH_INPUT_MODALITIES:'text,audio'}),/modalities/);
 });
 
+test('deployment Pi profiles register a separate route and survive profile composition', async t => {
+  const home=await mkdtemp(join(tmpdir(),'jsd-pi-profile-'));
+  t.after(()=>rm(home,{recursive:true,force:true}));
+  const profileFile=join(home,'provider.json');
+  const provider={api:'anthropic-messages',baseURL:'https://gateway.example/anthropic',
+    apiKeyEnv:'SYNTHETIC_KEY',cacheRetention:'short',compat:{forceAdaptiveThinking:true,allowEmptySignature:true},
+    models:[{id:'fixture-model',input:['text','image'],maxTokens:131072,reasoningEfforts:{off:null,high:'high'}}]};
+  await writeFile(profileFile,JSON.stringify(provider));
+  const env={JSD_AIRD_HARNESS_RUNTIME_SECRET:'x'.repeat(32),JSD_AIRD_DSH_PROVIDER:'fixture-pi',
+    JSD_AIRD_DSH_MODEL:'fixture-model',JSD_AIRD_DSH_PI_PROFILE_FILE:profileFile};
+  const config=configuration(env);
+  const policy=await prepareProfile(config,home,home);
+  const loaded=loadProfileDirectory('dsh',join(home,'profiles/web'),resolve(config.upstream,'apps/cli/package.json'));
+  const entries=composeEntries([...loaded.layers.map(layer=>layer.patches),loaded.patches,JSON.parse(await readFile(policy,'utf8'))]);
+  assert.deepEqual(entries.find(row=>row.id==='llm-pi-ai').config.providers['fixture-pi'],provider);
+  assert.equal(entries.find(row=>row.id==='agent-default-model').config.provider,'fixture-pi');
+  assert.throws(()=>configuration({...env,JSD_AIRD_DSH_PROVIDER:'deepseek-official'}),/distinct provider/);
+});
+
 test('native model and display preferences survive deployment regeneration and override only defaults', async t => {
   const home=await mkdtemp(join(tmpdir(),'jsd-native-settings-'));
   t.after(()=>rm(home,{recursive:true,force:true}));

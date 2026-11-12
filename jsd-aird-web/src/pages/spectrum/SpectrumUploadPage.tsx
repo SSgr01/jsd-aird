@@ -1,3 +1,4 @@
+import { UploadMetadataFields } from '@/components/upload-workspace/UploadMetadataFields';
 import {
   FileImageOutlined,
   MessageOutlined,
@@ -227,7 +228,7 @@ export function SpectrumUploadPage() {
       return;
     }
     const context = attempt.uploadContext || {};
-    const contextString = (key: string) => typeof context[key] === 'string' ? context[key] as string : undefined;
+    const contextString = (key: string) => typeof context[key] === 'string' ? context[key] : undefined;
     const contextObject = (key: string): Record<string, unknown> =>
       context[key] && typeof context[key] === 'object' && !Array.isArray(context[key])
         ? context[key] as Record<string, unknown>
@@ -400,7 +401,7 @@ export function SpectrumUploadPage() {
         </Space>}
         leftTitle="图谱分类与信息"
         classification={
-          <Form layout="vertical" component={false}>
+          <UploadMetadataFields primaryLabels={['图谱分类', '样品名称', '批号', '权限可见']} summary="实验、项目与测试条件"><Form layout="vertical" component={false}>
             <Form.Item label="图谱分类" required>
               <Select
                 value={categoryId}
@@ -476,7 +477,7 @@ export function SpectrumUploadPage() {
                 当前分类分析提示：{selectedCategory.analysisHint}
               </Typography.Paragraph>
             )}
-          </Form>
+          </Form></UploadMetadataFields>
         }
         accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff"
         multiple

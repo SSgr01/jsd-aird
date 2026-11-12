@@ -16,7 +16,6 @@ import {
 import {
   Breadcrumb,
   Button,
-  Empty,
   Input,
   Pagination,
   Space,
@@ -29,6 +28,8 @@ import type { BreadcrumbProps, UploadFile, UploadProps } from 'antd';
 import type { ReactNode } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
 import { hasPermission } from '@/routes/route-permissions';
+import { ListEmptyState } from '@/components/list-controls/ListEmptyState';
+import './upload-workspace.css';
 
 export interface UploadWorkspaceFilter {
   key: string;
@@ -320,7 +321,10 @@ export function UploadWorkspace({
                   {record.actions}
                 </div>}
               </article>
-            )) : recordsLoading ? <div className="upload-workspace-records-loading"><Spin /></div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`暂无${rightTitle}`} />}
+            )) : recordsLoading ? <div className="upload-workspace-records-loading"><Spin /></div> : <ListEmptyState
+              description={searchValue || (activeFilter && activeFilter !== rightFilters?.[0]?.key) ? '没有符合条件的上传记录' : `暂无${rightTitle}`}
+              action={(searchValue || (activeFilter && activeFilter !== rightFilters?.[0]?.key)) ? <Button onClick={() => { onSearchChange?.(''); if (rightFilters?.[0]) onFilterChange?.(rightFilters[0].key); }}>清除筛选</Button> : undefined}
+            />}
           </div>
 
           {pagination && onPageChange && (

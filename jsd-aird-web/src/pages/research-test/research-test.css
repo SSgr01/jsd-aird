@@ -92,7 +92,7 @@
   flex: 0 0 auto;
 }
 .research-test-batch-row .pm-view-btn.active {
-  color: var(--app-primary);
+  color: var(--app-text);
   background: var(--app-primary-soft);
   border-color: var(--app-primary);
 }
@@ -210,7 +210,7 @@
   -webkit-line-clamp: 2;
 }
 .research-test-card-title-link:hover {
-  color: var(--app-primary);
+  color: var(--app-text);
   text-decoration: underline;
 }
 .research-test-card-code {
@@ -270,7 +270,7 @@
   height: auto;
   min-height: 22px;
   padding: 0;
-  color: var(--app-primary);
+  color: var(--app-text);
   font-size: var(--app-font-size-caption);
   line-height: 22px;
 }
@@ -661,7 +661,7 @@
   margin-right: 12px;
   border-radius: 9px;
   background: var(--app-surface-subtle);
-  color: var(--app-primary);
+  color: var(--app-text);
   font-size: 15px;
 }
 .research-test-report-modal .research-test-choice-section button b {
@@ -758,7 +758,7 @@
   margin-right: 10px;
   border-radius: 8px;
   background: var(--app-primary-soft);
-  color: var(--app-primary);
+  color: var(--app-text);
   place-items: center;
 }
 .research-test-choice-section button b {
@@ -768,7 +768,7 @@
   display: block;
   margin-top: 3px;
   color: var(--app-text-secondary);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
 }
 @media (max-width: 720px) {

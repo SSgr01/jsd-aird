@@ -109,7 +109,7 @@
   color: var(--app-text);
 }
 .cm-customer-link {
-  color: var(--app-primary);
+  color: var(--app-text);
 }
 .cm-muted {
   margin-top: 2px;
@@ -134,7 +134,7 @@
 .cm-row-actions > a:hover,
 .cm-link-button:hover,
 .cm-more-trigger:hover {
-  color: var(--app-primary);
+  color: var(--app-text);
 }
 .cm-more-trigger .anticon {
   margin-left: 3px;
@@ -275,12 +275,12 @@
 }
 .cm-timeline-actions .cm-followup-edit,
 .cm-timeline-actions .cm-followup-edit:hover {
-  color: var(--app-primary);
+  color: var(--app-text);
 }
 
 /* 视图切换按钮 */
 .cm-view-btn.active {
-  color: var(--app-primary);
+  color: var(--app-text);
   background: var(--app-primary-soft);
   border-color: var(--app-primary);
 }
@@ -358,7 +358,7 @@
   max-width: 220px;
 }
 .cm-customer-card-name:hover {
-  color: var(--app-primary);
+  color: var(--app-text);
   text-decoration: underline;
 }
 .cm-customer-card-subline {
@@ -411,7 +411,7 @@
   font-size: 12px;
 }
 .cm-customer-card-foot .cm-link-button {
-  color: var(--app-primary);
+  color: var(--app-text);
 }
 
 @container (max-width: 360px) {
@@ -635,7 +635,7 @@
 
 .pm-unified-list-page.cm-customer-list-page .cm-row-actions > a,
 .pm-unified-list-page.cm-customer-list-page .cm-row-actions .ant-btn-link {
-  color: var(--app-primary);
+  color: var(--app-text);
   font-size: var(--app-font-size-label);
 }
 
@@ -782,7 +782,7 @@
 .cm-partner-detail-page .cm-table a,
 .cm-partner-detail-page .cm-table .cm-link-button,
 .cm-partner-detail-page .cm-table .ant-btn-link {
-  color: var(--app-primary);
+  color: var(--app-text);
   font-size: var(--app-font-size-label);
 }
 

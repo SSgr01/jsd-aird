@@ -9,15 +9,15 @@
 }
 
 :root {
-  /* SETO reference: warm whites and consistent graphite actions. */
-  --color-blue-600: #29282d;
-  --color-blue-700: #45424a;
-  --color-blue-50: #f7f5f4;
-  --color-grey-50: #faf9f8;
-  --color-grey-100: #f7f5f4;
-  --color-grey-200: #eeebed;
-  --color-grey-500: #716d76;
-  --color-grey-900: #29282d;
+  /* Arctic Blue × Glacier Cyan: ink accents and pale action fills are separate. */
+  --color-blue-600: #315f91;
+  --color-blue-700: #294f79;
+  --color-blue-50: #edf5fc;
+  --color-grey-50: #f8fbfe;
+  --color-grey-100: #f6fafd;
+  --color-grey-200: #e8eef4;
+  --color-grey-500: #52677d;
+  --color-grey-900: #263548;
   --color-green-600: #347552;
   --color-amber-600: #92671f;
   --color-red-600: #b84a55;
@@ -35,38 +35,42 @@
   --app-primary: var(--color-blue-600);
   --app-primary-hover: var(--color-blue-700);
   --app-primary-soft: var(--color-blue-50);
-  --app-action: #29282d;
-  --app-action-hover: #45424a;
-  --app-action-active: #201f24;
+  --app-action: #d1eaf9;
+  --app-action-hover: #c7e7f4;
+  --app-action-active: #b5e1eb;
+  --app-on-action: #000000;
+  --app-accent-start: #ddeeff;
+  --app-accent-end: #b5e1eb;
   --app-accent: var(--color-blue-600);
   --app-background: var(--color-grey-50);
   --app-surface: #ffffff;
   --app-surface-elevated: #ffffff;
   --app-surface-subtle: var(--color-grey-100);
-  --app-surface-active: var(--color-grey-200);
-  --app-surface-hover: #faf7f8;
-  --app-navigation: #fffdfc;
+  --app-surface-active: var(--app-primary-soft);
+  --app-surface-hover: #f1f8fc;
+  --app-navigation: #ffffff;
   /* Keep the inspector exception on the declaration it describes. */
   /* prettier-ignore */
-  --app-workspace-wash: radial-gradient(ellipse 70% 68% at 54% 3%, rgb(221 207 238 / 22%), transparent 80%), radial-gradient(ellipse 100% 78% at 0% 100%, rgb(247 206 176 / 34%), transparent 76%), radial-gradient(ellipse 105% 72% at 100% 100%, rgb(238 198 213 / 30%), transparent 78%); /* taste-skill-ignore: the user explicitly requests the SETO reference's warm white and pale lilac/peach workspace gradient. */
-  --app-composer-surface: rgb(255 255 255 / 42%);
-  --app-composer-border: rgb(226 211 208 / 80%);
-  --app-text: var(--color-grey-900);
-  --app-text-secondary: var(--color-grey-500);
-  --app-border: #eee9e8;
-  --app-border-strong: #dcd5dc;
-  --app-row-rule: #f2edef;
-  --app-scrollbar: #ded7df;
-  --app-focus-border: #45424a;
-  --app-focus-ring: 0 0 0 3px rgb(41 40 45 / 14%);
+  --app-workspace-wash: radial-gradient(ellipse 70% 68% at 54% 3%, rgb(221 238 255 / 48%), transparent 80%), radial-gradient(ellipse 100% 78% at 0% 100%, rgb(181 225 235 / 24%), transparent 76%); /* taste-skill-ignore: the user's Arctic reference uses a pale blue/cyan wash on login and AI welcome surfaces only. */
+  --app-composer-surface: #ffffff;
+  --app-composer-border: #e4edf5;
+  --app-text: #000000;
+  --app-text-secondary: var(--app-text);
+  --app-border: #e8eef4;
+  --app-border-strong: #dce7ef;
+  --app-row-rule: #edf2f7;
+  --app-scrollbar: #cadbe8;
+  --app-focus-border: #315f91;
+  --app-focus-ring: 0 0 0 3px rgb(49 95 145 / 14%);
   --app-danger: var(--color-red-600);
   --app-warning: var(--color-amber-600);
   --app-success: var(--color-green-600);
   --app-success-soft: #f0f8f3;
   --app-warning-soft: #fcf7ec;
   --app-danger-soft: #fdf1f2;
-  --app-violet: #7560a3;
-  --app-violet-soft: #f5f1fa;
+  /* Compatibility aliases for older category/tag styles. */
+  --app-violet: var(--app-primary);
+  --app-violet-soft: var(--app-primary-soft);
   --app-focus: var(--color-blue-600);
   --app-font-family:
     'Noto Sans SC Variable', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif;
@@ -80,10 +84,13 @@
   --app-radius: var(--radius-md);
   --app-radius-control: var(--radius-sm);
   --app-radius-card: var(--radius-md);
-  --app-radius-shell: var(--radius-lg);
-  --app-shadow: 0 1px 2px rgb(24 29 36 / 3%);
-  --app-shadow-hover: 0 2px 6px rgb(24 29 36 / 5%);
-  --app-text-muted: var(--color-grey-500);
+  --app-radius-shell: 20px;
+  --app-shadow: 0 1px 3px rgb(54 91 122 / 3%);
+  --app-shadow-hover: 0 3px 12px rgb(54 91 122 / 6%);
+  --app-shadow-shell: 0 18px 60px rgb(54 91 122 / 6.5%), 0 2px 8px rgb(54 91 122 / 2.5%);
+  --app-shadow-card: 0 6px 24px rgb(54 91 122 / 5.5%);
+  --app-shadow-overlay: 0 24px 70px rgb(42 75 105 / 14%);
+  --app-text-muted: var(--app-text);
   --app-motion-duration: 160ms;
 
   /* Component tokens */

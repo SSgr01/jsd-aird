@@ -435,7 +435,7 @@ export function ProjectListPage() {
       {holder}
       <div className="page-heading">
         <div>
-          <h1>项目列表</h1>
+          <h1>项目列表 <span className="pm-project-total" aria-label={`共 ${total} 个项目`}>{total}</span></h1>
           <p>研发项目、阶段、任务与关联实验。</p>
         </div>
         <div className="pm-page-actions">
@@ -560,6 +560,10 @@ export function ProjectListPage() {
 
       <ListQueryFeedback query={listQuery} />
       <div className="pm-content" aria-busy={listQuery.isFetching}>
+        <div className="pm-project-list-caption">
+          <div><h2>{hasFilters ? '筛选结果' : '全部项目'}</h2><span>共 {total} 个项目{selected.size > 0 ? ` · 已选 ${selected.size} 项` : ''}</span></div>
+          <span>{view === 'list' ? '列表视图' : '卡片视图'}</span>
+        </div>
         {view === 'card' ? (
           <>
             {rows.length > 0 && (
@@ -614,7 +618,7 @@ export function ProjectListPage() {
                   </div>
                   <div className="pm-card-actions">
                     <Link to={`/projects/${row.id}`} state={{ returnTo: `/projects/list?${searchParams.toString()}` }}>查看</Link>
-                    <Can permission="project.list.delete"><Popconfirm title="确认删除该项目？" description="删除后不可恢复。" onOpenChange={(open) => { if (open) pendingRowDelete.current = { id: row.id, version: row.version }; }} onConfirm={() => handleDeleteRow(row)}>
+                    <Can permission="project.list.delete"><Popconfirm title="确认删除该项目？" description="删除后不可恢复。" okButtonProps={{ danger: true }} onOpenChange={(open) => { if (open) pendingRowDelete.current = { id: row.id, version: row.version }; }} onConfirm={() => handleDeleteRow(row)}>
                       <Button type="link" danger>
                         删除
                       </Button>
@@ -628,7 +632,7 @@ export function ProjectListPage() {
           <div className="pm-table-scroll" tabIndex={0} role="region" aria-label="项目列表">
             <table className="pm-table" aria-label="项目列表">
               <colgroup>
-                <col style={{ width: 44 }} /><col style={{ width: 144 }} /><col />
+                <col style={{ width: 44 }} /><col className="pm-project-code-col" /><col />
                 <col style={{ width: 80 }} /><col style={{ width: 112 }} /><col style={{ width: 64 }} />
                 <col style={{ width: 104 }} /><col style={{ width: 88 }} /><col style={{ width: 112 }} />
               </colgroup>
@@ -659,11 +663,14 @@ export function ProjectListPage() {
                     </td>
                     <td className="pm-code-column">{row.projectCode}</td>
                     <td className="pm-name-column pm-project-name-column">
-                      <Link className="pm-name-link" to={`/projects/${row.id}`} state={{ returnTo: `/projects/list?${searchParams.toString()}` }} title={row.name}>
-                        {row.name}
-                      </Link>
+                      <div className="pm-project-identity-copy">
+                        <Link className="pm-name-link" to={`/projects/${row.id}`} state={{ returnTo: `/projects/list?${searchParams.toString()}` }} title={row.name}>
+                          {row.name}
+                        </Link>
+                        <span className="pm-project-subline" title={row.partnerName || undefined}>{row.projectCode}{row.partnerName ? ` · ${row.partnerName}` : ''}</span>
+                      </div>
                     </td>
-                    <td className="pm-owner-column">{row.owner ?? '—'}</td>
+                    <td className="pm-owner-column"><span className="pm-project-owner"><span className="pm-project-owner-avatar" aria-hidden="true">{row.owner?.slice(0, 1)}</span><span>{row.owner ?? '—'}</span></span></td>
                     <td>{row.startDate ?? '—'}</td>
                     <td>
                       <span className={priorityClass(row.priority)}>
@@ -677,7 +684,7 @@ export function ProjectListPage() {
                     <td>
                       <div className="cm-row-actions management-table-actions">
                         <Link to={`/projects/${row.id}`} state={{ returnTo: `/projects/list?${searchParams.toString()}` }}>查看</Link>
-                        <Can permission="project.list.delete"><Popconfirm title="确认删除该项目？" description="删除后不可恢复。" onOpenChange={(open) => { if (open) pendingRowDelete.current = { id: row.id, version: row.version }; }} onConfirm={() => handleDeleteRow(row)}>
+                        <Can permission="project.list.delete"><Popconfirm title="确认删除该项目？" description="删除后不可恢复。" okButtonProps={{ danger: true }} onOpenChange={(open) => { if (open) pendingRowDelete.current = { id: row.id, version: row.version }; }} onConfirm={() => handleDeleteRow(row)}>
                           <Button type="link" size="small" danger>
                             删除
                           </Button>

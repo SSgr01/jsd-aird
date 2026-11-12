@@ -1,6 +1,8 @@
-import { Alert, Button, Empty, Tag, Typography } from 'antd';
+import { Alert, Button, Tag, Typography } from 'antd';
 import type { ReactNode } from 'react';
 import { ContentLoading } from '@/components/loading/ContentLoading';
+import { ListEmptyState } from '@/components/list-controls/ListEmptyState';
+import './catalog-list-panel.css';
 
 interface CatalogListPanelProps {
   title: string;
@@ -20,10 +22,10 @@ export function CatalogListPanel({ title, count, countLabel = '条', filters, ac
   return (
     <section className="catalog-list-panel" aria-label={title}>
       <div className="catalog-list-heading">
-        <div><Typography.Title level={3}>{title}</Typography.Title>{typeof count === 'number' && <Tag color="green">共 {count} {countLabel}</Tag>}</div>
+        <div><Typography.Title level={3}>{title}</Typography.Title>{typeof count === 'number' && <Tag className="catalog-list-count">共 {count} {countLabel}</Tag>}</div>
         <div className="catalog-list-filters">{filters}</div>
       </div>
-      <div className="catalog-list-actions">{actions}</div>
+      {actions && <div className="catalog-list-actions">{actions}</div>}
       {feedback}
       {loading ? (
         <div className="catalog-list-state catalog-list-loading" role="status" aria-label="正在加载列表">
@@ -39,7 +41,7 @@ export function CatalogListPanel({ title, count, countLabel = '条', filters, ac
             action={onRetry ? <Button size="small" onClick={onRetry}>重新加载</Button> : undefined}
           />
         </div>
-      ) : children || <div className="catalog-list-state">{empty || <Empty description="暂无符合条件的记录" />}</div>}
+      ) : children || <div className="catalog-list-state">{empty || <ListEmptyState description="暂无符合条件的记录" />}</div>}
     </section>
   );
 }

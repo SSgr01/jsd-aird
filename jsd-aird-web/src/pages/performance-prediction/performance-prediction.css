@@ -38,7 +38,7 @@
 .performance-loading { display: flex; min-height: 100px; align-items: center; justify-content: center; gap: 12px; color: var(--performance-muted); font-size: 13px; }
 .performance-result-placeholder { padding: 44px 8px; color: var(--performance-muted); font-size: 13px; text-align: center; }
 .performance-results-panel .ant-table-cell { overflow-wrap: anywhere; }
-.performance-result-number { color: var(--app-primary); font-size: 17px; font-variant-numeric: tabular-nums; font-weight: 650; }
+.performance-result-number { color: var(--app-text); font-size: 17px; font-variant-numeric: tabular-nums; font-weight: 650; }
 .performance-single-result h4 { margin: 0 0 16px; font-size: 14px; font-weight: 600; }
 .performance-single-value { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
 .performance-single-value > .performance-result-number { font-size: 38px; line-height: 1.25; }
@@ -47,7 +47,7 @@
 .performance-single-error > strong { display: block; margin-bottom: 12px; color: var(--app-text-secondary); font-size: 18px; }
 .performance-result-note { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .performance-class-result { display: grid; gap: 5px; }
-.performance-class-result strong { color: var(--app-primary); font-size: 17px; }
+.performance-class-result strong { color: var(--app-text); font-size: 17px; }
 .performance-class-result small { color: var(--performance-muted); font-size: 12px; line-height: 1.6; }
 @media (max-width: 1250px) { .performance-workspace { grid-template-columns: minmax(0, 1fr); } .performance-workspace-multiple .performance-condition-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 700px) { .performance-page { padding: 14px; } .performance-target-panel { grid-template-columns: minmax(0, 1fr); padding: 16px; } .performance-target-panel > .ant-alert, .performance-catalog-note { grid-column: 1; } .performance-condition-grid, .performance-workspace-multiple .performance-condition-grid { grid-template-columns: minmax(0, 1fr); } .performance-input-panel, .performance-results-panel { padding: 16px; } .performance-submit-row .ant-btn { flex-shrink: 0; } }

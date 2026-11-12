@@ -8,6 +8,8 @@ import { useAuthStore } from '@/stores/auth-store';
 import { HttpError } from '@/services/http/errors';
 import { workbenchReturn } from './workbench-return';
 import { loginDestination } from './login-redirect';
+import { BrandMark } from '@/components/brand/BrandMark';
+import { appEnv } from '@/app/config/env';
 import './auth.css';
 
 interface LoginForm {
@@ -41,12 +43,13 @@ export function LoginPage() {
 
   return (
     <div className="auth-page">
-      {/* <div className="auth-brand-mark"><SafetyCertificateOutlined /></div>
-      <Typography.Title className="auth-brand-title">AI研发数字化平台</Typography.Title>
-      <Typography.Text className="auth-brand-subtitle">研发数据与 AI 协同工作台</Typography.Text> */}
       <Card className="auth-card" variant="borderless">
+        <div className="auth-product-brand">
+          <BrandMark size={40} />
+          <div><strong>{appEnv.title || 'AI 研发平台'}</strong><span>研发数据与 AI 协同工作台</span></div>
+        </div>
         <div className="auth-card-heading">
-          <Typography.Title level={3}>欢迎回来</Typography.Title>
+          <Typography.Title level={1}>欢迎回来</Typography.Title>
           <Typography.Text type="secondary">使用系统账号登录工作台</Typography.Text>
         </div>
         <Form<LoginForm> form={form} layout="vertical" initialValues={{ rememberMe: false }} onFinish={(values) => void onFinish(values)} requiredMark={false}>

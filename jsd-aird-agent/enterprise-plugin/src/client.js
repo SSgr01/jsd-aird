@@ -74,33 +74,31 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
     return h('span',{className:'jsd-brand-mark '+className,'aria-hidden':true},
       h('img',{src:base+'favicon.svg',width:size,height:size,alt:'',draggable:false}));
   }
+  function HeroMark({size,className = ''}) {
+    return h(BrandMark,{size,className:'jsd-hero-mark '+className});
+  }
   const HeroContext = React.createContext(false);
   function HeroFrame({hero,children}) {
     return h(HeroContext.Provider,{value:hero},children);
   }
   function StarterArt({kind}) {
-    const id = 'jsd-starter-'+React.useId();
-    const pearl = 'url(#'+id+'-pearl)', peach = 'url(#'+id+'-peach)';
+    const pearl = 'var(--dsw-alias-button-primary-fill)', peach = 'var(--dsw-specific-sidebar-nav-item-active)';
+    const stroke = 'var(--dsw-alias-state-business-primary)';
     return h('svg',{viewBox:'0 0 40 40',fill:'none','aria-hidden':true},
-      h('defs',null,
-        h('linearGradient',{id:id+'-pearl',x1:8,y1:3,x2:32,y2:37,gradientUnits:'userSpaceOnUse'},
-          h('stop',{stopColor:'#E7DCEC'}),h('stop',{offset:'.5',stopColor:'#BDA8CE'}),h('stop',{offset:1,stopColor:'#E6C3CB'})),
-        h('linearGradient',{id:id+'-peach',x1:12,y1:12,x2:30,y2:34,gradientUnits:'userSpaceOnUse'},
-          h('stop',{stopColor:'#FFE6C5'}),h('stop',{offset:1,stopColor:'#D9ACAA'}))),
       kind==='read' ? h(React.Fragment,null,
-        h('path',{d:'M11 5h13l7 7v21a3 3 0 0 1-3 3H11a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3Z',fill:pearl,stroke:'#EEE2F1'}),
-        h('path',{d:'M24 5v8h7',fill:'#F4EAF3'}),
-        h('path',{d:'M13 18h12m-12 5h12m-12 5h7',stroke:'#FFF5EE',strokeWidth:2,strokeLinecap:'round'})) :
+        h('path',{d:'M11 5h13l7 7v21a3 3 0 0 1-3 3H11a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3Z',fill:pearl,stroke}),
+        h('path',{d:'M24 5v8h7',fill:peach,stroke}),
+        h('path',{d:'M13 18h12m-12 5h12m-12 5h7',stroke,strokeWidth:1.5,strokeLinecap:'round'})) :
       kind==='compare' ? h(React.Fragment,null,
-        h('rect',{x:4,y:8,width:14,height:24,rx:4,fill:pearl,stroke:'#EEE2F1'}),
-        h('rect',{x:22,y:8,width:14,height:24,rx:4,fill:peach,stroke:'#F7E6DA'}),
-        h('path',{d:'M9 15h4m-4 5h4m14-5h4m-4 5h4',stroke:'#FFF9F6',strokeWidth:1.5,strokeLinecap:'round'}),
-        h('path',{d:'m17 24 3 3 3-3',stroke:'#A18AAB',strokeWidth:1.4,strokeLinecap:'round',strokeLinejoin:'round'})) :
+        h('rect',{x:4,y:8,width:14,height:24,rx:4,fill:pearl,stroke}),
+        h('rect',{x:22,y:8,width:14,height:24,rx:4,fill:peach,stroke}),
+        h('path',{d:'M9 15h4m-4 5h4m14-5h4m-4 5h4',stroke,strokeWidth:1.5,strokeLinecap:'round'}),
+        h('path',{d:'m17 24 3 3 3-3',stroke,strokeWidth:1.4,strokeLinecap:'round',strokeLinejoin:'round'})) :
       h(React.Fragment,null,
-        h('rect',{x:5,y:20,width:8,height:14,rx:3,fill:peach,stroke:'#F6E2D6'}),
-        h('rect',{x:16,y:6,width:8,height:28,rx:3,fill:pearl,stroke:'#EEE2F1'}),
-        h('rect',{x:27,y:13,width:8,height:21,rx:3,fill:peach,stroke:'#F6E2D6'}),
-        h('path',{d:'M19 10v19M30 17v12M8 24v5',stroke:'#FFF8F0',strokeOpacity:.6,strokeLinecap:'round'})));
+        h('rect',{x:5,y:20,width:8,height:14,rx:3,fill:peach,stroke}),
+        h('rect',{x:16,y:6,width:8,height:28,rx:3,fill:pearl,stroke}),
+        h('rect',{x:27,y:13,width:8,height:21,rx:3,fill:peach,stroke}),
+        h('path',{d:'M19 10v19M30 17v12M8 24v5',stroke,strokeOpacity:.6,strokeLinecap:'round'})));
   }
   function registerWelcomeCards(scope) {
     const starters = [
@@ -112,6 +110,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
       const hero = React.useContext(HeroContext), phase = useInput(value=>value.phase);
       if (!hero) return null;
       return h('div',{className:'jsd-starters',role:'group','aria-label':'研发任务建议'},
+        h('p',{className:'jsd-welcome-description'},'从一份资料、一个问题，开始今天的研发工作。'),
         starters.map(item=>h('button',{key:item.kind,type:'button','aria-label':item.title,
           title:'填入输入框，确认后发送',disabled:phase!=='plain',onClick:()=>fillPrompt(item.prompt)},
           h('span',{className:'jsd-starter-art'},h(StarterArt,{kind:item.kind})),
@@ -587,7 +586,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
     });
     ctx.slots.inject('sidebar.brand.mark',()=>ctx.slots.register({name:'sidebar.brand.mark'},BrandMark));
     ctx.slots.inject('sidebar.brand.name',()=>ctx.slots.register({name:'sidebar.brand.name'},()=>h('span',{className:'jsd-brand-name'},'AI工作台')));
-    ctx.slots.inject('conversation.hero.brand.mark',()=>ctx.slots.register({name:'conversation.hero.brand.mark'},BrandMark));
+    ctx.slots.inject('conversation.hero.brand.mark',()=>ctx.slots.register({name:'conversation.hero.brand.mark'},HeroMark));
     ctx.inject(['uiWorkspace'],registerBriefingNavigation);
     ctx.slots.inject('sidebar.footer.action',()=>ctx.slots.register({name:'sidebar.footer.action',id:'enterprise-navigation'},Navigation));
     ctx.inject(['inputTriggers','uiConversation','sidebarRight','sidebarRightTabs'],registerInputs);

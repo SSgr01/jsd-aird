@@ -189,7 +189,7 @@
   word-break: break-word;
 }
 .inventory-error {
-  color: #dc2626;
+  color: var(--app-danger);
   margin: 6px 0;
 }
 
@@ -234,7 +234,7 @@
   table-layout: fixed;
   border-collapse: collapse;
   background: #fff;
-  color: #263238;
+  color: var(--app-text);
   font-size: 14px;
 }
 .shipment-sheet th,
@@ -277,7 +277,7 @@
 }
 .shipment-sheet-select input { flex: none; }
 .shipment-sheet-select span { min-width: 0; }
-.shipment-sheet-select .anticon { color: #28734b; }
+.shipment-sheet-select .anticon { color: var(--app-success); }
 .shipment-sheet-empty td { height: 33px; }
 
 @media (max-width: 900px) {
@@ -308,7 +308,7 @@
     border: 1px solid #aeb7b0;
     border-bottom: 0;
     background: #fff;
-    color: #263238;
+    color: var(--app-text);
     text-align: center;
     font-size: 20px;
   }

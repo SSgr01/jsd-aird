@@ -16,7 +16,7 @@
   box-shadow: none;
 }
 .conversation-icon-button.ant-btn-primary {
-  color: #fff;
+  color: var(--app-on-action);
 }
 .conversation-answer-actions {
   display: flex;
@@ -43,8 +43,8 @@
   gap: 4px;
   padding: 1px 6px;
   border-radius: 5px;
-  color: #626a73;
-  background: #f1f2f3;
+  color: var(--app-text-secondary);
+  background: var(--app-surface-subtle);
   text-decoration: none;
   transition: color 150ms ease, background-color 150ms ease;
 }
@@ -54,13 +54,13 @@
 }
 .ai-markdown .conversation-citation a:hover,
 .ai-markdown .conversation-citation a:active {
-  color: #1677ff;
-  background: #e9eef5;
+  color: var(--app-text);
+  background: var(--app-primary-soft);
   text-decoration: none;
 }
 .ai-markdown .conversation-citation a:focus-visible {
   border-radius: 3px;
-  outline: 2px solid #1677ff;
+  outline: 2px solid var(--app-focus-border);
   outline-offset: 1px;
 }
 .ai-conversation-select {
@@ -184,7 +184,7 @@
 .assistant-hub .has-history-search .ai-conversation-side-head > .ant-btn-primary {
   min-height: 40px;
   height: 40px;
-  color: var(--app-surface);
+  color: var(--app-on-action);
   background: var(--app-action);
   border-radius: 24px;
 }
@@ -402,6 +402,7 @@
   box-shadow: none;
 }
 .assistant-hub .ai-conversation-composer-row > .ant-btn-primary:not(:disabled) {
+  color: var(--app-on-action);
   background: var(--app-action);
   border-color: var(--app-action);
   box-shadow: none;
@@ -476,7 +477,7 @@
 }
 .assistant-hub .ai-conversation-composer-tools .ai-composer-web-toggle.is-active {
   background: var(--app-primary-soft);
-  color: var(--app-primary);
+  color: var(--app-text);
   border-color: transparent;
 }
 body:has(.assistant-hub) .operation-assistant-launcher {

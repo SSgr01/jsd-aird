@@ -1,7 +1,9 @@
+import { DesktopListFilters } from '@/components/list-controls/DesktopListFilters';
+import { ListEmptyState } from '@/components/list-controls/ListEmptyState';
 import { ListFeedback } from '@/components/loading/ListQueryFeedback';
 import { useRequestGuard } from '@/services/query/use-request-guard';
 import { AppstoreOutlined, CopyOutlined, DownloadOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, UnorderedListOutlined } from '@ant-design/icons';
-import { App, Button, Checkbox, Empty, Input, Pagination, Popconfirm, Select, Space, Tag, Tooltip, Typography } from 'antd';
+import { App, Button, Checkbox, Input, Pagination, Popconfirm, Select, Space, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -327,7 +329,7 @@ export function PartnerListPage() {
         </div>
       </div>
 
-      <div className="cm-filter cm-filter-row">
+      <DesktopListFilters labels={['所属行业', '客户等级', '合作状态', '负责人']} advancedAfter={2}><div className="cm-filter cm-filter-row">
         <Input
           prefix={<SearchOutlined />}
           placeholder="搜索公司名称、简称、负责人"
@@ -383,7 +385,7 @@ export function PartnerListPage() {
         <Button className="cm-filter-reset" icon={<ReloadOutlined />} onClick={reset}>
           重置
         </Button>
-      </div>
+      </div></DesktopListFilters>
 
       <ListFeedback loading={loading} hasData={listLoaded} error={listError} onRetry={() => void load()} />
       <div className="cm-table-card" aria-busy={loading}>
@@ -537,7 +539,7 @@ export function PartnerListPage() {
           </div>
         )}
         {!loading && !listError && !visible.length && (
-          <Empty className="cm-empty" description="没有符合筛选条件的公司" />
+          <ListEmptyState filtered={Boolean(keyword || industry || level || cooperation || owner)} onReset={reset} className="cm-empty" description={keyword || industry || level || cooperation || owner ? '没有符合筛选条件的公司' : '暂无客户公司'} />
         )}
         <div className="cm-pagination">
           <div className="cm-pagination-right">

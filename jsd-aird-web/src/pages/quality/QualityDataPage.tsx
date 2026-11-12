@@ -1,3 +1,5 @@
+import { DesktopListFilters } from '@/components/list-controls/DesktopListFilters';
+import { ListEmptyState } from '@/components/list-controls/ListEmptyState';
 import { StatusTag } from '@/components/status/StatusTag';
 import { ListFeedback } from '@/components/loading/ListQueryFeedback';
 import { FormModal } from '@/components/form-dialog/FormModal';
@@ -22,7 +24,6 @@ import {
   Card,
   Checkbox,
   DatePicker,
-  Empty,
   Form,
   Input,
   Modal,
@@ -1011,6 +1012,14 @@ export function QualityDataPage() {
     editable: !category.systemDefault,
     allowedActions: category.allowedActions ?? ['DELETE'],
   }));
+  const resetListFilters = () => {
+    if (!guard()) return;
+    setKeyword('');
+    setProjectId(undefined);
+    setFormatFilter(undefined);
+    setFilters({});
+    setPage(1);
+  };
   return (
     <div className="quality-page pm-unified-list-page">
       {holder}
@@ -1144,7 +1153,7 @@ export function QualityDataPage() {
         } : undefined}
       />
       <Card className="content-card quality-filter-card">
-        <Space className="quality-filter-space" wrap>
+        <DesktopListFilters labels={['所属项目', '文件格式']} advancedAfter={2}><Space className="quality-filter-space" wrap>
           <Input
             value={keyword}
             prefix={<SearchOutlined />}
@@ -1210,21 +1219,14 @@ export function QualityDataPage() {
           })}
           <Button
             icon={<RedoOutlined />}
-            onClick={() => {
-              if (!guard()) return;
-              setKeyword('');
-              setProjectId(undefined);
-              setFormatFilter(undefined);
-              setFilters({});
-              setPage(1);
-            }}
+            onClick={resetListFilters}
           >
             重置
           </Button>
-        </Space>
+        </Space></DesktopListFilters>
       </Card>
       <ListFeedback loading={rowLoading} hasData={listLoaded} error={listError} onRetry={() => void loadRows()} />
-      <Card className="content-card quality-record-list-card" styles={{ body: { padding: 0 } }}>
+      <Card className="content-card quality-record-list-card" data-empty={!rowLoading && !listError && !visibleRows.length} styles={{ body: { padding: 0 } }}>
         {view === 'card' ? (
           <div className="quality-record-card-view">
             {visibleRows.length ? (
@@ -1244,7 +1246,7 @@ export function QualityDataPage() {
                 <div className="quality-record-card-grid">{visibleRows.map(renderQualityCard)}</div>
               </>
             ) : (
-              !listError && !rowLoading && <Empty description={keyword || projectId || Object.values(filters).some(Boolean) ? '没有符合筛选条件的数据' : '当前分类暂无数据'} />
+              !listError && !rowLoading && <ListEmptyState filtered={Boolean(keyword || projectId || formatFilter || Object.values(filters).some(Boolean))} onReset={resetListFilters} description={keyword || projectId || Object.values(filters).some(Boolean) ? '没有符合筛选条件的数据' : '当前分类暂无数据'} />
             )}
           </div>
         ) : (
@@ -1456,7 +1458,7 @@ export function QualityDataPage() {
                 </tbody>
               </table>
             ) : (
-              !listError && !rowLoading && <Empty description={keyword || projectId || Object.values(filters).some(Boolean) ? '没有符合筛选条件的数据' : '当前分类暂无数据'} />
+              !listError && !rowLoading && <ListEmptyState filtered={Boolean(keyword || projectId || formatFilter || Object.values(filters).some(Boolean))} onReset={resetListFilters} description={keyword || projectId || Object.values(filters).some(Boolean) ? '没有符合筛选条件的数据' : '当前分类暂无数据'} />
             )}
           </div>
         )}

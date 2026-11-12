@@ -2,6 +2,7 @@ import { CheckOutlined, DeleteOutlined, EditOutlined, FolderAddOutlined, PlusOut
 import { Button, Card, Empty, Space, Typography } from 'antd';
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
+import './category-card-grid.css';
 
 export interface CatalogCategoryCard {
   id: string;
@@ -23,9 +24,10 @@ interface CategoryCardGridProps {
   onCreate?: () => void;
   onRename?: (category: CatalogCategoryCard) => void;
   onDelete?: (category: CatalogCategoryCard) => void;
+  variant?: 'compact' | 'descriptive';
 }
 
-export function CategoryCardGrid({ categories, activeId, addLabel = '新增分类', countLabel = '条记录', onSelect, onCreate, onRename, onDelete }: CategoryCardGridProps) {
+export function CategoryCardGrid({ categories, activeId, addLabel = '新增分类', countLabel = '条记录', onSelect, onCreate, onRename, onDelete, variant = 'compact' }: CategoryCardGridProps) {
   const gridRef = useRef<HTMLDivElement>(null);
   const categorySignature = categories.map((category) => category.id).join('|');
 
@@ -38,7 +40,7 @@ export function CategoryCardGrid({ categories, activeId, addLabel = '新增分�
   }, [categorySignature]);
 
   return (
-    <div ref={gridRef} className="catalog-category-grid" data-fit={categories.length + Number(Boolean(onCreate)) <= 3 || undefined} aria-label="分类列表">
+    <div ref={gridRef} className="catalog-category-grid" data-variant={variant} data-fit={categories.length + Number(Boolean(onCreate)) <= 3 || undefined} aria-label="分类列表">
       {categories.map((category) => (
         <Card
           key={category.id}
@@ -52,6 +54,7 @@ export function CategoryCardGrid({ categories, activeId, addLabel = '新增分�
             role="button"
             tabIndex={0}
             aria-pressed={activeId === category.id}
+            title={category.description}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
@@ -62,8 +65,8 @@ export function CategoryCardGrid({ categories, activeId, addLabel = '新增分�
             <div className={`catalog-category-icon tone-${category.tone || 'blue'}`}>{category.icon || <FolderAddOutlined />}</div>
             <div className="catalog-category-copy">
               <Typography.Title level={4}>{category.name}</Typography.Title>
-              {category.description && <Typography.Paragraph ellipsis={{ rows: 2 }}>{category.description}</Typography.Paragraph>}
-              <Typography.Text strong>{category.count}</Typography.Text><Typography.Text type="secondary"> {countLabel}</Typography.Text>
+              {category.description && <Typography.Paragraph className="catalog-category-description" ellipsis={{ rows: 2 }}>{category.description}</Typography.Paragraph>}
+              <Typography.Text className="catalog-category-count" strong>{category.count}</Typography.Text><Typography.Text className="catalog-category-count-label" type="secondary"> {countLabel}</Typography.Text>
             </div>
           </div>
           {category.editable && (onRename || (onDelete && category.allowedActions?.includes('DELETE'))) && (

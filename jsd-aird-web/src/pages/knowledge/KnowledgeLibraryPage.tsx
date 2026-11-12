@@ -1,3 +1,4 @@
+import { UploadMetadataFields } from '@/components/upload-workspace/UploadMetadataFields';
 import { FileTextOutlined, UploadOutlined } from '@ant-design/icons';
 import { App, Form, Input, Select, Space, Typography, Upload } from 'antd';
 import type { UploadFile } from 'antd';
@@ -356,14 +357,14 @@ export function KnowledgeLibraryPage() {
       title="资料上传"
       description="文件解析完成后进入人工校对，确认后发布。"
       leftTitle="基础分类"
-      classification={<Form layout="vertical" component={false}>
+      classification={<UploadMetadataFields primaryLabels={['资料范围', '保存分类', '权限可见']} summary="标签、来源与项目关联"><Form layout="vertical" component={false}>
         <Form.Item label="资料范围" required><Select value={libraryScope} onChange={setLibraryScope} options={[{ value: 'INTERNAL', label: '内部资料' }, { value: 'EXTERNAL', label: '外部资料' }]} /></Form.Item>
         <Form.Item label="保存分类" required help="同分类下名称相近时，会提示作为新版本上传。"><Select allowClear value={categoryId} onChange={setCategoryId} placeholder="选择知识库分类" options={categories.map((item) => ({ value: item.id, label: item.name }))} /></Form.Item>
         <Form.Item label="标签"><Select mode="tags" allowClear tokenSeparators={[',', '，']} value={uploadTags} onChange={setUploadTags} placeholder="选择或输入标签，点击 × 移除" /></Form.Item>
         <Form.Item label="来源信息"><Input.TextArea rows={3} value={sourceDescription} onChange={(event) => setSourceDescription(event.target.value)} placeholder="资料来源、提供方或获取背景" /></Form.Item>
         <Form.Item label="关联项目 / 阶段 / 任务" extra="批量上传时，所选关联会应用到所有文件；新版本沿用原有关联。"><ProjectRelationPicker value={projectRelations} onChange={setProjectRelations} /></Form.Item>
         <Form.Item label="权限可见" required><Select value={visibility} onChange={setVisibility} options={[{ value: '研发部可见', label: '研发部可见' }, { value: '全员可见', label: '全员可见' }, { value: '项目组可见', label: '项目组可见' }]} /></Form.Item>
-      </Form>}
+      </Form></UploadMetadataFields>}
       accept={uploadCapabilities?.supportedExtensions.join(',') || ''}
       beforeUpload={validateSelectedFile}
       uploadDisabled={!canUpload || !uploadCapabilities}

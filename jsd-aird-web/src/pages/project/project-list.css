@@ -1,5 +1,7 @@
-/* One white working sheet, inspired by the user's AI-workspace reference.
-   The existing 256px navigation and 64px global toolbar keep their geometry. */
+/* Shared structure, with a separate desktop composition below. */
+.pm-project-total, .pm-project-list-caption,
+.pm-project-subline, .pm-project-owner-avatar { display: none; }
+.pm-project-code-col { width: 144px; }
 .app-shell .pm-unified-list-page.pm-project-list-page {
   height: calc(100dvh - 112px);
   min-height: 0;
@@ -122,18 +124,19 @@
 .app-shell .pm-unified-list-page.pm-project-list-page .pm-table :is(th, td).pm-code-column { width: 144px; min-width: 0; max-width: 144px; font-size: 12px; }
 .app-shell .pm-unified-list-page.pm-project-list-page .pm-table :is(th, td).pm-project-name-column { width: auto; min-width: 0; max-width: none; }
 .app-shell .pm-project-list-page .pm-table td.pm-project-name-column .pm-name-link { display: block; overflow: hidden; color: var(--app-text); font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.app-shell .pm-project-list-page .pm-table td.pm-project-name-column .pm-name-link:hover { color: var(--app-primary); }
+.app-shell .pm-project-list-page .pm-table td.pm-project-name-column .pm-name-link:hover { color: var(--app-text); }
 .app-shell .pm-project-list-page .pm-table .app-numeric { color: var(--app-text); }
 .app-shell .pm-project-list-page .pm-table .cm-row-actions { gap: 4px; }
-.app-shell .pm-project-list-page .pm-table .cm-row-actions :is(a, .ant-btn) { display: inline-flex; min-width: 32px; min-height: 32px; align-items: center; justify-content: center; color: var(--app-text-secondary); font-size: 12px; }
-.app-shell .pm-project-list-page .pm-table .cm-row-actions a:hover { color: var(--app-primary); }
+.app-shell .pm-project-list-page .pm-table .cm-row-actions :is(a, .ant-btn) { display: inline-flex; min-width: 32px; min-height: 32px; align-items: center; justify-content: center; font-size: 12px; }
+.app-shell .pm-project-list-page .pm-table .cm-row-actions :is(a, .ant-btn:not(.ant-btn-dangerous)) { color: var(--app-text-secondary); }
+.app-shell .pm-project-list-page .pm-table .cm-row-actions a:hover { color: var(--app-text); }
 .app-shell .pm-project-list-page .pm-table .cm-row-actions .ant-btn-dangerous:hover { color: var(--app-danger); background: var(--app-danger-soft); }
 
 .app-shell .pm-project-list-page .pm-content .pm-tag { min-height: 22px; padding: 1px 7px; border: 0; border-radius: 6px; font-size: 12px; font-weight: 400; line-height: 20px; }
 .app-shell .pm-project-list-page .pm-tag[class*='priority-'] { color: var(--app-text-secondary); background: transparent; }
 .app-shell .pm-project-list-page .pm-tag.priority-high { color: var(--app-danger); background: var(--app-danger-soft); }
 .app-shell .pm-project-list-page .pm-tag.status-not_started { color: var(--app-text-secondary); background: var(--app-surface-subtle); }
-.app-shell .pm-project-list-page .pm-tag.status-in_progress { color: var(--app-primary); background: var(--app-primary-soft); }
+.app-shell .pm-project-list-page .pm-tag.status-in_progress { color: var(--app-text); background: var(--app-primary-soft); }
 .app-shell .pm-project-list-page .pm-tag.status-completed { color: var(--app-success); background: var(--app-success-soft); }
 .app-shell .pm-project-list-page .pm-tag.status-paused { color: var(--app-warning); background: var(--app-warning-soft); }
 .app-shell .pm-project-list-page .pm-tag.status-cancelled { color: var(--app-danger); background: var(--app-danger-soft); }
@@ -174,6 +177,58 @@
   .app-shell .pm-unified-list-page.pm-project-list-page { padding: 20px; }
   .app-shell .pm-project-list-page .page-heading { align-items: flex-start; flex-direction: column; gap: 16px; }
   .app-shell .pm-project-list-page .pm-page-actions { width: 100%; justify-content: flex-start; }
+}
+
+/* One enclosing app frame; the title and filters sit on its white canvas while
+   the records get their own quiet boundary. No invented overview statistics. */
+@media (min-width: 1024px) {
+  .app-shell .pm-unified-list-page.pm-project-list-page {
+    height: calc(var(--app-viewport-height) - 154px);
+    min-height: 520px;
+    gap: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  .app-shell .pm-project-list-page .page-heading { flex-direction: row; align-items: center; gap: 20px; }
+  .app-shell .pm-project-list-page .page-heading h1 { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .app-shell .pm-project-list-page .pm-project-total { display: inline-flex; align-items: center; min-height: 24px; padding: 0 8px; border-radius: 6px; background: var(--app-surface-subtle); color: var(--app-text-secondary); font-size: 12px; font-weight: 500; }
+  .app-shell .pm-project-list-page .pm-page-actions { width: auto; justify-content: flex-end; }
+  .app-shell .pm-project-list-page .pm-page-actions .ant-btn { height: 38px; padding-inline: 14px; }
+  .app-shell .pm-project-list-page .pm-page-actions .pm-view-btn { height: 28px; padding: 0; }
+  .app-shell .pm-unified-list-page.pm-project-list-page .pm-list-surface { gap: 20px; }
+  .app-shell .pm-project-list-page .list-filter-bar { padding: 0; gap: 8px; border-radius: 0; background: transparent; }
+  .app-shell .pm-project-list-page .list-filter-search .ant-input-affix-wrapper { background: var(--app-surface-subtle); border-color: transparent; }
+  .app-shell .pm-project-list-page .list-filter-bar :is(.ant-input-affix-wrapper, .ant-picker) { min-height: 38px; }
+  .app-shell .pm-project-list-page .list-filter-bar .ant-select { height: 38px; }
+  .app-shell .pm-unified-list-page.pm-project-list-page .pm-content { border: 1px solid var(--app-border); border-radius: 14px; background: var(--app-surface); }
+  .app-shell .pm-project-list-page .pm-project-list-caption { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 20px; border-bottom: 1px solid var(--app-border); color: var(--app-text-secondary); font-size: 12px; }
+  .pm-project-list-caption > div { display: grid; gap: 3px; }
+  .pm-project-list-caption h2 { margin: 0; color: var(--app-text); font-size: 14px; font-weight: 600; line-height: 22px; }
+  .app-shell .pm-project-list-page .pm-table-scroll { margin-top: 0; }
+  .app-shell .pm-unified-list-page.pm-project-list-page .pm-table { min-width: 860px; }
+  .app-shell .pm-project-list-page .pm-table .pm-project-code-col { display: none; }
+  .app-shell .pm-project-list-page .pm-table :is(th, td).pm-code-column { display: none; }
+  .app-shell .pm-unified-list-page.pm-project-list-page .pm-table th { height: 40px; padding-inline: 12px; color: var(--app-text-secondary); background: var(--app-surface-subtle); font-size: 12px; }
+  .app-shell .pm-unified-list-page.pm-project-list-page .pm-table td { height: 66px; padding: 10px 12px; color: var(--app-text); font-size: 14px; }
+  .app-shell .pm-project-list-page .pm-table :is(th, td):nth-child(3) { position: sticky; left: 44px; z-index: 1; background: var(--app-surface); }
+  .app-shell .pm-project-list-page .pm-table th:nth-child(3) { z-index: 3; background: var(--app-surface-subtle); }
+  .app-shell .pm-project-list-page .pm-table th:first-child { background: var(--app-surface-subtle); }
+  .app-shell .pm-project-list-page .pm-table tbody tr:hover > td { background: var(--app-surface-hover); }
+  .app-shell .pm-project-list-page .pm-table tbody tr[aria-selected='true'] > td { background: var(--app-primary-soft); }
+  .app-shell .pm-project-list-page .pm-project-identity-copy { display: grid; min-width: 0; gap: 3px; }
+  .app-shell .pm-project-list-page .pm-name-link { line-height: 22px; }
+  .app-shell .pm-project-list-page .pm-project-subline { display: block; overflow: hidden; color: var(--app-text-secondary); font-size: 12px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+  .app-shell .pm-project-list-page .pm-project-owner { display: flex; align-items: center; gap: 6px; color: var(--app-text-secondary); font-size: 12px; }
+  .app-shell .pm-project-list-page .pm-project-owner-avatar:not(:empty) { display: grid; flex: none; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: var(--app-surface-active); color: var(--app-text); font-size: 12px; }
+  .app-shell .pm-project-list-page .pm-table :is(th, td):nth-child(8) { text-align: right; }
+  .app-shell .pm-project-list-page .pm-list-surface .pm-pagination { padding: 12px 18px; }
+  .app-shell .pm-project-list-page .pm-pagination .ant-pagination { padding-inline-end: 48px; }
+  .app-shell .pm-project-list-page .pm-card-grid { padding: 16px 20px; }
+  .app-shell .pm-project-list-page .pm-card-grid-head { padding-inline: 20px; }
+  .app-shell .pm-project-list-page .app-status-tag { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; border-radius: 6px; }
+  .app-shell .pm-project-list-page .app-status-tag::before { width: 5px; height: 5px; flex: none; border-radius: 50%; background: currentColor; content: ''; }
 }
 
 @media (max-width: 767px) {

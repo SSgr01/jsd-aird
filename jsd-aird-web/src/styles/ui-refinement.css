@@ -1,5 +1,5 @@
-/* Incremental UI layer. Shell geometry, routes and business actions stay owned
-   by their existing components. */
+/* Arctic component refinements. Keep shell geometry and business interactions
+   in their existing components; all visual roles come from variables.css. */
 body { font-variant-numeric: tabular-nums; }
 /* SDK chrome uses this utility; document/cell font styles remain in the models. */
 body .univer-font-sans { font-family: var(--app-font-family); }
@@ -35,7 +35,8 @@ body .univer-font-sans { font-family: var(--app-font-family); }
 .app-shell .ant-pro-sider .ant-menu-item-selected,
 .app-shell .ant-pro-sider .ant-menu-submenu-selected > .ant-menu-submenu-title {
   color: var(--app-text);
-  font-weight: 500;
+  background: var(--app-primary-soft);
+  font-weight: 600;
 }
 .app-shell .ant-pro-sider :is(.ant-menu-item, .ant-menu-submenu-title):hover {
   color: var(--app-text);
@@ -53,20 +54,19 @@ body .univer-font-sans { font-family: var(--app-font-family); }
 .app-shell .ant-pro-sider .ant-pro-sider-logo h1 { font-weight: 600; letter-spacing: 0; }
 .app-shell .app-brand-title { margin-inline-start: 8px; overflow: hidden; color: var(--app-text); font-size: 14px; font-weight: 600; line-height: 32px; text-overflow: ellipsis; white-space: nowrap; }
 .app-shell :is(.ant-layout-sider-collapsed, .ant-pro-sider-collapsed) .app-brand-title { display: none; }
-.app-shell .app-command-search { border-color: var(--app-border); box-shadow: none; }
-.app-shell .app-user-trigger .ant-avatar { box-shadow: none; }
+.app-shell .app-user-trigger .ant-avatar { color: var(--app-on-action); background: var(--app-action); box-shadow: none; }
 
 /* Header and footer are outside the only scrolling part of a long dialog. */
-body .ant-modal-mask { background: rgb(17 24 39 / 28%); }
+body .ant-modal-mask { background: rgb(38 53 72 / 28%); }
 body .ant-modal-root .ant-modal { top: 32px; max-width: calc(100vw - 24px); margin-block: 0; padding-bottom: 0; }
 body .ant-modal .ant-modal-content {
   display: flex;
   max-height: calc(100dvh - 64px);
   flex-direction: column;
   padding: 24px;
-  border: 1px solid rgb(32 36 42 / 5%);
+  border: 1px solid var(--app-border);
   border-radius: 16px;
-  box-shadow: 0 2px 6px rgb(24 29 36 / 4%), 0 6px 32px rgb(24 29 36 / 7%);
+  box-shadow: var(--app-shadow-overlay);
 }
 body .ant-modal .ant-modal-header { flex: none; margin: 0 0 20px; padding: 0 24px 0 0; border: 0; background: transparent; }
 body .ant-modal .ant-modal-title { color: var(--app-text); font-size: 20px; font-weight: 600; line-height: 1.4; text-wrap: balance; }
@@ -76,7 +76,7 @@ body .ant-modal .ant-modal-footer .ant-btn { min-width: 80px; min-height: 36px; 
 body .ant-modal .ant-modal-close { top: 18px; right: 16px; width: 36px; height: 36px; border-radius: 6px; }
 body .ant-drawer .ant-drawer-header { padding: 20px 24px; }
 body .ant-drawer .ant-drawer-body { padding: 24px; overscroll-behavior: contain; }
-body .ant-drawer .ant-drawer-footer { padding: 16px 24px; background: var(--app-surface); }
+body .ant-drawer .ant-drawer-footer { padding: 16px 24px; background: var(--app-background); }
 body :is(.ant-modal, .ant-drawer) .ant-form-item { margin-bottom: 16px; }
 body :is(.ant-modal, .ant-drawer) .ant-form-item-label > label { height: auto; color: var(--app-text); font-size: 14px; font-weight: 500; }
 body :is(.ant-modal, .ant-drawer) .ant-form-item-label { padding-bottom: 6px; }
@@ -100,27 +100,26 @@ body .app-form-dialog .pm-field-tag { padding: 2px 5px; border-radius: 3px; colo
 body .app-form-dialog .pm-form-desc .ant-form-item { margin-bottom: 12px; }
 body .ant-modal .ant-modal-footer .ant-btn-default { border-color: var(--app-border); background: var(--app-surface); color: var(--app-text-secondary); box-shadow: none; }
 
-/* The work is the focus: one quiet surface, dark record names, sparse blue. */
+/* One white working surface, black text ink and pale action fills. */
 .app-shell .app-command-search.ant-input-affix-wrapper { min-height: 36px; border-color: var(--app-border); border-radius: 10px; background: var(--app-surface); box-shadow: none; }
 .app-shell .app-command-search.ant-input-affix-wrapper:focus-within { border-color: var(--app-focus-border); background: var(--app-surface); }
-.app-shell .app-user-trigger .ant-avatar { color: var(--app-text-secondary); background: var(--app-surface-subtle); }
 .app-shell .ant-pro-sider .ant-menu-sub .ant-menu-item { margin-inline: 4px; width: calc(100% - 8px); }
 .app-shell .ant-pro-sider-collapsed .ant-menu-root { padding-inline: 0; }
 .app-shell .ant-pro-sider-collapsed .ant-menu-root > .ant-menu-item { margin-inline: 4px; width: calc(100% - 8px); }
 .app-shell .ant-pro-sider :is(div, ul) { scrollbar-width: thin; scrollbar-color: var(--app-scrollbar) transparent; }
-.app-shell .ant-pro-sider .ant-menu-item-selected { color: var(--app-text); background: var(--app-surface-active); box-shadow: none; font-weight: 500; }
+.app-shell .ant-pro-sider .ant-menu-item-selected { background: var(--app-primary-soft); box-shadow: inset 0 0 0 1px var(--app-border); }
 .app-shell .pm-unified-list-page .page-heading { align-items: center; }
 .app-shell .pm-unified-list-page .page-heading h1 { margin: 0 0 8px; font-size: var(--app-font-size-title); font-weight: 600; letter-spacing: normal; line-height: 1.3; }
 .app-shell .pm-unified-list-page .page-heading p { color: var(--app-text-secondary); font-size: 12px; line-height: 1.6; }
 .app-shell .pm-unified-list-page .pm-page-actions { gap: 8px; }
 .app-shell .pm-unified-list-page .page-heading > .pm-page-actions { min-width: 0; max-width: 100%; }
 .app-shell .pm-unified-list-page .pm-page-actions .ant-btn { font-size: 14px; font-weight: 500; }
-.app-shell .pm-unified-list-page .pm-page-actions .ant-btn:disabled { border-color: transparent; color: var(--app-text-secondary); background: transparent; }
+.app-shell .pm-unified-list-page .pm-page-actions .ant-btn:disabled { border-color: var(--app-border); color: var(--app-text-muted); background: var(--app-surface-subtle); }
 .app-shell .pm-unified-list-page .pm-page-actions .ant-space-compact { gap: 2px; padding: 3px; border-radius: 7px; background: var(--app-surface-active); }
 .app-shell .pm-unified-list-page .pm-page-actions :is(.pm-view-btn, .eln-view-btn) { width: 30px; height: 28px; padding: 0; border: 0; border-radius: 4px; color: var(--app-text-secondary); background: transparent; }
-.app-shell .pm-unified-list-page .pm-page-actions :is(.pm-view-btn, .eln-view-btn).active { color: var(--app-text); background: #fff; box-shadow: 0 1px 3px rgb(17 17 17 / 8%); }
+.app-shell .pm-unified-list-page .pm-page-actions :is(.pm-view-btn, .eln-view-btn).active { color: var(--app-text); background: var(--app-surface); box-shadow: none; }
 .app-shell .pm-unified-list-page .pm-table td.pm-project-name-column .pm-name-link { color: var(--app-text); font-weight: 500; }
-.app-shell .pm-unified-list-page .pm-table td.pm-project-name-column .pm-name-link:hover { color: var(--app-primary); }
+.app-shell .pm-unified-list-page .pm-table td.pm-project-name-column .pm-name-link:hover { color: var(--app-text); }
 .app-shell .pm-unified-list-page .pm-table :is(th, td).pm-code-column { color: var(--app-text-secondary); font-size: 12px; }
 .app-shell .pm-unified-list-page .pm-table tbody td { border-bottom-color: var(--app-row-rule); }
 .app-shell .pm-unified-list-page .pm-table-scroll,
@@ -131,18 +130,18 @@ body .ant-modal .ant-modal-footer .ant-btn-default { border-color: var(--app-bor
 .app-shell .pm-unified-list-page :is(.pm-content, .ant-table, .cm-table, .eln-table-wrap) .pm-tag[class*='priority-'] { padding-inline: 6px; color: var(--app-text-secondary); background: transparent; }
 .app-shell .pm-unified-list-page :is(.pm-content, .ant-table, .cm-table, .eln-table-wrap) .pm-tag.priority-high { color: var(--app-danger); background: var(--app-danger-soft); }
 .app-shell .pm-unified-list-page :is(.pm-content, .ant-table, .cm-table, .eln-table-wrap) .pm-tag.status-not_started { color: var(--app-text-secondary); background: var(--app-surface-subtle); }
-.app-shell .pm-unified-list-page :is(.pm-content, .ant-table, .cm-table, .eln-table-wrap) .pm-tag.status-in_progress { color: var(--app-primary); background: var(--app-primary-soft); }
+.app-shell .pm-unified-list-page :is(.pm-content, .ant-table, .cm-table, .eln-table-wrap) .pm-tag.status-in_progress { color: var(--app-text); background: var(--app-primary-soft); }
 .app-shell .pm-unified-list-page :is(.pm-content, .ant-table, .cm-table, .eln-table-wrap) .pm-tag.status-completed { color: var(--app-success); background: var(--app-success-soft); }
 .app-shell .pm-unified-list-page :is(.pm-content, .ant-table, .cm-table, .eln-table-wrap) .pm-tag.status-paused { color: var(--app-warning); background: var(--app-warning-soft); }
 .app-shell .pm-unified-list-page :is(.pm-content, .ant-table, .cm-table, .eln-table-wrap) .pm-tag.status-cancelled { color: var(--app-danger); background: var(--app-danger-soft); }
 .app-shell .pm-unified-list-page .ant-tag { border: 0; font-weight: 400; }
-.app-shell .pm-unified-list-page .ant-tag-blue { color: var(--app-primary); background: var(--app-primary-soft); }
+.app-shell .pm-unified-list-page .ant-tag-blue { color: var(--app-text); background: var(--app-primary-soft); }
 .app-shell .pm-unified-list-page .ant-tag-green { color: var(--app-success); background: var(--app-success-soft); }
 .app-shell .pm-unified-list-page .ant-tag-red { color: var(--app-danger); background: var(--app-danger-soft); }
 .app-shell .pm-unified-list-page .ant-tag-gold { color: var(--app-warning); background: var(--app-warning-soft); }
-.app-shell .ant-tag-purple { color: var(--app-violet); background: var(--app-violet-soft); }
+.app-shell .ant-tag-purple { color: var(--app-text); background: var(--app-violet-soft); }
 .app-shell .ant-tag { min-height: 24px; box-sizing: border-box; padding: 2px 8px; border: 0; border-radius: 5px; font-size: 12px; font-weight: 400; line-height: 20px; }
-.app-shell :is(.ant-tag-blue, .ant-tag-geekblue, .ant-tag-cyan, .ant-tag-processing) { color: var(--app-primary); background: var(--app-primary-soft); }
+.app-shell :is(.ant-tag-blue, .ant-tag-geekblue, .ant-tag-cyan, .ant-tag-processing) { color: var(--app-text); background: var(--app-primary-soft); }
 .app-shell :is(.ant-tag-green, .ant-tag-success) { color: var(--app-success); background: var(--app-success-soft); }
 .app-shell :is(.ant-tag-gold, .ant-tag-orange, .ant-tag-warning) { color: var(--app-warning); background: var(--app-warning-soft); }
 .app-shell :is(.ant-tag-red, .ant-tag-error) { color: var(--app-danger); background: var(--app-danger-soft); }
@@ -159,9 +158,9 @@ body .ant-modal .ant-modal-footer .ant-btn-default { border-color: var(--app-bor
 .app-shell .workspace-frame .workspace-header .ant-btn { font-size: 14px; box-shadow: none; }
 .app-shell .workspace-frame .workspace-view-tabs { background: var(--app-surface); }
 .app-shell .workspace-frame .ant-tabs .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn { text-shadow: none; font-weight: 600; }
-.app-shell .workspace-frame.workspace-shell { border-radius: 8px; box-shadow: var(--app-shadow); }
+.app-shell .workspace-frame.workspace-shell { border-radius: var(--app-radius-shell); box-shadow: var(--app-shadow); }
 .app-shell .workspace-frame .workspace-header .ant-tag { padding: 2px 8px; border: 0; border-radius: 5px; font-size: 12px; }
-.app-shell .workspace-frame .workspace-header .ant-tag-blue { color: var(--app-primary); background: var(--app-primary-soft); }
+.app-shell .workspace-frame .workspace-header .ant-tag-blue { color: var(--app-text); background: var(--app-primary-soft); }
 /* Keep the sheet controls clear of the floating help launcher. */
 .workspace-frame:not([data-maximized='true']) .univer-editor-surface footer > section[data-range-selector] { padding-inline-end: 76px; }
 .workspace-frame:not([data-maximized='true']) .univer-docs-surface footer > div { padding-inline-end: 76px; }
@@ -169,9 +168,10 @@ body .ant-modal .ant-modal-footer .ant-btn-default { border-color: var(--app-bor
 .app-shell .pm-unified-list-page :is(.experiment-page-intro, .research-test-page-intro, .production-order-page-intro, .cm-customer-page-intro) { padding: 0; border: 0; background: transparent; box-shadow: none; }
 .app-shell .pm-unified-list-page :is(.experiment-page-intro, .research-test-page-intro, .production-order-page-intro, .cm-customer-page-intro) > .ant-card-body { padding: 0; }
 .app-shell .pm-unified-list-page :is(.pm-table, .cm-table, .ant-table) :is(.pm-name-link, .cm-customer-link) { color: var(--app-text); font-weight: 500; }
-.app-shell .pm-unified-list-page :is(.pm-table, .cm-table, .ant-table) :is(.pm-name-link, .cm-customer-link):hover { color: var(--app-primary); }
+.app-shell .pm-unified-list-page :is(.pm-table, .cm-table, .ant-table) :is(.pm-name-link, .cm-customer-link):hover { color: var(--app-text); }
 .app-shell .pm-unified-list-page :is(.cm-filter-row, .eln-filter-row, .research-test-filter, .production-order-filter, .inventory-filters) :is(.ant-input-affix-wrapper, .ant-picker) { border-color: transparent; background: var(--app-surface-subtle); box-shadow: none; }
 .app-shell .pm-unified-list-page :is(.cm-filter-row, .eln-filter-row, .research-test-filter, .production-order-filter, .inventory-filters) .ant-select-outlined .ant-select-selector { border-color: transparent; background: var(--app-surface-subtle); }
+@media (max-width: 1023px) {
 .app-shell .pm-unified-list-page .catalog-category-card { min-height: 108px; border: 0; border-radius: 8px; background: #fff; box-shadow: var(--app-shadow); }
 .app-shell .pm-unified-list-page .catalog-category-card.is-active { background: var(--app-primary-soft); box-shadow: inset 0 0 0 1px var(--app-focus-border); }
 .app-shell .pm-unified-list-page .catalog-category-card .ant-card-body { min-height: 108px; padding: 16px; }
@@ -179,13 +179,14 @@ body .ant-modal .ant-modal-footer .ant-btn-default { border-color: var(--app-bor
 .app-shell .pm-unified-list-page .catalog-category-copy h4 { margin-bottom: 5px; font-size: 14px; font-weight: 600; }
 .app-shell .pm-unified-list-page .catalog-category-copy .ant-typography { font-size: 12px; }
 .app-shell .pm-unified-list-page .catalog-category-copy > .ant-typography { margin-bottom: 4px; }
-.app-shell .pm-unified-list-page .catalog-category-active-mark { width: 18px; height: 18px; color: var(--app-primary); background: var(--app-primary-soft); box-shadow: none; font-size: 10px; }
+.app-shell .pm-unified-list-page .catalog-category-active-mark { width: 18px; height: 18px; color: var(--app-text); background: var(--app-primary-soft); box-shadow: none; font-size: 10px; }
 .app-shell .pm-unified-list-page .catalog-category-add .ant-card-body { gap: 4px; }
 .app-shell .pm-unified-list-page .catalog-category-add-icon { width: 24px; height: 24px; margin-bottom: 0; color: var(--app-text-secondary); background: transparent; font-size: 18px; }
 .app-shell .pm-unified-list-page .catalog-category-add h4 { margin: 0; font-size: 14px; font-weight: 500; }
 .app-shell .pm-unified-list-page .catalog-category-add .ant-typography-secondary { color: var(--app-text-secondary); font-size: 12px; }
+}
 
-.app-shell .eln-prototype-page .pm-list-surface { overflow: hidden; border: 1px solid var(--app-border); border-radius: 8px; background: #fff; box-shadow: var(--app-shadow); }
+.app-shell .eln-prototype-page .pm-list-surface { overflow: hidden; border: 1px solid var(--app-border); border-radius: var(--app-radius-card); background: var(--app-surface); box-shadow: var(--app-shadow); }
 .app-shell .eln-prototype-page .pm-list-surface .eln-table-wrap { border: 0; border-radius: 0; box-shadow: none; }
 .app-shell .eln-prototype-page .pm-list-surface .list-query-feedback { margin: 10px 20px; }
 .app-shell .eln-prototype-page .eln-prototype-table :is(th, td).eln-experiment-name-column { width: 220px; max-width: 220px; }
@@ -202,11 +203,27 @@ body .ant-modal .ant-modal-footer .ant-btn-default { border-color: var(--app-bor
 .app-shell .pm-unified-list-page .ant-table-pagination { margin: 0; padding: 16px 20px; border-top: 1px solid var(--app-row-rule); color: var(--app-text-secondary); font-size: 12px; }
 .app-shell .eln-prototype-page .ant-table-pagination { padding-inline-end: 76px; }
 .app-shell .eln-prototype-page .eln-pagination > .ant-pagination { padding-inline-end: 56px; }
-.app-shell .eln-prototype-page .eln-prototype-table .ant-btn-link { color: var(--app-text-secondary); }
-.app-shell .eln-prototype-page .eln-prototype-table .ant-btn-link:hover { color: var(--app-primary); }
+.app-shell .eln-prototype-page .eln-prototype-table .ant-btn-link:not(.ant-btn-dangerous) { color: var(--app-text-secondary); }
+.app-shell .eln-prototype-page .eln-prototype-table .ant-btn-link:not(.ant-btn-dangerous):hover { color: var(--app-text); }
 .app-shell .eln-prototype-page .eln-prototype-table .ant-btn-dangerous:hover { color: var(--app-danger); }
 .app-shell .eln-prototype-page .eln-prototype-table .ant-table-cell-fix-right .ant-btn-link { padding-inline: 5px; font-size: 12px; }
 .app-shell .eln-prototype-page .eln-prototype-table .ant-table-thead > tr > th.ant-table-selection-column { padding-block: 0; }
+
+/* Shared desktop component finish. Page composition lives with each page; these
+   rules only unify surfaces and control shapes, including portalled overlays. */
+@media (min-width: 1024px) {
+  .app-shell :is(.ant-input-affix-wrapper, .ant-input-number, .ant-picker),
+  .app-shell .ant-select-outlined .ant-select-selector { border-radius: 10px; }
+  .app-shell .ant-btn-default:not(.ant-btn-dangerous):not(.pm-view-btn):not(.eln-view-btn) { border-color: var(--app-border); color: var(--app-text-secondary); }
+  .app-shell .ant-btn-default:not(.ant-btn-dangerous):not(:disabled):hover { border-color: var(--app-border-strong); color: var(--app-text); background: var(--app-surface-subtle); }
+  body .ant-modal .ant-modal-content { border-radius: 20px; }
+  body .ant-modal .ant-modal-header { margin-bottom: 24px; padding-bottom: 20px; border-bottom: 1px solid var(--app-border); }
+  body .ant-drawer-right .ant-drawer-content { border-start-start-radius: 20px; border-end-start-radius: 20px; overflow: hidden; }
+  body .ant-drawer .ant-drawer-header { background: var(--app-surface); border-bottom-color: var(--app-border); }
+  body .ant-drawer .ant-drawer-title { color: var(--app-text); font-size: 20px; font-weight: 600; }
+  body .ant-popover .ant-popover-inner,
+  body .ant-dropdown .ant-dropdown-menu { border: 1px solid var(--app-border); box-shadow: var(--app-shadow-card); }
+}
 
 @media (min-width: 1100px) {
   .app-shell .eln-prototype-page .catalog-category-grid[data-fit='true'] { grid-auto-columns: minmax(0, 1fr); }
@@ -281,4 +298,20 @@ body .ant-modal .ant-modal-footer .ant-btn-default { border-color: var(--app-bor
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-delay: 0ms !important; transition-duration: 0.01ms !important; }
   .pm-unified-list-page > *, .pm-unified-list-page .pm-list-surface > * { transform: none !important; }
   button:active, a:active, [role='button']:active { transform: none; }
+}
+/* Ghost actions need ink-colored outlines even though solid actions use pale fills. */
+.ant-btn.ant-btn-primary.ant-btn-background-ghost:not(.ant-btn-dangerous):not(:disabled) {
+  color: var(--app-text);
+  border-color: var(--app-primary);
+  background: transparent;
+}
+.ant-btn.ant-btn-primary.ant-btn-background-ghost:not(.ant-btn-dangerous):not(:disabled):hover {
+  color: var(--app-text);
+  border-color: var(--app-primary-hover);
+  background: var(--app-primary-soft);
+}
+.ant-btn.ant-btn-primary.ant-btn-background-ghost:not(.ant-btn-dangerous):not(:disabled):active {
+  color: var(--app-on-action);
+  border-color: var(--app-primary);
+  background: var(--app-action);
 }

@@ -1,3 +1,5 @@
+import { DesktopListFilters } from '@/components/list-controls/DesktopListFilters';
+import { ListEmptyState } from '@/components/list-controls/ListEmptyState';
 import { StatusTag } from '@/components/status/StatusTag';
 import { ListFeedback } from '@/components/loading/ListQueryFeedback';
 import { FormModal } from '@/components/form-dialog/FormModal';
@@ -7,7 +9,6 @@ import {
   Button,
   Card,
   DatePicker,
-  Empty,
   Form,
   Input,
   Modal,
@@ -116,6 +117,8 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
     [templates, setTemplates] = useState<TemplateListItem[]>([]),
     [templateCategories, setTemplateCategories] = useState<TemplateCategory[]>([]),
     [form] = Form.useForm<CreateFormValues>();
+  const [searchText, setSearchText] = useState('');
+  useEffect(() => setSearchText(keyword), [keyword]);
   const [renameOpen, setRenameOpen] = useState(false),
     [renameSaving, setRenameSaving] = useState(false),
     [renaming, setRenaming] = useState<ResearchTestSummary>(),
@@ -735,6 +738,16 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
     ],
     [message, nav, openRename, report, permissions],
   );
+  const resetListFilters = () => {
+    setSearchText('');
+    setKeyword('');
+    setProjectId(undefined);
+    setCategory(undefined);
+    setStatus(undefined);
+    setFormatFilter(undefined);
+    setDate(undefined);
+    setPage(1);
+  };
   return (
     <section className="research-test-page pm-unified-list-page">
       <header className="page-heading">
@@ -807,9 +820,13 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         </div>
       </header>
       <Card className="research-test-filter">
-        <Space wrap>
+        <DesktopListFilters labels={[report ? '所属项目' : '标准类别', '记录状态', '文件格式', '记录日期']} advancedAfter={2}
+          activeCount={[keyword, projectId, category, status, formatFilter, date].filter(Boolean).length}
+          summary={[keyword && `搜索：${keyword}`, projectId && '已选择项目', category && `类别：${category}`, status && `状态：${statusText[status] || status}`, formatFilter && `格式：${formatFilter}`, date && `日期：${date.format('YYYY/MM/DD')}`].filter(Boolean).join('；')}><Space wrap>
           <Input.Search
             allowClear
+            value={searchText}
+            onChange={(event) => setSearchText(event.target.value)}
             placeholder={report ? '搜索报告编号／名称' : '搜索标准编号／名称'}
             style={{ width: 320 }}
             onSearch={(v) => {
@@ -821,6 +838,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
             allowClear
             showSearch
             optionFilterProp="label"
+            value={report ? projectId : category}
             placeholder={report ? '全部项目' : '全部标准类别'}
             style={{ width: 180 }}
             popupMatchSelectWidth={false}
@@ -844,6 +862,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
           />
           <Select<string>
             allowClear
+            value={status}
             placeholder="全部状态"
             style={{ width: 160 }}
             options={Object.entries(statusText).map(([value, label]) => ({ value, label }))}
@@ -865,23 +884,15 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
           <Button
             className="pm-filter-reset"
             icon={<ReloadOutlined />}
-            onClick={() => {
-              setKeyword('');
-              setProjectId(undefined);
-              setCategory(undefined);
-              setStatus(undefined);
-              setFormatFilter(undefined);
-              setDate(undefined);
-              setPage(1);
-            }}
+            onClick={resetListFilters}
           >
             重置
           </Button>
-        </Space>
+        </Space></DesktopListFilters>
       </Card>
       <ListFeedback loading={loading && !listLoaded} hasData={listLoaded} error={listError} onRetry={() => void load()} />
       {mode === 'card' ? (
-        <List locale={{ emptyText: listError ? null : <Empty description={keyword || projectId || status || category || date ? '没有符合筛选条件的记录' : '暂无研发测试记录'} /> }}
+        <List locale={{ emptyText: listError ? null : <ListEmptyState filtered={Boolean(keyword || projectId || status || category || date || formatFilter)} onReset={resetListFilters} description={keyword || projectId || status || category || date || formatFilter ? '没有符合筛选条件的记录' : '暂无研发测试记录'} /> }}
           className={
             report
               ? 'research-test-card-list research-test-report-card-list'
@@ -1016,7 +1027,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         />
       ) : (
         <div className="research-test-table-wrap">
-          <Table locale={{ emptyText: listError ? null : <Empty description={keyword || projectId || status || category || date ? '没有符合筛选条件的记录' : '暂无研发测试记录'} /> }}
+          <Table locale={{ emptyText: listError ? null : <ListEmptyState filtered={Boolean(keyword || projectId || status || category || date || formatFilter)} onReset={resetListFilters} description={keyword || projectId || status || category || date || formatFilter ? '没有符合筛选条件的记录' : '暂无研发测试记录'} /> }}
             rowKey="id"
             className={`research-test-list-table research-test-${report ? 'report' : 'standard'}-table`}
             loading={loading && !listLoaded}

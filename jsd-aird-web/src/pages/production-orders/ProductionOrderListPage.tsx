@@ -1,3 +1,5 @@
+import { DesktopListFilters } from '@/components/list-controls/DesktopListFilters';
+import { ListEmptyState } from '@/components/list-controls/ListEmptyState';
 import { StatusTag } from '@/components/status/StatusTag';
 import { ListFeedback } from '@/components/loading/ListQueryFeedback';
 import { FormModal } from '@/components/form-dialog/FormModal';
@@ -19,7 +21,6 @@ import {
   Button,
   Card,
   Checkbox,
-  Empty,
   Form,
   Input,
   Modal,
@@ -732,7 +733,7 @@ export function ProductionOrderListPage() {
         </div>
 
         <Card className="content-card filter-card production-order-filter">
-          <Space wrap>
+          <DesktopListFilters labels={['所属项目', '生产单状态', '文件格式']} advancedAfter={2}><Space wrap>
             <Input.Search
               allowClear
               placeholder="生产单名称、订单号、品名或文件名"
@@ -780,7 +781,7 @@ export function ProductionOrderListPage() {
             <Button icon={<RedoOutlined />} onClick={resetFilters}>
               重置
             </Button>
-          </Space>
+          </Space></DesktopListFilters>
         </Card>
 
       <ListFeedback loading={loading} hasData={listLoaded} error={listError} onRetry={() => void load()} />
@@ -793,7 +794,7 @@ export function ProductionOrderListPage() {
             ) : items.length ? (
               <div className="production-order-card-grid">{items.map(renderProductionCard)}</div>
             ) : listError ? null : (
-              <Empty description={keyword || status || projectId ? '没有符合筛选条件的生产单' : '暂无已保存的生产单'} />
+              <ListEmptyState filtered={Boolean(keyword || status || projectId || format)} onReset={resetFilters} description={keyword || status || projectId || format ? '没有符合筛选条件的生产单' : '暂无已保存的生产单'} />
             )}
             {!loading && items.length > 0 && (
               <Pagination
@@ -822,7 +823,7 @@ export function ProductionOrderListPage() {
               }}
               loading={loading}
               dataSource={items}
-              locale={{ emptyText: listError ? null : <Empty description={keyword || status || projectId ? '没有符合筛选条件的生产单' : '暂无已保存的生产单'} /> }}
+              locale={{ emptyText: listError ? null : <ListEmptyState filtered={Boolean(keyword || status || projectId || format)} onReset={resetFilters} description={keyword || status || projectId || format ? '没有符合筛选条件的生产单' : '暂无已保存的生产单'} /> }}
               tableLayout="fixed"
               pagination={{
                 current: page.current,

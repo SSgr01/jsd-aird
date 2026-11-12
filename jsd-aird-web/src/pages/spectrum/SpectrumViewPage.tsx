@@ -1,7 +1,9 @@
+import { DesktopListFilters } from '@/components/list-controls/DesktopListFilters';
+import { ListEmptyState } from '@/components/list-controls/ListEmptyState';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { useRequestGuard } from '@/services/query/use-request-guard';
 import { DeleteOutlined, DownloadOutlined, EyeOutlined, FolderOpenOutlined, LineChartOutlined, MessageOutlined, RedoOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
-import { App, Button, Dropdown, Empty, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
+import { App, Button, Dropdown, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
@@ -171,10 +173,10 @@ export function SpectrumViewPage() {
       onCreate={canCategory('create') ? () => setEditor({ mode: 'NEW' }) : undefined}
       onRename={canCategory('update') ? (item) => setEditor({ mode: 'EDIT', item: categories.find((candidate) => candidate.id === item.id) }) : undefined}
       onDelete={canCategory('delete') ? (item) => { const category = categories.find((candidate) => candidate.id === item.id); if (category?.allowedActions?.includes('DELETE')) { setReplacementCategoryId(undefined); setDeleteItem(category); } } : undefined} />
-    <CatalogListPanel title={cards.find((item) => item.id === categoryId)?.name || '图谱'} count={page.total}
-      filters={<Space wrap><Input allowClear prefix={<SearchOutlined />} placeholder="搜索图谱名称、样品或批号" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={[{ value: 'READY', label: '可分析' }, { value: 'DELETED', label: '已删除' }]} /><Button icon={<RedoOutlined />} onClick={resetFilters}>重置</Button>{can('export') && <Button icon={<DownloadOutlined />} disabled={!selectedChartIds.length} onClick={() => void exportCharts(selectedChartIds)}>导出所选 ({selectedChartIds.length})</Button>}</Space>}
+    <CatalogListPanel title="图谱列表" count={page.total}
+      filters={<DesktopListFilters labels={["图谱状态"]} advancedAfter={2}><Space wrap><Input allowClear prefix={<SearchOutlined />} placeholder="搜索图谱名称、样品或批号" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={[{ value: 'READY', label: '可分析' }, { value: 'DELETED', label: '已删除' }]} /><Button icon={<RedoOutlined />} onClick={resetFilters}>重置</Button>{can('export') && <Button icon={<DownloadOutlined />} disabled={!selectedChartIds.length} onClick={() => void exportCharts(selectedChartIds)}>导出所选 ({selectedChartIds.length})</Button>}</Space></DesktopListFilters>}
       loading={loading}>
-      <Table<SpectrumChart> className="catalog-spectrum-table" rowKey="id" dataSource={items} rowSelection={{ selectedRowKeys: selectedChartIds, onChange: (keys) => setSelectedChartIds(keys.map(String)) }} scroll={{ x: 1580 }} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <Empty description="暂无图谱" /> }} columns={[
+      <Table<SpectrumChart> className="catalog-spectrum-table" rowKey="id" dataSource={items} rowSelection={{ selectedRowKeys: selectedChartIds, onChange: (keys) => setSelectedChartIds(keys.map(String)) }} scroll={{ x: 1580 }} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <ListEmptyState filtered={Boolean(keyword || status || (categoryId && categoryId !== 'ALL'))} onReset={resetFilters} description={keyword || status ? '没有符合筛选条件的图谱' : '当前分类暂无图谱'} /> }} columns={[
         { title: '图谱', dataIndex: 'title', width: 280, ellipsis: true, render: (value: string, record) => <Space><LineChartOutlined /><span><Typography.Text strong ellipsis={{ tooltip: value }}>{value}</Typography.Text><br /><Typography.Text type="secondary">{record.originalName}</Typography.Text></span></Space> },
         { title: '分类', dataIndex: 'categoryName', width: 140, ellipsis: true },
         { title: '样品 / 批号', width: 200, ellipsis: true, render: (_: unknown, record) => <span>{record.sampleName || '未填写'}{record.batchNo ? ` · ${record.batchNo}` : ''}</span> },

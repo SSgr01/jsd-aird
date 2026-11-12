@@ -15,16 +15,41 @@
 .list-filter-bar .list-filter-reset { padding-inline: 8px; border-color: transparent; color: var(--app-text-secondary); background: transparent; box-shadow: none; }
 .list-filter-bar .list-filter-reset:disabled { color: var(--app-text-secondary); opacity: .55; }
 .list-filter-count { font-variant-numeric: tabular-nums; }
+.list-filter-toggle-desktop { display: none; }
 .list-filter-bar .ant-select-selection-placeholder, .list-filter-bar input::placeholder { color: var(--app-text-secondary); opacity: 1; }
 
 @media (min-width: 768px) and (max-width: 1280px) {
   .list-filter-bar { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .list-filter-bar .list-filter-reset { justify-self: end; }
 }
+@media (min-width: 1024px) {
+  .app-shell :is(.research-test-filter, .production-order-filter, .quotation-filter, .quality-filter-card).ant-card > .ant-card-body { display: block; padding: 0; }
+  .app-shell .desktop-list-filters { width: 100%; border-radius: var(--app-radius-card); background: var(--app-surface); }
+  .app-shell .list-filter-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 16px 20px; }
+  .app-shell .list-filter-search { flex: 1 1 240px; max-width: 360px; }
+  .app-shell .list-filter-field { flex: 0 1 160px; min-width: 144px; }
+  .app-shell .list-filter-field[data-wide='true'] { flex-basis: 264px; min-width: 248px; }
+  .app-shell .list-filter-field[data-advanced='true'] { display: none; }
+  .app-shell .list-filter-bar[data-expanded='true'] .list-filter-field[data-advanced='true'] { display: block; }
+  .app-shell .list-filter-tail { display: flex; flex: 0 0 auto; order: 2; align-items: center; gap: 8px; }
+  .app-shell .list-filter-bar[data-has-advanced='true'] .list-filter-toggle { display: inline-flex; flex: 0 0 auto; }
+  .app-shell .list-filter-toggle-mobile { display: none; }
+  .app-shell .list-filter-toggle-desktop { display: inline; }
+  .app-shell .list-filter-reset, .app-shell .list-filter-actions { order: 3; }
+  .app-shell .list-filter-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+  .app-shell .list-filter-bar :is(.ant-input-affix-wrapper, .ant-picker, .ant-select, .ant-btn) { height: 36px; min-height: 36px; }
+  .app-shell .list-filter-field > :is(.ant-select, .ant-picker), .app-shell .list-filter-search > :is(.ant-input-affix-wrapper, .ant-input-group-wrapper) { width: 100% !important; }
+  .app-shell .list-filter-bar :is(.ant-input-affix-wrapper, .ant-picker), .app-shell .list-filter-bar .ant-select-outlined .ant-select-selector { border-color: var(--app-border); background: var(--app-surface); box-shadow: none; }
+  .app-shell .list-filter-bar :is(.ant-input-affix-wrapper, .ant-picker):focus-within { border-color: var(--app-focus-border); box-shadow: var(--app-focus-ring); }
+  .app-shell .list-filter-bar .list-filter-summary { display: flex; order: 4; flex: 1 0 100%; gap: 12px; align-items: center; color: var(--app-text-secondary); font-size: 12px; }
+  .app-shell .list-filter-summary > span { min-width: 0; overflow-wrap: anywhere; }
+  .app-shell .list-filter-summary > .ant-btn { height: 24px; min-height: 24px; font-size: 12px; }
+  .app-shell .list-filter-summary { display: none; }
+}
 @media (max-width: 767px) {
   .list-filter-bar { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 14px; }
   .list-filter-bar > .list-filter-toggle { display: inline-flex; min-height: 44px; padding-inline: 12px; color: var(--app-text-secondary); }
-  .list-filter-bar[data-expanded='true'] > .list-filter-toggle { color: var(--app-primary); border-color: var(--app-primary); }
+  .list-filter-bar[data-expanded='true'] > .list-filter-toggle { color: var(--app-text); border-color: var(--app-primary); }
   .list-filter-bar .list-filter-search .ant-input-affix-wrapper { min-height: 44px; }
   .list-filter-bar .list-filter-fields { display: none; }
   .list-filter-bar[data-expanded='true'] .list-filter-fields { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 12px; align-items: end; }

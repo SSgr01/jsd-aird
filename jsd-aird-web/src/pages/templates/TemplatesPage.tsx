@@ -1,3 +1,5 @@
+import { DesktopListFilters } from '@/components/list-controls/DesktopListFilters';
+import { ListEmptyState } from '@/components/list-controls/ListEmptyState';
 import { StatusTag } from '@/components/status/StatusTag';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import {
@@ -16,7 +18,7 @@ import {
   StopOutlined,
 } from '@ant-design/icons';
 import {
-  App, Button, DatePicker, Dropdown, Empty, Form, Input, Modal, Radio,
+  App, Button, DatePicker, Dropdown, Form, Input, Modal, Radio,
   Select, Space, Table, Typography,
 } from 'antd';
 import type { TableColumnsType, TablePaginationConfig } from 'antd';
@@ -366,7 +368,7 @@ export function TemplatesPage() {
       countLabel="个模板" />
 
     <CatalogListPanel title="模板列表" count={total} countLabel="个模板"
-      filters={<Space wrap size={10}>
+      filters={<DesktopListFilters labels={["模板分类","文件格式","模板状态","创建人","更新时间"]} advancedAfter={2}><Space wrap size={10}>
         <Input allowClear prefix={<SearchOutlined />} placeholder="搜索模板名称" value={keyword}
           onChange={(event) => applySearch(event.target.value)} style={{ width: 230 }} />
         <Select allowClear placeholder="全部分类" value={uncategorized ? 'UNCATEGORIZED' : categoryId} onChange={(value) => changeFilter(() => { setUncategorized(value === 'UNCATEGORIZED'); setCategoryId(value === 'UNCATEGORIZED' ? undefined : value); })} options={[...categoryItems.map((item) => ({ value: item.id, label: item.name })), { value: 'UNCATEGORIZED', label: '未分类' }]} style={{ width: 150 }} />
@@ -375,7 +377,7 @@ export function TemplatesPage() {
         <Select allowClear placeholder="创建人" value={createdBy} onChange={(value) => changeFilter(() => setCreatedBy(value))} options={creatorOptions.map((item) => ({ value: item.id, label: item.displayName }))} style={{ width: 140 }} />
         <RangePicker value={updatedRange} onChange={(values) => changeFilter(() => setUpdatedRange(values ? [values[0]!, values[1]!] : null))} />
         <Button icon={<RedoOutlined />} onClick={resetFilters}>重置</Button>
-      </Space>}
+      </Space></DesktopListFilters>}
       actions={<>
         <Typography.Text type="secondary">已选 {selected.length} 个模板</Typography.Text>
         {selected.length > 0 && <>
@@ -388,7 +390,7 @@ export function TemplatesPage() {
       </>}
     >
       <Table className="catalog-template-table" rowKey="templateId" loading={loading} dataSource={items}
-        scroll={{ x: 980 }} locale={{ emptyText: <Empty description="暂无模板" /> }} pagination={tablePagination}
+        scroll={{ x: 980 }} locale={{ emptyText: <ListEmptyState filtered={Boolean(keyword || categoryId || uncategorized || format || status || createdBy || updatedRange)} onReset={resetFilters} description={keyword || categoryId || uncategorized || format || status || createdBy || updatedRange ? '没有符合筛选条件的模板' : '暂无模板'} /> }} pagination={tablePagination}
         rowSelection={{ selectedRowKeys: Object.keys(selectedRecords), preserveSelectedRowKeys: true,
           onChange: (keys, rows) => setSelectedRecords((current) => {
             const next = { ...current }; const currentPageIds = new Set(items.map((item) => item.templateId));

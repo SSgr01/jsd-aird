@@ -34,14 +34,14 @@
 }
 
 .quality-page.pm-unified-list-page .quality-tab:hover {
-  color: var(--app-primary);
+  color: var(--app-text);
   background: var(--app-primary-soft);
 }
 
 .quality-page.pm-unified-list-page .quality-tab.active {
   border: 0;
   background: var(--app-primary-soft);
-  color: var(--app-primary);
+  color: var(--app-text);
   box-shadow:var(--app-shadow);
 }
 
@@ -55,6 +55,11 @@
 
 .quality-page.pm-unified-list-page .quality-filter-card .ant-card-body {
   padding: 14px;
+}
+
+@media (min-width: 1024px) {
+  .app-shell .quality-page.pm-unified-list-page .quality-filter-card .ant-card-body { padding: 0; }
+  .app-shell .quality-record-list-card[data-empty='true'] .quality-grid-wrap { min-height: 0; }
 }
 
 .quality-page.pm-unified-list-page .quality-filter-space {
@@ -299,7 +304,7 @@
   cursor: pointer;
 }
 .quality-drop strong {
-  color: var(--app-primary);
+  color: var(--app-text);
 }
 .quality-preview {
   min-height: 112px;
@@ -346,7 +351,7 @@
   cursor: pointer;
 }
 .quality-tab.active {
-  color: var(--app-primary);
+  color: var(--app-text);
   border-bottom: 2px solid var(--app-primary);
 }
 .quality-categories {
@@ -381,7 +386,7 @@
   margin-right: 14px;
   border-radius: 10px;
   background: var(--app-primary-soft);
-  color: var(--app-primary);
+  color: var(--app-text);
   font-size: 22px;
   place-items: center;
 }
@@ -428,7 +433,7 @@
 .quality-category-actions {
   display: flex;
   gap: 10px;
-  color: var(--app-primary);
+  color: var(--app-text);
   font-size: 12px;
   line-height: 18px;
 }
@@ -545,7 +550,7 @@
   height: auto;
   min-height: 0;
   padding: 0;
-  color: var(--app-primary, var(--app-primary));
+  color: var(--app-text);
   font-size: var(--app-font-size-label, 12px);
   line-height: 22px;
 }
@@ -622,7 +627,7 @@
   flex: 0 0 38px;
   border-radius: 8px;
   background: var(--app-primary-soft);
-  color: var(--app-primary);
+  color: var(--app-text);
   font-size: 18px;
   place-items: center;
 }
@@ -645,7 +650,7 @@
 .quality-record-card-name-link {
   height: auto;
   padding: 0;
-  color: var(--app-primary);
+  color: var(--app-text);
   font-weight: 600;
   line-height: 1.5;
 }
@@ -992,7 +997,7 @@
   place-items: center;
   border-radius: 8px;
   background: var(--app-primary-soft);
-  color: var(--app-primary);
+  color: var(--app-text);
   font-size: 16px;
   font-weight: 700;
 }
@@ -1298,7 +1303,7 @@
 }
 .production-file-icon {
   flex: 0 0 auto;
-  color: var(--app-primary);
+  color: var(--app-text);
   font-size: 24px;
 }
 .quality-single-workspace-grid {

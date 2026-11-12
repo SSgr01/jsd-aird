@@ -1,3 +1,5 @@
+import { DesktopListFilters } from '@/components/list-controls/DesktopListFilters';
+import { ListEmptyState } from '@/components/list-controls/ListEmptyState';
 import {
   DeleteOutlined,
   DownloadOutlined,
@@ -9,7 +11,6 @@ import {
   Button,
   Card,
   DatePicker,
-  Empty,
   Input,
   Popconfirm,
   Select,
@@ -236,7 +237,7 @@ export function QuotationListPage() {
       </header>
 
       <Card className="quotation-filter">
-        <Space wrap>
+        <DesktopListFilters labels={["客户","报价日期"]} advancedAfter={2}><Space wrap>
           <Input.Search
             allowClear
             placeholder="搜索报价编号/客户/产品"
@@ -271,7 +272,7 @@ export function QuotationListPage() {
           <Button className="pm-filter-reset" icon={<ReloadOutlined />} onClick={reset}>
             重置
           </Button>
-        </Space>
+        </Space></DesktopListFilters>
       </Card>
 
       <Table<QuotationSummary>
@@ -281,7 +282,7 @@ export function QuotationListPage() {
         dataSource={rows}
         columns={columns}
         scroll={{ x: 'max-content' }}
-        locale={{ emptyText: <Empty description="没有符合筛选条件的报价记录" /> }}
+        locale={{ emptyText: <ListEmptyState filtered={Boolean(keyword || selectedCustomer || dateFrom || dateTo)} onReset={reset} description={keyword || selectedCustomer || dateFrom || dateTo ? '没有符合筛选条件的报价记录' : '暂无报价记录'} /> }}
         pagination={{
           current: page,
           pageSize,

@@ -19,24 +19,24 @@
 }
 
 .pm-relation-path-project {
-  color: var(--app-text-primary, #1f2937);
+  color: var(--app-text-primary, var(--app-text));
   font-size: 13px;
   font-weight: 500;
 }
 
 .pm-relation-path-project.is-missing {
-  color: var(--app-text-tertiary, #98a2b3);
+  color: var(--app-text-tertiary, var(--app-text-secondary));
   font-weight: 400;
 }
 
 .pm-relation-path-sub {
-  color: var(--app-text-secondary, #667085);
+  color: var(--app-text-secondary, var(--app-text-secondary));
   font-size: 12px;
   font-weight: 400;
 }
 
 .pm-relation-path-empty {
-  color: var(--app-text-tertiary, #98a2b3);
+  color: var(--app-text-tertiary, var(--app-text-secondary));
   font-size: 13px;
   font-weight: 400;
 }

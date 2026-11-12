@@ -1,0 +1,71 @@
+.app-brand-mark { display: block; flex: none; }
+.app-location, .app-sidebar-profile { display: none; }
+
+/* Desktop composition only. The mobile drawer and editor dimensions stay owned
+   by ProLayout and the existing workspace rules. */
+@media (min-width: 1024px) {
+  .app-shell-framed {
+    min-height: calc(var(--app-viewport-height) - 40px);
+    margin: 20px;
+    border: 1px solid var(--app-border);
+    border-radius: 22px;
+    overflow: clip;
+    background: var(--app-surface);
+    box-shadow: var(--app-shadow-shell);
+  }
+  .app-shell-framed .ant-pro-layout-bg-list { inset: 21px; width: auto; height: auto; border-radius: 21px; background: var(--app-surface); }
+  .app-shell-framed .ant-pro-layout .ant-pro-sider {
+    top: 21px;
+    bottom: 21px;
+    inset-inline-start: 21px;
+    height: calc(var(--app-viewport-height) - 42px);
+    border-inline-end: 1px solid var(--app-border);
+    border-start-start-radius: 21px;
+    border-end-start-radius: 21px;
+  }
+  .app-shell-framed .ant-pro-sider .ant-pro-sider-logo {
+    height: 76px;
+    margin-inline: 18px;
+    gap: 0;
+  }
+  .app-shell-framed .ant-pro-sider .app-brand-title { margin-inline-start: 10px; font-size: 14px; }
+  .app-shell-framed .ant-pro-sider .ant-menu-root { padding-inline: 10px; }
+  .app-shell-framed .ant-pro-sider .ant-menu-submenu-selected > .ant-menu-submenu-title {
+    color: var(--app-text);
+    background: transparent;
+    font-weight: 500;
+  }
+  .app-shell-framed .ant-pro-sider .ant-menu-item-selected {
+    box-shadow: none;
+    background: var(--app-primary-soft);
+  }
+  .app-shell-framed .ant-pro-sider .ant-menu-item-selected::before { display: none; }
+  .app-shell-framed .app-topbar {
+    top: 21px;
+    right: 21px;
+    left: 277px;
+    justify-content: space-between;
+    padding-inline: 28px;
+    background: var(--app-surface);
+    border-start-end-radius: 21px;
+  }
+  .app-shell-framed.app-shell-sidebar-collapsed .app-topbar { left: 85px; }
+  .app-shell-framed .ant-pro-sider-collapsed .ant-menu-root { padding-inline: 0; }
+  .app-shell-framed .app-location { display: flex; align-items: center; gap: 12px; color: var(--app-text-secondary); font-size: 12px; }
+  .app-location strong { color: var(--app-text); font-weight: 500; }
+  .app-shell-framed .app-content:not(.app-content-workspace):not(.app-content-project-document-workspace):not(.app-content-knowledge-workbench) {
+    min-height: calc(var(--app-viewport-height) - 42px);
+    padding: 84px 28px 28px;
+  }
+  .app-shell-framed .app-command-search.ant-input-affix-wrapper { width: clamp(240px, 24vw, 340px); background: var(--app-surface-subtle); border-color: transparent; }
+  .app-shell-framed .app-command-search.ant-input-affix-wrapper:focus-within { border-color: var(--app-focus-border); background: var(--app-surface); }
+  .app-shell-framed .app-sidebar-profile { display: block; margin: 8px 8px 4px; padding: 12px 8px 4px; border-top: 1px solid var(--app-border); }
+  .app-shell-framed .app-user-trigger-profile { width: 100%; gap: 10px; padding: 8px; border-radius: 10px; text-align: start; }
+  .app-shell-framed .app-user-trigger-profile:hover { background: var(--app-surface-subtle); }
+  .app-sidebar-user-copy { display: grid; min-width: 0; gap: 2px; color: var(--app-text-secondary); font-size: 12px; }
+  .app-sidebar-user-copy strong { overflow: hidden; color: var(--app-text); font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+  .app-shell-sidebar-collapsed .app-sidebar-user-copy { display: none; }
+  .app-shell-sidebar-collapsed .app-sidebar-profile { margin-inline: 0; padding-inline: 0; }
+  .app-shell-sidebar-collapsed .app-user-trigger-profile { justify-content: center; }
+  .app-shell-framed .app-topbar .app-user-trigger { display: none; }
+}

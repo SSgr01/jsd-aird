@@ -23,7 +23,7 @@
 .research-briefing-primary { background: var(--app-text); color: var(--app-surface); border-radius: var(--app-radius-control); padding: 8px 14px; transition: opacity .15s ease; }
 .research-briefing-primary:hover { opacity: .85; color: var(--app-surface); }
 .research-briefing-link { color: var(--app-text); }
-.research-briefing-link:hover, .research-briefing-actions a:hover { color: var(--app-primary); text-decoration: underline; text-underline-offset: 4px; }
+.research-briefing-link:hover, .research-briefing-actions a:hover { color: var(--app-text); text-decoration: underline; text-underline-offset: 4px; }
 .research-briefing a:focus-visible { outline: 2px solid var(--app-primary); outline-offset: 4px; }
 .research-briefings-loading, .research-briefings-error { padding: 24px; background: var(--app-surface-subtle); border-radius: var(--app-radius-card); }
 .research-briefings-error { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; color: var(--app-text-secondary); }
@@ -34,7 +34,7 @@
 }
 @media (max-width: 580px) {
   .research-briefings-heading { align-items: flex-start; }
-  .research-briefings-heading > span { padding-top: 3px; white-space: nowrap; font-size: 11px; }
+  .research-briefings-heading > span { padding-top: 3px; white-space: nowrap; font-size: 12px; }
   .research-briefings-heading h2 { font-size: 16px; }
   .research-briefing, .research-briefing-main { padding: 18px; }
   .research-briefing-main h3 { font-size: 19px; }

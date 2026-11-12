@@ -79,7 +79,7 @@
 .recognition-mapping-list small,
 .recognition-fragment-list small {
   color: var(--app-text-secondary);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .recognition-field-editor {

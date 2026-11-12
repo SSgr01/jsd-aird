@@ -3,7 +3,7 @@
   margin: 0 auto;
   padding: 24px;
   background: #fff;
-  border: 1px solid #dbe5f4;
+  border: 1px solid var(--app-border);
   border-radius: 12px;
 }
 
@@ -26,16 +26,16 @@
   padding: 14px 16px;
   color: inherit;
   text-align: left;
-  background: #fafcff;
-  border: 1px solid #dbe5f4;
+  background: var(--app-surface-subtle);
+  border: 1px solid var(--app-border);
   border-radius: 10px;
   cursor: pointer;
 }
 
 .version-history-card:hover,
 .version-history-card:focus-visible {
-  border-color: #3974ef;
-  background: #f4f8ff;
+  border-color: var(--app-primary);
+  background: var(--app-primary-soft);
   outline: none;
 }
 
@@ -46,8 +46,8 @@
   width: 42px;
   height: 42px;
   border-radius: 50%;
-  background: #e7efff;
-  color: #2f66e8;
+  background: var(--app-primary-soft);
+  color: var(--app-text);
   font-weight: 700;
 }
 
@@ -58,7 +58,7 @@
 .version-history-meta small {
   display: block;
   margin-top: 4px;
-  color: #8796ad;
+  color: var(--app-text-secondary);
 }
 
 @media (max-width: 700px) {

@@ -121,25 +121,62 @@ body[data-jsd-workbench] {
   --dsh-font-family-text-default: 'Noto Sans SC Variable', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif;
   --dsw-font-family-brand: var(--dsw-font-family);
   --dsw-radius-panel: 20px;
-  --jsd-focus: #45424a;
-  --jsd-composer-shadow: rgb(76 48 65 / 5%);
-  /* The wash follows the explicitly requested UI-opz / SETO brand reference. */
+  --jsd-focus: #315f91;
+  --jsd-action: #d1eaf9;
+  --jsd-action-hover: #c7e7f4;
+  --jsd-action-active: #b5e1eb;
+  --jsd-on-action: #000000;
+  --jsd-composer-shadow: rgb(54 91 122 / 4%);
+  /* The Arctic wash belongs to the empty welcome canvas, not message content. */
   --jsd-workspace-wash:
-    radial-gradient(ellipse 70% 68% at 54% 3%, rgb(221 207 238 / 22%), transparent 80%),
-    radial-gradient(ellipse 100% 78% at 0% 100%, rgb(247 206 176 / 34%), transparent 76%),
-    radial-gradient(ellipse 105% 72% at 100% 100%, rgb(238 198 213 / 30%), transparent 78%);
+    radial-gradient(ellipse 70% 68% at 54% 3%, rgb(221 238 255 / 48%), transparent 80%),
+    radial-gradient(ellipse 100% 78% at 0% 100%, rgb(181 225 235 / 24%), transparent 76%);
 }
 
 body[data-jsd-workbench][data-ds-dark-theme] {
-  --jsd-focus: #d5cddc;
+  --jsd-focus: #b5e1eb;
+  --jsd-action: #b5e1eb;
+  --jsd-action-hover: #d1eaf9;
+  --jsd-action-active: #c7e7f4;
+  --jsd-on-action: #000000;
   --jsd-composer-shadow: rgb(0 0 0 / 18%);
   --jsd-workspace-wash:
-    radial-gradient(ellipse 70% 68% at 54% 3%, rgb(128 100 148 / 10%), transparent 80%),
-    radial-gradient(ellipse 100% 78% at 0% 100%, rgb(147 107 87 / 10%), transparent 76%);
+    radial-gradient(ellipse 70% 68% at 54% 3%, rgb(138 173 196 / 10%), transparent 80%),
+    radial-gradient(ellipse 100% 78% at 0% 100%, rgb(181 225 235 / 8%), transparent 76%);
 }
 
 body[data-jsd-workbench] [data-conversation-content] {
   background-image: var(--jsd-workspace-wash);
+}
+
+body[data-jsd-workbench] [data-conversation-content]:has([data-chat-flow-kind]) {
+  background-image: none;
+}
+
+/* Strong state marks retain inverse ink. A pale primary-button foreground must
+   not turn a checked switch thumb or a completed step into blue on blue. */
+body[data-jsd-workbench] :is([role='switch'], [role='checkbox']) {
+  --dsw-alias-label-primary-foreground: var(--dsw-alias-label-primary-inverted);
+}
+body[data-jsd-workbench] span[data-state='done'][aria-hidden='true']:has(> svg) {
+  color: var(--dsw-alias-label-primary-inverted);
+}
+
+/* Native send/stop controls have fixed white glyphs upstream. Match only their
+   public composer/ARIA contract, never generated CSS-module class names. */
+body[data-jsd-workbench] [data-composer-card] button:not([aria-expanded]):is([aria-busy], :has(> svg > rect[width='10'][height='10'])),
+body[data-jsd-workbench] .jsd-continue-action {
+  color: var(--jsd-on-action);
+  background: var(--jsd-action);
+  box-shadow: none;
+}
+body[data-jsd-workbench] [data-composer-card] button:not([aria-expanded]):is([aria-busy], :has(> svg > rect[width='10'][height='10'])):hover:not(:disabled),
+body[data-jsd-workbench] .jsd-continue-action:hover:not(:disabled) {
+  background: var(--jsd-action-hover);
+}
+body[data-jsd-workbench] [data-composer-card] button:not([aria-expanded]):is([aria-busy], :has(> svg > rect[width='10'][height='10'])):active:not(:disabled),
+body[data-jsd-workbench] .jsd-continue-action:active:not(:disabled) {
+  background: var(--jsd-action-active);
 }
 
 body[data-jsd-workbench] [data-composer-card] {
@@ -159,6 +196,7 @@ body[data-jsd-workbench] [data-composer-card]:focus-within {
 }
 
 .jsd-brand-mark img { display: block; }
+.jsd-welcome-description { display: none; }
 .jsd-business-tool .jsd-tool-header {
   flex: 1;
   min-width: 0;
@@ -307,16 +345,61 @@ body[data-jsd-workbench] [data-composer-card]:has(.jsd-continue-action) button[a
   border: 0;
   border-radius: 999px;
   corner-shape: round;
-  background: var(--dsw-alias-button-info-fill);
-  color: #fff;
+  background: var(--jsd-action);
+  color: var(--jsd-on-action);
   cursor: pointer;
 }
 .jsd-continue-action > svg:not(.jsd-continue-spinner) { transform: scale(1.5); }
-.jsd-continue-action:hover:not(:disabled) { background: var(--dsw-alias-button-info-hover); }
+.jsd-continue-action:hover:not(:disabled) { background: var(--jsd-action-hover); }
 .jsd-continue-action:disabled { opacity: .4; cursor: default; }
 .jsd-continue-action[aria-busy='true']:disabled { opacity: 1; cursor: progress; }
 .jsd-continue-spinner { animation: jsd-continue-spin 800ms linear infinite; }
 @keyframes jsd-continue-spin { to { transform: rotate(360deg); } }
+
+/* Group the empty welcome and input in the native composer's slots.
+   Keep the input mounted and keep active conversations under native geometry.
+   Public slot/data attributes are used instead of generated CSS-module names. */
+@media (min-width: 1024px) {
+  body[data-jsd-workbench] { padding: 20px; box-sizing: border-box; background: var(--dsw-alias-bg-base); }
+  body[data-jsd-workbench] #root {
+    box-sizing: border-box;
+    height: calc(100dvh - 40px);
+    min-height: 0;
+    overflow: hidden;
+    border: 1px solid var(--dsw-alias-border-l1);
+    border-radius: 22px;
+    box-shadow: 0 18px 60px var(--jsd-composer-shadow), 0 2px 8px var(--jsd-composer-shadow);
+  }
+  body[data-jsd-workbench] #root > div { height: 100%; min-height: 0; }
+  body[data-jsd-workbench] [data-conversation-content] { background-color: var(--dsw-alias-bg-layer-1); }
+  body[data-jsd-workbench] [data-content-phase='hero'] { --dsh-composer-card-max-width: 700px; }
+  body[data-jsd-workbench] [data-content-phase='hero'] [data-conversation-scroll] { justify-content: flex-start; }
+  body[data-jsd-workbench] [data-content-phase='hero'] [data-composer-seat] { flex: 1; }
+  body[data-jsd-workbench] [data-content-phase='hero'] [data-chain-overlay-fallback='conversation.composer'] > div {
+    flex: 1;
+    min-height: 580px;
+    justify-content: center;
+    padding: 20px 0 32px;
+  }
+  body[data-jsd-workbench] [data-content-phase='hero'] [data-chain-overlay-fallback='conversation.composer'] > div > div:has([data-slot='conversation.hero.brand.mark']) {
+    height: auto;
+    flex: none;
+    margin: 0;
+  }
+  body[data-jsd-workbench] [data-content-phase='hero'] [data-chain-overlay-fallback='conversation.composer'] > div:has(.jsd-starters) > div:has([data-slot='conversation.hero.brand.mark']) { margin-bottom: 16px; }
+  body[data-jsd-workbench] div:has(> span > [data-slot='conversation.hero.brand.mark']) { flex-direction: column; gap: 24px; font-size: 24px; line-height: 34px; font-weight: 600; }
+  body[data-jsd-workbench] .jsd-hero-mark { padding: 12px; border-radius: 24px; background: var(--dsw-alias-bg-layer-1); box-shadow: 0 8px 32px var(--jsd-composer-shadow); }
+  body[data-jsd-workbench] .jsd-hero-mark img { width: 48px; height: 48px; }
+  body[data-jsd-workbench] .jsd-starters { flex: none; margin-block: 0 16px; padding-bottom: 0; gap: 12px; }
+  .jsd-starters .jsd-welcome-description { display: block; grid-column: 1 / -1; margin: -4px 0 20px; color: var(--dsw-alias-label-secondary); font-size: 14px; line-height: 24px; text-align: center; }
+  body[data-jsd-workbench] .jsd-starters button { gap: 8px; min-height: 126px; padding: 18px; border-color: var(--dsw-alias-border-l1); border-radius: 14px; box-shadow: 0 3px 14px var(--jsd-composer-shadow); }
+  body[data-jsd-workbench] .jsd-starters button:hover:not(:disabled) { border-color: var(--dsw-alias-border-l4); background: var(--dsw-alias-bg-layer-1); box-shadow: 0 6px 24px var(--jsd-composer-shadow); }
+  .jsd-starters .jsd-starter-art { width: 30px; height: 30px; margin-bottom: 4px; }
+  body[data-jsd-workbench] [data-composer-card] { border-radius: 16px; }
+  body[data-jsd-workbench] [data-slot='sidebar.brand.mark'] .jsd-brand-mark { margin-inline-end: 8px; }
+  body[data-jsd-workbench] .jsd-brand-name { font-size: 14px; }
+  body[data-jsd-workbench] .jsd-page-title { font-size: 14px; font-weight: 500; color: var(--dsw-alias-label-secondary); }
+}
 
 @media (max-width: 767px) {
   .jsd-starters { grid-template-columns: minmax(0, 1fr); gap: 8px; margin-block: 6px; }

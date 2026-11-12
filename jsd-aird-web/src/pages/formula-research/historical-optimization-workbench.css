@@ -29,7 +29,7 @@
 }
 
 .historical-eyebrow {
-  color: var(--app-primary);
+  color: var(--app-text);
   font-size: 12px;
   font-weight: 600;
   letter-spacing: .035em;

@@ -15,7 +15,7 @@
   white-space: nowrap;
   vertical-align: middle;
 }
-.app-shell .app-status-tag.is-active { color: var(--app-primary); background: var(--app-primary-soft); }
+.app-shell .app-status-tag.is-active { color: var(--app-text); background: var(--app-primary-soft); }
 .app-shell .app-status-tag.is-success { color: var(--app-success); background: var(--app-success-soft); }
 .app-shell .app-status-tag.is-warning { color: var(--app-warning); background: var(--app-warning-soft); }
 .app-shell .app-status-tag.is-danger { color: var(--app-danger); background: var(--app-danger-soft); }

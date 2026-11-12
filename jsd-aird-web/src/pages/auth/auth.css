@@ -13,7 +13,7 @@
   width: 54px;
   height: 54px;
   place-items: center;
-  color: var(--app-primary);
+  color: var(--app-text);
   font-size: 27px;
   background: transparent;
 }
@@ -41,9 +41,9 @@
 .auth-card-heading {
   margin-bottom: 22px;
 }
-.auth-card-heading h3 {
+.auth-card-heading :is(h1, h3) {
   margin: 0 0 4px !important;
-  font-size: 20px;
+  font-size: var(--app-font-size-title);
   font-weight: 600;
 }
 .auth-submit {
@@ -54,4 +54,37 @@
   min-height: 100dvh;
   place-items: center;
   background: var(--app-background);
+}
+
+.auth-product-brand { display: none; }
+
+@media (min-width: 1024px) {
+  .auth-page {
+    gap: 20px;
+    background-image:
+      radial-gradient(ellipse 38% 48% at 42% 38%, rgb(221 238 255 / 65%), transparent 85%),
+      radial-gradient(ellipse 32% 40% at 67% 70%, rgb(181 225 235 / 28%), transparent 85%);
+  }
+  .auth-page .auth-card {
+    width: 444px;
+    margin-top: 0;
+    border: 1px solid var(--app-border);
+    border-radius: 20px !important;
+    box-shadow: var(--app-shadow-shell);
+  }
+  .auth-page .auth-card .ant-card-body { padding: 36px; }
+  .auth-product-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 36px; }
+  .auth-product-brand > div { display: grid; gap: 4px; }
+  .auth-product-brand strong { color: var(--app-text); font-size: 14px; font-weight: 600; }
+  .auth-product-brand span { color: var(--app-text-secondary); font-size: 12px; }
+  .auth-page .auth-card-heading { margin-bottom: 28px; }
+  .auth-page .auth-card-heading h1 { margin-bottom: 8px !important; line-height: 1.4; }
+  .auth-page .auth-card-heading > .ant-typography-secondary { font-size: 14px; }
+  .auth-page .auth-card .ant-form-item { margin-bottom: 22px; }
+  .auth-page .auth-card .ant-form-item-label > label { font-size: 14px; font-weight: 500; }
+  .auth-page .auth-card .ant-input-affix-wrapper { min-height: 46px; padding-inline: 14px; border-radius: 10px; border-color: var(--app-border-strong); background: var(--app-surface-subtle); }
+  .auth-page .auth-card .ant-input-affix-wrapper:focus-within { background: var(--app-surface); border-color: var(--app-focus-border); }
+  .auth-page .auth-card .ant-input-prefix { margin-inline-end: 10px; color: var(--app-text-secondary); }
+  .auth-page .auth-submit { height: 46px; margin-top: 24px; border-radius: 10px; font-size: 14px; font-weight: 500; }
+  .auth-page .auth-footer { font-size: 12px; }
 }

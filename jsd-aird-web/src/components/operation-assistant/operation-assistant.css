@@ -11,19 +11,19 @@
   height: 48px;
   padding: 0;
   border-radius: 50%;
-  border: 1px solid var(--oa-text);
-  background: var(--oa-text);
-  color: var(--oa-surface);
+  border: 1px solid var(--app-action);
+  background: var(--app-action);
+  color: var(--app-on-action);
   font-weight: 600;
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--oa-text) 12%, transparent);
+  box-shadow: none;
   transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
   cursor: grab;
   touch-action: none;
 }
 .operation-assistant-launcher.ant-btn:not(:disabled):is(:hover, :focus-visible, :active) {
-  border-color: var(--oa-muted);
-  background: var(--oa-muted);
-  color: var(--oa-surface);
+  border-color: var(--app-action-hover);
+  background: var(--app-action-hover);
+  color: var(--app-on-action);
 }
 .operation-assistant-root.is-dragging,
 .operation-assistant-root.is-dragging * {
@@ -298,7 +298,7 @@
 }
 .operation-assistant-request-id code {
   color: inherit;
-  font-size: 11px;
+  font-size: 12px;
 }
 .operation-assistant-failure .ant-btn {
   margin: 5px 0 0 -7px;
@@ -327,7 +327,7 @@
 }
 .operation-assistant-composer-footer > span {
   color: var(--oa-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .operation-assistant-composer-footer .ant-btn {
   height: 32px;

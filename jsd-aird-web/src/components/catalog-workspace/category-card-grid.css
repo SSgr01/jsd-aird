@@ -1,0 +1,22 @@
+/* Compact classification is a desktop filter; smaller screens retain the existing cards. */
+@media (min-width: 1024px) {
+  .app-shell .catalog-category-grid[data-variant='compact'] { display: flex; flex-wrap: wrap; gap: 8px; padding: 0; overflow: visible; }
+  .app-shell .catalog-category-grid[data-variant='compact'] .catalog-category-card { flex: 0 1 auto; min-width: 0; max-width: 100%; min-height: 40px; border: 1px solid var(--app-border); border-radius: var(--app-radius-control); background: var(--app-surface); box-shadow: none; transform: none; }
+  .app-shell .catalog-category-grid[data-variant='compact'] .catalog-category-card:hover { border-color: var(--app-border-strong); background: var(--app-surface-subtle); box-shadow: none; transform: none; }
+  .app-shell .catalog-category-grid[data-variant='compact'] .catalog-category-card.is-active { border-color: var(--app-border-strong); background: var(--app-primary-soft); }
+  .app-shell .catalog-category-grid[data-variant='compact'] .ant-card-body { min-height: 38px; padding: 0; gap: 0; align-items: center; }
+  .app-shell .catalog-category-grid[data-variant='compact'] .catalog-category-select { min-height: 38px; align-items: center; padding: 8px 12px; }
+  .app-shell .catalog-category-grid[data-variant='compact'] .catalog-category-copy { display: flex; align-items: center; gap: 10px; }
+  .app-shell .catalog-category-grid[data-variant='compact'] .catalog-category-copy h4 { max-width: 240px; margin: 0; padding: 0; overflow: hidden; color: var(--app-text-secondary); font-size: 14px; font-weight: 500; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+  .app-shell .catalog-category-grid[data-variant='compact'] .is-active h4 { color: var(--app-text); font-weight: 600; }
+  .app-shell .catalog-category-grid[data-variant='compact'] :is(.catalog-category-icon, .catalog-category-description, .catalog-category-active-mark, .catalog-category-count-label, .catalog-category-add .ant-typography-secondary) { display: none; }
+  .app-shell .catalog-category-grid[data-variant='compact'] .catalog-category-count { color: var(--app-text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; line-height: 20px; }
+  .app-shell .catalog-category-grid[data-variant='compact'] .catalog-category-count strong { font-weight: 500; }
+  .app-shell .catalog-category-grid[data-variant='compact'] .catalog-category-actions { position: static; margin-right: 6px; opacity: 1; }
+  .app-shell .catalog-category-grid[data-variant='compact'] .catalog-category-actions .ant-btn { width: 28px; height: 28px; color: var(--app-text-secondary); }
+  .app-shell .catalog-category-grid[data-variant='compact'] .catalog-category-actions .ant-btn-dangerous { color: var(--app-danger); }
+  .app-shell .catalog-category-grid[data-variant='compact'] .catalog-category-add { border-style: dashed; }
+  .app-shell .catalog-category-grid[data-variant='compact'] .catalog-category-add .ant-card-body { flex-direction: row; gap: 6px; padding: 8px 12px; }
+  .app-shell .catalog-category-grid[data-variant='compact'] .catalog-category-add-icon { width: auto; height: auto; margin: 0; color: var(--app-text-secondary); background: transparent; font-size: 14px; }
+  .app-shell .catalog-category-grid[data-variant='compact'] .catalog-category-add h4 { margin: 0 !important; color: var(--app-text-secondary); font-size: 14px; font-weight: 500; }
+}

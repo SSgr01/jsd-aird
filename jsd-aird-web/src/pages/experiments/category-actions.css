@@ -22,7 +22,7 @@
   position: static;
   display: flex;
   gap: 10px;
-  color: #2563eb;
+  color: var(--app-text);
   font-size: 12px;
   font-style: normal;
   line-height: 18px;
@@ -35,7 +35,7 @@
 }
 
 .eln-category-card .eln-category-footer em .danger {
-  color: #f04452;
+  color: var(--app-danger);
 }
 
 .eln-category-card .eln-category-footer .anticon {

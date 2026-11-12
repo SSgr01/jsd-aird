@@ -43,7 +43,7 @@
 }
 
 .modeling-workbench-steps button:disabled { cursor: not-allowed; opacity: .55; }
-.modeling-workbench-steps button.active { background: var(--app-surface-subtle); color: var(--app-primary); }
+.modeling-workbench-steps button.active { background: var(--app-surface-subtle); color: var(--app-text); }
 .modeling-workbench-steps button:focus-visible { outline: 2px solid var(--app-primary); outline-offset: 2px; }
 .workbench-step-number { display: grid; width: 26px; height: 26px; place-items: center; border: 1px solid var(--app-border); border-radius: 50%; background: var(--app-surface); color: var(--app-text-secondary); font-size: 12px; }
 .active .workbench-step-number { border-color: var(--app-primary); background: var(--app-primary); color: var(--app-surface); }
@@ -85,7 +85,7 @@
 .workbench-result-banner span { color: var(--app-text-secondary); font-size: 12px; }
 .workbench-result-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
 .workbench-result-summary > div { min-width: 0; padding: 12px 14px; border: 1px solid var(--app-border); border-radius: var(--app-radius-control); background: var(--app-surface-subtle); }
-.workbench-result-summary span { display: block; margin-bottom: 5px; color: var(--app-text-secondary); font-size: 11px; }
+.workbench-result-summary span { display: block; margin-bottom: 5px; color: var(--app-text-secondary); font-size: 12px; }
 .workbench-result-summary strong { display: block; overflow-wrap: anywhere; color: var(--app-text); font-size: 13px; }
 .workbench-metric-card { margin-top: 14px; }
 .workbench-result-error { display: grid; gap: 14px; max-width: 760px; margin: 30px auto; }

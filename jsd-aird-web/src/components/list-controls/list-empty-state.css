@@ -1,0 +1,7 @@
+@media (min-width: 1024px) {
+  .app-shell .list-empty-state.ant-empty { margin: 0; padding: 24px 16px; color: var(--app-text-secondary); }
+  .app-shell .list-empty-state .ant-empty-image { height: 32px; margin-bottom: 10px; }
+  .app-shell .list-empty-state .ant-empty-description { color: var(--app-text-secondary); font-size: 14px; line-height: 1.6; }
+  .app-shell .list-empty-state .ant-empty-footer { margin-top: 12px; }
+  .app-shell .list-empty-state .ant-btn { height: 36px; box-shadow: none; }
+}

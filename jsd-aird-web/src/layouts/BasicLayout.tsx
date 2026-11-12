@@ -33,6 +33,8 @@ import { App, Avatar, Button, Dropdown, Input, Modal, Result, Tooltip, Typograph
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSidebarAutoCollapse } from './use-sidebar-auto-collapse';
+import { BrandMark } from '@/components/brand/BrandMark';
+import './desktop-shell.css';
 
 import { ContentBoundary } from '@/components/loading/ContentBoundary';
 import { PrefetchLink } from '@/components/loading/PrefetchLink';
@@ -193,7 +195,7 @@ const route = {
   ],
 };
 
-function UserMenu() {
+function UserMenu({ profile = false }: { profile?: boolean }) {
   const navigate = useNavigate();
   const { message } = App.useApp();
   const [passwordOpen, setPasswordOpen] = useState(false);
@@ -236,7 +238,10 @@ function UserMenu() {
       {menu}
     </div>}
   >
-    <button type="button" className="app-user-trigger" aria-label="打开用户菜单"><Avatar size={34}>{initial}</Avatar></button>
+    <button type="button" className={`app-user-trigger${profile ? ' app-user-trigger-profile' : ''}`} aria-label="打开用户菜单">
+      <Avatar size={34}>{initial}</Avatar>
+      {profile && <span className="app-sidebar-user-copy"><strong>{user.displayName || user.username}</strong><span>{user.roleName || '个人工作空间'}</span></span>}
+    </button>
   </Dropdown>
     <Modal title="修改密码" open={passwordOpen} onCancel={() => { if (!submittingPassword) setPasswordOpen(false); }} footer={null} destroyOnHidden>
       <ChangePasswordForm onSubmit={submitPassword} submitting={submittingPassword} onCancel={() => setPasswordOpen(false)} />
@@ -299,7 +304,8 @@ export function BasicLayout() {
     && !['/quotations/list', '/quotations/upload'].includes(location.pathname);
   const isProjectDocumentWorkspace = /^\/projects\/[^/]+\/documents\/[^/]+$/.test(location.pathname);
   const isKnowledgeWorkbench = location.pathname.startsWith('/knowledge/review/') || location.pathname.startsWith('/knowledge/documents/');
-  const isPermissionManagement = location.pathname.startsWith('/system/user-permissions');
+  const isPermissionManagement = location.pathname.startsWith('/system/user-permissions')
+    || location.pathname.startsWith('/system/roles');
   const isWorkspace = isTemplateWorkspace || isExperimentWorkspace || isDataWorkspace || isQuotationWorkspace;
   const collapsed = useAppStore((state) => state.sidebarCollapsed);
   const setCollapsed = useAppStore((state) => state.setSidebarCollapsed);
@@ -316,17 +322,22 @@ export function BasicLayout() {
   const menuKeys = user?.menuKeys;
   const visibleRoute = useMemo(() => filterMenuRoute(route, permissions, menuKeys) ?? { path: '/', routes: [] }, [permissions, menuKeys]);
   const requiredPermission = requiredPermissionForPath(location.pathname);
+  const framed = !isWorkspace && !isProjectDocumentWorkspace && !isKnowledgeWorkbench && !isAssistant;
+  const section = route.routes.find(item => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`));
+  const currentPage = section && 'routes' in section ? section.routes?.find(item => item.path === location.pathname)?.name : undefined;
 
   return (
     <AuthGate>
-      <div className={`app-shell${layoutCollapsed ? ' app-shell-sidebar-collapsed' : ''}${isAssistant ? ' app-shell-assistant' : ''}${isPermissionManagement ? ' permission-management-shell' : ''}`}>
+      <div className={`app-shell${framed ? ' app-shell-framed' : ''}${layoutCollapsed ? ' app-shell-sidebar-collapsed' : ''}${isAssistant ? ' app-shell-assistant' : ''}${isPermissionManagement ? ' permission-management-shell' : ''}`}>
       <div className="app-topbar" aria-label="全局工具区">
+        <div className="app-location" aria-label="当前位置"><span>{section?.name || '研发工作空间'}</span>{currentPage && <><span aria-hidden="true">/</span><strong>{currentPage}</strong></>}</div>
         <AppHeaderTools permissions={permissions} menuKeys={menuKeys ?? []} />
       </div>
       <ProLayout
-        title={appEnv.title}
-        logo={<AppstoreOutlined />}
-        menuHeaderRender={(logo) => <>{logo}<span className="app-brand-title">{appEnv.title}</span></>}
+        title={appEnv.title || 'AI 研发平台'}
+        logo={<BrandMark />}
+        menuHeaderRender={(logo) => <>{logo}<span className="app-brand-title">{appEnv.title || 'AI 研发平台'}</span></>}
+        menuFooterRender={() => <div className="app-sidebar-profile"><UserMenu profile /></div>}
         route={visibleRoute}
         location={{ pathname: location.pathname }}
         selectedKeys={[location.pathname.startsWith('/assistant/model-center') ? '/assistant/model-center' : location.pathname]}

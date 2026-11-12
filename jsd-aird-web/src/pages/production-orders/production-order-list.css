@@ -72,7 +72,7 @@
   height: auto;
   min-height: 0;
   padding: 0;
-  color: var(--app-primary);
+  color: var(--app-text);
   font-size: var(--app-font-size-label);
   line-height: 22px;
 }
@@ -224,7 +224,7 @@
   flex: 0 0 38px;
   border-radius: 8px;
   background: var(--app-primary-soft, var(--app-primary-soft));
-  color: var(--app-primary);
+  color: var(--app-text);
   font-size: 18px;
   place-items: center;
 }
@@ -369,7 +369,7 @@
 }
 
 .production-order-relation-fields label {
-  color: #24344f;
+  color: var(--app-text);
   font-size: 14px;
   font-weight: 600;
 }
@@ -474,7 +474,7 @@
 }
 
 .production-order-choice-section > label i {
-  color: #e5484d;
+  color: var(--app-danger);
   font-style: normal;
 }
 
@@ -490,7 +490,7 @@
   align-items: center;
   min-height: 64px;
   padding: 12px;
-  border: 1px solid #d6e0ef;
+  border: 1px solid var(--app-border);
   border-radius: 9px;
   background: #fff;
   text-align: left;
@@ -498,7 +498,7 @@
 }
 
 .production-order-choice-section button.active {
-  border: 2px solid #678bff;
+  border: 2px solid var(--app-primary);
   background: var(--app-surface-subtle);
 }
 
@@ -509,7 +509,7 @@
   margin-right: 10px;
   border-radius: 8px;
   background: var(--app-primary-soft);
-  color: var(--app-primary);
+  color: var(--app-text);
   place-items: center;
 }
 
@@ -521,7 +521,7 @@
   display: block;
   margin-top: 3px;
   color: var(--app-text-secondary);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
 }
 

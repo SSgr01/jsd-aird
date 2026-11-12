@@ -42,7 +42,7 @@
 .formula-loading { display:flex; align-items:center; justify-content:center; gap:12px; min-height:95px; font-size:13px; color:var(--app-text-secondary); }
 .formula-input-notice,.formula-result-notice { margin-bottom:16px; }
 .formula-predicted-value { display:grid; gap:5px; }
-.formula-predicted-value > strong { color:var(--app-primary); font-weight:650; font-variant-numeric:tabular-nums; }
+.formula-predicted-value > strong { color:var(--app-text); font-weight:650; font-variant-numeric:tabular-nums; }
 .formula-predicted-value > small { font-size:12px; color:var(--app-text-secondary); }
 .formula-predicted-value > .formula-goal-met { color:var(--app-success); }
 .formula-predicted-value > .formula-field-error { color:var(--app-danger); margin-top:0; }

@@ -1,15 +1,15 @@
 .cm-bulk-bar{display:flex;align-items:center;justify-content:space-between;min-height:52px;padding:8px 14px;background:var(--app-surface);border:1px solid var(--app-border);border-radius:10px;color:var(--app-text-secondary);font-size:13px}
-.cm-company-mark{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;background:var(--app-primary-soft);color:var(--app-primary);font-weight:600}
+.cm-company-mark{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;background:var(--app-primary-soft);color:var(--app-text);font-weight:600}
 .cm-company-editor{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
 .cm-company-section{min-width:0}.cm-company-section .cm-section-title{min-height:44px;margin-bottom:4px}
 .cm-edit-row{display:grid;grid-template-columns:110px minmax(0,1fr);align-items:center;gap:12px;min-height:50px;padding:7px 0;border-bottom:1px solid var(--app-border);font-size:13px}
 .cm-edit-row>span{color:var(--app-text-secondary)}.cm-edit-row>strong{min-width:0;color:var(--app-text);font-weight:500;overflow-wrap:anywhere}
-.cm-edit-divider{display:flex;align-items:center;margin:14px 0 2px;color:var(--app-primary);font-size:12px;font-weight:600;letter-spacing:.5px}.cm-edit-divider::before{content:"";flex:1;height:1px;margin-right:10px;background:var(--app-border)}.cm-edit-empty{color:var(--app-text-secondary);font-size:12px;padding:6px 0}
+.cm-edit-divider{display:flex;align-items:center;margin:14px 0 2px;color:var(--app-text);font-size:12px;font-weight:600;letter-spacing:.5px}.cm-edit-divider::before{content:"";flex:1;height:1px;margin-right:10px;background:var(--app-border)}.cm-edit-empty{color:var(--app-text-secondary);font-size:12px;padding:6px 0}
 .cm-responsible-card .cm-edit-divider,.cm-project-card .cm-edit-divider{margin-top:10px}
 .cm-edit-row .ant-btn-dashed{width:100%;margin-top:8px}.cm-ext-key-input{max-width:110px}
 .cm-edit-row.cm-ext-new{grid-template-columns:120px minmax(0,1fr) auto;gap:8px}.cm-edit-row.cm-ext-new .cm-ext-key-input{max-width:none}
 .cm-responsible-head{display:flex;align-items:center;justify-content:space-between;min-height:44px;margin-bottom:4px}.cm-responsible-head h5{margin:0;font-size:15px}
-.cm-primary-badge{display:inline-flex;margin-left:6px;padding:2px 8px;border-radius:999px;background:var(--app-surface-subtle);color:var(--app-primary);font-size:12px}
+.cm-primary-badge{display:inline-flex;margin-left:6px;padding:2px 8px;border-radius:999px;background:var(--app-surface-subtle);color:var(--app-text);font-size:12px}
 .cm-responsible-cards{display:flex;flex-direction:column;gap:12px}
 .cm-responsible-card{border:1px solid var(--app-border);border-radius:8px;background:var(--app-surface);padding:12px 14px}
 .cm-responsible-card-editing{border-color:var(--app-border);background:var(--app-surface-subtle)}
@@ -17,7 +17,7 @@
 .cm-responsible-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid var(--app-row-rule);cursor:pointer}
 .cm-responsible-card-open .cm-responsible-card-head{cursor:pointer}
 .cm-responsible-card:not(.cm-responsible-card-open) .cm-responsible-card-head{border-bottom:none;margin-bottom:0;padding-bottom:0}
-.cm-responsible-card-caret{color:var(--app-primary);font-size:12px;font-weight:500;cursor:pointer;user-select:none}
+.cm-responsible-card-caret{color:var(--app-text);font-size:12px;font-weight:500;cursor:pointer;user-select:none}
 .cm-responsible-card-actions{cursor:default}
 .cm-responsible-card-name{display:flex;align-items:center;font-size:14px;font-weight:600;color:var(--app-text);flex-wrap:wrap}
 .cm-responsible-card-actions{flex:0 0 auto}
@@ -40,7 +40,7 @@
 .cm-communication-list .ant-table{font-size:13px}
 .cm-communication-list .ant-table-thead>tr>th{background:var(--app-surface-subtle);color:var(--app-text-secondary)}
 .cm-communication-list .ant-tag{margin:0}
-.cm-link-inline{margin-left:auto;color:var(--app-primary)}
+.cm-link-inline{margin-left:auto;color:var(--app-text)}
 .cm-project-card-name{font-size:14px;font-weight:600;color:var(--app-text)}
 .cm-project-card-meta{font-size:12px;color:var(--app-text-secondary);margin-bottom:8px}
 .cm-project-card-row{display:grid;grid-template-columns:88px minmax(0,1fr);gap:12px;padding:5px 0;font-size:13px}

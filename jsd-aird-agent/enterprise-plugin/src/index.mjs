@@ -21,6 +21,7 @@ import { StageTiming } from './stage-timing.mjs';
 import { readExecutionPolicy } from './read-policy.mjs';
 import { materializeBusinessDataset } from './business-dataset.mjs';
 import { installSessionLifecycle } from './session-lifecycle.mjs';
+import { installExperts } from './experts.mjs';
 import { installAdmission, inputSignature, previewTurnInput } from './admission.mjs';
 import { createUserMessage, createAssistantMessage, BlockAssembler } from '../../../vendor/deepseek-harness/packages/llm/llm/lib/index.js';
 
@@ -103,6 +104,7 @@ export async function apply(ctx) {
       trace_id:response?.headers?.get('x-jsd-trace-id'),server_timing:response?.headers?.get('server-timing')});
     }
   }
+  const expertActions = installExperts(ctx,{business,executionRoot});
   function enqueue(sessionId, operation) {
     const queuedAt=performance.now(), started_at_ms=Date.now();
     const next = (serial.get(sessionId) || Promise.resolve()).catch(() => {}).then(()=>{
@@ -570,11 +572,13 @@ export async function apply(ctx) {
     const denied = ctx.connection.requestRejection({ method: req.method, headers: req.headers });
     if (denied) { res.writeHead(denied); res.end(); return; }
     const action = new URL(req.url, 'http://local').pathname.slice('/business/'.length);
-    if (!['context','resource','inbox','run-state','run-diagnostics','run-cancel','run-retry','memory'].includes(action)) {res.writeHead(404);res.end();return;}
+    if (!['context','resource','inbox','run-state','run-diagnostics','run-cancel','run-retry','memory','experts'].includes(action)) {res.writeHead(404);res.end();return;}
     try {
       const body = await readBody(req);
       let value;
-      if (action === 'memory') {
+      if (action === 'experts') {
+        value = await expertActions(body);
+      } else if (action === 'memory') {
         // Browser callers cannot impersonate trusted lifecycle capture/validation.
         if (!['initialize','settings','set-settings','list','search','remember','correct','forget','status','source',
           'session-settings','set-session'].includes(body.action)) throw new Error('MEMORY_ACTION_DENIED');

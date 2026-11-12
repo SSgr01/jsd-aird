@@ -76,6 +76,9 @@ class JsdBindings(RuntimeBindings):
                 await self.sandbox.cancel(digest([run["id"], call["execution_epoch"], call["call_id"]])[:32])
 
     async def authorized_topic(self, principal, run, *, execution=True):
+        if run.get("expert") and execution:
+            from aird_agent.hosts.jsd.experts import resolve
+            await resolve(self.runtime, principal, run["expert"])
         if run.get("pack_versions"):
             if execution:
                 try:
@@ -342,7 +345,8 @@ class JsdBindings(RuntimeBindings):
         return run
 
     def instructions_for(self, run):
-        return CORE_INSTRUCTIONS
+        from aird_agent.hosts.jsd.experts import role_instructions
+        return CORE_INSTRUCTIONS + role_instructions(run.get("expert"))
 
     async def authorize_history(self, principal, conversation):
         await self.authorize_conversation(principal, conversation)
@@ -371,6 +375,11 @@ class JsdBindings(RuntimeBindings):
                     payload["research_requirements"].pop(option)
         if request.conversation_id:
             existing = await self.store.get(principal, "conversation", str(request.conversation_id))
+            if existing.get("expert"):
+                from aird_agent.hosts.jsd.experts import resolve
+                # Resolve the pinned revision, never silently adopt a newer role.
+                await resolve(self.runtime, principal, existing["expert"])
+                payload["expert"] = existing["expert"]
             if set(payload.get("private_source_ids", [])) - set(existing.get("private_source_ids") or []):
                 raise HTTPException(403, "PRIVATE_SOURCE_NOT_IN_CONVERSATION")
             # The conversation registers ownership, never default inputs or retrieval filters.

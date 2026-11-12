@@ -135,6 +135,22 @@ async def invoke(service, principal, run, name, args, call_id=None):
     return await service.tool(principal, run["id"], run["epoch"], call_id or str(uuid4()), name, args, native=name == "dsh_execute")
 
 
+async def test_shared_numeric_check_uses_authorized_ledger_and_rechecks_access_on_replay(setup, principal):
+    service, host, run, _ = setup
+    discovered = await invoke(service, principal, run, "tool_search", {"query": "quantity_check"})
+    assert "quantity_check" in discovered["activate_tools"]
+    args = {"operation": "convert", "actual": {"value": "0.52", "unit": "Pa·s"},
+            "target_unit": "mPa·s", "source": "user-file:row-2"}
+    result = await invoke(service, principal, run, "quantity_check", args, "decimal-check")
+    assert result["value"] == "520" and result["review_state"] == "DRAFT"
+    assert result["inputs"] == args and result["input_authority"] == "CALLER_SUPPLIED_NOT_VERIFIED"
+    assert await invoke(service, principal, run, "quantity_check", args, "decimal-check") == result
+    assert not any(action == "quantity_check" for action, _, _ in host.calls)
+    host.denied = True
+    with pytest.raises(HTTPException, match="TEST_ACCESS_REVOKED"):
+        await invoke(service, principal, run, "quantity_check", args, "decimal-check")
+
+
 @pytest.mark.parametrize('outcome', ['SUCCEEDED', 'FAILED', 'UNKNOWN'])
 async def test_native_continuation_queries_original_compute_receipt_without_replaying(setup, principal, store, outcome):
     from aird_agent.hosts.jsd.operations import reconcile_business_operations

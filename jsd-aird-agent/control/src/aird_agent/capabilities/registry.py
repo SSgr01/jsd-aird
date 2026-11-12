@@ -1,6 +1,7 @@
 """Platform-approved packs. No manifests or AGENTS instructions from user files."""
 
 
+from aird_agent.capabilities.business_checks import CHECK_HANDLERS, CHECK_TOOLS
 from aird_agent.capabilities.definitions import INTEGER, STRING, TOOLS, tool
 from aird_agent.capabilities.files.definitions import FILE_INSTRUCTIONS, FILE_TOOLS
 from aird_agent.core import CapabilityPack, CapabilityRegistry
@@ -57,7 +58,7 @@ def default_registry():
 
     registry = CapabilityRegistry()
     groups = {
-        "core": {"tool_search", "memory_search", "memory_manage"},
+        "core": {"tool_search", "memory_search", "memory_manage", *(item["name"] for item in CHECK_TOOLS)},
         "files": {item["name"] for item in FILE_TOOLS},
     }
     groups["literature"] = {item["name"] for item in TOOLS} - groups["core"] - groups["files"]
@@ -77,11 +78,11 @@ def default_registry():
         registry.register(
             CapabilityPack(
                 pid,
-                "4" if pid == "literature" else "2" if pid == "core" else "1",
+                "4" if pid == "literature" else "3" if pid == "core" else "1",
                 instructions,
-                tuple(item for item in (*TOOLS, *MEMORY_TOOLS) if item["name"] in names),
+                tuple(item for item in (*TOOLS, *MEMORY_TOOLS, *CHECK_TOOLS) if item["name"] in names),
                 initial,
-                handlers=MEMORY_HANDLERS if pid == "core" else {},
+                handlers={**MEMORY_HANDLERS, **CHECK_HANDLERS} if pid == "core" else {},
                 mutations=frozenset(
                     names
                     & {

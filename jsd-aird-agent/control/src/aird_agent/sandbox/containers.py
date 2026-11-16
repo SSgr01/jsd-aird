@@ -173,11 +173,19 @@ class ContainerPool:
                                        "--format", "{{.Names}}", timeout=self.settings.cleanup_seconds)
         if code:
             return
-        for name in output.decode().splitlines():
+        existing = set(output.decode().splitlines())
+        for name in existing:
             if name.startswith("jsd-analysis-") and name not in self.slots:
                 code, _, _ = await docker("rm", "--force", name, timeout=self.settings.cleanup_seconds)
-                if code == 0 and (slot := self.pending.pop(name, None)):
+                if code == 0 and (slot := self.pending.get(name)):
+                    slot.cleanup_complete = True
                     await self.remove_staging(slot)
+        # An external daemon cleanup can remove the container before this sweep.
+        # A missing name is authoritative only after the create CLI has exited.
+        for name, slot in list(self.pending.items()):
+            if name not in existing and (slot.process is None or slot.process.returncode is not None) and not slot.cleanup_complete:
+                slot.cleanup_complete = True
+                await self.remove_staging(slot)
 
     async def reap(self):
         while not self.closed:

@@ -373,7 +373,7 @@
   background: var(--app-composer-surface);
   border: 1px solid var(--app-composer-border);
   border-radius: 16px;
-  box-shadow: 0 2px 4px rgb(72 48 61 / 2%);
+  box-shadow: 0 2px 4px rgb(0 0 0 / 2%);
   max-width: var(--conversation-content-width);
   width: 100%;
   box-sizing: border-box;
@@ -515,7 +515,7 @@ body:has(.assistant-hub) .operation-assistant-launcher {
 }
 .conversation-starters button:hover {
   border-color: var(--app-border-strong);
-  box-shadow: 0 3px 12px rgb(64 40 60 / 5%);
+  box-shadow: 0 3px 12px rgb(0 0 0 / 5%);
 }
 .conversation-starters button:focus-visible {
   outline: 2px solid var(--app-focus-border);

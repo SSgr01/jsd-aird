@@ -2,6 +2,7 @@ import { lstat, mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promi
 import { lstatSync, realpathSync } from 'node:fs';
 import { relative, resolve, isAbsolute, sep, dirname, posix } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { FileSystem, FsError } from '../../../vendor/deepseek-harness/packages/fs/fs/lib/index.js';
 import { LocalFileSystem } from '../../../vendor/deepseek-harness/packages/fs/fs-local/lib/index.js';
 
@@ -18,11 +19,20 @@ export default class EnterpriseFileSystem extends FileSystem {
     this.root = realpathSync.native(this.configuredRoot);
     this.resourceRoot = process.env.JSD_DSH_OFFICE_SKILLS ? realpathSync.native(process.env.JSD_DSH_OFFICE_SKILLS) : undefined;
     this.attachmentPaths = new Map();
+    this.attachmentContext = new AsyncLocalStorage();
     this.local = new LocalFileSystem(ctx.isolate('fs'), {cwd:this.root,diffBasisMaxBytes:10*1024*1024});
   }
   get sandboxMode() {return 'workspace-write';}
   hostPath(path, cwd = this.root) {
     if (typeof path !== 'string' || !path || /[\x00-\x1f]/.test(path)) throw denied();
+    // Native file mentions render as @/workspaces/..., while read expects a
+    // path. Resolve that virtual absolute reference through the same boundary;
+    // a relative filename beginning with @ keeps its literal meaning.
+    if (path.startsWith('@'+worldRoot+'/')) path = path.slice(1);
+    // pwd/realpath inside the OCI image can return the target of /workspaces.
+    // It is an alias of this owner's virtual tree, never a host directory.
+    const sandboxRoot = '/work/scratch/native';
+    if (path === sandboxRoot || path.startsWith(sandboxRoot+'/')) path = worldRoot+path.slice(sandboxRoot.length);
     const resource = '/opt/dsh-skills/office';
     const map = value => {
       if (this.resourceRoot && (value === resource || value.startsWith(resource+'/')))
@@ -67,15 +77,37 @@ export default class EnterpriseFileSystem extends FileSystem {
     return posix.join(worldRoot,relative(this.root,path).split(sep).join('/'));
   }
   processPathFromHostPath(path) {
-    if (this.attachmentPaths.has(path)) return this.attachmentPaths.get(path);
+    const paths=this.attachmentPaths.get(path);
+    if(paths) {
+      const cwd=this.attachmentContext.getStore();
+      const scope=directory=>directory.match(/^\/workspaces\/tasks\/[^/]+\/[^/]+/)?.[0] ?? directory;
+      if(cwd)return [...paths.entries()].filter(([directory])=>scope(directory)===scope(cwd)).at(-1)?.[1];
+      // A shared attachment reference has no unique model path outside a
+      // request. Never let the most recent task redirect another task's input.
+      return paths.size===1 ? paths.values().next().value : undefined;
+    }
     try {return this.processPath({targetKey:this.hostPath(path)});} catch {return undefined;}
+  }
+  async * scopedAttachments(cwd, iterable) {
+    const iterator=iterable[Symbol.asyncIterator]();let complete=false;
+    try {
+      while(true) {
+        const item=await this.attachmentContext.run(cwd,()=>iterator.next());
+        if(item.done){complete=true;return;}
+        yield item.value;
+      }
+    } finally {
+      if(!complete && iterator.return)await this.attachmentContext.run(cwd,()=>iterator.return());
+    }
   }
   /** Copy exact native attachment bytes into the same sandbox-visible directory. */
   async exposeAttachment(ref, bytes, cwd, originalPath) {
     if ('sha256:' + sha256(bytes) !== ref.attachmentId || bytes.length !== ref.bytes) throw new Error('NATIVE_ATTACHMENT_MISMATCH');
     const target = await this.resolve(posix.join('.dsh-attachments',sha256(bytes),ref.name),{cwd});
     await this.publish(String(target.targetKey),bytes);
-    this.attachmentPaths.set(originalPath,this.processPath(target));
+    const paths=this.attachmentPaths.get(originalPath) ?? new Map();
+    paths.set(this.processPath(await this.resolve(cwd)),this.processPath(target));
+    this.attachmentPaths.set(originalPath,paths);
   }
   fileUrl(target) {return 'file://'+this.processPath(target).split('/').map(encodeURIComponent).join('/');}
   contains(parent,child) {const part=relative(this.hostPath(String(parent.targetKey)),this.hostPath(String(child.targetKey)));return part===''||part!=='..'&&!part.startsWith('..'+sep)&&!isAbsolute(part);}

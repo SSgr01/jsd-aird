@@ -13,6 +13,27 @@ function fixture() {
     resolve:async(path,{cwd})=>({targetKey:cwd+'/'+path}),publish:async(path,content)=>writes.push({path,content})}};
   return {ctx,writes,dataset};
 }
+test('Word originals retain their exact bytes in the native task directory',async()=>{
+  const {ctx,writes}=fixture(),bytes=Buffer.from('PK\u0003\u0004word-original');
+  const result=await materializeBusinessDataset(ctx,{agent:{}},{business_file:{name:'交付说明.docx',content_type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex'),content_base64:bytes.toString('base64')}});
+  assert.match(result.business_file.path,/\.docx$/);assert.deepEqual(writes[0].content,bytes);
+  assert.equal(result.business_file.content_base64,undefined);
+});
+
+test('original text views stay hash-bound and require a separate native read',async()=>{
+  const {ctx,writes}=fixture(),bytes=Buffer.from('PK-word'),text=Buffer.from('原文件正文：编号000123，数量0');
+  const digest=value=>createHash('sha256').update(value).digest('hex');
+  const file={name:'技术要求.docx',content_type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    bytes:bytes.length,sha256:digest(bytes),content_base64:bytes.toString('base64'),text_projection:{source_sha256:digest(bytes),
+      bytes:text.length,sha256:digest(text),content_base64:text.toString('base64'),parser:'office-docx-v2'}};
+  const result=await materializeBusinessDataset(ctx,{agent:{}},{business_file:file});
+  assert.equal(writes.length,2);assert.deepEqual(writes[0].content,bytes);assert.deepEqual(writes[1].content,text);
+  assert.match(result.business_file.reading_path,/\.txt$/);assert.match(result.file_analysis_hint,/read\(file_path=business_file.reading_path\)/);
+  assert.equal(result.business_file.text_projection.content_base64,undefined);
+  assert.equal(result.business_file.text_projection.source_sha256,digest(bytes));
+  await assert.rejects(materializeBusinessDataset(ctx,{agent:{}},{business_file:{...file,text_projection:{...file.text_projection,source_sha256:'0'.repeat(64)}}}),/BUSINESS_PROJECTION_SOURCE_MISMATCH/);
+});
 
 test('knowledge images reach the session filesystem without base64 entering model text',async()=>{
   const {ctx,writes}=fixture();

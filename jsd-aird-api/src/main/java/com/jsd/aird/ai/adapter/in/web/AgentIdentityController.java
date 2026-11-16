@@ -71,6 +71,10 @@ public class AgentIdentityController {
             ActorContext.set(actor);
             authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "ai.use", "AI", null, "READ"));
             return identity;
+        } catch (ApiException error) {
+            if (error.errorCode() == ApiErrorCode.PERMISSION_DENIED || error.errorCode() == ApiErrorCode.DATA_SCOPE_DENIED)
+                throw AgentDelegation.backgroundAuthorizationRequired();
+            throw error;
         } finally { ActorContext.clear(); }
     }
 

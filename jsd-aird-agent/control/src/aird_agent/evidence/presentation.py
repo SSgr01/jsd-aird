@@ -24,7 +24,7 @@ def model_candidate(candidate, links=None):
         **({"url": links[candidate["evidence_id"]]["url"]}
            if links and candidate.get("evidence_id") in links
            and not document_identity(source_label(candidate.get("source") or {})) else {}),
-        **{key: candidate[key] for key in ("already_retrieved", "quote_count", "table_context", "sample_associations") if key in candidate},
+        **{key: candidate[key] for key in ("already_retrieved", "quote_count", "table_context", "sample_associations", "files", "reading") if key in candidate},
         **{key: candidate[key] for key in ("record_key", "field", "value", "unit", "value_type", "condition", "source_status") if key in candidate},
     }.items() if value is not None}
 

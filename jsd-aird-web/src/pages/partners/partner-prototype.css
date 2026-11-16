@@ -3,7 +3,7 @@
   margin: -24px;
   padding: 25px 24px;
   background: var(--app-background);
-  font-family: 'Microsoft YaHei', 'PingFang SC', Arial, sans-serif;
+  font-family: var(--app-font-family);
 }
 .cm-page-head {
   min-height: 66px;

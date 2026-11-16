@@ -3,7 +3,7 @@
 import contextlib
 import json
 import re
-from datetime import datetime
+from pathlib import PurePosixPath
 
 from fastapi import HTTPException
 
@@ -308,6 +308,8 @@ class JsdBindings(RuntimeBindings):
                 "tools": [{"name": tool["name"], "description": tool["description"]} for tool in selected],
                 "activate_tools": [tool["name"] for tool in selected],
             }
+        if name == "folder_conversion":
+            return await self.runtime.folders.handle(principal, run, args, call_id)
         if name in FILE_TOOL_NAMES:
             return await self.files.dispatch(principal, run, name, args, call_id)
         return await self.literature.dispatch(principal, run, topic, name, args, call_id)
@@ -318,7 +320,13 @@ class JsdBindings(RuntimeBindings):
         validate_literature_export(
             args["path"], parsed, [q for q in source_quotes if q["source"].get("kind") in LITERATURE_KINDS]
         )
-        return {"source_quotes": source_quotes, "source_refs": source_refs}
+        # Native writes can paraphrase tool results without quote handles or
+        # execution inputs. Bind the business context at the trusted boundary;
+        # model-selected citations cannot narrow a file's export authority.
+        # This is a permission scope, not a claim that every source was cited.
+        from aird_agent.hosts.jsd.business_context import business_export_context
+        return {"source_quotes": source_quotes, "source_refs": source_refs,
+                "export_context": business_export_context(run)}
 
     async def prepare_run(self, principal, run):
         from aird_agent.hosts.jsd.operations import reconcile_business_operations
@@ -355,7 +363,14 @@ class JsdBindings(RuntimeBindings):
             "当前命令沙箱未启用，不要调用 bash 或用命令探测环境；继续使用已有读取能力，"
             "需要程序执行才能完成的部分说明限制，不能改用宿主命令执行。"
         )
-        return instructions + "\n\n" + sandbox + role_instructions(run.get("expert"))
+        calendar = (
+            "日期与当前时间复用原生时间上下文及其时区，不以企业服务宿主时间覆盖。"
+            "需要确定星期、跨时区转换或相对日期时，使用现有 bash 中已安装的 Python datetime/zoneinfo 计算，"
+            "不得凭心算给出日期结论。相对日期以本轮原生时间上下文为参照，写明绝对日期和显示时区。"
+            "来源时间没有时区时先确认，不擅自当作 UTC；保留来源原值，转换结果另列。"
+            "没有执行能力时说明尚未计算，不猜测星期或换算结果。"
+        )
+        return instructions + "\n\n" + sandbox + "\n\n" + calendar + role_instructions(run.get("expert"))
 
     async def authorize_history(self, principal, conversation):
         await self.authorize_conversation(principal, conversation)
@@ -386,9 +401,8 @@ class JsdBindings(RuntimeBindings):
             existing = await self.store.get(principal, "conversation", str(request.conversation_id))
             if existing.get("expert"):
                 from aird_agent.hosts.jsd.experts import resolve
-                # Resolve the pinned revision, never silently adopt a newer role.
-                await resolve(self.runtime, principal, existing["expert"])
-                payload["expert"] = existing["expert"]
+                # Sessions bind an expert identity; each new task reads its current definition.
+                payload["expert"] = await resolve(self.runtime, principal, existing["expert"])
             if set(payload.get("private_source_ids", [])) - set(existing.get("private_source_ids") or []):
                 raise HTTPException(403, "PRIVATE_SOURCE_NOT_IN_CONVERSATION")
             # The conversation registers ownership, never default inputs or retrieval filters.
@@ -586,7 +600,6 @@ class JsdBindings(RuntimeBindings):
 
     async def runtime_topic(self, principal, run, topic):
         value = {
-            "current_date": datetime.now().astimezone().date().isoformat(),
             **{key: topic.get(key) for key in ("id", "title", "goal", "documents", "scope_mode")},
             "referenced_records": [model_candidate(item) for item in topic.get("context_candidates", [])],
             "evidence_catalog": [
@@ -690,7 +703,23 @@ class JsdBindings(RuntimeBindings):
     async def validate_delivery(self, principal, run, conn):
         # File registration checks the exact producing execution and byte hash.
         # An unrelated failed command does not invalidate a read-only business answer.
-        check_delivery(run)
+        try:
+            check_delivery(run)
+        except HTTPException as error:
+            if not str(error.detail).startswith("DELIVERABLE_FILES_MISSING:"):
+                raise
+            saved = {PurePosixPath(item.get("path") or item.get("title", "")).name
+                     for item in run.get("registered_outputs", []) if item["kind"] == "artifact"}
+            missing = set(run.get("required_artifacts", [])) - saved
+            # Use the actual authorization receipt, never wording in the answer.
+            denied = await (await conn.execute(
+                "SELECT arguments->>'path' AS path FROM agent_runtime.harness_calls "
+                "WHERE run_id=%s AND tool_name='artifact_save' AND status='FAILED' "
+                "AND result->>'access_denied'='true'", (run["id"],)
+            )).fetchall()
+            if missing.intersection(PurePosixPath(item["path"]).name for item in denied if item["path"]):
+                raise HTTPException(403, "ARTIFACT_EXPORT_DENIED") from error
+            raise
 
     def default_completion(self, run):
         return {

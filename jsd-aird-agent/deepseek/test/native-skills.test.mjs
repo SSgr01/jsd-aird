@@ -13,7 +13,7 @@ const bundled=(await readdir(root,{withFileTypes:true})).filter(item=>item.isDir
 const catalog=JSON.parse(await readFile(new URL('../../../jsd-aird-api/src/main/resources/ai/expert-presets.json',import.meta.url),'utf8'));
 
 test('every released expert workflow is discoverable as a shared native skill',()=>{
-  const referenced=new Set(catalog.experts.flatMap(item=>Object.values(item.versions).flatMap(role=>role.skills)));
+  const referenced=new Set(catalog.experts.flatMap(item=>item.skills));
   assert.deepEqual([...referenced].sort(),bundled);
 });
 

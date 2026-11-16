@@ -34,7 +34,9 @@ public class AgentArtifactService {
         var topicId = request.hasNonNull("topic_id") ? UUID.fromString(request.path("topic_id").asText()) : null;
         var topic = topicId == null ? mapper.createObjectNode() : records.topic(topicId);
         var sourceRefs = request.has("source_refs") ? request.path("source_refs") : mapper.createArrayNode();
-        sources.authorize(sourceRefs);
+        var exportContext = request.has("export_context") ? request.path("export_context") : sourceRefs;
+        sources.requireExport(sourceRefs);
+        sources.requireExport(exportContext);
         if (topicId == null) {
             UUID.fromString(request.path("conversation_id").asText());
             UUID.fromString(request.path("run_id").asText());
@@ -60,6 +62,7 @@ public class AgentArtifactService {
                     || !Objects.equals(request.path("conversation_id").asText(null), record.path("conversation_id").asText(null))
                     || !Objects.equals(request.path("run_id").asText(null), record.path("run_id").asText(null))
                     || !sourceRefs.equals(record.has("source_refs") ? record.path("source_refs") : mapper.createArrayNode())
+                    || !exportContext.equals(record.path("export_context"))
                     || !request.path("execution_receipt").equals(record.path("execution_receipt"))
                     || !(request.has("source_quotes")?request.path("source_quotes"):mapper.createArrayNode()).equals(record.has("source_quotes")?record.path("source_quotes"):mapper.createArrayNode()))
                 throw new ApiException(ApiErrorCode.IDEMPOTENCY_CONFLICT);
@@ -72,6 +75,7 @@ public class AgentArtifactService {
         if (topicId != null) metadata.put("topic_id", topicId.toString());
         if (request.hasNonNull("conversation_id")) metadata.put("conversation_id", request.path("conversation_id").asText());
         metadata.set("source_refs", sourceRefs.deepCopy());
+        metadata.set("export_context", exportContext.deepCopy());
         metadata.set("source_quotes",request.has("source_quotes")?request.path("source_quotes").deepCopy():mapper.createArrayNode());
         if(request.hasNonNull("execution_receipt")) metadata.set("execution_receipt",request.path("execution_receipt").deepCopy());
         metadata.set("documents", topic.has("documents") ? topic.path("documents").deepCopy() : mapper.createArrayNode());
@@ -85,14 +89,19 @@ public class AgentArtifactService {
             var artifact=records.get(id);
             var result=mapper.createObjectNode().put("artifact_id",id.toString()).put("sha256",artifact.path("sha256").asText())
                 .put("verification","AI_GENERATED_UNVERIFIED");
-            for(var key:List.of("source_refs","source_quotes","execution_receipt")) if(artifact.has(key)) result.set(key,artifact.path(key).deepCopy());
+            for(var key:List.of("source_refs","source_quotes","export_context","execution_receipt")) if(artifact.has(key)) result.set(key,artifact.path(key).deepCopy());
             return result;
         }
     }
 
     public FileStorageFacade.StoredFile open(UUID id) {
         var artifact = records.get(id);
+        // Older native outputs omitted business context when no quote handles
+        // were supplied. Their export authority cannot be proved from the file.
+        if (artifact.hasNonNull("run_id") && !artifact.has("export_context"))
+            throw new ApiException(ApiErrorCode.DATA_SCOPE_DENIED, "该文件缺少完整的来源授权信息，请在原会话重新生成");
         if (artifact.has("source_refs")) sources.requireExport(artifact.path("source_refs"));
+        if (artifact.has("export_context")) sources.requireExport(artifact.path("export_context"));
         return storage.open(ActorContext.required().organizationId(), UUID.fromString(artifact.path("file_id").asText()));
     }
 }

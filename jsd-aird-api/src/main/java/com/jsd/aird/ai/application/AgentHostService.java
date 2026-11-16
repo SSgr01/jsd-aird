@@ -123,6 +123,7 @@ public class AgentHostService {
 
     public ObjectNode authorizeSources(ObjectNode args) {
         if ("briefing-history".equals(args.path("purpose").asText())) sources.authorizeBriefingHistory(args.path("sources"));
+        else if ("export".equals(args.path("purpose").asText())) sources.requireExport(args.path("sources"));
         else sources.authorize(args.path("sources"));
         return mapper.createObjectNode().put("allowed", true);
     }

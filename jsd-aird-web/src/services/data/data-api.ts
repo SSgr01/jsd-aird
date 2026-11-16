@@ -53,7 +53,28 @@ export interface ExperimentAssemblyPlan { importJobId: string; candidates: Exper
 export interface ExperimentAssemblyLink { assemblyKey: string; parentAssemblyKey?: string; status: string; resolutionAction?: string; resolutionReason?: string; experimentId?: string; experimentVersionId?: string; experimentNo?: string; planHash: string; contentHash: string; errorMessage?: string }
 export interface ExperimentSyncStatus { plan: ExperimentAssemblyPlan; links: ExperimentAssemblyLink[] }
 
+export interface ExperimentConversion {
+  id: string; batchId: string; sourceFileId: string; sourceName: string; sourceSha256: string;
+  templateVersionId: string; categoryId: string; kind: 'test' | 'synthesis';
+  status: 'QUEUED' | 'WAITING_REVIEW' | 'FAILED'; importJobId?: string;
+  resultArtifactId?: string; planArtifactId?: string; reportArtifactId?: string;
+  report?: { status: string; human_review: string; unplaced?: unknown[]; source_conflicts?: unknown[]; limitations?: string };
+  errorMessage?: string; createdAt: string; updatedAt: string;
+}
+
 export const dataApi = {
+  async createConversion(input: { batchId: string; sourceFileId: string; templateVersionId: string; categoryId: string }) {
+    const response = await httpClient.post<ApiResponse<ExperimentConversion>>('/api/v1/data/experiment-conversions', input); return response.data.data;
+  },
+  async conversions(batchId?: string) {
+    const response = await httpClient.get<ApiResponse<ExperimentConversion[]>>('/api/v1/data/experiment-conversions', { params: { batchId } }); return response.data.data;
+  },
+  async conversionForImport(id: string) {
+    const response = await httpClient.get<ApiResponse<ExperimentConversion | null>>(`/api/v1/data/experiment-conversions/for-import/${id}`); return response.data.data;
+  },
+  async startConversions(batchId: string, retryFailed = false) {
+    const response = await httpClient.post<{ tasks: Array<{ conversion_id: string; session_id: string; accepted: boolean }> }>('/agent/business/conversion-start', { batch_id: batchId, retry_failed: retryFailed }, { timeout: 120000 }); return response.data;
+  },
   async publication(id: string) { const response = await httpClient.get<ApiResponse<DataPublication>>(`/api/v1/data/sources/${id}/publication`); return response.data.data; },
   async publicationAction(id: string, action: 'confirm' | 'submit' | 'withdraw' | 'revise' | 'publish' | 'disable' | 'restore', revision: string, reviewerId?: string) { const response = await httpClient.post<ApiResponse<DataPublication>>(`/api/v1/data/sources/${id}/publication/${action}`, action === 'submit' ? { reviewerId, revision } : { revision }); return response.data.data; },
   async dataReviewers(id: string) { const response = await httpClient.get<ApiResponse<Array<{ id: string; name: string }>>>(`/api/v1/data/sources/${id}/publication/reviewers`); return response.data.data; },

@@ -19,7 +19,7 @@ function expectReadable(foreground: unknown, background: unknown) {
   expect((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)).toBeGreaterThanOrEqual(4.5);
 }
 
-describe('Arctic theme readability', () => {
+describe('Monochrome theme readability', () => {
   const token = appTheme.token!;
   const button = appTheme.components!.Button!;
 
@@ -32,12 +32,12 @@ describe('Arctic theme readability', () => {
     }
   });
 
-  it('keeps primary labels readable throughout pale button interaction states', () => {
+  it('keeps white primary labels readable throughout black button interaction states', () => {
     for (const background of [button.colorPrimary, button.colorPrimaryHover, button.colorPrimaryActive]) {
       expectReadable(button.primaryColor, background);
-      // Prevent a regression to a dark fill merely to make white labels readable.
-      expect(luminance(background)).toBeGreaterThan(0.65);
+      expect(luminance(background)).toBeLessThan(0.05);
     }
+    expect(button.primaryColor).toBe('#ffffff');
   });
 
   it('preserves readable success, warning and error labels', () => {

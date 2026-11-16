@@ -61,16 +61,14 @@
 @media (min-width: 1024px) {
   .auth-page {
     gap: 20px;
-    background-image:
-      radial-gradient(ellipse 38% 48% at 42% 38%, rgb(221 238 255 / 65%), transparent 85%),
-      radial-gradient(ellipse 32% 40% at 67% 70%, rgb(181 225 235 / 28%), transparent 85%);
+    background-image: none;
   }
   .auth-page .auth-card {
     width: 444px;
     margin-top: 0;
     border: 1px solid var(--app-border);
     border-radius: 20px !important;
-    box-shadow: var(--app-shadow-shell);
+    box-shadow: none;
   }
   .auth-page .auth-card .ant-card-body { padding: 36px; }
   .auth-product-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 36px; }

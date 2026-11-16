@@ -3,7 +3,8 @@ import {shortSourceTitle, sourceLinkLabel} from './source-links.mjs';
 const resourceNames = {
   PROJECT:'项目', STAGE:'项目阶段', TASK:'项目任务', REQUIREMENT:'项目需求', MATERIAL:'项目资料',
   EXPERIMENT:'实验', STRUCTURED_DATA:'结构化研发数据', DATA_IMPORT:'导入文件', STRUCTURED_RECORD:'原始数据行',
-  RESEARCH_TEST:'研发测试报告', CUSTOMER:'客户', CUSTOMER_CONTACT:'客户联系人', CUSTOMER_COMMUNICATION:'客户跟进',
+  RESEARCH_TEST:'研发资料', RESEARCH_TEST_UPLOAD:'研发附件', MEETING_MINUTES:'会议纪要', PROJECT_DOCUMENT:'项目文档', PROJECT_REFERENCE:'资料参考', QUALITY_UPLOAD:'品管附件',
+  CUSTOMER:'客户', CUSTOMER_CONTACT:'客户联系人', CUSTOMER_COMMUNICATION:'客户跟进',
   CUSTOMER_REQUIREMENT:'客户需求', INVENTORY_BALANCE:'库存余额', INVENTORY_TRANSACTION:'库存流水',
   SAMPLE_DISPATCH:'发样单', SHIPMENT:'出货单', PRODUCTION_ORDER:'生产单', PRODUCTION_UPLOAD:'上传生产单',
   QUALITY_STANDARD:'品管标准', QUALITY_RECORD:'品管检验记录', QUALITY_COA:'COA 证书', QUALITY_DEFECT:'不良记录',
@@ -117,7 +118,7 @@ function projectResult(value) {
         ...(!documentIdentity(sourceLabel(candidate.source)) && value.citation_links?.[candidate.evidence_id]?.url
           ? {url:value.citation_links[candidate.evidence_id].url} : {}),
         ...(candidate.quote_id ? {quote_id:candidate.quote_id} : {}),
-        ...Object.fromEntries(['already_retrieved','quote_count','table_context'].filter(key=>candidate[key]!==undefined).map(key=>[key,candidate[key]])),
+        ...Object.fromEntries(['already_retrieved','quote_count','table_context','files','reading'].filter(key=>candidate[key]!==undefined).map(key=>[key,candidate[key]])),
         ...Object.fromEntries(['record_key','field','value','unit','value_type','condition','source_status']
           .filter(key=>candidate[key]!==undefined).map(key=>[key,candidate[key]])),
       }));

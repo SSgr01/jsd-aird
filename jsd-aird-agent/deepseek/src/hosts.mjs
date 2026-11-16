@@ -74,6 +74,7 @@ export class Hosts {
       if(host?.backgroundIdentity?.automation_grant_id!==grantId)continue;
       await this.call(host,'background-revoke').catch(()=>{});
       host.backgroundIdentity=undefined;
+      host.installing=undefined;
       if(host.identity.automation_grant_id) {
         this.instances.delete(ownerKey(host.identity));await this.stop(host);
       }

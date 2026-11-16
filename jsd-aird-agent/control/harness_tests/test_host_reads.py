@@ -37,6 +37,24 @@ async def test_read_failures_have_distinct_safe_diagnoses_and_do_not_retry(
     assert len(calls) == 1
 
 
+async def test_file_permission_refusal_explains_no_delivery_without_inviting_replay(settings, principal):
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(403, json={"code": "DATA_SCOPE_DENIED", "message": "private SQL details"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+        with pytest.raises(HostToolError) as caught:
+            await JsdHostGateway(settings, http).call(principal, "artifact_save", {})
+    error = caught.value
+    assert error.tool_error["error_code"] == "ARTIFACT_EXPORT_DENIED"
+    assert not error.tool_error["retryable"] and len(calls) == 1
+    assert "文件未登记" in error.detail and "不要声称" in error.detail
+    assert "private" not in error.detail
+    assert JsdBindings().error_info(error)["access_denied"]
+
+
 @pytest.mark.parametrize("failure", ["busy", "bad-gateway", "connect", "read-reset", "protocol-reset"])
 async def test_transient_read_failure_retries_once_with_the_same_request(settings, principal, failure):
     calls = []

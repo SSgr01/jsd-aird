@@ -45,7 +45,7 @@
   background: var(--app-surface);
   border: 1px solid var(--app-border);
   border-radius: 12px;
-  box-shadow: 0 5px 18px rgb(15 23 42 / 4%);
+  box-shadow: 0 5px 18px rgb(0 0 0 / 4%);
 }
 
 .upload-workspace-panel-left {
@@ -279,7 +279,7 @@
 }
 .upload-workspace-record:hover {
   border-color: color-mix(in srgb, var(--app-primary) 32%, var(--app-border));
-  box-shadow: 0 6px 18px rgb(15 23 42 / 6%);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 6%);
   transform: translateY(-1px);
 }
 .upload-workspace-record-main {

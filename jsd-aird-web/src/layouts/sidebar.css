@@ -1,0 +1,241 @@
+.app-sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.app-sidebar-brand-copy {
+  min-width: 0;
+}
+.app-sidebar-brand-subtitle,
+.app-sidebar-caption,
+.app-sidebar-user-chevron {
+  display: none;
+}
+.ant-pro-sider-collapsed .app-sidebar-brand-copy {
+  display: none;
+}
+
+/* Match the light HTML reference without changing the shell geometry
+   or the mobile drawer. All sidebar-specific values live in this scope. */
+@media (min-width: 1024px) {
+  .app-shell .ant-pro-sider {
+    --sidebar-ground: #f7f7f7;
+    --sidebar-hover: #ededed;
+    --sidebar-ink: var(--app-text);
+    --sidebar-meta: #666666;
+    --sidebar-line: #d4d4d4;
+    background: var(--sidebar-ground) !important;
+  }
+
+  .app-shell .ant-pro-sider .ant-pro-sider-logo {
+    height: 76px;
+    margin-inline: 22px;
+    padding: 0;
+    justify-content: flex-start;
+  }
+  .app-sidebar-brand .app-brand-mark {
+    width: 28px;
+    height: 28px;
+  }
+  .app-sidebar-brand-copy {
+    display: grid;
+    gap: 2px;
+  }
+  .app-shell .ant-pro-sider .app-brand-title {
+    margin: 0;
+    color: var(--sidebar-ink);
+    font-size: 15px;
+    line-height: 22px;
+    font-weight: 650;
+    white-space: nowrap;
+  }
+  .app-sidebar-brand-subtitle {
+    display: block;
+    color: var(--sidebar-meta);
+    font-size: 12px;
+    line-height: 18px;
+  }
+  .app-sidebar-caption {
+    display: block;
+    margin: 8px 26px 10px;
+    color: var(--sidebar-meta);
+    font-size: 12px;
+    line-height: 18px;
+  }
+
+  .app-shell .ant-pro-sider .ant-menu-root {
+    padding-inline: 12px;
+  }
+  .app-shell .ant-pro-sider :is(div, ul) {
+    scrollbar-width: thin;
+    scrollbar-color: var(--sidebar-line) transparent;
+  }
+  .app-shell .ant-pro-sider :is(div, ul)::-webkit-scrollbar {
+    width: 4px;
+  }
+  .app-shell .ant-pro-sider :is(div, ul)::-webkit-scrollbar-thumb {
+    border-radius: 4px;
+    background: var(--sidebar-line);
+  }
+  .app-shell .ant-pro-sider :is(div, ul)::-webkit-scrollbar-button {
+    display: none;
+  }
+  .app-shell .ant-pro-sider .ant-menu-item,
+  .app-shell .ant-pro-sider .ant-menu-submenu-title {
+    width: 100%;
+    height: 40px;
+    min-height: 40px;
+    margin: 2px 0;
+    padding-inline: 12px;
+    border-radius: 8px;
+    color: var(--sidebar-ink);
+    font-size: 14px;
+    line-height: 40px;
+    font-weight: 400;
+  }
+  .app-shell .ant-pro-sider .ant-pro-base-menu-inline-item-icon,
+  .app-shell .ant-pro-sider .ant-pro-base-menu-vertical-item-icon {
+    color: var(--sidebar-meta);
+    font-size: 16px;
+  }
+  .app-shell .ant-pro-sider .ant-menu-item:hover,
+  .app-shell .ant-pro-sider .ant-menu-submenu-title:hover {
+    background: var(--sidebar-hover);
+  }
+  .app-shell .ant-pro-sider .ant-menu-submenu-selected > .ant-menu-submenu-title {
+    background: transparent;
+    font-weight: 600;
+  }
+  .app-shell .ant-pro-sider .ant-menu-submenu-selected > .ant-menu-submenu-title:hover {
+    background: var(--sidebar-hover);
+  }
+  .app-shell .ant-pro-sider .ant-menu-item-selected,
+  .app-shell .ant-pro-sider .ant-menu-item-selected:hover {
+    color: var(--sidebar-ink);
+    background: var(--app-surface);
+    font-weight: 600;
+    box-shadow: none; /* taste-skill-ignore: clears the old inset selection outline; no shadow is added. */
+  }
+  .app-shell .ant-pro-sider .ant-menu-item-selected::before,
+  .app-shell .ant-pro-sider .ant-menu-item-selected::after {
+    display: none;
+  }
+  .app-shell .ant-pro-sider .ant-menu-sub {
+    background: transparent;
+  }
+  .app-shell .ant-pro-sider .ant-menu-sub .ant-menu-item {
+    height: 36px;
+    min-height: 36px;
+    line-height: 36px;
+    padding-inline-start: 38px;
+  }
+  .app-shell .ant-pro-sider .ant-menu-submenu-arrow {
+    color: var(--sidebar-meta);
+  }
+  .app-shell .ant-pro-sider :is(a, button, [role='menuitem']):focus-visible {
+    outline: 2px solid var(--app-focus-border);
+    outline-offset: -2px;
+  }
+
+  .app-shell .app-sidebar-profile {
+    display: block;
+    margin: 8px 12px 4px;
+    padding: 12px 0 0;
+    border-top: 1px solid var(--sidebar-line);
+  }
+  .app-shell .app-user-trigger-profile {
+    width: 100%;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    text-align: start;
+  }
+  .app-shell .app-user-trigger-profile:hover {
+    background: var(--sidebar-hover);
+  }
+  .app-sidebar-user-copy {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+    gap: 2px;
+    color: var(--sidebar-meta);
+    font-size: 12px;
+    line-height: 18px;
+  }
+  .app-sidebar-user-copy strong {
+    overflow: hidden;
+    color: var(--sidebar-ink);
+    font-size: 14px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .app-sidebar-user-copy > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .app-shell .app-sidebar-profile .app-user-trigger .ant-avatar {
+    color: var(--sidebar-ink);
+    background: var(--sidebar-hover);
+    font-size: 13px;
+  }
+  .app-sidebar-user-chevron {
+    display: inline-flex;
+    color: var(--sidebar-meta);
+    font-size: 10px;
+  }
+  .app-shell .ant-pro-sider [data-sidebar-toggle] {
+    color: var(--sidebar-meta);
+    border-radius: 8px;
+  }
+  .app-shell .ant-pro-sider [data-sidebar-toggle]:hover {
+    color: var(--sidebar-ink);
+    background: var(--sidebar-hover);
+  }
+
+  .app-shell .ant-pro-sider-collapsed .ant-pro-sider-logo {
+    justify-content: center;
+    margin-inline: 0;
+  }
+  .app-shell .ant-pro-sider-collapsed .ant-menu-root {
+    padding-inline: 0;
+  }
+  .app-shell .ant-pro-sider-collapsed :is(div, ul) {
+    scrollbar-width: none;
+  }
+  .app-shell .ant-pro-sider-collapsed :is(div, ul)::-webkit-scrollbar {
+    width: 0;
+  }
+  .app-shell .ant-pro-sider-collapsed .ant-pro-base-menu-vertical-item-title {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+  }
+  .app-shell .ant-pro-sider-collapsed .ant-menu-submenu-selected > .ant-menu-submenu-title {
+    background: var(--app-surface);
+  }
+  .app-shell .ant-pro-sider-collapsed .ant-menu-item,
+  .app-shell .ant-pro-sider-collapsed .ant-menu-submenu-title {
+    padding-inline: 0;
+  }
+  .app-shell
+    .ant-pro-sider-collapsed
+    :is(
+      .app-sidebar-brand-copy,
+      .app-sidebar-caption,
+      .app-sidebar-user-copy,
+      .app-sidebar-user-chevron
+    ) {
+    display: none;
+  }
+  .app-shell .ant-pro-sider-collapsed .app-sidebar-profile {
+    margin-inline: 8px;
+    padding-inline: 0;
+  }
+  .app-shell .ant-pro-sider-collapsed .app-user-trigger-profile {
+    justify-content: center;
+    padding-inline: 0;
+  }
+}

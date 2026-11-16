@@ -1,0 +1,3 @@
+interface:
+  display_name: "JSD Experiment Converter"
+  short_description: "Normalize Jieshida test and synthesis experiment records into the official Excel templates"

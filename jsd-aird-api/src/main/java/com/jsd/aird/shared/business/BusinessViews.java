@@ -63,9 +63,19 @@ public final class BusinessViews {
         if (snapshot == null || snapshot.isMissingNode() || snapshot.isNull()) return result;
         if (snapshot.has("sheets")) {
             var cells = result.putArray("cells");
-            for (var sheet : snapshot.path("sheets")) {
+            var sheets = new ArrayList<JsonNode>();
+            var ordered = new HashSet<String>();
+            for (var key : snapshot.path("sheetOrder")) {
+                if (snapshot.path("sheets").has(key.asText())) {
+                    sheets.add(snapshot.path("sheets").path(key.asText())); ordered.add(key.asText());
+                }
+            }
+            if (snapshot.path("sheets").isObject()) snapshot.path("sheets").properties().stream()
+                .filter(entry -> !ordered.contains(entry.getKey())).sorted(Map.Entry.comparingByKey()).forEach(entry -> sheets.add(entry.getValue()));
+            else snapshot.path("sheets").forEach(sheets::add);
+            for (var sheet : sheets) {
                 if (sheet.path("name").asText().startsWith("_JSD")) continue;
-                for (var row : sheet.path("cellData").properties()) for (var column : row.getValue().properties()) {
+                for (var row : numericEntries(sheet.path("cellData"))) for (var column : numericEntries(row.getValue())) {
                     var cell = column.getValue();
                     var value = cell.has("v") ? cell.path("v") : cell.path("p").path("body").path("dataStream");
                     if (value.isMissingNode() && !cell.hasNonNull("f")) continue;
@@ -73,6 +83,9 @@ public final class BusinessViews {
                         .put("cell", com.jsd.aird.shared.lab.LabWorkbook.address(Integer.parseInt(row.getKey()), Integer.parseInt(column.getKey())));
                     item.set("value", value.isMissingNode() ? JSON.nullNode() : value.deepCopy());
                     if (cell.hasNonNull("f")) item.set("formula", cell.path("f"));
+                    if (cell.hasNonNull("t")) item.set("value_type", cell.path("t"));
+                    var style = cell.path("s").isTextual() ? snapshot.path("styles").path(cell.path("s").asText()) : cell.path("s");
+                    if (style.path("n").hasNonNull("pattern")) item.set("number_format", style.path("n").path("pattern"));
                 }
             }
         } else if (snapshot.path("body").has("dataStream")) {
@@ -81,6 +94,10 @@ public final class BusinessViews {
                 .replace('\u001d', '\t').replace('\u000e', '\n').replace('\u000f', '\n').replace('\r', '\n'));
         }
         return result;
+    }
+    private static List<Map.Entry<String,JsonNode>> numericEntries(JsonNode node) {
+        return node.properties().stream().filter(entry -> entry.getKey().matches("[0-9]+"))
+            .sorted(Comparator.comparingInt(entry -> Integer.parseInt(entry.getKey()))).toList();
     }
     public static String hash(String value) {
         return hash(value.getBytes(StandardCharsets.UTF_8));

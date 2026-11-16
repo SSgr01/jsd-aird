@@ -270,6 +270,158 @@ async def test_native_completion_projection_failure_preserves_command_receipt(se
     assert row['status'] == 'SUCCEEDED' and row['result'] == result
 
 
+@pytest.mark.parametrize('receipt_status,expected,error', [
+    ('FAILED', 'FAILED', 'BACKGROUND_COMMAND_FAILED'),
+    ('SUCCEEDED', 'SUCCEEDED', None),
+    ('CANCELLED', 'CANCELLED', 'SANDBOX_CANCELLED'),
+    ('UNKNOWN', 'FAILED', 'SIDE_EFFECT_RECONCILIATION_REQUIRED'),
+])
+async def test_native_completion_after_lease_release_checks_history_without_readmitting(
+        setup, principal, store, receipt_status, expected, error):
+    from psycopg.types.json import Jsonb
+
+    service, host, run, _ = setup
+    candidate = (await read_source(service, host, principal, run))['candidates'][0]
+    # Policy refresh used to call active(), which requires an execution lease.
+    host.scope['retrieval_policy'] = {'fingerprint': 'current-policy'}
+    result = {'receipt': {'status': receipt_status}}
+    if receipt_status == 'SUCCEEDED':
+        result.update(exit_code=0, files=[])
+    else:
+        result['error'] = 'SANDBOX_STARTUP_TIMEOUT' if receipt_status == 'FAILED' else 'SANDBOX_' + receipt_status
+    async with store.transaction(principal, run['id']) as conn:
+        current = await store.get(principal, 'run', run['id'], conn)
+        current.update(last_text='会议安排已整理。[E:' + candidate['evidence_id'] + ']',
+            dsh_pending_operations=['background'], dsh_model_completed_turn=1,
+            dsh_stop_reason={'kind': 'completed'})
+        await store.update(principal, 'run', current, conn)
+        await conn.execute("INSERT INTO agent_runtime.harness_calls(run_id,call_id,request_hash,tool_name,status,result,execution_epoch) "
+            "VALUES(%s,'background','original','dsh_execute',%s,%s,1)",
+            (run['id'], 'SUCCEEDED' if receipt_status == 'SUCCEEDED' else 'UNKNOWN' if receipt_status == 'UNKNOWN' else 'FAILED', Jsonb(result)))
+        await conn.execute("UPDATE agent_runtime.harness_admission SET state='RELEASED' WHERE run_id=%s", (run['id'],))
+    body = {'run_id': run['id'], 'session_id': run['dsh_session_id'], 'turn': 1, 'epoch': 1}
+    checked = await service.complete_dsh(principal, {**body, 'check_only': True})
+    assert checked['status'] == expected
+    assert (await store.get(principal, 'run', run['id']))['status'] == 'RUNNING'
+    final = await service.complete_dsh(principal, body)
+    assert final['status'] == expected
+    current = await store.get(principal, 'run', run['id'])
+    assert current['error'] == error and current['dsh_completed_turn'] == 1
+    assert not current.get('dsh_pending_operations')
+    assert (await service.admission.state(principal, run['id']))['admission'] == 'RELEASED'
+    assert (await service.complete_dsh(principal, body))['status'] == expected
+    assert len([event for event in await store.events(principal, run['id']) if event['type'] == 'run.' + expected.lower()]) == 1
+
+
+async def released_background(setup, principal, store, status='FAILED', *, ended=True, turn=1, cancelled=False):
+    from psycopg.types.json import Jsonb
+
+    service, host, run, _ = setup
+    candidate = (await read_source(service, host, principal, run))['candidates'][0]
+    host.scope['retrieval_policy'] = {'fingerprint': 'current-policy'}
+    result = {'error': 'SANDBOX_STARTUP_TIMEOUT', 'receipt': {'status': status}}
+    if status == 'SUCCEEDED':
+        result = {'exit_code': 0, 'files': [], 'receipt': {'status': status}}
+    async with store.transaction(principal, run['id']) as conn:
+        current = await store.get(principal, 'run', run['id'], conn)
+        current.update(last_text='会议安排已整理。[E:' + candidate['evidence_id'] + ']',
+            dsh_pending_operations=['background'], dsh_stop_reason={'kind': 'completed'})
+        if ended:
+            current['dsh_model_completed_turn'] = turn
+        if cancelled:
+            current['status'] = 'CANCELLED'
+        await store.update(principal, 'run', current, conn)
+        await conn.execute("INSERT INTO agent_runtime.harness_calls(run_id,call_id,request_hash,tool_name,status,result,execution_epoch) "
+            "VALUES(%s,'background','original','dsh_execute',%s,%s,1)",
+            (run['id'], 'FAILED' if status == 'CANCELLED' else status, Jsonb(result)))
+        await conn.execute("UPDATE agent_runtime.harness_admission SET state='RELEASED' WHERE run_id=%s", (run['id'],))
+    return run
+
+
+@pytest.mark.parametrize('receipt_status,ended,turn,cancelled,expected', [
+    ('FAILED', True, 1, False, 'FAILED'),
+    ('SUCCEEDED', True, 1, False, 'SUCCEEDED'),
+    ('CANCELLED', True, 1, False, 'CANCELLED'),
+    ('UNKNOWN', True, 1, False, 'FAILED'),
+    ('RUNNING', True, 1, False, 'RUNNING'),
+    ('FAILED', False, 1, False, 'RUNNING'),
+    ('FAILED', True, 2, False, 'RUNNING'),
+    ('SUCCEEDED', True, 1, True, 'CANCELLED'),
+])
+async def test_reconstructed_services_settle_only_ended_turns_from_original_receipts(
+        setup, settings, store, principal, receipt_status, ended, turn, cancelled, expected):
+    from unittest.mock import AsyncMock
+
+    run = await released_background(setup, principal, store, receipt_status, ended=ended, turn=turn, cancelled=cancelled)
+    _, host, _, _ = setup
+    # Both controllers start with empty in-memory state. Claim and transaction
+    # fencing must still produce just one business terminal event.
+    services = [Service(settings, store, host=host), Service(settings, store, host=host)]
+    try:
+        for service in services:
+            service.runtime = AsyncMock(side_effect=AssertionError('must not wake native execution'))
+            service.bindings.sandbox.execute = AsyncMock(side_effect=AssertionError('must not replay command'))
+        await asyncio.gather(*(service.admission.cycle() for service in services))
+        await asyncio.gather(*(task for service in services for task in list(service.admission.tasks)))
+        current = await store.get(principal, 'run', run['id'])
+        assert current['status'] == expected and current['epoch'] == 1
+        assert (await services[0].admission.state(principal, run['id']))['admission'] == 'RELEASED'
+        settled = ended and turn == 1 and not cancelled and receipt_status != 'RUNNING'
+        terminal = [event for event in await store.events(principal, run['id']) if event['type'] in {'run.succeeded', 'run.failed', 'run.cancelled'}]
+        assert len(terminal) == (1 if settled else 0)
+        if settled:
+            assert current['started_at'] is None and current['dsh_completed_turn'] == 1
+            assert not current.get('dsh_pending_operations')
+        async with store.pool.connection() as conn:
+            operation = await (await conn.execute("SELECT status,result FROM agent_runtime.harness_calls WHERE run_id=%s AND call_id='background'", (run['id'],))).fetchone()
+        assert operation['status'] == ('FAILED' if receipt_status == 'CANCELLED' else receipt_status)
+        assert operation['result']['receipt']['status'] == receipt_status
+        for service in services:
+            service.runtime.assert_not_awaited()
+            service.bindings.sandbox.execute.assert_not_awaited()
+    finally:
+        for service in services:
+            await service.http.aclose()
+
+
+@pytest.mark.parametrize('revoked', [False, True])
+async def test_deferred_completion_keeps_receipt_on_unavailable_or_revoked_authority(setup, settings, store, principal, revoked):
+    from unittest.mock import AsyncMock
+
+    run = await released_background(setup, principal, store)
+    _, host, _, _ = setup
+    service = Service(settings, store, host=host)
+    original = service.complete_dsh
+    failure = HTTPException(403 if revoked else 503, 'ACCESS_REVOKED' if revoked else 'TEMPORARILY_UNAVAILABLE')
+    service.complete_dsh = AsyncMock(side_effect=failure)
+    try:
+        await service.admission.cycle()
+        await asyncio.gather(*list(service.admission.tasks), return_exceptions=True)
+        current = await store.get(principal, 'run', run['id'])
+        assert current['status'] == ('FAILED' if revoked else 'RUNNING')
+        if revoked:
+            assert current['error'] == 'AUTHORIZATION_REQUIRED' and current['result'] == ''
+            assert current['completion']['gaps'] == ['AUTHORIZATION_REQUIRED']
+            assert not current.get('dsh_pending_operations') and current['dsh_completed_turn'] == 1
+        # Retry delay prevents every scheduler tick from repeating a failed read.
+        await service.admission.cycle()
+        await asyncio.gather(*list(service.admission.tasks), return_exceptions=True)
+        assert service.complete_dsh.await_count == 1
+        if not revoked:
+            async with store.pool.connection() as conn:
+                await conn.execute("UPDATE agent_runtime.harness_admission SET retry_at=now() WHERE run_id=%s", (run['id'],))
+            service.complete_dsh = original
+            await service.admission.cycle()
+            await asyncio.gather(*list(service.admission.tasks))
+            current = await store.get(principal, 'run', run['id'])
+            assert current['status'] == 'FAILED' and current['error'] == 'BACKGROUND_COMMAND_FAILED'
+        async with store.pool.connection() as conn:
+            operation = await (await conn.execute("SELECT status,result FROM agent_runtime.harness_calls WHERE run_id=%s AND call_id='background'", (run['id'],))).fetchone()
+        assert operation['status'] == 'FAILED' and operation['result']['error'] == 'SANDBOX_STARTUP_TIMEOUT'
+    finally:
+        await service.http.aclose()
+
+
 async def test_multiple_background_receipts_keep_an_earlier_cancellation_until_the_last_job_finishes(setup, principal, store, monkeypatch):
     from aird_agent.hosts.jsd import native_files
 
@@ -1367,6 +1519,81 @@ async def test_unrelated_read_does_not_force_citations_on_computation(setup, pri
         await receipt(store, principal, run["id"], "user-computation", "tool-result", execution, conn)
     result = await invoke(service, principal, run, "artifact_save", {"path": "output/user.csv"})
     assert result["id"] and result["execution_receipt"]
+    assert not result["source_refs"] and not result["source_quotes"]
+
+
+async def test_native_business_export_uses_trusted_context_and_denial_leaves_agent_running(setup, principal, store):
+    service, host, run, _ = setup
+    source = {"kind": "BUSINESS_RECORD", "resource_type": "QUALITY_RECORD", "resource_id": str(uuid4()),
+        "document_id": str(uuid4()), "version_id": str(uuid4()), "source_node_key": "saved-content",
+        "content_sha256": hashlib.sha256(b"zero=0; code=001").hexdigest(), "title": "检测记录",
+        "anchor": {"business_adapter": "v1"}}
+    await service.remember_sources(principal, run, {"candidates": [{"source": source, "text": "zero=0; code=001"}]})
+    original = host.call
+    denied = True
+
+    async def call(actor, action, args, rid=None):
+        if action == "artifact_save":
+            assert args["export_context"] == [source]
+            assert not args["source_refs"] and not args["source_quotes"]
+            if denied:
+                raise HTTPException(403, "该业务资料没有导出权限，可继续查阅正文")
+        return await original(actor, action, args, rid)
+
+    host.call = call
+    data = "整理后的检测结论，无引用标记".encode()
+    args = {"path": "检测事项.txt", "base64": base64.b64encode(data).decode(),
+        "sha256": hashlib.sha256(data).hexdigest(), "source_quotes": []}
+    result = await service.tool(principal, run["id"], run["epoch"], "denied-present", "artifact_save", args, native=True)
+    assert result["access_denied"] and "导出权限" in result["error"]
+    saved = await store.get(principal, "run", run["id"])
+    assert saved["status"] == "RUNNING" and not saved["registered_outputs"]
+    saved["source_documents"] = []  # this case has business sources, no selected publication
+    async with store.transaction(principal, run["id"]) as conn:
+        # Refusing a file does not by itself invalidate ordinary authorized chat.
+        await service.bindings.validate_delivery(principal, saved, conn)
+        saved["required_artifacts"] = ["检测事项.txt"]
+        await store.update(principal, "run", saved, conn)
+        with pytest.raises(HTTPException, match="ARTIFACT_EXPORT_DENIED") as refused:
+            await service.bindings.validate_delivery(principal, saved, conn)
+        assert refused.value.status_code == 403
+    # Recoverable file refusal is a normal result; reading/discovery stays usable.
+    assert "tools" in await invoke(service, principal, run, "tool_search", {"query": "business_read"})
+    denied = False
+    accepted = await service.tool(principal, run["id"], run["epoch"], "allowed-present", "artifact_save", args, native=True)
+    assert accepted["id"] and accepted["export_context"] == [source]
+    async with store.transaction(principal, run["id"]) as conn:
+        await service.bindings.validate_delivery(principal, await store.get(principal, "run", run["id"], conn), conn)
+
+
+async def test_export_context_survives_new_turn_and_restored_store_without_becoming_citations(setup, principal, store):
+    from uuid import UUID
+    from aird_agent.server.contracts import RunRequest
+    from aird_agent.core.workspace import Workspace
+
+    service, host, run, _ = setup
+    source = {"kind": "BUSINESS_RECORD", "resource_type": "PROJECT_DOCUMENT", "resource_id": str(uuid4()),
+        "document_id": str(uuid4()), "version_id": str(uuid4()), "source_node_key": "saved-content",
+        "content_sha256": hashlib.sha256(b"project content").hexdigest(), "title": "固化安排",
+        "anchor": {"business_adapter": "v1"}}
+    await service.remember_sources(principal, run, {"candidates": [{"source": source, "text": "project content"}]})
+    async with store.transaction(principal, run["id"]) as conn:
+        saved = await store.get(principal, "run", run["id"], conn)
+        saved["status"] = "SUCCEEDED"
+        await store.update(principal, "run", saved, conn)
+        conversation = await store.get(principal, "conversation", run["conversation_id"], conn)
+        conversation.update(profile="agent", engine_version="dsh-v1", last_run=run["id"],
+            messages=[{"run_id": run["id"], "role": "user", "text": "查阅固化安排"}])
+        await store.update(principal, "conversation", conversation, conn)
+    followup = await service.create_run(principal, RunRequest(request="把刚才的安排存成文件",
+        conversation_id=UUID(run["conversation_id"]), retrieval_scope={"knowledge_documents": [host.document]}), str(uuid4()), dispatch=False)
+    restored = await store.get(principal, "run", followup["id"])
+    assert not restored["evidence"] and not restored["source_refs"]
+    workspace = Workspace(service.settings.storage_root / "workspaces", str(principal.organization_id), restored["id"])
+    workspace.prepare()
+    workspace.write("output/安排.txt", "沿用已读内容整理")
+    result = await service.bindings.files.dispatch(principal, restored, "artifact_save", {"path": "output/安排.txt"}, "restored-export")
+    assert result["export_context"] == [source]
     assert not result["source_refs"] and not result["source_quotes"]
 
 

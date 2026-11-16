@@ -14,6 +14,8 @@ const explanations = {
   BRIEFING_COVERAGE_INCOMPLETE: '本期仍有业务记录或分页未完整读取，复盘位置已保留，可在任务中重新执行。',
   CURRENT_MATRIX_CHECKED_REPORT_REQUIRED: '研究报告尚未通过原文核查并保存。',
   USER_DELIVERABLES_MISSING: '本轮要求的报告或文件尚未完成保存。',
+  ARTIFACT_EXPORT_DENIED: '当前账号无权交付这些业务资料，文件未提供下载；可继续查阅已授权内容。',
+  EXPERT_CHECKS_REQUIRED: '本轮专业核验尚未取得完整计算回执，不能确认核对已完成。',
   SIDE_EFFECT_RECONCILIATION_REQUIRED: '有一项业务操作的结果尚未确认，需要先核对回执，不能重复执行。',
 };
 
@@ -34,6 +36,9 @@ export async function businessError(response) {
   let detail;
   try { detail = (await response.json()).detail; } catch { return new Error(prefix); }
   if (typeof detail === 'string') {
+    // A refused write must be a normal tool error: the agent still needs its
+    // read-only jobs and receipts. Final delivery keeps its separate hard gate.
+    if(detail==='SIDE_EFFECT_RECONCILIATION_REQUIRED')return Object.assign(new Error(explanations[detail]),{code:detail,status:response.status});
     if (explanations[detail]) return new LlmError(explanations[detail], detail, {status:response.status});
     return Object.assign(new Error(prefix + ': ' + detail.slice(0, 2000)), {code:detail,status:response.status});
   }

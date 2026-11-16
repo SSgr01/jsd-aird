@@ -94,10 +94,16 @@ async def native_execute(service, principal, run, args, call_id):
     script = "import os,pathlib,shutil,subprocess,sys\n"
     script += "root=pathlib.Path('/work/scratch/native');root.mkdir(parents=True,exist_ok=True)\n"
     script += "shutil.copytree(" + repr("/work/" + prefix.rstrip('/')) + ",root,dirs_exist_ok=True)\n" if selected else ""
+    # The transfer contains files, not empty directories. A new workspace can
+    # therefore have no copied cwd even though the native workspace exists.
+    script += "cwd=root/" + repr(cwd) + ";cwd.mkdir(parents=True,exist_ok=True)\n"
     script += "env=os.environ.copy()\n"
     script += "overrides=" + repr(args.get("env", {})) + "\n"
     script += "for key,value in overrides.items():\n if value is None: env.pop(key,None)\n else: env[key]=value\n"
-    script += "code=subprocess.run(['/bin/bash','-c'," + repr(command) + "],cwd=root/" + repr(cwd) + ",env=env"
+    # Bash honours a valid logical PWD even when subprocess resolves its cwd
+    # through the sandbox symlink. Keep `pwd` in the model's workspace view.
+    script += "env['PWD']=" + repr("/workspaces" + ("/" + cwd if cwd else "")) + "\n"
+    script += "code=subprocess.run(['/bin/bash','-c'," + repr(command) + "],cwd=cwd,env=env"
     script += (",input=" + repr(args["stdin"]) + ",text=True" if "stdin" in args else "") + ").returncode\n"
     script += EXPORT_SCRIPT + "\nsys.exit(code)\n"
     if len(script) > 65536:
@@ -160,7 +166,7 @@ async def native_output(service, principal, body):
         raise HTTPException(422, "INVALID_OUTPUT_CURSOR")
     async with service.store.pool.connection() as conn:
         operation = await (await conn.execute(
-            "SELECT tool_name,execution_epoch FROM agent_runtime.harness_calls WHERE run_id=%s AND call_id=%s",
+            "SELECT tool_name,execution_epoch,status,result FROM agent_runtime.harness_calls WHERE run_id=%s AND call_id=%s",
             (run["id"], call_id))).fetchone()
     if operation is None:
         if run["status"] in {"RUNNING", "WAITING_APPROVAL"}:
@@ -169,7 +175,24 @@ async def native_output(service, principal, body):
     if operation["tool_name"] != "dsh_execute":
         raise HTTPException(403, "NATIVE_EXECUTION_REQUIRED")
     execution_id = digest([run["id"], operation["execution_epoch"], call_id])[:32]
-    return await service.bindings.sandbox.output(execution_id, *offsets)
+    if operation['status'] == 'UNKNOWN':
+        from aird_agent.hosts.jsd.operations import reconcile
+        try:
+            await reconcile(service, principal, run['id'], call_id)
+        except HTTPException as error:
+            if error.status_code != 409:
+                raise
+        async with service.store.pool.connection() as conn:
+            operation = await (await conn.execute(
+                'SELECT status,result FROM agent_runtime.harness_calls WHERE run_id=%s AND call_id=%s',
+                (run['id'], call_id))).fetchone()
+    output = await service.bindings.sandbox.output(execution_id, *offsets)
+    result = operation.get('result') or {}
+    if operation['status'] in {'SUCCEEDED', 'FAILED'} and result.get('receipt', {}).get('status') in {'SUCCEEDED', 'FAILED', 'CANCELLED'}:
+        # The original command's ledger and authority have now agreed. The native
+        # process accepts these bytes using its existing snapshot/hash checks.
+        output = {**output, 'reconciled_result': result}
+    return output
 
 
 async def native_artifact(service, principal, run, args, call_id):

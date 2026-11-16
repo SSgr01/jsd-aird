@@ -27,13 +27,19 @@ class BusinessSourceControllerTest {
     }
     @Test void recordLinkCannotSubstituteAnotherObjectAndRetainsPinnedRevision(){
         String ref=json.createObjectNode().put("type","QUALITY_RECORD").put("id",id.toString()).put("revision","v1").toString();
-        assertThatThrownBy(()->controller.record("QUALITY_COA",id,ref)).isInstanceOf(ApiException.class);
+        assertThatThrownBy(()->controller.record("QUALITY_COA",id,ref,null,0,20)).isInstanceOf(ApiException.class);
         verifyNoInteractions(data);
         when(data.invoke(eq("business_read"),any())).thenReturn(response());
-        var result=controller.record("QUALITY_RECORD",id,ref);
+        var result=controller.record("QUALITY_RECORD",id,ref,null,0,20);
         assertThat(result.getBody()).contains("0 MPa","/quality/records/");
         assertThat(result.getHeaders().getCacheControl()).isEqualTo("no-store");
         verify(data).invoke(eq("business_read"),argThat(a->a.path("ref").path("revision").asText().equals("v1")));
+    }
+    @Test void contentLinkRetainsTheExactReadRange(){
+        when(data.invoke(eq("business_read"),any())).thenReturn(response());
+        var ref=json.createObjectNode().put("type","QUALITY_RECORD").put("id",id.toString()).put("revision","v1");
+        controller.record("QUALITY_RECORD",id,ref.toString(),"content",40,20);
+        verify(data).invoke(eq("business_read"),argThat(a->a.path("section").asText().equals("content")&&a.path("offset").asInt()==40&&a.path("limit").asInt()==20));
     }
     @Test void queryAndComputeLinksRejectChangedSnapshots(){
         when(data.invoke(eq("business_query"),any())).thenReturn(response());when(compute.result("PREDICTION",id)).thenReturn(response());

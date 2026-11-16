@@ -35,7 +35,15 @@ public class KnowledgeIndexJobHandler implements AsyncJobHandler {
         }
         var documentId = uuid(payload, "documentId");
         if (payload.path("rebuildPublishedIndex").asBoolean(false)) {
-            service.rebuildPublishedIndex(organizationId, documentId);
+            if (payload.hasNonNull("expectedPublicationId")) {
+                if (payload.path("vectorsOnly").asBoolean(false)) {
+                    service.rebuildPublishedIndex(organizationId, documentId, uuid(payload, "expectedPublicationId"),
+                            payload.path("expectedEmbeddingModel").asText(null),
+                            payload.hasNonNull("expectedEmbeddingDimension") ? payload.path("expectedEmbeddingDimension").asInt() : null, true);
+                } else service.rebuildPublishedIndex(organizationId, documentId, uuid(payload, "expectedPublicationId"),
+                        payload.path("expectedEmbeddingModel").asText(null),
+                        payload.hasNonNull("expectedEmbeddingDimension") ? payload.path("expectedEmbeddingDimension").asInt() : null);
+            } else service.rebuildPublishedIndex(organizationId, documentId);
             return objectMapper.createObjectNode().put("status", "INDEX_REBUILT")
                     .put("documentId", documentId.toString());
         }

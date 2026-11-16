@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.ops.api.FileStorageFacade;
 import com.jsd.aird.shared.error.ApiException;
+import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.security.Actor;
 import com.jsd.aird.shared.security.ActorContext;
 import java.io.ByteArrayInputStream;
@@ -89,6 +90,44 @@ class AgentArtifactServiceTest {
     @Test void unsupportedFormatsAndPathsDoNotReachStorage() {
         for (var name : List.of("../report.md", "report.exe", "report.tsv", "C:report.txt"))
             assertThatThrownBy(() -> service.save(request(name))).isInstanceOf(ApiException.class);
+        verifyNoInteractions(storage);
+    }
+
+    @Test void businessContextRequiresExportBeforeAnyFileIsStagedEvenWithoutCitations() {
+        var input = request("检测记录.txt");
+        var context = input.putArray("export_context");
+        context.addObject().put("kind", "BUSINESS_RECORD").put("resource_type", "QUALITY_RECORD")
+            .put("resource_id", UUID.randomUUID().toString());
+        doThrow(new ApiException(ApiErrorCode.PERMISSION_DENIED)).when(sources).requireExport(eq(context));
+        assertThatThrownBy(() -> service.save(input)).isInstanceOf(ApiException.class);
+        verifyNoInteractions(storage);
+        verify(records, never()).create(any(), any());
+    }
+
+    @Test void exportedContextIsDurableAndRecheckedAfterPermissionRevocation() throws Exception {
+        var input = request("进展.csv");
+        var context = input.putArray("export_context");
+        context.addObject().put("kind", "BUSINESS_RECORD").put("resource_type", "PROJECT_DOCUMENT")
+            .put("resource_id", UUID.randomUUID().toString());
+        var saved = service.save(input);
+        assertThat(saved.path("source_refs").isEmpty()).isTrue();
+        assertThat(saved.path("export_context")).isEqualTo(context);
+        var id = UUID.randomUUID();
+        when(records.get(id)).thenReturn(saved);
+        when(storage.open(any(), eq(fileId))).thenReturn(new FileStorageFacade.StoredFile(
+            fileId, "进展.csv", "text/csv", 2, "hash", new ByteArrayInputStream(new byte[]{1,2})));
+        try (var file = service.open(id)) { assertThat(file.stream().readAllBytes()).containsExactly(1,2); }
+        doThrow(new ApiException(ApiErrorCode.PERMISSION_DENIED)).when(sources).requireExport(eq(context));
+        assertThatThrownBy(() -> service.open(id)).isInstanceOf(ApiException.class);
+        verify(storage, times(1)).open(any(), eq(fileId));
+    }
+
+    @Test void olderNativeFilesWithoutExportContextMustBeRegenerated() {
+        var id = UUID.randomUUID();
+        when(records.get(id)).thenReturn(mapper.createObjectNode()
+            .put("run_id", UUID.randomUUID().toString()).put("file_id", fileId.toString()));
+        assertThatThrownBy(() -> service.open(id)).isInstanceOf(ApiException.class)
+            .hasMessageContaining("来源授权信息");
         verifyNoInteractions(storage);
     }
 }

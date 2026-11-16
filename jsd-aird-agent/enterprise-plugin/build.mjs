@@ -21,8 +21,19 @@ await writeFile(new URL('./lib/client.js', import.meta.url),
     .replace('/* @experts-ui */ null', () => '(()=>{'+expertsUI.replace('export function ','function ')+';return {registerExpertsUI};})()'));
 
 await import('../../jsd-aird-web/scripts/prepare-chemistry.mjs');
-// Package self-hosted chemistry assets alongside the native chat plugin.
 const { copyFile } = await import('node:fs/promises');
+// Use the exact Fontsource package/version imported by the business UI. Preserve
+// Unicode subsets and relative URLs so browsers fetch only the glyphs they need.
+const fontSource = new URL('../../jsd-aird-web/node_modules/@fontsource-variable/noto-sans-sc/', import.meta.url);
+const fontTarget = new URL('./lib/fonts/', import.meta.url);
+const fontCss = await readFile(new URL('index.css', fontSource), 'utf8');
+await mkdir(new URL('files/', fontTarget), {recursive:true});
+await writeFile(new URL('index.css', fontTarget), fontCss);
+await copyFile(new URL('LICENSE', fontSource), new URL('LICENSE', fontTarget));
+for (const [, file] of fontCss.matchAll(/url\(\.\/(files\/[a-z0-9-]+\.woff2)\)/g)) {
+  await copyFile(new URL(file, fontSource), new URL(file, fontTarget));
+}
+// Package self-hosted chemistry assets alongside the native chat plugin.
 await mkdir(new URL('./lib/chemistry/', import.meta.url), {recursive:true});
 for (const file of ['viewer.html','viewer.js','viewer.css','worker.js','input.js','limits.json','RDKit_minimal.js','RDKit_minimal.wasm','LICENSE']) {
   await copyFile(new URL('../../jsd-aird-web/public/chemistry/'+file, import.meta.url), new URL('./lib/chemistry/'+file, import.meta.url));

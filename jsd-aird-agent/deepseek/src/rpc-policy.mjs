@@ -71,6 +71,12 @@ export async function checkRpc(endpoint, envelope, { executionRoot, identity }) 
     nativeFileSession(endpoint,envelope);
     return;
   }
+  // The native composer resolves skill references before submitting a prompt.
+  // This reads only the catalog of an owned session; it grants no business access.
+  if(namespace==='skills' && method==='list') {
+    nativeFileSession(endpoint,envelope);
+    return;
+  }
   if (namespace === 'session') {
     if (!sessionMethods.has(method)) deny();
     if (method === 'create') {
@@ -139,10 +145,20 @@ export async function checkRpc(endpoint, envelope, { executionRoot, identity }) 
 
 /** Native file and job controls pass through the same enterprise session ownership gate. */
 export function nativeFileSession(endpoint, envelope) {
-  if (!endpoint.startsWith('workspaceFiles/') && endpoint !== 'officeToPdf/render' && !endpoint.startsWith('job/')) return;
-  const sessionId = endpoint.startsWith('job/') ? envelope.payload?.args?.request?.sessionId : envelope.payload?.args?.workspaceFileScopeId;
+  if (!endpoint.startsWith('workspaceFiles/') && endpoint !== 'officeToPdf/render' && !endpoint.startsWith('job/') && endpoint!=='skills/list') return;
+  const sessionId = endpoint==='skills/list' ? envelope.payload?.args?.request?.sessionId
+    : endpoint.startsWith('job/') ? envelope.payload?.args?.request?.sessionId : envelope.payload?.args?.workspaceFileScopeId;
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(sessionId)) deny('SESSION_REQUIRED');
   return sessionId;
+}
+
+/** Reading bytes or rendered pages in the browser exports a workspace file. */
+export function nativeFileAuthorization(endpoint, envelope) {
+  const sessionId = nativeFileSession(endpoint, envelope);
+  if (!sessionId) return;
+  return {session_id:sessionId,
+    ...(['workspaceFiles/read','workspaceFiles/readBytes','officeToPdf/render'].includes(endpoint)
+      ? {purpose:'file-export'} : {})};
 }
 
 const streams = new Set(['$events','session/follow','session/control','remoteAccess/follow','workspace/follow',

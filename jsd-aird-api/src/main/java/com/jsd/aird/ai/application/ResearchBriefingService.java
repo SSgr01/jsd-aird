@@ -15,6 +15,9 @@ public class ResearchBriefingService {
     private final AgentProjectFacade projects;
     private final AgentExperimentFacade experiments;
     private final ObjectMapper json;
+    private ProjectRelatedActivity related;
+    @org.springframework.beans.factory.annotation.Autowired
+    void related(ProjectRelatedActivity related){this.related=related;}
 
     public ResearchBriefingService(AgentProjectFacade projects, AgentExperimentFacade experiments, ObjectMapper json) {
         this.projects = projects; this.experiments = experiments; this.json = json;
@@ -23,12 +26,13 @@ public class ResearchBriefingService {
     public ObjectNode context(ObjectNode args) {
         String kind = args.path("task_type").asText(), section = args.path("section").asText("PROJECT");
         if (!Set.of("project-morning", "research-weekly", "experiment-review").contains(kind)
-                || !Set.of("PROJECT", "STAGE", "TASK", "EXPERIMENT").contains(section))
+                || !Set.of("PROJECT", "STAGE", "TASK", "EXPERIMENT", "RELATED_ACTIVITY").contains(section))
             throw new ApiException(ApiErrorCode.BAD_REQUEST);
         Instant end = Instant.parse(args.path("window_end").asText());
         Instant start = args.hasNonNull("window_start") ? Instant.parse(args.path("window_start").asText()) : null;
         if (end.isAfter(Instant.now().plusSeconds(30)) || start != null && !start.isBefore(end))
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "活动时间范围无效");
+        if("RELATED_ACTIVITY".equals(section))return related.context(args);
         var request = args.deepCopy().put("record_type", section).put("updated_before", end.toString());
         if (!"project-morning".equals(kind) && start != null) request.put("updated_from", start.toString());
         var result = "EXPERIMENT".equals(section) ? experiments.read("search_experiments", request)

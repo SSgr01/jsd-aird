@@ -32,13 +32,16 @@ public class BusinessQualityReader implements BusinessReadPort {
         var actor = ActorContext.required(); var id = id(request); var type = request.path("type").asText();
         var row = records.record(actor.organizationId(), actor.role(), id);
         if (!Objects.equals(TYPES.get(type), row.businessType())) throw missing();
-        var body = facts(json, row, "businessNo", "displayName", "categoryId", "categoryName", "projectId", "data", "visibility");
+        var body = facts(json, row, "businessNo", "displayName", "categoryId", "categoryName", "projectId", "data", "visibility", "workflowStatus");
+        body.set("content", document(row.workbookSnapshot()));
         String revision = Long.toString(row.lockVersion());
         if (request.hasNonNull("version_id")) {
             var version = records.versions(actor.organizationId(), id).stream().filter(value -> value.id().toString().equals(request.path("version_id").asText())).findFirst().orElseThrow(BusinessViews::missing);
             body.set("data", clean(version.data())); body.put("versionNo", version.versionNo());
+            body.set("content", document(version.workbookSnapshot()));
             body.put("businessNo", version.businessNo()); revision = version.id().toString();
         }
+        if (body.path("content").isEmpty()) body.put("content_notice", "没有已保存的正文；登记字段不代表完整原文件，请查看文件目录。");
         var links = new ArrayList<BusinessRecordView.Relation>(); projectLinks(links, row.projectId(), row.stageId(), row.taskId());
         var data = body.path("data");
         addBusinessNumberLink(links, data, "internalRecordNo", "QUALITY_RECORD", "COA对应测试记录");

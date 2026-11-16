@@ -118,15 +118,8 @@
 .jsd-expert-card-bottom > .jsd-expert-button { border-color: var(--dsw-alias-border-l2); padding-inline: 14px; }
 .jsd-expert-tags { display: flex; flex-wrap: wrap; gap: 5px; }
 .jsd-expert-tags > span { color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-interactive-bg-hover); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
-.jsd-expert-avatar { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex: 0 0 auto; border-radius: 13px; background: #eeebfa; color: #7562ab; }
+.jsd-expert-avatar { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex: 0 0 auto; border-radius: 13px; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); }
 .jsd-expert-avatar svg { display: block; width: 25px; height: 25px; }
-.jsd-expert-avatar[data-expert="customer-assistant"] { background: #fcf0e8; color: #b57850; }
-.jsd-expert-avatar[data-expert="experiment-assistant"] { background: #e7f3ee; color: #46866f; }
-.jsd-expert-avatar[data-expert="quality-assistant"] { background: #eaf0fb; color: #527cbb; }
-.jsd-expert-avatar[data-expert="production-assistant"] { background: #f8f0dd; color: #ad8737; }
-.jsd-expert-avatar[data-expert="materials-advisor"] { background: #eeedfb; color: #7667b5; }
-.jsd-expert-avatar[data-expert="technical-assistant"] { background: #f7eaf0; color: #b37691; }
-.jsd-expert-avatar[data-expert="data-assistant"] { background: #e6f3f5; color: #428491; }
 .jsd-expert-avatar-small { width: 22px; height: 22px; border-radius: 7px; }
 .jsd-expert-avatar-small svg { width: 15px; height: 15px; stroke-width: 1.8; }
 .jsd-expert-dialog { width: min(620px,100%); max-height: 100%; background: var(--dsw-alias-bg-layer-1); }
@@ -217,28 +210,23 @@ body[data-jsd-workbench] {
   --dsh-font-family-text-default: 'Noto Sans SC Variable', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif;
   --dsw-font-family-brand: var(--dsw-font-family);
   --dsw-radius-panel: 20px;
-  --jsd-focus: #315f91;
-  --jsd-action: #d1eaf9;
-  --jsd-action-hover: #c7e7f4;
-  --jsd-action-active: #b5e1eb;
-  --jsd-on-action: #000000;
-  --jsd-composer-shadow: rgb(54 91 122 / 4%);
-  /* The Arctic wash belongs to the empty welcome canvas, not message content. */
-  --jsd-workspace-wash:
-    radial-gradient(ellipse 70% 68% at 54% 3%, rgb(221 238 255 / 48%), transparent 80%),
-    radial-gradient(ellipse 100% 78% at 0% 100%, rgb(181 225 235 / 24%), transparent 76%);
+  --jsd-focus: #262626;
+  --jsd-action: #171717;
+  --jsd-action-hover: #303030;
+  --jsd-action-active: #0a0a0a;
+  --jsd-on-action: #ffffff;
+  --jsd-composer-shadow: rgb(0 0 0 / 4%);
+  --jsd-workspace-wash: none;
 }
 
 body[data-jsd-workbench][data-ds-dark-theme] {
-  --jsd-focus: #b5e1eb;
-  --jsd-action: #b5e1eb;
-  --jsd-action-hover: #d1eaf9;
-  --jsd-action-active: #c7e7f4;
-  --jsd-on-action: #000000;
+  --jsd-focus: #e5e5e5;
+  --jsd-action: #f5f5f5;
+  --jsd-action-hover: #dedede;
+  --jsd-action-active: #d4d4d4;
+  --jsd-on-action: #171717;
   --jsd-composer-shadow: rgb(0 0 0 / 18%);
-  --jsd-workspace-wash:
-    radial-gradient(ellipse 70% 68% at 54% 3%, rgb(138 173 196 / 10%), transparent 80%),
-    radial-gradient(ellipse 100% 78% at 0% 100%, rgb(181 225 235 / 8%), transparent 76%);
+  --jsd-workspace-wash: none;
 }
 
 body[data-jsd-workbench] [data-conversation-content] {
@@ -249,8 +237,8 @@ body[data-jsd-workbench] [data-conversation-content]:has([data-chat-flow-kind]) 
   background-image: none;
 }
 
-/* Strong state marks retain inverse ink. A pale primary-button foreground must
-   not turn a checked switch thumb or a completed step into blue on blue. */
+/* Strong state marks retain inverse ink. The primary-button foreground must
+   not turn a checked switch thumb or a completed step into unreadable marks. */
 body[data-jsd-workbench] :is([role='switch'], [role='checkbox']) {
   --dsw-alias-label-primary-foreground: var(--dsw-alias-label-primary-inverted);
 }
@@ -456,15 +444,15 @@ body[data-jsd-workbench] [data-composer-card]:has(.jsd-continue-action) button[a
    Keep the input mounted and keep active conversations under native geometry.
    Public slot/data attributes are used instead of generated CSS-module names. */
 @media (min-width: 1024px) {
-  body[data-jsd-workbench] { padding: 20px; box-sizing: border-box; background: var(--dsw-alias-bg-base); }
+  body[data-jsd-workbench] { margin: 0; padding: 0; box-sizing: border-box; background: var(--dsw-alias-bg-base); }
   body[data-jsd-workbench] #root {
     box-sizing: border-box;
-    height: calc(100dvh - 40px);
+    height: 100dvh;
     min-height: 0;
     overflow: hidden;
-    border: 1px solid var(--dsw-alias-border-l1);
-    border-radius: 22px;
-    box-shadow: 0 18px 60px var(--jsd-composer-shadow), 0 2px 8px var(--jsd-composer-shadow);
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
   }
   body[data-jsd-workbench] #root > div { height: 100%; min-height: 0; }
   body[data-jsd-workbench] [data-conversation-content] { background-color: var(--dsw-alias-bg-layer-1); }
@@ -518,7 +506,7 @@ body[data-jsd-workbench] a[href*="/api/v1/agents/private-sources/"][href*="/cont
   color: inherit;
   font-size: inherit;
   text-decoration: underline;
-  text-decoration-color: var(--dsw-alias-border-l2, #d3d0cd);
+  text-decoration-color: var(--dsw-alias-border-l2, #d4d4d4);
   text-underline-offset: .2em;
   overflow-wrap: anywhere;
 }
@@ -534,21 +522,30 @@ body[data-jsd-workbench] a[href*="/content"]:focus-visible, .jsd-source-link:foc
 /* Citation chrome stays inline; the native message owns all layout and media. */
 .jsd-cited-answer { display: contents; }
 body[data-jsd-workbench] .jsd-cited-answer a[data-jsd-citation] {
+  display: inline-block;
+  box-sizing: border-box;
+  max-width: min(100%, 28em);
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--dsw-alias-label-secondary, inherit);
   background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.12));
-  border-radius: 4px;
+  border-radius: 5px;
   font-size: .78em;
   font-weight: 400;
-  line-height: 1.5;
+  line-height: 1.65;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  vertical-align: baseline;
+  vertical-align: -.3em;
   text-decoration: none;
-  padding: 1px 6px;
+  padding: 1px 7px;
   margin-inline: 2px;
 }
 body[data-jsd-workbench] .jsd-cited-answer a[data-jsd-citation] > svg { display: none; }
 body[data-jsd-workbench] .jsd-cited-answer a[data-jsd-citation]:hover { color: var(--dsw-alias-label-primary, inherit); text-decoration: none; }
+body[data-jsd-workbench] .jsd-cited-answer a[data-jsd-citation]:focus-visible {
+  outline: 2px solid var(--dsw-alias-label-secondary, currentColor);
+  outline-offset: 2px;
+}
 body[data-jsd-workbench] .jsd-briefing-period,
 body[data-jsd-workbench] .jsd-briefing-entry-error {
   font-size: 12px;

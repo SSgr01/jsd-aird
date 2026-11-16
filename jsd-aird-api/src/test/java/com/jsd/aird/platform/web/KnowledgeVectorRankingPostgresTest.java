@@ -27,7 +27,7 @@ class KnowledgeVectorRankingPostgresTest {
         db.table("version", "id uuid PRIMARY KEY,file_object_id uuid");
         db.table("file", "id uuid PRIMARY KEY,organization_id uuid,status text");
         db.table("grant", "document_id uuid PRIMARY KEY,status text");
-        db.table("chunk", "id uuid PRIMARY KEY,document_id uuid,document_version_id uuid,review_revision_id uuid,chunk_role text,embedding vector");
+        db.table("chunk", "id uuid PRIMARY KEY,document_id uuid,document_version_id uuid,review_revision_id uuid,chunk_role text,embedding vector,embedding_model text DEFAULT 'qwen3'");
         repository = new JdbcKnowledgeRepository(db.jdbc);
     }
     @AfterAll static void cleanup() { if (db != null) db.close(); }
@@ -43,12 +43,12 @@ class KnowledgeVectorRankingPostgresTest {
         return d;
     }
     private UUID chunk(Document d, UUID id, String vector) {
-        db.jdbc.update("INSERT INTO kb.document_chunk VALUES(?,?,?,?,'CHILD',CAST(? AS vector))", id, d.id(), d.version(), d.review(), vector);
+        db.jdbc.update("INSERT INTO kb.document_chunk(id,document_id,document_version_id,review_revision_id,chunk_role,embedding) VALUES(?,?,?,?,'CHILD',CAST(? AS vector))", id, d.id(), d.version(), d.review(), vector);
         return id;
     }
     private List<KnowledgeRepository.VectorQuery> queries() {
-        return List.of(new KnowledgeRepository.VectorQuery(0, "x", "[1,0]"),
-                new KnowledgeRepository.VectorQuery(1, "y", "[0,1]"));
+        return List.of(new KnowledgeRepository.VectorQuery(0, "x", "[1,0]", "qwen3"),
+                new KnowledgeRepository.VectorQuery(1, "y", "[0,1]", "qwen3"));
     }
 
     @Test void batchesExactCosineRankingAndBreaksTiesByChunkId() {
@@ -85,12 +85,14 @@ class KnowledgeVectorRankingPostgresTest {
         candidates.add(wrongCategory.id());
         chunk(wrongCategory, UUID.randomUUID(), "[1,0]");
         db.jdbc.update("UPDATE kb.publication SET metadata_snapshot_jsonb=jsonb_build_object('categoryId',?::text) WHERE id=?", UUID.randomUUID().toString(), wrongCategory.publication());
-        for (String defect : List.of("parent", "dimension", "version", "review", "null")) {
+        for (String defect : List.of("parent", "dimension", "version", "review", "null", "old-model", "unknown-model")) {
             var id = chunk(good, UUID.randomUUID(), defect.equals("dimension") ? "[1,0,0]" : defect.equals("null") ? null : "[1,0]");
             switch (defect) {
                 case "parent" -> db.jdbc.update("UPDATE kb.document_chunk SET chunk_role='PARENT' WHERE id=?", id);
                 case "version" -> db.jdbc.update("UPDATE kb.document_chunk SET document_version_id=? WHERE id=?", UUID.randomUUID(), id);
                 case "review" -> db.jdbc.update("UPDATE kb.document_chunk SET review_revision_id=? WHERE id=?", UUID.randomUUID(), id);
+                case "old-model" -> db.jdbc.update("UPDATE kb.document_chunk SET embedding_model='old-model' WHERE id=?", id);
+                case "unknown-model" -> db.jdbc.update("UPDATE kb.document_chunk SET embedding_model=NULL WHERE id=?", id);
                 default -> { }
             }
         }

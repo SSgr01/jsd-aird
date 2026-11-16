@@ -10,6 +10,71 @@ from aird_agent.hosts.jsd.bindings import JsdBindings
 from aird_agent.core.business_service import BusinessService
 
 
+async def test_replayed_projection_acknowledgement_does_not_duplicate_message_or_usage(store, principal):
+    async with store.transaction(principal, 'projection-ack') as conn:
+        run = await store.create(principal, 'run', {
+            'status': 'RUNNING', 'epoch': 1, 'dsh_session_id': 'projection-ack',
+            'dsh_turn': 1, 'evidence': {},
+        }, conn)
+        conversation = await store.create(principal, 'conversation', {
+            'messages': [], 'active_run': run['id'], 'dsh_session_id': 'projection-ack',
+        }, conn)
+    service = SimpleNamespace(store=store, session_conversation=AsyncMock(return_value=conversation),
+        bindings=SimpleNamespace(normalize_output=lambda text, evidence: text))
+    body = {'session_id': 'projection-ack', 'event': {'seq': 17, 'type': 'assistant/message', 'data': {
+        'turn': 1, 'usage': {'inputTokens': 7, 'outputTokens': 3},
+        'message': {'id': 'message-17', 'content': [{'type': 'text', 'text': '样品寄送台账'}]},
+    }}}
+    # The first commit succeeded but its HTTP acknowledgement was lost.
+    await BusinessService.project_event(service, principal, body)
+    assert (await BusinessService.project_event(service, principal, body))['accepted']
+    current = await store.get(principal, 'run', run['id'])
+    assert len(current['assistant_messages']) == 1
+    assert len(current['dsh_usage']) == 1
+    assert current['dsh_seq'] == 17
+    assert len((await store.get(principal, 'conversation', conversation['id']))['messages']) == 1
+    async with store.pool.connection() as conn:
+        rows = await (await conn.execute(
+            "SELECT event_key FROM agent_runtime.harness_events WHERE run_id=%s AND kind='message.completed'",
+            (run['id'],))).fetchall()
+    assert [row['event_key'] for row in rows] == ['dsh:17']
+
+
+@pytest.mark.parametrize('legacy_requirement', [False, True])
+async def test_expert_skill_and_old_metadata_do_not_force_per_turn_tool_execution(store, principal, settings, legacy_requirement):
+    async with store.transaction(principal, 'expert-check') as conn:
+        run = await store.create(principal, 'run', {
+            'status': 'RUNNING', 'epoch': 1, 'dsh_session_id': 'expert-check', 'dsh_turn': 1,
+            'expert': {'id': 'quality-assistant', 'skills': ['quality-review']},
+            'request': '解释上轮规格核对的差异',
+            'evidence': {}, 'last_text': '上轮结果显示原值超限，未重新执行核验。', 'active_seconds': 0, 'started_at': None,
+            **({'expert_check_tools': ['specification_compare']} if legacy_requirement else {}),
+        }, conn)
+        conversation = await store.create(principal, 'conversation', {
+            'messages': [], 'active_run': run['id'], 'dsh_session_id': 'expert-check',
+        }, conn)
+
+    async def mapped_run(principal, body):
+        return await store.get(principal, 'run', body['run_id'])
+
+    service = SimpleNamespace(store=store, settings=settings, session_run=mapped_run,
+        session_conversation=AsyncMock(return_value=conversation), authorized_topic=AsyncMock(),
+        bindings=SimpleNamespace(normalize_output=lambda text,evidence:text,
+            validate_output=lambda run,text:(text,True), validate_delivery=AsyncMock(),
+            default_completion=JsdBindings().default_completion))
+    event = {'seq': 5, 'type': 'assistant/message', 'data': {'turn': 1, 'message': {'content': [
+        {'type': 'tool-call', 'name': 'skill', 'arguments': '{"name":"quality-review"}'}]}}}
+    await BusinessService.project_event(service, principal, {'session_id': 'expert-check', 'event': event})
+    body = {'run_id': run['id'], 'session_id': 'expert-check', 'turn': 1, 'check_only': True}
+    checked = await BusinessService.complete_dsh(service, principal, body)
+    assert checked['status'] == 'SUCCEEDED'
+    assert 'expert_checks' not in checked['completion']
+    assert (await store.get(principal, 'run', run['id']))['status'] == 'RUNNING'
+    final = await BusinessService.complete_dsh(service, principal, {**body, 'check_only': False})
+    assert final['status'] == 'SUCCEEDED'
+    assert (await store.get(principal, 'run', run['id']))['status'] == 'SUCCEEDED'
+
+
 async def test_completion_rechecks_generation_after_authorization(store, principal, settings):
     from fastapi import HTTPException
 
@@ -19,7 +84,8 @@ async def test_completion_rechecks_generation_after_authorization(store, princip
             'evidence':{}, 'last_text':'answer', 'active_seconds':0, 'started_at':None,
         }, conn)
 
-    async def recover(*args):
+    async def recover(*args, **kwargs):
+        assert kwargs == {'execution': False}
         async with store.transaction(principal, run['id']) as conn:
             current = await store.get(principal, 'run', run['id'], conn)
             current.update(epoch=2, status='QUEUED')
@@ -32,6 +98,29 @@ async def test_completion_rechecks_generation_after_authorization(store, princip
             'run_id':run['id'], 'session_id':'completion-generation', 'turn':1, 'epoch':1})
     current = await store.get(principal, 'run', run['id'])
     assert current['epoch']==2 and current['status']=='QUEUED'
+
+
+@pytest.mark.parametrize('status', ['FAILED', 'CANCELLED', 'SUCCEEDED'])
+async def test_completion_cannot_overwrite_a_terminal_result_committed_during_authorization(store, principal, settings, status):
+    async with store.transaction(principal, 'completion-race') as conn:
+        run = await store.create(principal, 'run', {
+            'status': 'RUNNING', 'epoch': 1, 'dsh_session_id': 'completion-race', 'dsh_turn': 1,
+            'evidence': {}, 'last_text': 'answer', 'active_seconds': 0, 'started_at': None,
+        }, conn)
+
+    async def close(*args, **kwargs):
+        async with store.transaction(principal, run['id']) as conn:
+            current = await store.get(principal, 'run', run['id'], conn)
+            current.update(status=status, error='original-diagnosis', result='original-result')
+            await store.update(principal, 'run', current, conn)
+
+    service = SimpleNamespace(store=store, settings=settings, session_run=AsyncMock(return_value=run),
+        authorized_topic=close, bindings=SimpleNamespace(validate_output=lambda run, text: (text, True)))
+    result = await BusinessService.complete_dsh(service, principal, {
+        'run_id': run['id'], 'session_id': 'completion-race', 'turn': 1, 'epoch': 1})
+    assert result['status'] == status
+    current = await store.get(principal, 'run', run['id'])
+    assert current['error'] == 'original-diagnosis' and current['result'] == 'original-result'
 
 
 @pytest.mark.parametrize('valid', [False, True])
@@ -104,6 +193,22 @@ async def test_native_budget_failure_does_not_become_an_unknown_interruption(set
             json={'run_id':run['id'], 'session_id':'native', 'turn':1, 'error_code':error_code})
     assert response.status_code == 200
     assert (await store.get(principal, 'run', run['id']))['error'] == error_code
+
+
+async def test_activation_failure_can_end_an_admitted_run_before_register_step(settings, store, principal):
+    async with store.transaction(principal, 'activation-failure') as conn:
+        run = await store.create(principal, 'run', {'status':'QUEUED', 'epoch':1,
+            'dsh_session_id':'native', 'dsh_turn':None}, conn)
+    app = create_app(settings, store, SimpleNamespace(session_run=AsyncMock(return_value=run), briefings=SimpleNamespace(finish=AsyncMock())))
+    headers = {'X-Jsd-Agent-Ticket': issue(settings.shared_secret.get_secret_value(), principal, 'control'),
+        'Authorization':'Bearer '+settings.runtime_secret.get_secret_value()}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://harness.test') as client:
+        response = await client.post('/internal/v1/harness/dsh/failure', headers=headers, json={
+            'run_id':run['id'], 'session_id':'native', 'epoch':1, 'error_code':'TOOL_ACTIVATION_FAILED',
+            'diagnostic':{'code':'TOOL_ACTIVATION_FAILED','phase':'native-activation'}})
+    assert response.status_code == 200
+    current = await store.get(principal, 'run', run['id'])
+    assert current['status'] == 'FAILED' and current['failure_diagnostic']['phase'] == 'native-activation'
 
 
 async def test_native_output_truncation_is_never_a_successful_delivery(store, principal, settings):

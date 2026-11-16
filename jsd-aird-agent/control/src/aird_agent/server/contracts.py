@@ -144,6 +144,8 @@ class HarnessSettings(BaseSettings):
     java_url: str = "http://127.0.0.1:8080"
     public_url: str = Field(default="http://localhost:5173", validation_alias=AliasChoices("JSD_AIRD_HARNESS_PUBLIC_URL", "JSD_AIRD_PUBLIC_URL", "public_url"))
     storage_root: Path = Path(".runtime/harness")
+    # None uses the Linux default /etc/jsd-aird/experiment-conversion-roots.json.
+    conversion_roots_file: Path | None = None
     model_context_window: int = Field(default=128000, ge=16000)
     model_output_tokens: int = Field(default=8192, ge=512)
     max_steps: int = Field(default=32, ge=1, le=128)

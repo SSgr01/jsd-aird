@@ -26,6 +26,8 @@ class Service(SessionViews, BusinessService):
 
         from aird_agent.hosts.jsd.briefings import Briefings
         self.briefings = Briefings(self)
+        from aird_agent.hosts.jsd.folder_conversion import FolderConversions
+        self.folders = FolderConversions(self)
         from aird_agent.memory.service import Memory
         self.memory = Memory(self)
 

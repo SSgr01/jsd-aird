@@ -29,8 +29,7 @@ async def experts(settings, store):
         item = next(row for row in catalog["experts"] if row["id"] == args["expert_id"])
         if args["action"] == "resolve" and not item["enabled"]:
             raise HTTPException(403, "EXPERT_DISABLED")
-        revision = args.get("revision") or item["current_revision"]
-        return {**item["versions"][revision], "id": item["id"], "revision": revision, "enabled": item["enabled"]}
+        return copy.deepcopy(item)
 
     host = type("Host", (), {"call": staticmethod(call)})()
     service = Service(settings, store, host=host)
@@ -41,7 +40,7 @@ async def experts(settings, store):
         await service.http.aclose()
 
 
-async def test_first_and_followup_runs_keep_pinned_main_role(experts, principal):
+async def test_followup_runs_use_current_definition_for_the_same_expert(experts, principal):
     sid = "session-" + str(uuid4())
     bound = await expert_action(experts, principal, {"action": "bind", "session_id": sid, "expert_id": "project-assistant"})
     conversation = await experts.session_conversation(principal, sid)
@@ -54,16 +53,62 @@ async def test_first_and_followup_runs_keep_pinned_main_role(experts, principal)
     async with experts.store.transaction(principal, first["id"]) as conn:
         first["status"] = "SUCCEEDED"
         await experts.store.update(principal, "run", first, conn)
-    version = experts.expert_test_catalog["experts"][0]
-    pinned_revision = bound["expert"]["revision"]
-    version["versions"]["3"] = {**version["versions"][pinned_revision], "instructions": "new role"}
-    version["current_revision"] = "3"
+    definition = experts.expert_test_catalog["experts"][0]
+    definition["instructions"] = "当前开发配置"
     followup = await experts.create_run(principal, RunRequest(request="继续细化行动项", conversation_id=UUID(conversation["id"])), str(uuid4()), dispatch=False)
-    assert followup["expert"]["revision"] == pinned_revision
+    assert followup["expert"]["id"] == first["expert"]["id"]
     assert followup["expert"]["work_config"] == first["expert"]["work_config"]
-    assert "new role" not in experts.instructions_for(followup)
+    assert "当前开发配置" in experts.instructions_for(followup)
+    assert "当前开发配置" not in experts.instructions_for(first)
     restored = await expert_action(experts, principal, {"action": "session", "session_id": sid})
-    assert restored["expert"]["revision"] == pinned_revision
+    assert restored["expert"] == definition
+    assert "revision" not in restored["expert"]
+
+
+
+async def test_text_only_expert_runs_leave_tool_selection_to_native_agent(experts, principal):
+    sid = 'session-' + str(uuid4())
+    await expert_action(experts, principal, {'action': 'bind', 'session_id': sid, 'expert_id': 'data-assistant'})
+    conversation = await experts.session_conversation(principal, sid)
+    first = await experts.create_run(principal, RunRequest(request='核对记录：001,0；002,5',
+        conversation_id=UUID(conversation['id'])), str(uuid4()), dispatch=False)
+    assert 'expert_check_tools' not in first
+    assert 'expert_checks' not in experts.bindings.gate_state(first)
+    assert 'record_validate' in {tool['name'] for tool in experts.tools_for(first)}
+    discovered = await experts.bindings.dispatch(principal, first, {}, 'tool_search',
+        {'query': 'record_validate 记录核验重复缺项'}, 'discover-record-check')
+    assert 'record_validate' in discovered['activate_tools']
+    async with experts.store.transaction(principal, first['id']) as conn:
+        first['status'] = 'SUCCEEDED'
+        first['active_tools'] = ['record_validate', 'artifact_save', 'unregistered_tool']
+        await experts.store.update(principal, 'run', first, conn)
+    followup = await experts.create_run(principal, RunRequest(request='第二行改成6，请继续',
+        pack_ids=['core'], conversation_id=UUID(conversation['id'])), str(uuid4()), dispatch=False)
+    assert 'expert_check_tools' not in followup
+    assert 'expert_checks' not in experts.bindings.gate_state(followup)
+    assert 'record_validate' in {tool['name'] for tool in experts.tools_for(followup)}
+    assert 'record_validate' in followup['active_tools']
+    assert 'tool_search' in followup['active_tools']
+    assert 'artifact_save' not in followup['active_tools']
+    assert 'unregistered_tool' not in followup['active_tools']
+    # Existing sessions may contain a failed turn produced by the old reset.
+    # Recover prior discovery from the already authorized native conversation.
+    async with experts.store.transaction(principal, followup['id']) as conn:
+        followup.update(status='FAILED', active_tools=[])
+        await experts.store.update(principal, 'run', followup, conn)
+    restored = await experts.create_run(principal, RunRequest(request='解释已有结论',
+        pack_ids=['core'], conversation_id=UUID(conversation['id'])), str(uuid4()), dispatch=False)
+    assert 'record_validate' in restored['active_tools']
+    assert 'artifact_save' not in restored['active_tools']
+
+
+async def test_runtime_context_leaves_clock_and_zone_to_native_context(experts, principal):
+    context = await experts.bindings.runtime_topic(principal, {}, {})
+    assert 'current_date' not in context
+    assert 'time_zone' not in context
+    instructions = experts.instructions_for({'pack_ids': ['core', 'files']})
+    assert '原生时间上下文' in instructions
+    assert 'Python datetime/zoneinfo' in instructions
 
 
 async def test_binding_cannot_replace_an_expert_or_existing_general_conversation(experts, principal):

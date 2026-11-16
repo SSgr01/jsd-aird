@@ -32,6 +32,7 @@ import com.jsd.aird.tpl.api.TemplateFormat;
 
 @Service
 public class ProjectDocumentService {
+    @org.springframework.beans.factory.annotation.Autowired(required=false) private com.jsd.aird.ops.api.ProjectMaterialActivity materialActivity;
 
     private final ProjectDocumentRepository repository;
     private final FileStorageFacade fileStorageFacade;
@@ -102,6 +103,7 @@ public class ProjectDocumentService {
         var detail = repository.findById(id)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "项目文档不存在"));
         repository.delete(detail.id(), actor.userId().toString());
+        if(materialActivity!=null)materialActivity.record("DELETED","PROJECT_DOCUMENT",id,detail.projectId(),detail.title());
     }
 
     @Transactional

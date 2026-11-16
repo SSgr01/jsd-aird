@@ -1,0 +1,7 @@
+{
+  "version": "qwen3-instruct-v1",
+  "format": "Instruct: {instruction}\nQuery:{query}",
+  "generic": "Given a web search query, retrieve relevant passages that answer the query",
+  "materials": "Given a materials research question, retrieve passages containing relevant evidence about materials, formulations, processing conditions, experimental methods, measured properties, or underlying mechanisms.",
+  "operation_manual": "Given a question about using this application, retrieve relevant operating instructions, workflow steps, prerequisites, and permission requirements from the application manual."
+}

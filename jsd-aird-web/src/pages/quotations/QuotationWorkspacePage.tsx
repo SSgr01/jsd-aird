@@ -429,7 +429,7 @@ export function QuotationWorkspacePage() {
           setView(key as 'preview' | 'edit');
         } }}
         items={[{ key: 'preview', label: <><EyeOutlined /> 预览</>, disabled: dirty && view === 'edit' },
-          { key: 'edit', label: '编辑', disabled: !canEdit || !editableReview },
+          ...(canEdit ? [{ key: 'edit', label: '编辑', disabled: !editableReview }] : []),
           { key: 'versions', label: '版本记录', disabled: dirty && view === 'edit' }]} /></nav>}
       content={view === 'versions' && !selectedVersion ? <main className="version-history-page quotation-history-page">
         <div className="version-history-heading"><Typography.Title level={4}>版本记录</Typography.Title></div>

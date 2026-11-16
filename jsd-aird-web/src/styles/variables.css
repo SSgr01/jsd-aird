@@ -9,15 +9,15 @@
 }
 
 :root {
-  /* Arctic Blue × Glacier Cyan: ink accents and pale action fills are separate. */
-  --color-blue-600: #315f91;
-  --color-blue-700: #294f79;
-  --color-blue-50: #edf5fc;
-  --color-grey-50: #f8fbfe;
-  --color-grey-100: #f6fafd;
-  --color-grey-200: #e8eef4;
-  --color-grey-500: #52677d;
-  --color-grey-900: #263548;
+  /* Monochrome UI: neutral surfaces, crisp ink and inverse primary actions. */
+  --color-neutral-600: #262626;
+  --color-neutral-700: #404040;
+  --color-neutral-50: #f0f0f0;
+  --color-grey-50: #fafafa;
+  --color-grey-100: #f5f5f5;
+  --color-grey-200: #e5e5e5;
+  --color-grey-500: #525252;
+  --color-grey-900: #262626;
   --color-green-600: #347552;
   --color-amber-600: #92671f;
   --color-red-600: #b84a55;
@@ -32,36 +32,37 @@
   --radius-lg: 16px;
 
   /* Semantic tokens */
-  --app-primary: var(--color-blue-600);
-  --app-primary-hover: var(--color-blue-700);
-  --app-primary-soft: var(--color-blue-50);
-  --app-action: #d1eaf9;
-  --app-action-hover: #c7e7f4;
-  --app-action-active: #b5e1eb;
-  --app-on-action: #000000;
-  --app-accent-start: #ddeeff;
-  --app-accent-end: #b5e1eb;
-  --app-accent: var(--color-blue-600);
+  --app-primary: var(--color-neutral-600);
+  --app-primary-hover: var(--color-neutral-700);
+  --app-primary-soft: var(--color-neutral-50);
+  --app-action: #171717;
+  --app-action-hover: #303030;
+  --app-action-active: #0a0a0a;
+  --app-on-action: #ffffff;
+  --app-accent-start: #f0f0f0;
+  --app-accent-end: #d4d4d4;
+  --app-accent: var(--color-neutral-600);
   --app-background: var(--color-grey-50);
   --app-surface: #ffffff;
   --app-surface-elevated: #ffffff;
+  --app-surface-inverse: #202020;
+  --app-text-inverse: #f5f5f5;
+  --app-border-inverse: #404040;
   --app-surface-subtle: var(--color-grey-100);
   --app-surface-active: var(--app-primary-soft);
-  --app-surface-hover: #f1f8fc;
+  --app-surface-hover: #f5f5f5;
   --app-navigation: #ffffff;
-  /* Keep the inspector exception on the declaration it describes. */
-  /* prettier-ignore */
-  --app-workspace-wash: radial-gradient(ellipse 70% 68% at 54% 3%, rgb(221 238 255 / 48%), transparent 80%), radial-gradient(ellipse 100% 78% at 0% 100%, rgb(181 225 235 / 24%), transparent 76%); /* taste-skill-ignore: the user's Arctic reference uses a pale blue/cyan wash on login and AI welcome surfaces only. */
+  --app-workspace-wash: none;
   --app-composer-surface: #ffffff;
-  --app-composer-border: #e4edf5;
-  --app-text: #000000;
-  --app-text-secondary: var(--app-text);
-  --app-border: #e8eef4;
-  --app-border-strong: #dce7ef;
-  --app-row-rule: #edf2f7;
-  --app-scrollbar: #cadbe8;
-  --app-focus-border: #315f91;
-  --app-focus-ring: 0 0 0 3px rgb(49 95 145 / 14%);
+  --app-composer-border: #d4d4d4;
+  --app-text: #171717;
+  --app-text-secondary: #525252;
+  --app-border: #e5e5e5;
+  --app-border-strong: #d4d4d4;
+  --app-row-rule: #ededed;
+  --app-scrollbar: #c4c4c4;
+  --app-focus-border: #262626;
+  --app-focus-ring: 0 0 0 3px rgb(38 38 38 / 14%);
   --app-danger: var(--color-red-600);
   --app-warning: var(--color-amber-600);
   --app-success: var(--color-green-600);
@@ -71,7 +72,7 @@
   /* Compatibility aliases for older category/tag styles. */
   --app-violet: var(--app-primary);
   --app-violet-soft: var(--app-primary-soft);
-  --app-focus: var(--color-blue-600);
+  --app-focus: var(--color-neutral-600);
   --app-font-family:
     'Noto Sans SC Variable', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif;
   --app-font-size-base: 14px;
@@ -85,12 +86,12 @@
   --app-radius-control: var(--radius-sm);
   --app-radius-card: var(--radius-md);
   --app-radius-shell: 20px;
-  --app-shadow: 0 1px 3px rgb(54 91 122 / 3%);
-  --app-shadow-hover: 0 3px 12px rgb(54 91 122 / 6%);
-  --app-shadow-shell: 0 18px 60px rgb(54 91 122 / 6.5%), 0 2px 8px rgb(54 91 122 / 2.5%);
-  --app-shadow-card: 0 6px 24px rgb(54 91 122 / 5.5%);
-  --app-shadow-overlay: 0 24px 70px rgb(42 75 105 / 14%);
-  --app-text-muted: var(--app-text);
+  --app-shadow: 0 1px 3px rgb(0 0 0 / 3%);
+  --app-shadow-hover: 0 3px 12px rgb(0 0 0 / 6%);
+  --app-shadow-shell: 0 18px 60px rgb(0 0 0 / 6.5%), 0 2px 8px rgb(0 0 0 / 2.5%);
+  --app-shadow-card: 0 6px 24px rgb(0 0 0 / 5.5%);
+  --app-shadow-overlay: 0 24px 70px rgb(0 0 0 / 14%);
+  --app-text-muted: #666666;
   --app-motion-duration: 160ms;
 
   /* Component tokens */

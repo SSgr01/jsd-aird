@@ -8,6 +8,18 @@ from aird_agent.core.contracts import digest
 from aird_agent.evidence.registry import canonical_candidate, register_candidates
 
 
+def business_export_context(run):
+    """Permission scope for native files; independent of model-selected citations."""
+    unique = {
+        digest(source): source for source in [
+            *run.get("source_refs", []),
+            *run.get("file_source_context", []),
+            *(item["source"] for item in run.get("evidence", {}).values()),
+        ] if source.get("kind") in {"BUSINESS_RECORD", "DATA_SOURCE_FILE"}
+    }
+    return [unique[key] for key in sorted(unique)]
+
+
 def identity(source):
     return source.get("resource_type"), source.get("resource_id")
 

@@ -8,7 +8,7 @@ body,
 .startup-skeleton {
   min-height: 100vh;
   min-height: 100dvh;
-  background: #f8fbfe;
+  background: #fafafa;
   color: var(--app-text);
   font:
     14px/22px 'Microsoft YaHei UI',
@@ -19,7 +19,7 @@ body,
 }
 .startup-skeleton i {
   display: block;
-  background: #e8eef4;
+  background: #e5e5e5;
   border-radius: 6px;
   height: 16px;
   width: 65%;
@@ -42,7 +42,7 @@ body,
   height: 64px;
   margin-left: 256px;
   padding: 5px 32px;
-  background: #f8fbfe;
+  background: #fafafa;
   box-sizing: border-box;
 }
 .startup-header i {
@@ -60,7 +60,7 @@ body,
 .startup-panel {
   margin-top: 24px;
   min-height: 340px;
-  border: 1px solid #e8eef4;
+  border: 1px solid #e5e5e5;
   border-radius: 20px;
   padding: 24px;
   background: #fff;
@@ -96,7 +96,7 @@ html[data-startup='login'] #root > .startup-skeleton .startup-panel {
 }
 .content-loading i {
   display: block;
-  background: #e8eef4;
+  background: #e5e5e5;
   height: 16px;
   margin-top: 24px;
   border-radius: 6px;
@@ -133,7 +133,7 @@ html[data-startup='login'] #root > .startup-skeleton .startup-panel {
   inset: 0;
   display: grid;
   place-content: center;
-  background: #f8fbfe;
+  background: #fafafa;
   z-index: 4;
   color: var(--app-text);
   font-size: 14px;

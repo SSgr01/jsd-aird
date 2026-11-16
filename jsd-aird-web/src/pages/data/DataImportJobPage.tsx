@@ -56,6 +56,7 @@ import { instanceWorkbookView } from '@/features/data-workbench/instance-workboo
 import { workbookCellValue } from '@/features/data-workbench/cell-format';
 import { AutoSaveFieldInput } from '@/features/data-workbench/AutoSaveFieldInput';
 import { DataReviewFooter } from '@/features/data-workbench/DataReviewFooter';
+import { ExperimentConversionNotice } from '@/features/data-workbench/ExperimentConversionNotice';
 import { FieldDefinitionReview } from '@/features/data-workbench/FieldDefinitionReview';
 import {
   deduplicateFieldDefinitionIssues,
@@ -489,7 +490,7 @@ export function DataImportJobPage({
       title={preview.job.sourceFileName}
       leading={<Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate(workspaceMode === 'EXPERIMENT' ? '/experiments/upload' : (canCreate ? '/data/upload' : '/data/view'))}>{workspaceMode === 'EXPERIMENT' ? '返回实验上传' : (canCreate ? '返回上传' : '返回数据查看')}</Button>}
       meta={meta}
-      navigation={<nav className="workspace-view-tabs data-workspace-view-tabs" aria-label="数据工作台视图"><Tabs activeKey={workspaceView === 'edit' && !canUpdate ? 'preview' : workspaceView} onChange={setWorkspaceView} items={[{ key: 'preview', label: <span><EyeOutlined /> 预览</span> }, { key: 'edit', label: '编辑', disabled: !canUpdate }, ...(workspaceMode === 'DATA' ? [{ key: 'versions', label: '版本记录' }] : [])]} /></nav>}
+      navigation={<nav className="workspace-view-tabs data-workspace-view-tabs" aria-label="数据工作台视图"><Tabs activeKey={workspaceView === 'edit' && !canUpdate ? 'preview' : workspaceView} onChange={setWorkspaceView} items={[{ key: 'preview', label: <span><EyeOutlined /> 预览</span> }, ...(canUpdate ? [{ key: 'edit', label: '编辑' }] : []), ...(workspaceMode === 'DATA' ? [{ key: 'versions', label: '版本记录' }] : [])]} /></nav>}
       content={workspaceMode === 'DATA' && workspaceView === 'versions' ? <div ref={setVersionContainer} /> : undefined}
       actions={<>
         {canUpdate && workbook?.editable && <Button loading={saving} disabled={Boolean(savingCell) || processing} onClick={() => void saveDraft()}>保存草稿</Button>}
@@ -520,6 +521,7 @@ export function DataImportJobPage({
           onEdit={editFieldDefinition}
           onConfirm={confirmFieldDefinition}
         />
+        {workspaceMode === 'EXPERIMENT' && <ExperimentConversionNotice importId={id} confirmed={preview.job.status === 'COMPLETED'} />}
         <WorkbenchNotice preview={preview} issues={issuesOutsideDefinition} processing={processing} onIssue={(issue) => {
           if (isFieldDefinitionIssue(issue) && instance) {
             const location = fieldDefinitionIssueLocation(issue, instance, preview.sheets);

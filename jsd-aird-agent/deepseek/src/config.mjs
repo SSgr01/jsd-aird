@@ -60,8 +60,13 @@ export function standardPlugins(config) {
   const excluded = new Set(['delegation', 'tool-plugin-manager', 'tool-plugin-market']);
   return blueprint[0].insert[0].config.plugins.filter(row => !excluded.has(row.id)).map(row => {
     if (row.id === 'persona') return { ...row, config: { prefix: '你是由 {{model}} 驱动的企业研发助手。' } };
+    // Use native request-zone selection and durable clock messages. Refresh on
+    // every prepared request so short followups cannot retain yesterday's clock.
+    if (row.id === 'time-context') return { ...row, config: {
+      ...row.config, timeZone: 'Asia/Shanghai', refreshIntervalMs: 0,
+    } };
     // Native instruction discovery must stop at the tenant's execution root.
-    if (row.id === 'agent-instructions') return { ...row, config: {
+    if (row.id === 'agent-instructions') return { ...row, name: pathToFileURL(resolve(config.plugin, 'src/instruction-runtime.mjs')).href, config: {
       ...row.config, projectRootMarkers: ['.dsh-workspace-root', '.git'],
     } };
     // The execution world is Linux even when the enterprise gateway runs on Windows.
@@ -79,7 +84,7 @@ export function enterprisePatch(config) {
   const disabled = [
     'session-log-deepseek', 'session-telemetry-otel', 'desktop-product-telemetry', 'product-analytics',
     'plugin-manager', 'tool-plugin-manager', 'hmr',
-    'directory-picker', 'fs-sandbox', 'bash-sandbox', 'pwsh-sandbox', 'terminal-controller', 'subprocess',
+    'directory-picker', 'working-directory', 'fs-sandbox', 'bash-sandbox', 'pwsh-sandbox', 'terminal-controller', 'subprocess',
     'account-controller', 'mcp-manager', 'cordis-host-runner',
     'cordis-client-runner', 'cordis-inspect-providers', 'open-in-app',
     'session-log-download', 'subagent', 'agent-team', 'subagent-spawn-in-process',
@@ -96,7 +101,6 @@ export function enterprisePatch(config) {
   ];
   return [
     ...disabled.map(id => ({ id, disabled: true })),
-    { id: 'working-directory', name: resolve(config.plugin, 'src/working-directory.mjs') },
     { id: 'spill-local', name: resolve(config.plugin, 'src/spill-store.mjs') },
     { id: 'web', config: { searchProvider: 'enterprise-search', fetchProvider: 'http' } },
     { id: 'agent-default-model', config: { provider: config.model.provider || 'deepseek-official', model: config.model.id,
@@ -130,6 +134,9 @@ export function enterprisePatch(config) {
       foldedReplies: 'final', performanceUsage: 'detailed', linkOpening: 'sidebar' } },
     { id: 'agent-preset-registry', config: { default: 'enterprise' } },
     { insert: [
+      // Patch `name` qualifies the existing module; it cannot replace it.
+      // Disable the original service and insert the enterprise implementation.
+      { id: 'enterprise-working-directory', name: resolve(config.plugin, 'src/working-directory.mjs') },
       { id: 'preset-enterprise', name: '@deepseek-ai/dsh-agent-preset', config: {
         id: 'enterprise', name: '研发助手', description: '阅读资料、分析问题，联动授权研发数据完成任务', order: 1,
         plugins: standardPlugins(config),

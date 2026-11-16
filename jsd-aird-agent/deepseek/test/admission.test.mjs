@@ -11,12 +11,22 @@ function harness(t, respond) {
   }};
   const ctx={on:(name,fn)=>hooks.set(name,fn),effect:fn=>cleanups.push(fn()),logger:{warn:()=>{}}};
   const admission=installAdmission(ctx,{ready:Promise.resolve(),prepare:async(_agent,input)=>({session_id:agent.id,...input}),
-    business:async(action,body)=>{calls.push({action,body});return respond(action,body,calls);}});
+    business:async(action,body,signal)=>{calls.push({action,body});return respond(action,body,calls,signal);}});
   t.after(()=>cleanups.forEach(fn=>fn()));
   const run=next=>hooks.get('agent/pre-turn')({agent,messages:[message],turn:1,signal:controller.signal},next);
-  return {agent,controller,calls,admission,run,end:()=>hooks.get('session/event')({id:agent.id},{type:'turn/end',data:{turn:1}})};
+  return {agent,controller,calls,admission,run,end:reason=>hooks.get('session/event')({id:agent.id},{type:'turn/end',data:{turn:1,reason}})};
 }
 const state=(admission='QUEUED')=>({run_id:'run',epoch:admission==='GRANTED'?1:0,status:'QUEUED',admission,heartbeat_seconds:10,lease_seconds:60});
+
+test('activation failure before binding ends the admitted queued Run before releasing its ticket',async t=>{
+  const h=harness(t,async()=>state('GRANTED'));
+  await h.run(async()=>{});
+  h.end({kind:'error',error:{code:'TOOL_ACTIVATION_FAILED'}});await delay(0);
+  const last=h.calls.slice(-2);
+  assert.equal(last[0].action,'failure');assert.equal(last[0].body.run_id,'run');
+  assert.equal(last[0].body.error_code,'TOOL_ACTIVATION_FAILED');
+  assert.equal(last[1].action,'admission-release');
+});
 
 test('queued native input waits, automatically enters once, and releases the same epoch',async t=>{
   let current=state(),entered=0;
@@ -71,6 +81,53 @@ test('a fenced heartbeat stops the old agent while preserving its pending Inbox'
   });
   await h.run(async()=>{});await delay(25);
   assert.deepEqual(h.agent.cancelled,{reason:{kind:'user'},options:{keepInbox:true}});
+});
+
+test('a late renewal rejection from an ended turn cannot cancel its successor',async t=>{
+  let rejectRenewal;
+  const h=harness(t,async action=>{
+    if(action==='admission-renew')return new Promise((_resolve,reject)=>{rejectRenewal=reject;});
+    return {...state('GRANTED'),heartbeat_seconds:0.005};
+  });
+  await h.run(async()=>{});
+  while(!rejectRenewal)await delay(5);
+  h.end();await delay(0);
+  await h.run(async()=>{});
+  rejectRenewal(Object.assign(new Error('old request fenced'),{status:409}));await delay(0);
+  assert.equal(h.agent.cancelled,undefined);
+  assert.equal(h.admission.grants.size,1);
+});
+
+test('a stalled renewal has its own deadline and cannot outlive the confirmed lease',async t=>{
+  let renewalSignal;
+  const h=harness(t,async(action,_body,_calls,signal)=>{
+    if(action==='admission-renew') {
+      renewalSignal=signal;
+      return new Promise(()=>{});
+    }
+    return {...state('GRANTED'),heartbeat_seconds:0.005,lease_seconds:0.06};
+  });
+  await h.run(async()=>{});
+  while(!renewalSignal)await delay(5);
+  await delay(90);
+  assert.equal(renewalSignal.aborted,true);
+  assert.deepEqual(h.agent.cancelled,{reason:{kind:'user'},options:{keepInbox:true}});
+  h.end();await delay(0);
+  assert.equal(h.calls.at(-1).action,'admission-release');
+});
+
+test('a transient renewal failure preserves the live turn and renews the same epoch',async t=>{
+  let attempts=0;
+  const h=harness(t,async action=>{
+    if(action==='admission-renew' && ++attempts===1)throw new TypeError('fetch failed');
+    if(action==='admission-renew')return {accepted:true};
+    return {...state('GRANTED'),heartbeat_seconds:0.005};
+  });
+  await h.run(async()=>{});
+  while(attempts<2)await delay(5);
+  assert.equal(h.agent.cancelled,undefined);
+  const renewals=h.calls.filter(call=>call.action==='admission-renew');
+  assert.deepEqual(renewals[0].body,renewals[1].body);
 });
 
 test('cancelling after a lost initial reply persists cancellation with the same input identity',async t=>{

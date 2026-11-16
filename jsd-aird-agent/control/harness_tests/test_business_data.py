@@ -15,6 +15,25 @@ from aird_agent.evidence.registry import canonical_candidate
 from aird_agent.capabilities.literature.approval import native_literature_approval
 
 
+async def test_background_material_reads_receive_only_server_frozen_project_scope():
+    calls = []
+    async def host(principal, action, arguments, run_id):
+        calls.append(arguments)
+        return {}
+    from aird_agent.hosts.jsd.briefings import Briefings
+    run = {'id': 'report', 'automation': {'builtin_id': 'project-morning'}}
+    runtime = SimpleNamespace(briefings=Briefings)
+    context = ExecutionContext(SimpleNamespace(user_id=uuid4()), run, {}, host, runtime=runtime)
+    args = {'ref': {'type': 'PROJECT_DOCUMENT', 'id': str(uuid4())}}
+    with pytest.raises(HTTPException, match='BACKGROUND_REPORT_SCOPE_REQUIRED'):
+        await business_pack().handlers['business_read'](context, args)
+    assert not calls
+    project = str(uuid4())
+    run['briefing_snapshot'] = {'frozen': True, 'sections': {'PROJECT': [{'ref': {'type': 'PROJECT', 'id': project}}]}}
+    await business_pack().handlers['business_read'](context, {**args, 'report_project_ids': ['forged']})
+    assert calls[0]['report_project_ids'] == [project]
+
+
 async def test_compute_identity_is_server_owned_and_missing_identity_does_not_submit():
     calls = []
 
@@ -107,11 +126,20 @@ def test_query_proof_stays_in_ledger_and_model_receives_compact_typed_results():
     assert citation_links({proof["evidence_id"]: proof}, "https://example.test")[proof["evidence_id"]]["url"].startswith("https://example.test/api/v1/agents/business/")
 
 
-def test_mutating_compute_tools_are_discoverable_and_not_initially_activated():
+def test_discovered_business_material_keeps_files_and_page_coordinates_for_model():
+    files = [{'file_id': 'source', 'name': '固化条件.docx', 'bytes': 100, 'sha256': 'fixed'}]
+    reading = {'section': 'content', 'offset': 20, 'returned': 20, 'total': 41, 'next_offset': 40}
+    candidate = {'source': {'resource_type': 'PROJECT_DOCUMENT'}, 'text': '已保存正文', 'files': files, 'reading': reading}
+    shown = model_result({'candidates': [candidate]})['candidates'][0]
+    assert shown['files'] == files and shown['reading'] == reading
+
+
+def test_mutating_business_tools_are_discoverable_and_not_initially_activated():
     pack = business_pack()
     assert pack.initial_tools == ("business_search",)
     assert pack.mutations == {"run_prediction", "run_formula_design", "run_experiment_optimization",
-                              "run_model_training", "activate_trained_model", "continue_experiment_optimization"}
+                              "run_model_training", "activate_trained_model", "continue_experiment_optimization",
+                              "experiment_conversion"}
     for spec in pack.tools:
         assert "operation_key" not in spec["parameters"].get("properties", {})
 

@@ -23,7 +23,7 @@ DSH Workspace 管目录和会话，企业资料随任务通过原生附件或 `@
 
 长期记忆已接入自托管 Hindsight 0.8.6，提供本人私有偏好、新会话召回、来源核验、后台整理、更正遗忘及原生设置。Control 复用现有记录结构保存控制信息，正文由 Hindsight 保存；不导入启用前历史。默认配置保留部署开关，先隔离验收再启用企业入口。接入及开关见 [个人记忆一期](docs/personal-memory.md)，固定镜像及后台启动见 [记忆服务部署](../deployment/hindsight/README.md)，实际结果见 [验收记录](docs/personal-memory-acceptance.md)。
 
-网页外观通过企业插件的 `src/theme.mjs` 和 `src/theme.css` 适配 UI-opz 系统设计，使用原生 `theme.overrideTokens` 与品牌、导航插槽；不复制旧问答页面或上游组件。浅色、深色、字号和自选字体继续由 dsh 原生设置管理，网关仅允许其显示字段。修改样式后执行 `node jsd-aird-agent/enterprise-plugin/build.mjs` 并重启网关及其 Host；生成的 `lib/client.js` 包含主题资源，不需要额外样式请求。
+网页外观通过企业插件的 `src/theme.mjs` 和 `src/theme.css` 对齐业务系统的黑白灰主题，使用原生 `theme.overrideTokens` 与品牌、导航插槽；桌面窗口铺满、无外层圆角和阴影。浅色、深色、字号和自选字体继续由 dsh 原生设置管理，默认正文字体与业务系统相同。修改样式后执行 `node jsd-aird-agent/enterprise-plugin/build.mjs` 并重启网关及其 Host；构建需要先安装 `jsd-aird-web` 依赖，并将同一版本的 `@fontsource-variable/noto-sans-sc` 分片和许可证复制到 `lib/fonts/`。工作台通过同域 `/agent/font-assets/` 独立加载字体，不依赖曾访问业务页面或本机安装字体。部署时须保留生成的 `lib/client.js`、`lib/fonts/` 和 `lib/chemistry/`。
 
 欢迎区保留 UI-opz 的“阅读文献、比较方法、整理数据”卡片，通过原生 Hero 与输入区插槽展示；点击仅追加到原生草稿并聚焦，保留已有文字、资料引用与附件，由用户确认发送。进入已有对话后不显示卡片。
 

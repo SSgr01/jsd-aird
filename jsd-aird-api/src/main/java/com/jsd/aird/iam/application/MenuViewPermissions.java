@@ -52,11 +52,23 @@ public final class MenuViewPermissions {
     public static Set<String> impliedBy(Set<String> menuKeys) {
         var permissions = new LinkedHashSet<String>();
         for (var key : menuKeys) {
+            // A navigation group carries no read grant of its own.
+            if(PermissionModelCatalog.menus().stream().anyMatch(menu->key.equals(menu.parent())))continue;
             if (key.endsWith(".view") && DEFINED.contains(key)) permissions.add(key);
             if (DEFINED.contains(key + ".view")) permissions.add(key + ".view");
             var view = PAGE_VIEWS.get(key);
             if (view != null) permissions.add(view);
         }
         return permissions;
+    }
+
+    /** Explicit view denial also hides the entry, even if a role still carries its menu. */
+    public static Set<String> deniedMenus(Set<String> denied) {
+        var result=new LinkedHashSet<String>();
+        for(var menu:PermissionModelCatalog.allMenuKeys()) {
+            String view=PAGE_VIEWS.get(menu);
+            if(denied.contains(menu+".view") || view!=null && denied.contains(view))result.add(menu);
+        }
+        return result;
     }
 }

@@ -459,7 +459,7 @@ export function ProjectListPage() {
           <Can permission="project.list.create"><Button icon={<FileWordOutlined />} loading={importing} onClick={() => importInput.current?.click()}>
             AI 导入
           </Button></Can>
-          <Can permission="project.list.view"><Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void handleExport()}>
+          <Can permission="project.list.export"><Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void handleExport()}>
             导出
           </Button></Can>
           {selected.size > 0 && <Can permission="project.list.create"><Button icon={<CopyOutlined />} loading={copying} onClick={handleCopy}>

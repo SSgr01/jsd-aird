@@ -225,19 +225,52 @@ public class KnowledgeGovernanceService {
     }
 
     public IndexBuildView rebuildPublishedIndex(UUID documentId) {
+        return rebuildPublishedIndex(documentId, null);
+    }
+
+    private String rebuildKey(UUID documentId, String requestKey) {
+        if (requestKey != null && !requestKey.matches("[A-Za-z0-9_-]{1,128}")) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "重建请求标识格式不正确");
+        }
+        return "kb-rebuild-published-index:" + documentId + ":" + requestKey;
+    }
+
+    public RebuildIndexStatusView rebuildIndexStatus(UUID documentId, String requestKey) {
         var actor = ActorContext.required();
         var publication = governance.currentPublication(actor.organizationId(), documentId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "当前发布不存在"));
+        var job = requestKey == null
+                ? async.findLatestJob(actor.organizationId(), "kb-rebuild-published-index:" + documentId + ":")
+                : async.findJob(actor.organizationId(), rebuildKey(documentId, requestKey));
+        var profile = knowledge.indexModel();
+        return new RebuildIndexStatusView(documentId, publication.id(), publication.versionId(), publication.reviewRevisionId(),
+                profile.model(), profile.dimension(), knowledgeRepository.isAiApproved(actor.organizationId(), documentId),
+                job.orElse(null));
+    }
+
+    public IndexBuildView rebuildPublishedIndex(UUID documentId, String requestKey) {
+        return rebuildPublishedIndex(documentId, requestKey, false);
+    }
+
+    public IndexBuildView rebuildPublishedIndex(UUID documentId, String requestKey, boolean vectorsOnly) {
+        var actor = ActorContext.required();
+        var publication = governance.currentPublication(actor.organizationId(), documentId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "当前发布不存在"));
+        var profile = knowledge.indexModel();
         var payload = objectMapper.createObjectNode()
                 .put("organizationId", actor.organizationId().toString())
                 .put("actorId", actor.userId().toString())
                 .put("documentId", documentId.toString())
-                .put("rebuildPublishedIndex", true);
-        async.enqueue(actor.organizationId(), "KB_REBUILD_PUBLISHED_INDEX", payload,
-                "kb-rebuild-published-index:" + documentId + ":" + System.currentTimeMillis(), 45);
+                .put("rebuildPublishedIndex", true)
+                .put("vectorsOnly", vectorsOnly)
+                .put("expectedPublicationId", publication.id().toString())
+                .put("expectedEmbeddingModel", profile.model())
+                .put("expectedEmbeddingDimension", profile.dimension());
+        var jobId = async.enqueue(actor.organizationId(), "KB_REBUILD_PUBLISHED_INDEX", payload,
+                rebuildKey(documentId, requestKey == null ? UUID.randomUUID().toString() : requestKey), 45);
         audit(actor.organizationId(), actor.userId(), "KB_PUBLISHED_INDEX_REBUILD_QUEUED", documentId,
                 objectMapper.createObjectNode().put("publicationId", publication.id().toString()));
-        return new IndexBuildView(documentId, publication.versionId(), publication.reviewRevisionId(), "QUEUED");
+        return new IndexBuildView(documentId, publication.versionId(), publication.reviewRevisionId(), "QUEUED", jobId);
     }
 
     public BulkIndexBuildView rebuildAllPublishedIndexes() {
@@ -615,7 +648,14 @@ public class KnowledgeGovernanceService {
     public record TableReviewCommand(int lockVersion, List<KnowledgeGovernanceRepository.CellPatch> patches,
                                      List<KnowledgeGovernanceRepository.RowState> rows,
                                      int rowOffset, int rowLimit, int columnOffset, int columnLimit) { }
-    public record IndexBuildView(UUID documentId, UUID versionId, UUID reviewRevisionId, String status) { }
+    public record IndexBuildView(UUID documentId, UUID versionId, UUID reviewRevisionId, String status, UUID jobId) {
+        public IndexBuildView(UUID documentId, UUID versionId, UUID reviewRevisionId, String status) {
+            this(documentId, versionId, reviewRevisionId, status, null);
+        }
+    }
+    public record RebuildIndexStatusView(UUID documentId, UUID publicationId, UUID versionId, UUID reviewRevisionId,
+                                        String embeddingModel, int embeddingDimension, boolean aiApproved,
+                                        OpsAsyncFacade.AsyncJobView job) { }
 
     public record BulkIndexBuildView(int documentCount, String status) { }
     public record DocumentRevision(@jakarta.validation.constraints.NotNull UUID id,

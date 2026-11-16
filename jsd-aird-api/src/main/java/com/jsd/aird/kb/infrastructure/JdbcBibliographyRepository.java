@@ -132,6 +132,18 @@ public class JdbcBibliographyRepository implements BibliographyRepository {
         result.put("total",total).put("embedded",embedded);
         result.put("status", total == 0 ? "NOT_INDEXED" : embedded == total ? "PRESENT" : embedded == 0 ? "MISSING" : "PARTIAL");
         result.put("modelCompatibilityChecked",false);
+        // Expose stored model/dimension counts so a migration can verify its own
+        // explicit target; PRESENT alone only establishes that vectors exist.
+        var models = jdbc.queryForList("""
+            SELECT c.embedding_model AS model, vector_dims(c.embedding) AS dimension, count(*) AS count
+            FROM kb.document d
+            JOIN kb.publication p ON p.id=d.current_publication_id AND p.document_version_id=?
+            JOIN kb.document_chunk c ON c.document_version_id=p.document_version_id
+              AND c.review_revision_id=p.review_revision_id AND c.chunk_role='CHILD'
+            WHERE d.organization_id=? AND d.id=? AND c.embedding IS NOT NULL
+            GROUP BY c.embedding_model, vector_dims(c.embedding)
+            """, version, org, doc);
+        result.set("models", json.valueToTree(models));
         return result;
     }
     @Override public Task createTask(UUID org, UUID owner, String key, String fingerprint) {

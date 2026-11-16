@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {normalizeOriginalLinks,shortSourceTitle,projectSourceBlocks} from '../../enterprise-plugin/src/source-links.mjs';
+import {normalizeOriginalLinks,shortSourceTitle,projectSourceBlocks,describeSourceLink} from '../../enterprise-plugin/src/source-links.mjs';
 const origin='http://127.0.0.1:5184';
 const id='11111111-1111-1111-1111-111111111111', version='22222222-2222-2222-2222-222222222222';
 const url=origin+'/api/v1/knowledge/documents/'+id+'/versions/'+version+'/content';
@@ -121,11 +121,76 @@ test('same-document references to different pages retain separate direct navigat
  assert.equal(actual,'[Explicit source · p3]('+url+'#page=3) [Explicit source · p4]('+url+'#page=4)');
 });
 
-test('ordinary scientific parentheses, external quoted links, and diagnostic code are untouched',()=>{
+test('scientific parentheses and diagnostic code stay intact; external citations use their supplied title',()=>{
  const external='[**\\[1\\]**](https://example.org/paper "External title")';
  const input='结果 [论文]('+url+'#page=14)（浓度 0.1%/1%）\n'+external+'\n```text\nq61ca9e3880b6327596f1fa60\n```';
  const result=projectSourceBlocks([{kind:'text',text:input}],origin);
  assert.ok(result.blocks[0].text.includes('（浓度 0.1%/1%）'));
- assert.ok(result.blocks[0].text.includes(external));
+ assert.ok(result.blocks[0].text.includes('[External title](https://example.org/paper)'));
+ assert.equal(result.links[0].title,'External title');
  assert.ok(result.blocks[0].text.includes('```text\nq61ca9e3880b6327596f1fa60\n```'));
+});
+
+test('website citations shorten raw and auto URLs without changing destinations or nearby punctuation',()=>{
+ const target='https://time.is/Shanghai?lang=zh#clock';
+ const input='当前时间（'+target+'）。[日历](https://example.org/calendar "日历来源") <https://www.example.net/path?q=1&b=2>';
+ const result=projectSourceBlocks([{kind:'text',text:input}],origin);
+ assert.equal(result.blocks[0].text,'当前时间[time.is]('+target+')。[日历](https://example.org/calendar) [example.net](https://www.example.net/path?q=1&b=2)');
+ assert.deepEqual(new Set(result.links.map(link=>link.url)),new Set([target,'https://example.org/calendar','https://www.example.net/path?q=1&b=2']));
+ assert.equal(result.links.find(link=>link.url==='https://example.org/calendar').title,'日历来源');
+});
+
+test('project names resolve only for exact same-origin project routes with a readable fallback',()=>{
+ const target=origin+'/projects/'+id+'?tab=overview#summary';
+ const endpoint='/api/v1/projects/'+id;
+ const input='项目：'+target+'\n[查看项目](/projects/'+id+')';
+ const initial=projectSourceBlocks([{kind:'text',text:input}],origin);
+ assert.ok(initial.blocks[0].text.includes('[项目详情]('+target+')'));
+ assert.equal(initial.links[0].endpoint,endpoint);
+ const names=new Map([[endpoint,'澄禾电子 [UV胶] *配方*']]);
+ const result=projectSourceBlocks([{kind:'text',text:input}],origin,names);
+ assert.ok(result.blocks[0].text.includes('[项目 · 澄禾电子 \\[UV胶\\] \\*配方\\*]('+target+')'));
+ assert.equal(result.links[0].title,'澄禾电子 [UV胶] *配方*');
+ assert.equal(result.links[0].url,target);
+ assert.equal(describeSourceLink('', 'https://untrusted.org/projects/'+id,origin).kind,'web');
+ assert.equal(describeSourceLink('', 'http://127.0.0.1:9999/projects/'+id,origin).endpoint,undefined);
+ assert.equal(describeSourceLink('', origin+'/projects/'+id+'/other',origin),null);
+ assert.equal(describeSourceLink('', 'javascript:alert(1)',origin),null);
+ assert.equal(describeSourceLink('', origin+'/api/v1/files/'+id,origin),null);
+});
+
+test('code, images, reference definitions and unfinished links retain their native content',()=>{
+ const target=origin+'/projects/'+id;
+ const input='`'+target+'`\n```text\nhttps://time.is\n```\n![项目截图]('+target+')\n[时间][clock]\n[clock]: https://time.is "时间"\n[项目]('+target;
+ const result=projectSourceBlocks([{kind:'text',text:input}],origin);
+ assert.equal(result.blocks[0].text,input);
+ assert.equal(result.links.length,0);
+});
+
+test('paper title truncation and page labels remain unchanged alongside website and project links',()=>{
+ const title='Re-Assemblable, Recyclable, and Self-Healing Epoxy Resin Adhesives';
+ const text='['+title+']('+url+'#page=5) ['+title+']('+url+'#page=3)';
+ const before=projectSourceBlocks([{kind:'text',text}],origin);
+ const mixed=projectSourceBlocks([{kind:'text',text:text+' https://time.is'}],origin);
+ assert.ok(mixed.blocks[0].text.startsWith(before.blocks[0].text));
+ assert.ok(before.blocks[0].text.includes('[Re-Assemblable, Recyclable,… · p5]('));
+ assert.deepEqual(mixed.sources,before.sources);
+});
+
+test('source-only parentheses disappear without removing scientific or descriptive parentheses',()=>{
+ const input='时间（[time.is](https://time.is/)），也见 ([日历](https://example.org/calendar), [原文]('+url+'#page=3))。\n浓度（0.1%/1%）；说明（参见 [日历](https://example.org/calendar)）。`(https://time.is/)`';
+ const actual=projectSourceBlocks([{kind:'text',text:input}],origin).blocks[0].text;
+ assert.ok(actual.startsWith('时间[time.is](https://time.is/)，也见 [日历](https://example.org/calendar), [内容标签缺失 · p3]('+url+'#page=3)。'));
+ assert.ok(actual.includes('浓度（0.1%/1%）'));
+ assert.ok(actual.includes('说明（参见 [日历](https://example.org/calendar)）'));
+ assert.ok(actual.endsWith('`(https://time.is/)`'));
+});
+
+test('balanced URL parentheses and Markdown-escaped destinations retain complete navigation targets',()=>{
+ const target='https://example.org/paper_(2026)?a=1&b=2';
+ const input='来源（[论文网页]('+target.replaceAll('&','\\&')+')），另见 '+target+'。';
+ const result=projectSourceBlocks([{kind:'text',text:input}],origin);
+ assert.equal(result.blocks[0].text,'来源[论文网页]('+target.replaceAll('&','\\&')+')，另见 [example.org]('+target+')。');
+ assert.equal(result.links.length,1);
+ assert.equal(result.links[0].url,target);
 });

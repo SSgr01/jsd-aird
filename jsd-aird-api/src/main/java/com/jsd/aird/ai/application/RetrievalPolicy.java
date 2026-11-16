@@ -13,6 +13,11 @@ public final class RetrievalPolicy {
     public final int rrfK, rerankTop, pageSize, parentCount, parentChars, parentBudget;
     public final boolean parents;
     private String dependencies="standalone";
+    private org.springframework.beans.factory.ObjectProvider<com.jsd.aird.kb.api.KnowledgeEmbeddingFacade> embeddings;
+    @org.springframework.beans.factory.annotation.Autowired
+    void embeddingQueries(org.springframework.beans.factory.ObjectProvider<com.jsd.aird.kb.api.KnowledgeEmbeddingFacade> embeddings) {
+        this.embeddings = embeddings;
+    }
     @org.springframework.beans.factory.annotation.Autowired
     void dependencies(@Value("${app.ai.embedding.model:}") String embedding,
             @Value("${app.ai.embedding.dimension:1024}") int dimension,
@@ -56,10 +61,13 @@ public final class RetrievalPolicy {
         values.put("page_size",pageSize);values.put("parent_enabled",parents);values.put("parent_count",parentCount);
         values.put("parent_chars",parentChars);values.put("parent_budget",parentBudget);
         values.put("dependencies",dependencies);
+        var provider = embeddings == null ? null : embeddings.getIfAvailable();
+        values.put("embedding_query", provider == null ? Map.of("profile", "none", "version", "plain-v1") : provider.queryPolicy());
         return values;
     }
     public String fingerprint() {
-        try { return EvidenceProtocol.sha(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(describe())); }
+        try { return EvidenceProtocol.sha(new com.fasterxml.jackson.databind.ObjectMapper()
+                .enable(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS).writeValueAsString(describe())); }
         catch(Exception error) {throw new IllegalStateException(error);}
     }
 }

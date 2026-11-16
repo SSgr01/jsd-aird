@@ -19,6 +19,7 @@ from aird_agent.core.workspace import Workspace
 from aird_agent.sandbox.containers import LABEL, ContainerPool, stage_inputs
 from aird_agent.sandbox.jobs import BrokerJobs, TransferFile
 from aird_agent.sandbox.streams import ExecutionStreams
+from aird_agent.sandbox.recovery import CleanupPending
 
 
 class BrokerSettings(BaseSettings):
@@ -102,6 +103,8 @@ class ContainerRunner:
         if len(request.script.encode()) > 65536:
             raise HTTPException(400, "Invalid script")
         slot = None
+        observed_result = failure = None
+        result = None
         started = time.monotonic()
         timeout = min(self.settings.timeout_seconds, (request.timeout_ms or 600000) / 1000)
         streams = ExecutionStreams(workspace.root / ".streams", self.settings.output_bytes_per_stream) if workspace else None
@@ -162,7 +165,7 @@ class ContainerRunner:
                 f"output/execution-{request.execution_id}.json",
                 json.dumps({"exit_code": result["exit_code"], "output": text}, ensure_ascii=False),
             )
-            return {
+            observed_result = {
                 "exit_code": result["exit_code"],
                 "output": text,
                 "truncated": truncated,
@@ -173,13 +176,25 @@ class ContainerRunner:
                     "ready_wait_seconds": round(acquired-started, 3), "input_stage_seconds": round(staged-acquired, 3),
                     "run_and_export_seconds": round(time.monotonic()-staged, 3), **result.get("timings", {})},
             }
+            return observed_result
         except (ValueError, KeyError, TypeError):
             raise HTTPException(502, "Invalid sandbox result") from None
         except TimeoutError:
             raise HTTPException(504, "SANDBOX_TIMEOUT" if slot else "SANDBOX_STARTUP_TIMEOUT") from None
         finally:
+            import sys
+            failure = sys.exception()
             if slot and not await asyncio.shield(self.pool.release(slot)):
-                raise HTTPException(503, "SANDBOX_CLEANUP_PENDING")
+                observed_exit_code = result.get('exit_code') if isinstance(result, dict) and type(result.get('exit_code')) is int else None
+                raise CleanupPending(slot.name, result=observed_result, failure=failure, observed_exit_code=observed_exit_code) from failure
+
+    def cleanup_confirmed(self, name):
+        slot = self.pool.pending.get(name)
+        return bool(slot and slot.cleanup_complete)
+
+    def acknowledge_cleanup(self, name):
+        if self.cleanup_confirmed(name):
+            self.pool.pending.pop(name, None)
 
 
 def create_broker(settings=None):

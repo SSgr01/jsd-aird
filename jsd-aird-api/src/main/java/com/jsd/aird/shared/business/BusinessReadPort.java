@@ -14,6 +14,10 @@ public interface BusinessReadPort {
     default FileContent file(ObjectNode reference) {
         throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.BAD_REQUEST, "该业务对象没有可读取的原文件");
     }
+    default FileContent file(ObjectNode reference, java.util.UUID fileId) {
+        if (fileId != null) throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.BAD_REQUEST, "该业务类型不支持选择文件");
+        return file(reference);
+    }
 
     record FileContent(String name, String contentType, byte[] bytes, String sha256) { }
 

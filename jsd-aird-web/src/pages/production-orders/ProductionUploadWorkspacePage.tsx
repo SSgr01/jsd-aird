@@ -840,7 +840,7 @@ export function ProductionUploadWorkspacePage() {
           onChange={(key) => switchView(key as WorkspaceView)}
           items={[
             { key: 'preview', label: '预览' },
-            { key: 'edit', label: '编辑', disabled: !isWorkbook && format !== 'DOCX' },
+            ...(canUpdate ? [{ key: 'edit', label: '编辑', disabled: !isWorkbook && format !== 'DOCX' }] : []),
             { key: 'versions', label: '版本记录' },
             { key: 'material', label: '实际投料单', disabled: !isWorkbook },
             { key: 'attachments', label: '工艺附件', disabled: !isWorkbook },

@@ -6,10 +6,23 @@ import { LocalSubprocessRuntime } from '../../../vendor/deepseek-harness/package
 import { sha256 } from './filesystem.mjs';
 import { scheduleTools } from './scheduling.mjs';
 import { SandboxProcess } from './sandbox-process.mjs';
+import { workbookInspectionCommand } from './xlsx-runtime.mjs';
+import {backgroundNativeTools,confineBackgroundRead} from './background-reads.mjs';
 
 export const nativeTools = new Set(['read','read_image','write','edit','apply_patch','bash','present','todo_write',
   'glob','grep','skill','ask_user_question','web_search','web_fetch','working_directory',
   'enter_plan_mode','exit_plan_mode','get_goal','create_goal','update_goal','job_output','job_list','job_kill', ...scheduleTools]);
+
+export function installNativeToolGuard(ctx, {runs}) {
+  ctx.effect(() => ctx.tools.guard(execution => {
+    if (!execution.agent) return 'ENTERPRISE_TOOL_DENIED';
+    const bound = runs.get(execution.agent.id);
+    if (bound?.automation && nativeTools.has(execution.name) && !backgroundNativeTools.has(execution.name))
+      return 'BACKGROUND_READ_ONLY';
+    return (nativeTools.has(execution.name) && bound && (scheduleTools.has(execution.name) || bound.pack_ids?.includes('files'))) || bound?.tools.some(tool => tool.name === execution.name)
+      ? undefined : 'ENTERPRISE_TOOL_DENIED';
+  }));
+}
 
 /** Native tools retain their schemas, editing semantics, terminal cards and delivery cards. */
 export function installNativeRuntime(ctx, {business,runs,profileOf,searchAvailable=false}) {
@@ -25,22 +38,38 @@ export function installNativeRuntime(ctx, {business,runs,profileOf,searchAvailab
     const content=await ctx.fs.readBytes(target,exec.signal,10*1024*1024);
     const save = suffix => business('native-tool',bodyFor(exec,{name:'artifact_save',call_id:exec.callId+'/file-'+index+suffix,
       arguments:{path:pathOf(target),base64:Buffer.from(content).toString('base64'),sha256:sha256(content),source_quotes}}),exec.signal);
+    const freeze = async(command, suffix) => {
+      const bound=bodyFor(exec,{call_id:exec.callId+'/'+suffix+'-'+index});
+      await business('gate',{...bound,kind:'tool',native_name:'bash'},exec.signal);
+      const checkpoint=new SandboxProcess(ctx,{
+        argv:['bash','-c',command],cwd:ctx.fs.processPath(await ctx.fs.resolve(cwd)),env:{},signal:exec.signal,
+        stdio:{stdout:{maxBytes:4096},stderr:{maxBytes:4096}},
+      },{business,payload:bound,agent:exec.agent});
+      const result=await checkpoint.done;
+      if(result.signal || result.exitCode===null) {
+        exec.signal?.throwIfAborted();
+        throw new Error('ARTIFACT_CHECKPOINT_CANCELLED: file was not registered');
+      }
+      if(result.exitCode!==0) {
+        const detail=checkpoint.collected.stderr.readFrom(0);
+        throw new Error((suffix==='xlsx'?'EXPORT_FORMAT_INVALID: Excel workbook could not be opened':'ARTIFACT_CHECKPOINT_FAILED: file was not registered')
+          + (detail.text ? '\n'+detail.text : ''));
+      }
+      exec.signal?.throwIfAborted();
+      const currentContent=await ctx.fs.readBytes(target,exec.signal,10*1024*1024);
+      if(sha256(currentContent)!==sha256(content))throw new Error('WORKSPACE_CHANGED_DURING_REGISTRATION');
+    };
+    const isWorkbook=pathOf(target).toLowerCase().endsWith('.xlsx');
+    // Opening the exact bytes also freezes an execution receipt, so edited
+    // workbooks need no additional no-op checkpoint or speculative save.
+    if(isWorkbook)await freeze(workbookInspectionCommand(ctx.fs.processPath(target),sha256(content)), 'xlsx');
     let value=await save('');
     if(value.error?.startsWith('ARTIFACT_EXECUTION_HASH_MISMATCH:')) {
       // Native write/edit can follow bash. Freeze the current workspace through
       // the same broker, rather than requiring the model to invent a shell retry.
       // This creates a real receipt; unknown outcomes are never replayed here.
-      const bound=bodyFor(exec,{call_id:exec.callId+'/checkpoint-'+index});
-      await business('gate',{...bound,kind:'tool',native_name:'bash'},exec.signal);
-      const checkpoint=new SandboxProcess(ctx,{
-        argv:['bash','-c',':'],cwd:ctx.fs.processPath(await ctx.fs.resolve(cwd)),env:{},signal:exec.signal,
-        stdio:{stdout:{maxBytes:4096},stderr:{maxBytes:4096}},
-      },{business,payload:bound,agent:exec.agent});
-      const result=await checkpoint.done;
-      if(result.exitCode!==0)throw new Error('ARTIFACT_CHECKPOINT_FAILED: file was not registered');
-      exec.signal?.throwIfAborted();
-      const currentContent=await ctx.fs.readBytes(target,exec.signal,10*1024*1024);
-      if(sha256(currentContent)!==sha256(content))throw new Error('WORKSPACE_CHANGED_DURING_REGISTRATION');
+      if(isWorkbook)throw new Error(value.error);
+      await freeze(':','checkpoint');
       value=await save('-checkpointed');
     }
     if(value.error)throw new Error(value.error);
@@ -50,10 +79,12 @@ export function installNativeRuntime(ctx, {business,runs,profileOf,searchAvailab
     if(!nativeTools.has(exec.name)) return next();
     const bound=runs.get(exec.agent?.id);
     if(!bound)throw new Error('ENTERPRISE_TOOL_DENIED');
+    if(bound.automation)await confineBackgroundRead(ctx,exec);
     if (['glob','grep'].includes(exec.name)) {
       await ctx.fs.resolve(exec.arguments.path || '.', {cwd:await ctx.workingDirectory.ensure(exec.agent,exec.signal),signal:exec.signal});
     }
-    await business('gate',{run_id:bound.id,session_id:exec.agent.id,turn:bound.dsh_turn,kind:['bash','present','web_search'].includes(exec.name)?'tool':'native-tool',native_name:exec.name,call_id:exec.callId},exec.signal);
+    await business('gate',{run_id:bound.id,session_id:exec.agent.id,turn:bound.dsh_turn,kind:['bash','present','web_search'].includes(exec.name)?'tool':'native-tool',native_name:exec.name,call_id:exec.callId,
+      ...(['read','read_image'].includes(exec.name)?{native_path:exec.arguments.file_path}:{})},exec.signal);
     return current.run(exec,async()=>{
       if(exec.name==='present')for(const [index,file] of exec.arguments.files.entries())await register(exec,file.path,index);
       return next();

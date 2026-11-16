@@ -6,17 +6,26 @@ export async function materializeBusinessDataset(ctx, execution, result) {
     const file = result.business_file;
     const extensions = { 'application/pdf':'pdf', 'image/png':'png', 'image/jpeg':'jpg', 'image/gif':'gif',
       'image/webp':'webp', 'image/tiff':'tiff', 'text/plain':'txt', 'text/csv':'csv',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':'xlsx' };
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':'xlsx',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document':'docx',
+      'application/msword':'doc', 'application/vnd.ms-excel':'xls', 'application/rtf':'rtf', 'text/rtf':'rtf', 'text/tab-separated-values':'tsv' };
     const extension = extensions[file.content_type];
     if (!extension || typeof file.name !== 'string' || !file.name || file.name.length > 255 ||
-        /[\\/:\x00-\x1f]/.test(file.name)) throw new Error('INVALID_BUSINESS_FILE');
+        /[\\/:\x00-\x1f]/.test(file.name)) throw new Error('BUSINESS_FILE_FORMAT_UNSUPPORTED: 原文件名称或格式暂不支持原生传输，请通过业务页面阅读');
     const bytes = verify(file);
     const path = await publish(ctx, execution, `source-${file.sha256.slice(0,20)}.${extension}`, bytes);
-    const {content_base64, ...metadata} = file;
-    result = {...result, business_file:{...metadata,path},
+    const {content_base64, text_projection, ...metadata} = file;
+    let readingPath;
+    if(text_projection){
+      if(text_projection.source_sha256!==file.sha256)throw new Error('BUSINESS_PROJECTION_SOURCE_MISMATCH');
+      const projectionBytes=verify(text_projection);
+      readingPath=await publish(ctx,execution,`source-${file.sha256.slice(0,20)}-${text_projection.sha256.slice(0,12)}.txt`,projectionBytes);
+    }
+    result = {...result, business_file:{...metadata,path,...(readingPath?{reading_path:readingPath,text_projection:{source_sha256:file.sha256,sha256:text_projection.sha256,bytes:text_projection.bytes,parser:text_projection.parser}}:{})},
       file_analysis_hint:file.content_type.startsWith('image/')
         ? '调用原生read_image(file_path=business_file.path)将这张图片传给当前视觉模型；仅有路径不代表已看图。结合返回的证据ID和原文页码核对。'
-        : '使用原生PDF、图片或文件读取工具查看完整原文件。图像观察与原始数值曲线应明确区分。'};
+        : readingPath?'调用read(file_path=business_file.reading_path)阅读原上传文件的文本投影，按返回行数继续读取；下载不代表已阅读。内嵌图片、扫描内容和版式不在文本投影中，原件保留在business_file.path。'
+          : file.reading_notice||'使用原生文件能力读取原文件；二进制Office或PDF不能用文本read直接阅读，可先读取页面已保存正文。'};
   }
   const dataset = result?.dataset;
   if (!dataset) return result;

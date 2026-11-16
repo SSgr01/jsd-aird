@@ -89,9 +89,9 @@ export function ProductionUploadRecognitionStatusBar({
         )}
       </div>
       <Space size={6}>
-        <Button
+        {canUpdate && <><Button
           size="small"
-          disabled={locked || !canUpdate || !pending}
+          disabled={locked || !pending}
           loading={busy}
           onClick={onStart}
         >
@@ -100,7 +100,7 @@ export function ProductionUploadRecognitionStatusBar({
         <Button
           size="small"
           type="primary"
-          disabled={locked || !canUpdate || pendingCount === 0}
+          disabled={locked || pendingCount === 0}
           loading={busy}
           onClick={onConfirmAll}
         >
@@ -114,7 +114,7 @@ export function ProductionUploadRecognitionStatusBar({
           onClick={onRestart}
         >
           重新识别
-        </Button>
+        </Button></>}
       </Space>
     </div>
   );

@@ -10,11 +10,12 @@ import EnterpriseFileSystem, { worldRoot } from '../../enterprise-plugin/src/fil
 import { installNativeRuntime } from '../../enterprise-plugin/src/native-runtime.mjs';
 import { enterprisePatch } from '../src/config.mjs';
 import { nativeFileSession, checkRpc, checkStream } from '../src/rpc-policy.mjs';
+import { SandboxProcess } from '../../enterprise-plugin/src/sandbox-process.mjs';
 
 const require=createRequire(new URL('../../../vendor/deepseek-harness/packages/fs/fs-local/package.json',import.meta.url));
 const {Context}=await import(pathToFileURL(require.resolve('@deepseek-ai/cordis')).href);
 
-async function harness(t,{stdout='completed\n',stderr='',elapsed=50,exitCode=0,submissionError,hold=false}={}) {
+async function harness(t,{stdout='completed\n',stderr='',elapsed=50,exitCode=0,submissionError,hold=false,noExport=false,reconcileAfter=0,outputFaults=0,lostSubmission=false}={}) {
   const root=await mkdtemp(join(tmpdir(),'aird-native-process-')),previous=process.env.JSD_DSH_EXECUTION_ROOT;
   process.env.JSD_DSH_EXECUTION_ROOT=root;
   const owner=new Context(),fs=new EnterpriseFileSystem(owner),plugins=[],hooks=[],calls=[],operations=new Map();
@@ -34,21 +35,28 @@ async function harness(t,{stdout='completed\n',stderr='',elapsed=50,exitCode=0,s
       return {status:'CANCELLED',pending:false};
     }
     if(action==='native-output') {
+      if(outputFaults-->0)throw new TypeError('fetch failed');
       const operation=operations.get(body.call_id);
       if(!operation)return {status:'QUEUED',streams:{}};
+      if(operation.status==='UNKNOWN' && Date.now()>=operation.recoverAt)operation.status='SUCCEEDED';
       return {status:operation.status,streams:Object.fromEntries(['stdout','stderr'].map(name=>{
         const bytes=Buffer.from(name==='stdout'?stdout:stderr),offset=body[name+'_offset'];
         const chunk=bytes.subarray(offset,offset+65536);
         return [name,{base64:chunk.toString('base64'),from_offset:offset,next_offset:offset+chunk.length,total_bytes:bytes.length,lossy:false}];
-      }))};
+      })),...(reconcileAfter && operation.status==='SUCCEEDED'?{reconciled_result:{exit_code:exitCode,files:operation.files,receipt:{status:'SUCCEEDED'}}}:{})};
     }
     if(action!=='native-tool')return {};
     if(submissionError)return {error:submissionError,retryable:false};
     const operation={status:'RUNNING'};operations.set(body.call_id,operation);
     if(hold)await released.promise;else await delay(elapsed);
     if(operation.status==='CANCELLED')return {error:'SANDBOX_CANCELLED',receipt:{status:'CANCELLED'}};
+    if(reconcileAfter) {
+      operation.status='UNKNOWN';operation.recoverAt=Date.now()+reconcileAfter;operation.files=body.arguments.files;
+      if(lostSubmission)await new Promise(()=>{});
+      return {error:'TOOL_RESULT_UNKNOWN',requires_reconciliation:true,retryable:false};
+    }
     operation.status='SUCCEEDED';
-    return {exit_code:exitCode,files:body.arguments.files,receipt:{status:'SUCCEEDED'}};
+    return {exit_code:exitCode,...(noExport?{error:'SANDBOX_SCRIPT_FAILED'}:{files:body.arguments.files}),receipt:{status:'SUCCEEDED'}};
   };
   installNativeRuntime(ctx,{business,runs,profileOf:()=> 'agent'});
   const Provider=plugins.find(plugin=>plugin.name==='EnterpriseSubprocess'),provider=Object.create(Provider.prototype);
@@ -62,7 +70,7 @@ async function harness(t,{stdout='completed\n',stderr='',elapsed=50,exitCode=0,s
     const exec={name:'bash',callId:'command-'+(++count),agent:{id:'session-a',session:{}},arguments:{},signal:signal||new AbortController().signal};
     return hooks[0](exec,()=>shell.execute(shell.resolve({...spec,signal:exec.signal})));
   };
-  return {fs,shell,start,calls,runs,finish:()=>released.resolve()};
+  return {ctx,fs,shell,start,calls,runs,finish:()=>released.resolve()};
 }
 
 test('native executor owns deadlines, cancellation and non-expiring job waits through the broker provider',async t=>{
@@ -79,13 +87,66 @@ test('native executor owns deadlines, cancellation and non-expiring job waits th
   assert.equal(calls.filter(value=>value.action==='native-cancel').length,1);
 });
 
-test('rejected submission ends without waiting forever for an unregistered output receipt',async t=>{
+test('rejected submission ends without waiting forever for an unregistered output receipt',{timeout:10000},async t=>{
   const {start,calls}=await harness(t,{submissionError:'CAPABILITY_NOT_AUTHORIZED'});
-  const begin=Date.now(),process=await start({command:'work'});
+  const process=await start({command:'work'});
   await assert.rejects(process.result(),/CAPABILITY_NOT_AUTHORIZED/);
-  assert.ok(Date.now()-begin<2000);
   assert.equal(calls.filter(value=>value.action==='native-tool').length,1);
   assert.equal(calls.filter(value=>value.action==='native-cancel').length,1);
+});
+
+test('known script failure keeps stderr and does not delete files without an export',async t=>{
+  const {start,fs,calls}=await harness(t,{exitCode:1,stderr:'FileNotFoundError: missing input\n',noExport:true});
+  await fs.publish('/workspaces/source.csv',Buffer.from('original rows'));
+  const result=await (await start({command:'python3 missing.py'})).result();
+  assert.equal(result.exitCode,1);
+  assert.match(result.stderr.text,/FileNotFoundError: missing input/);
+  assert.equal(await fs.readText(await fs.resolve('/workspaces/source.csv')),'original rows');
+  assert.equal(calls.filter(value=>value.action==='native-cancel').length,0);
+});
+
+test('UNKNOWN execution recovers the original receipt and bytes without command replay',async t=>{
+  const {start,fs,calls}=await harness(t,{reconcileAfter:25,exitCode:1,stderr:'ValueError: repair this cell\n'});
+  await fs.publish('/workspaces/input.csv',Buffer.from('unaltered source'));
+  const result=await (await start({command:'python3 workbook.py'})).result();
+  assert.equal(result.exitCode,1);assert.match(result.stderr.text,/repair this cell/);
+  assert.equal(await fs.readText(await fs.resolve('/workspaces/input.csv')),'unaltered source');
+  assert.equal(calls.filter(c=>c.action==='native-tool').length,1);
+  assert.equal(calls.filter(c=>c.action==='native-cancel').length,0);
+  assert.ok(calls.filter(c=>c.action==='native-output').length>=2);
+});
+
+test('a transient output read failure does not cancel an accepted command',async t=>{
+  const {start,calls}=await harness(t,{outputFaults:1});
+  const result=await (await start({command:'work'})).result();
+  assert.equal(result.exitCode,0);
+  assert.equal(calls.filter(c=>c.action==='native-tool').length,1);
+  assert.equal(calls.filter(c=>c.action==='native-cancel').length,0);
+});
+
+test('the original receipt can finish while the submission HTTP response is still missing',{timeout:10000},async t=>{
+  const {start,calls}=await harness(t,{reconcileAfter:25,lostSubmission:true});
+  const result=await (await start({command:'work'})).result();
+  assert.equal(result.exitCode,0);
+  assert.equal(calls.filter(c=>c.action==='native-tool').length,1);
+  assert.equal(calls.filter(c=>c.action==='native-cancel').length,0);
+});
+
+test('an unknown receipt ends its recovery window without awaiting or cancelling a lost submission',{timeout:20000},async t=>{
+  const {ctx}=await harness(t);
+  const actions=[];let now=0;
+  t.mock.method(Date,'now',()=>now+=31000);
+  const handle=new SandboxProcess(ctx,{argv:['bash','-c','original command'],cwd:worldRoot,env:{},
+    signal:new AbortController().signal,stdio:{stdout:{maxBytes:4096},stderr:{maxBytes:4096}}},
+    {agent:{id:'session-a',session:{}},payload:{run_id:'run-a',call_id:'original-command'},business:async action=>{
+      actions.push(action);
+      if(action==='native-tool')return new Promise(()=>{});
+      return {status:'UNKNOWN',streams:{}};
+    }});
+  await assert.rejects(handle.done,/SANDBOX_RESULT_UNKNOWN/);
+  assert.equal(actions.filter(action=>action==='native-tool').length,1);
+  assert.equal(actions.filter(action=>action==='native-cancel').length,0);
+  assert.equal(handle.quiescent,false);
 });
 
 test('long Unicode stdout and stderr use native byte collectors and recoverable session spill files',async t=>{

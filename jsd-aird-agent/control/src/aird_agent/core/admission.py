@@ -321,6 +321,55 @@ class RunAdmission:
             run["active_seconds"] += max(0, time.time() - run["started_at"])
         run["started_at"] = None
 
+    async def complete_released(self, row):
+        """Settle a durably ended turn after its original command receipts arrive."""
+        principal = Principal.model_validate(row["principal"])
+        rid = str(row["run_id"])
+        async with self.store.transaction(principal, rid) as conn:
+            claimed = await (await conn.execute(
+                "UPDATE agent_runtime.harness_admission SET recovery_owner=%s,"
+                "recovery_until=now()+interval '150 seconds',retry_at=now()+interval '30 seconds' "
+                "WHERE run_id=%s AND epoch=%s AND state='RELEASED' AND retry_at<=now() "
+                "AND (recovery_until IS NULL OR recovery_until<now()) RETURNING run_id",
+                (self.worker_id, rid, row["epoch"]),
+            )).fetchone()
+            if not claimed:
+                return
+        try:
+            run = await self.store.get(principal, "run", rid)
+            turn = run.get("dsh_model_completed_turn")
+            if (run["status"] != "RUNNING" or run["epoch"] != row["epoch"]
+                    or turn is None or turn != run.get("dsh_turn") or not run.get("dsh_pending_operations")):
+                return
+            try:
+                await self.service.complete_dsh(principal, {
+                    "run_id": rid, "session_id": run["dsh_session_id"], "turn": turn,
+                    "epoch": row["epoch"], "stop_reason": run.get("dsh_model_completed_stop_reason"),
+                })
+            except HTTPException as error:
+                if error.status_code not in {401, 403, 404}:
+                    raise
+                # Revoked historical access cannot publish a result, but also
+                # must not leave an already ended turn permanently RUNNING.
+                async with self.store.transaction(principal, rid) as conn:
+                    current = await self.store.get(principal, "run", rid, conn)
+                    if current["status"] != "RUNNING" or current["epoch"] != row["epoch"] or current.get("dsh_turn") != turn:
+                        return
+                    current.update(status="FAILED", error="AUTHORIZATION_REQUIRED", result="", dsh_completed_turn=turn)
+                    current.pop("dsh_pending_operations", None)
+                    current["completion"] = self.service.bindings.default_completion(current)
+                    self.settle_time(current)
+                    await self.store.update(principal, "run", current, conn)
+                    if hasattr(self.service, "briefings"):
+                        await self.service.briefings.finish(principal, current, conn)
+                    await self.store.event(principal, rid, "run.failed", {"error": current["error"]}, conn)
+        finally:
+            async with self.store.pool.connection() as conn:
+                await conn.execute(
+                    "UPDATE agent_runtime.harness_admission SET recovery_owner=NULL,recovery_until=NULL "
+                    "WHERE run_id=%s AND recovery_owner=%s", (rid, self.worker_id),
+                )
+
     async def reconcile(self, row):
         principal = Principal.model_validate(row["principal"])
         rid = str(row["run_id"])
@@ -444,12 +493,27 @@ class RunAdmission:
 
     async def cycle(self):
         async with self.store.pool.connection() as conn:
+            completed = await (await conn.execute(
+                "SELECT a.* FROM agent_runtime.harness_admission a JOIN agent_runtime.harness_records r "
+                "ON r.kind='run' AND r.id=a.run_id WHERE a.state='RELEASED' AND a.retry_at<=now() "
+                "AND (a.recovery_until IS NULL OR a.recovery_until<now()) "
+                "AND r.payload->>'status'='RUNNING' AND r.payload->>'engine_version'='dsh-v1' "
+                "AND (r.payload->>'epoch')::int=a.epoch AND coalesce(r.payload->>'session_deleted','false')<>'true' "
+                "AND r.payload->>'dsh_model_completed_turn'=r.payload->>'dsh_turn' "
+                "AND jsonb_array_length(coalesce(r.payload->'dsh_pending_operations','[]'::jsonb))>0 "
+                "AND NOT EXISTS(SELECT 1 FROM agent_runtime.harness_calls c "
+                "WHERE c.run_id=a.run_id AND c.tool_name='dsh_execute' AND c.status='RUNNING') "
+                "ORDER BY a.retry_at,a.run_id LIMIT 20"
+            )).fetchall()
             stale = await (
                 await conn.execute(
                     "SELECT * FROM agent_runtime.harness_admission WHERE state='RELEASING' "
                     "OR (state='GRANTED' AND lease_until<=now())"
                 )
             ).fetchall()
+        for row in completed:
+            # Receipts only: do not grant a slot, wake the Agent or replay a command.
+            self.start(("complete", str(row["run_id"])), lambda row=row: self.complete_released(row))
         for row in stale:
             # An unreachable host must not stall admission for other owners.
             self.start(("reconcile", str(row["run_id"])), lambda row=row: self.reconcile(row))

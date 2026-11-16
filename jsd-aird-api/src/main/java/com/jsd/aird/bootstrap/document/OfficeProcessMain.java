@@ -19,6 +19,18 @@ public final class OfficeProcessMain {
         if(args.length!=4)throw new IllegalArgumentException("Invalid office invocation");
         var json=new ObjectMapper().findAndRegisterModules();var source=Path.of(args[1]);var argument=json.readTree(Path.of(args[2]).toFile());var output=Path.of(args[3]);
         switch(args[0]){
+            case "business-pdf"->{
+                var blocks=new java.util.ArrayList<com.jsd.aird.kb.api.DocumentParser.TextBlock>();
+                try(var document=org.apache.pdfbox.Loader.loadPDF(source.toFile())){
+                    var stripper=new org.apache.pdfbox.text.PDFTextStripper();long characters=0;
+                    for(int page=1;page<=document.getNumberOfPages();page++){
+                        stripper.setStartPage(page);stripper.setEndPage(page);String text=stripper.getText(document);
+                        characters+=text.length();if(characters>8*1024*1024)throw new IllegalStateException("PDF text exceeds read limit");
+                        if(!text.isBlank())blocks.add(new com.jsd.aird.kb.api.DocumentParser.TextBlock(page,"page",text));
+                    }
+                }
+                json.writeValue(output.toFile(),new com.jsd.aird.kb.api.DocumentParser.ParsedDocument(blocks,"pdfbox-text-v1"));
+            }
             case "word-observations"->{
                 var result=json.createArrayNode();
                 try(var input=Files.newInputStream(source);var document=new org.apache.poi.xwpf.usermodel.XWPFDocument(input)){

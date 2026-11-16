@@ -37,7 +37,10 @@ class BusinessService:
 
 
     async def host_call(self, principal, action, arguments=None, run_id=None):
-        return await self.host.call(principal, action, arguments or {}, run_id)
+        value = await self.host.call(principal, action, arguments or {}, run_id)
+        if action == "runtime_context" and "files" in value.get("pack_ids", []) and hasattr(self, "folders") and self.folders.roots(principal):
+            value = {**value, "pack_ids": list(dict.fromkeys([*value["pack_ids"], "folder-conversion"]))}
+        return value
 
 
     def authorization_sources(self, sources):
@@ -70,6 +73,8 @@ class BusinessService:
         from jsonschema import ValidationError, validate
 
         run = await self.store.get(principal, "run", rid)
+        if principal.scope == "folder-conversion" and name not in {"tool_search", "folder_conversion", "dsh_execute"}:
+            raise HTTPException(403, "FOLDER_BUSINESS_WRITE_DENIED")
         if native and run.get("automation"):
             raise HTTPException(403, "BACKGROUND_READ_ONLY")
         if native:
@@ -337,11 +342,17 @@ class BusinessService:
         payload, topic = await self.bindings.prepare_request(principal, request)
         from aird_agent.evidence.registry import register_candidates
         evidence = {}
+        discovered_tools = set()
+        file_source_context = {}
         if request.conversation_id:
             conversation = await self.store.get(principal, "conversation", str(request.conversation_id))
             # Native messages can refer to evidence from any earlier turn. Recheck
             # its current authorization, while keeping request filters independent.
             snapshots = await self.authorize_history(principal, conversation)
+            # Native history remains visible even when this turn narrows its
+            # evidence selection. Preserve its authorized file permission scope.
+            file_source_context = {digest(source): source for snapshot in snapshots.values()
+                                   for source in snapshot.get("source_refs", [])}
             pinned = (payload.get("retrieval_scope") or {}).get("knowledge_documents")
             allowed = {(item["document_id"], item["publication_id"]) for item in pinned or []}
             for snapshot in snapshots.values():
@@ -349,6 +360,7 @@ class BusinessService:
                 # supply authoritative evidence or coverage for a new period.
                 if snapshot.get("automation"):
                     continue
+                discovered_tools.update(snapshot.get('active_tools', []))
                 candidates = snapshot.get("evidence", {}).values()
                 if allowed:
                     candidates = [candidate for candidate in candidates
@@ -380,14 +392,23 @@ class BusinessService:
                 }, conn)
             turn_evidence = register_candidates({}, topic.get("context_candidates", []))
             inherited = {"registered_outputs": previous.get("registered_outputs", [])} if previous else {}
-            run = await self.store.create(principal, "run", {
+            state = {
                 **payload, **initial_run_state(principal), **inherited,
                 "engine_version": "dsh-v1", "conversation_id": conversation["id"],
                 "scope_hash": self.bindings.scope_digest(topic), "evidence": evidence,
                 "turn_evidence_ids": list(turn_evidence),
+                "file_source_context": list(file_source_context.values()),
                 **self.bindings.initial_state(topic, evidence),
                 "dsh_session_id": conversation.get("dsh_session_id"), "dsh_version": "0.2.2-rc.1",
-            }, conn)
+            }
+            if previous:
+                # Tool discovery belongs to the conversation. Native history
+                # retains calls across turns, so keep prior activation choices
+                # while intersecting them with this request's authority.
+                available = {tool['name'] for tool in self.tools_for(state)}
+                state['active_tools'] = sorted(available & (
+                    set(self.bindings.initial_tools(state)) | discovered_tools | set(previous.get('active_tools', []))))
+            run = await self.store.create(principal, "run", state, conn)
             conversation.update(engine_version="dsh-v1", active_run=run["id"], scope_hash=run["scope_hash"])
             conversation["messages"].append({"id": str(uuid4()), "role": "user", "text": request.request, "run_id": run["id"]})
             await self.store.update(principal, "conversation", conversation, conn)
@@ -481,7 +502,7 @@ class BusinessService:
                     else:
                         await self.admission.release(principal,rid,cancelled=True,stopped=True)
                 return await self.admission.state(principal,rid)
-        automation = await self.briefings.binding(principal, body) if hasattr(self, "briefings") else None
+        automation = await self.briefings.binding(principal, body) if hasattr(self, "briefings") and principal.scope != "folder-conversion" else None
         conversation = await self.session_conversation(principal, sid)
         run = None
         if conversation:
@@ -598,7 +619,7 @@ class BusinessService:
             reading = coverage(run.get("briefing_snapshot", {}))
             context["briefing"] = {"task_type": run["automation"]["builtin_id"], "window": run["automation"]["window"],
                 "coverage": {**reading, "missing": reading["missing"][:20], "missing_total": len(reading["missing"])},
-                "policy": "先用get_research_briefing_context加载并读完本期索引，历史轮次的索引不能代表本期覆盖。本期只读。实验优先用business_read的section=record读完整版本，过大时再按概览分区分页。读完各索引再整理正文；读取不足不能推进复盘位置。"}
+                "policy": "先用get_research_briefing_context读完available_sections及分页，包含RELATED_ACTIVITY资料变化；历史索引不代表本期覆盖。本期只读。资料正文与原件按报告需要读取，项目business_links可展开当前关联资料；下载不代表已阅读。实验优先section=record，过大时按分区分页。未读完索引不能推进报告位置。"}
         if body.get("binding_protocol") == 2:
             from aird_agent.core.binding_projection import binding_projection
             return binding_projection(self, run, body, json.dumps(context, ensure_ascii=False))
@@ -640,13 +661,21 @@ class BusinessService:
     async def gate_dsh(self, principal, body):
         run = await self.session_run(principal, body)
         if run.get("automation") and (body.get("kind") == "native-tool" or body.get("native_name")) and body.get("native_name") not in {
-                "skill", "todo_write", "ask_user_question", "enter_plan_mode", "exit_plan_mode", "get_goal", "create_goal", "update_goal"}:
+                "skill", "todo_write", "ask_user_question", "enter_plan_mode", "exit_plan_mode", "get_goal", "create_goal", "update_goal",
+                "read", "read_image", "glob", "grep"}:
             raise HTTPException(403, "BACKGROUND_READ_ONLY")
         await self.authorized_topic(principal, run)
         async with self.store.transaction(principal, run["id"]) as conn:
             run = await self.active(principal, run["id"], run["epoch"], conn)
             unknown = await (await conn.execute("SELECT 1 FROM agent_runtime.harness_calls WHERE run_id=%s AND status='UNKNOWN' LIMIT 1", (run["id"],))).fetchone()
-            if unknown:
+            # Unknown writes fence further effects and delivery, not the native
+            # loop or its read-only recovery tools. Never admit an arbitrary bash
+            # command here, even if its description says it only reads status.
+            recovery = body['kind'] in {'step', 'model'} or (
+                body['kind'] == 'native-tool' and body.get('native_name') in {
+                    'job_output', 'job_list', 'read', 'read_image', 'glob', 'grep', 'skill', 'ask_user_question',
+                })
+            if unknown and not recovery:
                 raise HTTPException(409, "SIDE_EFFECT_RECONCILIATION_REQUIRED")
             if run["active_seconds"] + time.time() - run["started_at"] > self.settings.max_active_seconds:
                 raise HTTPException(409, "BUDGET_EXCEEDED")
@@ -855,13 +884,15 @@ class BusinessService:
         run = await self.session_run(principal, body)
         if run.get("dsh_completed_turn") == body.get("turn"):
             return {"accepted": True, "status": run["status"], "completion": run.get("completion")}
-        await self.authorized_topic(principal, run)
+        # Settling an admitted turn reads historical authority and receipts; it
+        # must still work after native turn/end has released the execution lease.
+        await self.authorized_topic(principal, run, execution=False)
         text, valid = self.bindings.validate_output(run, run.get("last_text", ""))
         async with self.store.transaction(principal, run["id"]) as conn:
             run = await self.store.get(principal, "run", run["id"], conn)
             if body.get("epoch") is not None and body["epoch"] != run["epoch"]:
                 raise HTTPException(409, "STALE_EXECUTION_EPOCH")
-            if run["status"] == "CANCELLED":
+            if run["status"] in {"SUCCEEDED", "FAILED", "CANCELLED"}:
                 return {"accepted": True, "status": run["status"], "completion": run.get("completion")}
             if run.get("dsh_completed_turn") == body.get("turn"):
                 return {"accepted": True, "status": run["status"], "completion": run.get("completion")}

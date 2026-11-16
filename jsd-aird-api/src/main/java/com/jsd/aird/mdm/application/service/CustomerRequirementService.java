@@ -18,6 +18,7 @@ import java.util.function.Supplier;
 
 @Service
 public class CustomerRequirementService {
+    @org.springframework.beans.factory.annotation.Autowired(required=false) private com.jsd.aird.ops.api.ProjectMaterialActivity materialActivity;
     private final CustomerRequirementRepository repository;
     private final BusinessPartnerService partnerService;
     private final AuditLogFacade audit;
@@ -94,6 +95,8 @@ public class CustomerRequirementService {
         if (current.partnerId() != null) partnerService.requireAccess(current.partnerId(), "customer.needs.delete");
         else if (current.projectId() != null) partnerService.requireProjectAction(current.projectId(), "project.customer-needs.delete");
         if (!repository.deleteRequirement(id, version, CrmServiceSupport.operator())) CrmServiceSupport.conflict();
+        if(materialActivity!=null)for(var project:normalizeProjectIds(current.projectIds(),current.projectId()))
+            materialActivity.record("DELETED","CUSTOMER_REQUIREMENT",id,project,current.title());
         if (current.partnerId() != null) {
             partnerService.appendAudit("CUSTOMER_REQUIREMENT_DELETED", current.partnerId());
         } else {

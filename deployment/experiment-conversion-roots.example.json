@@ -1,0 +1,11 @@
+{
+  "历史实验资料": {
+    "organization_id": "00000000-0000-0000-0000-000000000001",
+    "administrator_ids": [
+      "00000000-0000-0000-0000-000000000002"
+    ],
+    "source": "/srv/jsd-aird/experiment-history/originals",
+    "templates": "/srv/jsd-aird/experiment-history/templates",
+    "output": "/srv/jsd-aird/experiment-history/results"
+  }
+}

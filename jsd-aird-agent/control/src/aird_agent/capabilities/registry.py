@@ -99,6 +99,9 @@ def default_registry():
                 resources=({"answer_guidelines": ANSWER_INSTRUCTIONS} if pid == "core" else {}),
             )
         )
+    from aird_agent.capabilities.folder_conversion import FOLDER_INSTRUCTIONS, FOLDER_TOOL
+    registry.register(CapabilityPack("folder-conversion", "1", FOLDER_INSTRUCTIONS, (FOLDER_TOOL,),
+                                     mutations=frozenset({"folder_conversion"})))
     projects = (
         tool(
             "search_projects",

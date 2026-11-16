@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkRpc, checkUpload, nativeFileSession } from '../src/rpc-policy.mjs';
+import { checkRpc, checkUpload, nativeFileSession, nativeFileAuthorization } from '../src/rpc-policy.mjs';
 
 test('native appearance and font preferences persist through the bounded settings gate', async () => {
   for (const method of ['update','mutate']) {
@@ -26,6 +26,14 @@ test('native composer can load its command catalog and invoke composed commands'
   for (const method of ['commands/register','commands/install','terminal/execute','plugins/install']) {
     await assert.rejects(checkRpc(method,request(method),{}),/RPC_DENIED/);
   }
+});
+
+test('native composer skill catalog is bound to an owned session', async () => {
+  const request=sessionId=>({type:'client-request',method:'skills/list',payload:{args:{request:{sessionId}}}});
+  await checkRpc('skills/list',request('session-native'),{});
+  assert.equal(nativeFileSession('skills/list',request('session-native')),'session-native');
+  for(const id of [undefined,'','../foreign'])await assert.rejects(checkRpc('skills/list',request(id),{}),/SESSION_REQUIRED/);
+  for(const method of ['skills/install','skills/write'])await assert.rejects(checkRpc(method,{...request('session-native'),method},{}),/RPC_DENIED/);
 });
 
 test('prompt admits native file receipts, rejects direct attachment authority', async () => {
@@ -58,4 +66,15 @@ test('native downloads and Office previews require the same session ownership ch
   await checkRpc('officeToPdf/generation',request('officeToPdf/generation'),{});
   assert.equal(nativeFileSession('officeToPdf/generation',request('officeToPdf/generation')),undefined);
   await assert.rejects(checkRpc('officeToPdf/convert',request('officeToPdf/convert','session-native'),{}),/RPC_DENIED/);
+});
+
+test('browser file bytes and previews require export authority while metadata and jobs keep read access', () => {
+  for(const endpoint of ['workspaceFiles/read','workspaceFiles/readBytes','officeToPdf/render'])
+    assert.deepEqual(nativeFileAuthorization(endpoint,{payload:{args:{workspaceFileScopeId:'session-documents'}}}),
+      {session_id:'session-documents',purpose:'file-export'});
+  for(const endpoint of ['workspaceFiles/stat','workspaceFiles/list'])
+    assert.deepEqual(nativeFileAuthorization(endpoint,{payload:{args:{workspaceFileScopeId:'session-documents'}}}),
+      {session_id:'session-documents'});
+  assert.deepEqual(nativeFileAuthorization('job/list',{payload:{args:{request:{sessionId:'session-documents'}}}}),
+    {session_id:'session-documents'});
 });

@@ -48,6 +48,7 @@ def repair_fields(detail):
 class JsdHostGateway:
     RETRIEVAL_ACTIONS = {"knowledge_search", "retrieval_context", "private_source_search", "query_structured_data"}
     READ_ACTIONS = RETRIEVAL_ACTIONS | {
+        "get_research_briefing_context",
         "business_search", "business_read", "business_links", "business_query",
         "document_outline", "document_read", "table_read", "source_read", "source_context", "source_image",
         "private_source_outline", "private_source_read", "private_source_context",
@@ -117,6 +118,11 @@ class JsdHostGateway:
         if status == 401:
             raise HostToolError(status, "AUTH_REQUIRED", "登录状态已失效，请重新登录。", attempts=attempts)
         if status == 403:
+            if action == "artifact_save":
+                raise HostToolError(status, "ARTIFACT_EXPORT_DENIED",
+                    "当前账号无权交付这些业务资料。文件未登记，不能下载或预览。"
+                    "可继续在对话中处理已获授权的内容；不要通过改名、重写或执行脚本重试交付，"
+                    "也不要声称文件已经交付。", attempts=attempts)
             raise HostToolError(status, "ACCESS_DENIED", "当前账号无权读取这些记录或执行该业务操作。", attempts=attempts)
         if status == 404:
             raise HostToolError(status, "NOT_FOUND", "所需记录不存在，请重新查找。", attempts=attempts)

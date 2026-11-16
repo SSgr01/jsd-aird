@@ -37,15 +37,11 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
         if ("SELECTED".equals(scope)) {
             if ("PRODUCTION".equalsIgnoreCase(check.resourceType())) {
                 if (binding.targetIds().isEmpty()) return ResolvedDataScope.deny(scope, "EMPTY_SCOPE");
-                var placeholders = String.join(",", binding.targetIds().stream().map(id -> "?").toList());
-                var args = new java.util.ArrayList<Object>();
-                args.add(check.organizationId());
-                args.add(check.resourceId());
-                args.addAll(binding.targetIds());
-                args.add(check.userId());
+                // Orders currently have no persisted project relationship. A selected project
+                // cannot authorize an unrelated order; retain only the existing creator access.
                 return exists("SELECT EXISTS (SELECT 1 FROM mfg.production_order WHERE organization_id = ? " +
-                                "AND id = ? AND (project_id IN (" + placeholders + ") OR created_by = ?))",
-                        args.toArray(), scope, "NOT_IN_SELECTED_PROJECT");
+                                "AND id = ? AND created_by = ?)",
+                        new Object[]{check.organizationId(),check.resourceId(),check.userId()}, scope, "NOT_IN_SELECTED_PROJECT");
             }
             if ("PRODUCTION_UPLOAD".equalsIgnoreCase(check.resourceType())) {
                 if (binding.targetIds().isEmpty()) return ResolvedDataScope.deny(scope, "EMPTY_SCOPE");
@@ -297,8 +293,8 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
                 args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
             }
             case "PROJECT" -> {
-                sql = "SELECT EXISTS (SELECT 1 FROM mdm.project WHERE organization_id = ? AND created_by::text = ? AND id = ? AND deleted = false)";
-                args = new Object[]{check.organizationId(), check.userId().toString(), check.resourceId()};
+                sql = "SELECT EXISTS (SELECT 1 FROM mdm.project p JOIN iam.app_user u ON u.organization_id=p.organization_id AND u.id=? WHERE p.organization_id=? AND p.id=? AND p.deleted=false AND (p.created_by=u.username OR p.created_by=u.id::text))";
+                args = new Object[]{check.userId(),check.organizationId(),check.resourceId()};
             }
             case "QUOTATION" -> {
                 // 上传任务与报价记录共用报价权限：重试/删除上传记录时资源 id 是导入任务 id。
@@ -391,9 +387,12 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
         if ("TEMPLATE".equals(resourceType)) table = "tpl.template";
         else if ("KNOWLEDGE".equals(resourceType)) table = "kb.document";
         else if ("EXPERIMENT".equals(resourceType)) table = "rnd.experiment";
+        else if ("QUALITY".equals(resourceType)) table = "quality.data_record";
+        else if ("PRODUCTION_UPLOAD".equals(resourceType)) table = "mfg.production_upload";
+        else if ("RESEARCH_TEST".equals(resourceType)) table = "rnd.research_test_record";
         else if ("PRODUCTION".equals(resourceType)) table = "mfg.production_order";
         else return ResolvedDataScope.deny(relationColumn.equals("project_id") ? "PROJECT" : "CATEGORY", "RESOURCE_SCOPE_UNSUPPORTED");
-        if (!"EXPERIMENT".equals(resourceType) && "project_id".equals(relationColumn)) {
+        if (!Set.of("EXPERIMENT","QUALITY","PRODUCTION_UPLOAD","RESEARCH_TEST").contains(resourceType) && "project_id".equals(relationColumn)) {
             return ResolvedDataScope.deny("PROJECT", "RESOURCE_SCOPE_UNSUPPORTED");
         }
         if (!Set.of("TEMPLATE", "KNOWLEDGE").contains(resourceType) && "category_id".equals(relationColumn)) {

@@ -91,8 +91,16 @@ public class KnowledgeGovernanceController {
     }
 
     @PostMapping("/documents/{documentId}/rebuild-index")
-    public ApiResponse<KnowledgeGovernanceService.IndexBuildView> rebuildIndex(@PathVariable UUID documentId) {
-        return success(service.rebuildPublishedIndex(documentId));
+    public ApiResponse<KnowledgeGovernanceService.IndexBuildView> rebuildIndex(@PathVariable UUID documentId,
+            @RequestParam(required = false) String requestKey,
+            @RequestParam(defaultValue = "false") boolean vectorsOnly) {
+        return success(service.rebuildPublishedIndex(documentId, requestKey, vectorsOnly));
+    }
+
+    @GetMapping("/documents/{documentId}/rebuild-index")
+    public ApiResponse<KnowledgeGovernanceService.RebuildIndexStatusView> rebuildIndexStatus(@PathVariable UUID documentId,
+            @RequestParam(required = false) String requestKey) {
+        return success(service.rebuildIndexStatus(documentId, requestKey));
     }
 
     @PostMapping("/rebuild-index")

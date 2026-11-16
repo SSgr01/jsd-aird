@@ -74,14 +74,14 @@ async def test_binding_delta_omits_ledger_and_repeated_links_but_keeps_authoriza
     current = await bind(store, principal, run)
     body = {'session_id':run['dsh_session_id'], 'turn':1, 'profile':'agent', 'binding_protocol':2}
     first = await service.register_step(principal, body)
-    assert not {'evidence', 'retrieval_snapshots', 'principal', 'dsh_usage'} & first.keys()
+    assert not {'evidence', 'retrieval_snapshots', 'principal', 'dsh_usage', 'file_source_context'} & first.keys()
     assert first['citation_links'] == citation_links(current['evidence'], service.settings.public_url, quote_aliases=True)
-    assert len(json.dumps(first)) < 50000
+    assert len(json.dumps(first, ensure_ascii=False).encode('utf-8')) < 50000
     cursor = {**body, 'binding_etags':first['binding_etags'], 'known_citation_evidence_ids':first['citation_evidence_ids']}
     second = await service.register_step(principal, cursor)
     assert not {'tools', 'active_tools', 'instructions', 'context'} & second.keys()
     assert second['citation_links'] == {} and second['citation_evidence_ids'] == []
-    assert len(json.dumps(second)) < 1500
+    assert len(json.dumps(second, ensure_ascii=False).encode('utf-8')) < 1500
     assert (await store.get(principal, 'run', run['id']))['revision'] == current['revision']
     async with store.transaction(principal, run['id']) as conn:
         changed = await store.get(principal, 'run', run['id'], conn)
@@ -179,3 +179,28 @@ async def test_ownership_checks_permissions_without_returning_the_run_ledger(set
         denied = await client.post('/internal/v1/harness/dsh/ownership',headers=headers,
             json={'session_id':run['dsh_session_id'], 'profile':'agent'})
         assert denied.status_code == 403
+
+
+async def test_browser_file_export_cannot_bypass_business_permissions_in_an_owned_session(setup, principal, store, settings):
+    service, host, run, _ = setup
+    await bind(store, principal, run)
+    source = {"kind": "BUSINESS_RECORD", "resource_type": "QUALITY_RECORD", "resource_id": str(uuid4())}
+    async with store.transaction(principal, run['id']) as conn:
+        current = await store.get(principal, 'run', run['id'], conn)
+        current['source_refs'] = [source]
+        await store.update(principal, 'run', current, conn)
+    original = host.call
+    async def call(owner, action, args, rid=None):
+        if action == 'authorize_sources' and args.get('purpose') == 'export':
+            assert args['sources'] == [source]
+            raise HTTPException(403, 'No export permission')
+        return await original(owner, action, args, rid)
+    host.call = call
+    headers = {'X-Jsd-Agent-Ticket':issue(settings.shared_secret.get_secret_value(), principal, 'control'),
+        'Authorization':'Bearer '+settings.runtime_secret.get_secret_value()}
+    body = {'session_id':run['dsh_session_id'], 'profile':'agent'}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(create_app(settings,store,service)),base_url='http://harness.test') as client:
+        assert (await client.post('/internal/v1/harness/dsh/ownership',headers=headers,json=body)).status_code == 200
+        denied = await client.post('/internal/v1/harness/dsh/ownership',headers=headers,json={**body,'purpose':'file-export'})
+        assert denied.status_code == 403
+        assert (await client.post('/internal/v1/harness/dsh/ownership',headers=headers,json=body)).status_code == 200

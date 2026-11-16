@@ -11,10 +11,36 @@ from fastapi import HTTPException
 from aird_agent.core.contracts import digest
 from aird_agent.core.workspace import Workspace
 from aird_agent.hosts.jsd.native_files import accept_native_result, read_export, reconcile_native, storage_path
+from aird_agent.hosts.jsd.native_files import native_execute
 from aird_agent.sandbox.client import Sandbox
 from unittest.mock import AsyncMock
 from uuid import uuid4
 from aird_agent.capabilities.files.handler import FileTools
+
+
+@pytest.mark.parametrize('directory', ['', 'default', 'default/乳液 工艺'])
+async def test_native_shell_creates_empty_working_directory_before_launch(tmp_path, principal, directory):
+    captured = {}
+
+    async def execute(workspace, script, language, execution_id, selected, **kwargs):
+        captured.update(script=script, selected=selected)
+        return {'error': 'SANDBOX_UNAVAILABLE'}
+
+    service = SimpleNamespace(settings=SimpleNamespace(storage_root=tmp_path),
+                              bindings=SimpleNamespace(sandbox=SimpleNamespace(execute=execute)))
+    await native_execute(service, principal, {'id': str(uuid4()), 'epoch': 1},
+                         {'command': 'python3 -c "import openpyxl"', 'cwd': directory, 'files': [],
+                          'env': {'PWD': 'C:/host/workspace'}}, 'empty')
+    # Execute the actual setup prefix against a temporary directory; a file-only
+    # transfer has nothing from which to reconstruct this nested cwd.
+    setup = captured['script'].split('code=subprocess.run', 1)[0]
+    setup = setup.replace("'/work/scratch/native'", repr(str(tmp_path / 'native')))
+    namespace = {}
+    exec(setup, namespace)
+    assert namespace['cwd'] == tmp_path / 'native' / directory
+    assert namespace['cwd'].is_dir()
+    assert namespace['env']['PWD'] == '/workspaces' + ('/' + directory if directory else '')
+    assert captured['selected'] == []
 
 
 async def test_binary_attachment_lineage_uses_authorized_parsed_version_without_claiming_model_reading(principal):

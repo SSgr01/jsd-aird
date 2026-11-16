@@ -1,14 +1,17 @@
+import {FolderConversionRuntime,isFolderSession,folderNativeTools} from './folder-conversion.mjs';
 import { readFile as readChemistryAsset } from 'node:fs/promises';
+import { serveFontAsset } from './font-assets.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { NativeBriefings, beginBriefingPeriod } from './briefings.mjs';
+import { NativeBriefings, installBriefingPeriods } from './briefings.mjs';
 import { NativeMemory } from './memory.mjs';
-import { installNativeRuntime, nativeTools } from './native-runtime.mjs';
+import { installNativeRuntime, installNativeToolGuard, nativeTools } from './native-runtime.mjs';
 import { randomUUID, createHash } from 'node:crypto';
 import { timingSafeEqual } from 'node:crypto';
 import { presetForProfile, profileForPreset } from '../../deepseek/src/session-policy.mjs';
 import { executionDirectory } from '../../deepseek/src/paths.mjs';
 import { installScheduling, requestText, scheduleTools } from './scheduling.mjs';
 import { businessError, deliveryError } from './business-error.mjs';
+import { recoverControlRead } from './control-recovery.mjs';
 import { bindingCursor, mergeBinding } from './binding-state.mjs';
 import { EventProjection, StreamProjection } from './event-projection.mjs';
 import { updateNativeInbox } from './inbox-actions.mjs';
@@ -20,7 +23,10 @@ import { repairInstruction } from './citation-repair.mjs';
 import { StageTiming } from './stage-timing.mjs';
 import { readExecutionPolicy } from './read-policy.mjs';
 import { materializeBusinessDataset } from './business-dataset.mjs';
+import { prepareConversionResources } from './conversion-resources.mjs';
+import { conversionLauncher } from './conversion-launch.mjs';
 import { installSessionLifecycle } from './session-lifecycle.mjs';
+import { installTaskDirectories, ensureTaskDirectory } from './task-directories.mjs';
 import { installExperts } from './experts.mjs';
 import { installAdmission, inputSignature, previewTurnInput } from './admission.mjs';
 import { createUserMessage, createAssistantMessage, BlockAssembler } from '../../../vendor/deepseek-harness/packages/llm/llm/lib/index.js';
@@ -32,19 +38,39 @@ export const inject = ['tools', 'agents', 'sessions', 'sessionQuery', 'sessionPr
 export async function apply(ctx) {
   const identity = JSON.parse(process.env.JSD_DSH_IDENTITY);
   let interactiveIdentity = identity.automation_grant_id ? undefined : identity;
-  let backgroundIdentity = identity.automation_grant_id ? identity : undefined;
+  let backgroundIdentity = identity.automation_grant_id && identity.scope!=='folder-conversion' ? identity : undefined;
   const authorizationContext = new AsyncLocalStorage();
   const sessionAuthorities = new Map();
+  const folderTickets = new Map();
+  async function folderTicket({batchId,sessionId}) {
+    const key=batchId || sessionId;
+    const cached=folderTickets.get(key);
+    if(cached?.expires_at>Date.now()/1000+60)return cached.ticket;
+    const response=await fetch(process.env.JSD_DSH_CONTROL_URL+'/internal/v1/harness/background/folder-ticket',{
+      method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+process.env.JSD_DSH_RUNTIME_SECRET},
+      body:JSON.stringify(batchId?{owner_id:batchId}:{session_id:sessionId}),signal:AbortSignal.timeout(15000)});
+    if(!response.ok)throw await businessError(response);
+    const value=await response.json();
+    if(value.organization_id!==identity.organization_id || value.actor_id!==identity.actor_id || value.auth_version!==identity.auth_version || value.scope!=='folder-conversion')throw new Error('FOLDER_IDENTITY_MISMATCH');
+    folderTickets.set(key,value);return value.ticket;
+  }
+
   const asBackground = operation => authorizationContext.run({background:true}, operation);
   let renewing;
   async function backgroundTicket() {
     if (backgroundIdentity?.expires_at > Date.now()/1000+60) return backgroundIdentity.ticket;
     if (!backgroundIdentity?.automation_grant_id) throw new Error('BACKGROUND_AUTHORIZATION_REQUIRED');
-    renewing ||= fetch(process.env.JSD_DSH_CONTROL_URL + '/internal/v1/harness/background/ticket', {
-      method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+process.env.JSD_DSH_RUNTIME_SECRET},
-      body:JSON.stringify({owner_id:backgroundIdentity.automation_grant_id}),signal:AbortSignal.timeout(10000),
-    }).then(async response=> {if(!response.ok)throw new Error('BACKGROUND_AUTHORIZATION_REVOKED');
-      backgroundIdentity=await response.json();return backgroundIdentity.ticket;}).finally(()=>{renewing=undefined;});
+    const grantId=backgroundIdentity.automation_grant_id;
+    renewing ||= recoverControlRead('background-ticket',{owner_id:grantId},async()=>{
+      const response=await fetch(process.env.JSD_DSH_CONTROL_URL + '/internal/v1/harness/background/ticket', {
+        method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+process.env.JSD_DSH_RUNTIME_SECRET},
+        body:JSON.stringify({owner_id:grantId}),signal:AbortSignal.timeout(10000),
+      });
+      if(!response.ok)throw await businessError(response);
+      const renewed=await response.json();
+      if(backgroundIdentity?.automation_grant_id!==grantId)throw new Error('BACKGROUND_AUTHORIZATION_REVOKED');
+      backgroundIdentity=renewed;return renewed.ticket;
+    }).finally(()=>{renewing=undefined;});
     return renewing;
   }
   const control = process.env.JSD_DSH_CONTROL_URL;
@@ -65,7 +91,6 @@ export async function apply(ctx) {
   const claimedInputs = new Map();
   const currentTurns = new Map();
   const preparedBindings = new Map();
-  const preparedBriefingTurns = new Map();
   const timing = new StageTiming(ctx.logger);
   let admission;
   async function business(action, body, signal) {
@@ -76,14 +101,20 @@ export async function apply(ctx) {
     const started=performance.now(), started_at_ms=Date.now();
     const metadata={action,session_id:body.session_id,run_id:body.run_id,turn:body.turn,kind:body.kind};
     const background = authorizationContext.getStore()?.background ?? (body.session_id ? sessionAuthorities.get(body.session_id)?.background : undefined) ?? !interactiveIdentity;
-    const ticket = background ? await backgroundTicket() : interactiveIdentity?.ticket;
+    const folderSession=isFolderSession(body.session_id), folderBatch=authorizationContext.getStore()?.folderBatch;
+    const ticket = folderSession || folderBatch || (!interactiveIdentity && identity.scope==='folder-conversion')
+      ? await folderTicket(folderSession?{sessionId:body.session_id}:{batchId:folderBatch || identity.automation_grant_id})
+      : background ? await backgroundTicket() : interactiveIdentity?.ticket;
     if (!ticket) throw new Error('INTERACTIVE_AUTHORIZATION_REQUIRED');
     const timeoutMs=action==='native-tool' && body.name==='dsh_execute'
       ? Math.min(600000,Math.max(1,body.arguments?.timeout_ms || 120000))+15000
-      : ['native-output','native-cancel'].includes(action) ? 7000 : 120000;
+      // Output is a read of an accepted command, not a new execution. A short
+      // read deadline can cancel healthy work during transient broker latency.
+      : action==='admission-renew' ? 5000 : action==='native-output' ? 30000 : action==='native-cancel' ? 7000 : 120000;
     const encoded=JSON.stringify(body), encodedAt=performance.now();
     let response, headersAt, responseBytes, completed=false;
     try {
+    return await recoverControlRead(action,body,async()=>{
     response = await fetch(control + '/internal/v1/harness/dsh/' + action, {
       method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + secret,
         'x-jsd-agent-ticket': ticket }, body: encoded,
@@ -97,6 +128,16 @@ export async function apply(ctx) {
     } else value=await response.json();
     completed=true;
     return value;
+    },{signal,onRetry:attempt=>{
+      ctx.logger.warn('Enterprise request retry action=%s attempt=%s',action,attempt);
+      timing.emit('control.retry',{...metadata,attempt});
+    }});
+    } catch(error) {
+      // Native activation wraps the error and otherwise loses which enterprise
+      // request failed. Keep operational diagnostics free of arguments/tickets.
+      process.stderr.write('Enterprise control failure '+JSON.stringify({action,session_id:body.session_id,
+        run_id:body.run_id,status:error.status,code:error.code || error.cause?.code || error.name})+'\n');
+      throw error;
     } finally {
     timing.emit('control.request',{...metadata,started_at_ms,elapsed_ms:performance.now()-started,completed,status:response?.status,
       encode_ms:encodedAt-started,http_headers_ms:(headersAt ?? performance.now())-encodedAt,decode_ms:headersAt===undefined ? 0 : performance.now()-headersAt,
@@ -104,7 +145,18 @@ export async function apply(ctx) {
       trace_id:response?.headers?.get('x-jsd-trace-id'),server_timing:response?.headers?.get('server-timing')});
     }
   }
+  installTaskDirectories(ctx);
   const expertActions = installExperts(ctx,{business,executionRoot});
+  const startConversions = conversionLauncher(ctx,{business,executionRoot});
+  const folders=new FolderConversionRuntime(ctx,{business,executionRoot,
+    withBatch:(folderBatch,operation)=>authorizationContext.run({folderBatch},operation)});
+  ctx.effect(()=>ctx.tools.guard(execution=>isFolderSession(execution.agent?.id) &&
+    !folderNativeTools.has(execution.name) && !['folder_conversion','tool_search'].includes(execution.name)
+    ? 'FOLDER_MODE_TOOL_DENIED' : undefined));
+  ctx.on('session/event',(session,event)=>{
+    if(isFolderSession(session.id) && event.type==='turn/end' && event.data.reason?.kind!=='disposed')
+      void ready.then(()=>business('folder-ended',{session_id:session.id})).catch(error=>ctx.logger.warn('Folder completion pending: %s',error.message));
+  });
   function enqueue(sessionId, operation) {
     const queuedAt=performance.now(), started_at_ms=Date.now();
     const next = (serial.get(sessionId) || Promise.resolve()).catch(() => {}).then(()=>{
@@ -140,7 +192,7 @@ export async function apply(ctx) {
     clear: sessionId => {
       projection.clear(sessionId);streams.clear(sessionId);
       for (const map of [runs,serial,pendingEvents,claimedInputs,currentTurns,
-        preparedBindings,preparedBriefingTurns,sessionAuthorities]) map.delete(sessionId);
+        preparedBindings,sessionAuthorities]) map.delete(sessionId);
       cancelled.delete(sessionId); outputLimited.delete(sessionId);
     },
   });
@@ -164,12 +216,13 @@ export async function apply(ctx) {
       await business('complete',{run_id:run.id,epoch:run.epoch,session_id:sessionId,turn:run.dsh_turn});
   }
   const briefings = new NativeBriefings(ctx,{business,executionRoot,asBackground,reconcileSession:reconcileRunSession});
+  installBriefingPeriods(ctx,{binding:agent=>runs.get(agent.id)});
   // A recovered native timer may fire while the enterprise plugin initializes.
   // Hold activation and model admission until all guards and projections exist.
   let initialized;
   const ready = new Promise(resolve => { initialized = resolve; });
   const memory = new NativeMemory(ctx,{business,ready,runs});
-  ctx.on('agent/created', ({agent}) => { void memory.recover(agent); });
+  ctx.on('agent/created', ({agent}) => { if(!isFolderSession(agent.id))void memory.recover(agent); });
   let scheduleSync;
   ctx.on('schedule/changed', () => {
     clearTimeout(scheduleSync);
@@ -213,13 +266,19 @@ export async function apply(ctx) {
         await business('gate', { run_id: bound.id, epoch:bound.epoch, session_id: execution.agent.id, turn: bound.dsh_turn,
           kind: 'tool', call_id: execution.callId }, execution.signal);
         await approveLiterature(ctx,business,bound,spec.name,args,execution);
+        if(spec.name==='folder_conversion' && args.action==='export')return folders.export(execution,args,bound);
         if(spec.name==='artifact_save')return native.register(execution,args.path,0,args.source_quotes||[]);
         let result = await business('tool', { run_id: bound.id, epoch:bound.epoch, session_id: execution.agent.id,
           turn: bound.dsh_turn, call_id: execution.callId, name: spec.name, arguments: args }, execution.signal);
         // The business ledger already records the refusal. Keep native error
         // presentation useful without exposing the host's internal diagnosis.
         if (result.error && result.access_denied) throw new Error(modelResult(result).error);
+        if(spec.name==='folder_conversion') {
+          result=await folders.materialize(execution,result);
+          if(result.folder_dispatch)void folders.sync(result.batch_id).catch(error=>ctx.logger.warn('Folder dispatch pending: %s',error.message));
+        }
         result = await materializeBusinessDataset(ctx, execution, result);
+        if (spec.name === 'experiment_conversion') result = await prepareConversionResources(ctx, execution, result);
         if (result.activate_tools) bound.active_tools = [...new Set([...(bound.active_tools || []),
           ...result.activate_tools.filter(name => bound.tools.some(tool => tool.name === name))])];
         Object.assign(bound.citation_links ||= {}, result.citation_links || {});
@@ -230,14 +289,7 @@ export async function apply(ctx) {
       return Boolean(bound?.tools.some(tool => tool.name === spec.name) && bound.active_tools?.includes(spec.name));
     } }));
   }
-  ctx.effect(() => ctx.tools.guard(execution => {
-    if (!execution.agent) return 'ENTERPRISE_TOOL_DENIED';
-    const bound = runs.get(execution.agent.id);
-    if (bound?.automation && nativeTools.has(execution.name) && !['skill','todo_write','ask_user_question','enter_plan_mode','exit_plan_mode','get_goal','create_goal','update_goal'].includes(execution.name))
-      return 'BACKGROUND_READ_ONLY';
-    return (nativeTools.has(execution.name) && bound && (scheduleTools.has(execution.name) || bound.pack_ids?.includes('files'))) || bound?.tools.some(tool => tool.name === execution.name)
-      ? undefined : 'ENTERPRISE_TOOL_DENIED';
-  }));
+  installNativeToolGuard(ctx,{runs});
   ctx.effect(() => ctx.systemPrompt.section({ name: 'enterprise-policy', order: 0,
     interpolate: false, text: ({ agent }) => (runs.get(agent?.id)?.instructions || catalog.instructions) + '\n化学式和反应式使用 $ 或 $$ 内的 \\ce{...}。已知且有依据的分子结构使用 smiles 代码块，反应结构使用 reaction-smiles 代码块（反应物>试剂>产物）。不得猜测文献结构对应的 SMILES；不确定时展示原图并说明。绘图成功仅表示语法可解析，不代表原文结构核验。' }));
   ctx.effect(() => ctx.systemPrompt.context({ name: 'enterprise-business', order: 0, required: true,
@@ -257,6 +309,9 @@ export async function apply(ctx) {
       }
       // Reconcile committed events; no pi checkpoints and no model-state copy.
       await replayEvents(agent.id,agent.session.snapshotEvents().filter(event=>event.seq>(restored.run?.dsh_seq ?? -1)));
+    } else if(source==='startup' && agent.session.inheritedEventCount > 0 && profileOf(agent)==='agent') {
+      const messages=agent.session.snapshotEvents().filter(event=>event.type==='user/message').map(event=>event.data.message||event.data);
+      await exposeFiles(agent,(await inputFiles(messages,signal)).files,signal);
     }
   });
   ctx.on('agent/inbox/claimed', ({ agent, message, turn }) => {
@@ -272,10 +327,9 @@ export async function apply(ctx) {
     if (preparedBindings.has(agent.id)) return preparedBindings.get(agent.id);
     const input = proposal || claimedInputs.get(agent.id) || {turn:currentTurns.get(agent.id),messages:[]};
     if (input.turn === undefined) return undefined;
-    claimedInputs.delete(agent.id);
     const pending = timing.time('bind.total',{session_id:agent.id,turn:input.turn},()=>bindInput(agent, signal, input));
     preparedBindings.set(agent.id, pending);
-    try { return await pending; }
+    try { const bound=await pending;claimedInputs.delete(agent.id);return bound; }
     catch (error) { preparedBindings.delete(agent.id); throw error; }
   }
   async function bindInput(agent, signal, input) {
@@ -284,6 +338,7 @@ export async function apply(ctx) {
     await timing.time('bind.queue_wait',{session_id:agent.id,turn:input.turn},()=>drainProjection(agent.id));
     const automation = await briefings.delivery(agent.id,input);
     sessionAuthorities.set(agent.id,{background:Boolean(automation),turn:input.turn});
+    if(automation)await ensureTaskDirectory(ctx,agent,signal);
     const text = requestText(input.messages);
     const {attachments, files} = await inputFiles(input.messages, signal);
     if (files.length && profile === 'agent') await exposeFiles(agent, files, signal);
@@ -334,12 +389,8 @@ export async function apply(ctx) {
       const bound = await prepareBinding(payload.agent, payload.signal, payload);
       if (!bound || bound.dsh_turn !== payload.turn) throw new Error('TURN_BINDING_CONFLICT');
       await business('gate', { run_id: bound.id, epoch:bound.epoch, session_id: payload.agent.id, turn: payload.turn, kind: 'step' }, payload.signal);
-      if(bound.automation && preparedBriefingTurns.get(payload.agent.id)!==payload.turn) {
-        beginBriefingPeriod(payload.agent,payload.turn,payload.step,payload.signal);
-        preparedBriefingTurns.set(payload.agent.id,payload.turn);
-      }
       const decision = await next();
-      return await memory.prepare(payload,decision,bound);
+      return isFolderSession(payload.agent.id) ? decision : await memory.prepare(payload,decision,bound);
     } finally { preparedBindings.delete(payload.agent.id); }
   });
   // All native provider calls share enterprise admission and metering. Title
@@ -354,12 +405,14 @@ export async function apply(ctx) {
       ...(!title ? { run_id: bound.id, epoch:bound.epoch, turn: bound.dsh_turn, kind: 'model' } : {}),
       purpose: options.purpose || 'conversation', provider: options.provider, model: options.model };
     await business(title ? 'auxiliary-admit' : 'gate', request, options.signal);
-    if(!title) await memory.guardRequest(options);
+    if(!title && !isFolderSession(options.sessionId)) await memory.guardRequest(options);
     const assembler = new BlockAssembler();
     let completed = false;
     try {
+      const agent=ctx.agents.get(options.sessionId);
+      const downstream=agent ? ctx.fs.scopedAttachments(ctx.workingDirectory.get(agent.session),next()) : next();
       const stream = ['report-review', 'evidence-score'].includes(options.purpose) || title
-        ? next() : citationStream(researchWordingStream(next()), bound.citation_links || {});
+        ? downstream : citationStream(researchWordingStream(downstream), bound.citation_links || {});
       for await (const chunk of stream) { assembler.push(chunk); yield chunk; }
       completed = true;
     } finally {
@@ -407,7 +460,7 @@ export async function apply(ctx) {
         const corrected=agent.session.snapshotEvents().some(event=>event.type==='user/message' && event.data.source?.kind===source && event.data.source.turn===turn);
         if(!corrected) {
           agent.steer(createUserMessage({source:{kind:source,turn},content:[{type:'text',text:
-            '本期业务读取尚未完整。请继续沿原任务补齐以下索引和固定记录，再整理完整正文。同一实验缺少多个分区时，优先用 business_read 的 section=record 完整读取该固定版本；仅记录过大时再按 next_offset 分页。不得补造缺失结果；仍不可读取时说明具体缺口。'+JSON.stringify(checked.coverage)}]}));
+            '本期业务读取尚未完整。missing中带ref的条目请用business_read逐条读取该ref（overview可省略section）；重新调用get_research_briefing_context只会取得目录，不能补齐这些正文。带unread_index_count的条目沿next_request读取剩余索引页。同一实验缺少多个分区时，优先用business_read的section=record完整读取固定版本，仅记录过大时按next_offset分页。补齐后再整理完整正文；仍不可读取时说明具体错误，不补造结果。'+JSON.stringify(checked.coverage)}]}));
           return;
         }
       }
@@ -427,7 +480,7 @@ export async function apply(ctx) {
       }
       const result = await business('complete', input, signal);
       if (result.status === 'FAILED') throw deliveryError(result);
-      if (result.status === 'SUCCEEDED') await memory.capture(agent,bound);
+      if (result.status === 'SUCCEEDED' && !isFolderSession(agent.id)) await memory.capture(agent,bound);
     }
   });
   ctx.on('agent/error', ({ agent, error }) => {
@@ -444,6 +497,7 @@ export async function apply(ctx) {
     return JSON.parse(Buffer.concat(chunks).toString() || '{}');
   }
   // Public static code only; source structures stay in the browser URL fragment.
+  ctx.effect(() => ctx.webServer.register({kind:'prefix',path:'/font-assets',handler:serveFontAsset}));
   ctx.effect(() => ctx.webServer.register({kind:'prefix',path:'/chemistry-assets',async handler(req,res){
     const file = new URL(req.url,'http://local').pathname.split('/').pop();
     const types = {'viewer.html':'text/html; charset=utf-8','viewer.js':'text/javascript','worker.js':'text/javascript','input.js':'text/javascript','limits.json':'application/json','viewer.css':'text/css','RDKit_minimal.js':'text/javascript','RDKit_minimal.wasm':'application/wasm','LICENSE':'text/plain'};
@@ -465,6 +519,8 @@ export async function apply(ctx) {
       if (action === 'identity') {
         if(body.identity)interactiveIdentity=body.identity;
         value = { accepted: true };
+      } else if (action === 'folder-sync') {
+        value=await folders.sync(body.batch_id);
       } else if (action === 'background-identity') {
         backgroundIdentity=body.identity;
         value=await asBackground(()=>briefings.sync());
@@ -503,7 +559,8 @@ export async function apply(ctx) {
         if (!sessionId) throw new Error('SESSION_REQUIRED');
         const profile = await sessionProfile(sessionId, signal);
         if (body.profile && body.profile !== profile) throw new Error('SESSION_PROFILE_CHANGED');
-        await business('ownership', { session_id: sessionId, profile });
+        await business('ownership', { session_id: sessionId, profile,
+          ...(action==='authorize' && body.purpose==='file-export' ? {purpose:'file-export'} : {}) });
         if (action === 'wake') {
           const resolved = await ctx.sessionController.resolveAgent(sessionId);
           if ('error' in resolved) throw new Error(resolved.error.code || 'SESSION_RESUME_FAILED');
@@ -567,7 +624,9 @@ export async function apply(ctx) {
         res.end(JSON.stringify({running:false,pending:false,missing:true}));
         return;
       }
-      process.stderr.write('Enterprise command refused: ' + error.message + '\n'); res.writeHead(409); res.end(JSON.stringify({ error: 'COMMAND_REFUSED' }));
+      process.stderr.write('Enterprise command refused: ' + error.message + '\n');
+      res.writeHead(action==='authorize' && [401,403,404].includes(error.status) ? error.status : 409);
+      res.end(JSON.stringify({ error: 'COMMAND_REFUSED' }));
     }
   } }));
 
@@ -575,11 +634,13 @@ export async function apply(ctx) {
     const denied = ctx.connection.requestRejection({ method: req.method, headers: req.headers });
     if (denied) { res.writeHead(denied); res.end(); return; }
     const action = new URL(req.url, 'http://local').pathname.slice('/business/'.length);
-    if (!['context','resource','inbox','run-state','run-diagnostics','run-cancel','run-retry','memory','briefing-open','experts'].includes(action)) {res.writeHead(404);res.end();return;}
+    if (!['context','resource','inbox','run-state','run-diagnostics','run-cancel','run-retry','memory','briefing-open','experts','conversion-start'].includes(action)) {res.writeHead(404);res.end();return;}
     try {
       const body = await readBody(req);
       let value;
-      if (action === 'experts') {
+      if (action === 'conversion-start') {
+        value = await startConversions(body);
+      } else if (action === 'experts') {
         value = await expertActions(body);
       } else if (action === 'memory') {
         // Browser callers cannot impersonate trusted lifecycle capture/validation.
@@ -604,7 +665,8 @@ export async function apply(ctx) {
       res.end(JSON.stringify(value));
     } catch(error) {res.writeHead(action==='memory' ? error.status || 409 : 409);res.end(JSON.stringify({error:error.code || 'BUSINESS_ACCESS_REFUSED'}));}
   }}));
-  if(backgroundIdentity) await asBackground(()=>briefings.sync());
+  if(identity.scope==='folder-conversion' && !interactiveIdentity) { /* Folder leases do not install research automations. */ }
+  else if(backgroundIdentity) await asBackground(()=>briefings.sync());
   else {
     try { briefings.plan=await business('builtin-state',{}); }
     catch(error) { if(error.code!=='ENTERPRISE_GATE_404')throw error; }

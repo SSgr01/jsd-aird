@@ -220,6 +220,11 @@ app:
       model: ${JSD_AIRD_EMBEDDING_MODEL:}
       dimension: ${JSD_AIRD_EMBEDDING_DIMENSION:1024}
       timeout: ${JSD_AIRD_EMBEDDING_TIMEOUT:30s}
+      query:
+        profile: ${JSD_AIRD_EMBEDDING_QUERY_PROFILE:none}
+        version: ${JSD_AIRD_EMBEDDING_QUERY_VERSION:}
+        knowledge-instruction: ${JSD_AIRD_EMBEDDING_KNOWLEDGE_INSTRUCTION:}
+        manual-instruction: ${JSD_AIRD_EMBEDDING_MANUAL_INSTRUCTION:}
     ocr:
       enabled: ${JSD_AIRD_OCR_ENABLED:false}
       base-url: ${JSD_AIRD_OCR_BASE_URL:https://dashscope.aliyuncs.com/api/v1}

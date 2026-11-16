@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('api', 'web', 'gateway', 'control', 'migrate-control')][string]$Service,
+    [Parameter(Mandatory)][ValidateSet('api', 'web', 'gateway', 'control', 'migrate-control', 'worker')][string]$Service,
     [Parameter(Mandatory)][string]$EnvFile
 )
 $ErrorActionPreference = 'Stop'
@@ -89,7 +89,7 @@ switch ($Service) {
         try { & node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5184 --strictPort }
         finally { Pop-Location }
     }
-    'api' {
+    { $_ -in 'api', 'worker' } {
         $env:SPRING_FLYWAY_ENABLED = 'false'
         if ($env:JSD_AIRD_JAVA_HOME) {
             $env:JAVA_HOME = $env:JSD_AIRD_JAVA_HOME
@@ -101,11 +101,13 @@ switch ($Service) {
         $env:JSD_AIRD_MANAGEMENT_PORT = '9191'
         $env:JSD_AIRD_ALLOWED_ORIGINS = 'http://localhost:5184,http://127.0.0.1:5184'
         $env:JSD_AIRD_SESSION_COOKIE_NAME = 'JSD_AIRD_HARNESS_SESSION'
-        $env:JSD_AIRD_WORKER_ENABLED = 'false'
+        $env:JSD_AIRD_WORKER_ENABLED = if ($Service -eq 'worker') { 'true' } else { 'false' }
+        if ($Service -eq 'worker') { $env:JSD_AIRD_WORKER_ID = 'local-harness-worker' }
         $env:JSD_AIRD_IAM_BOOTSTRAP_ENABLED = 'false'
         $env:JSD_AIRD_RENDER_FRONTEND_BASE_URL = 'http://127.0.0.1:5184'
         Push-Location (Join-Path $repoRoot 'jsd-aird-api')
-        try { & ./mvnw.cmd '-Dmaven.test.skip=true' 'spring-boot:run' '-Dspring-boot.run.profiles=local' }
+        $taskProfile = if ($Service -eq 'worker') { 'local,worker' } else { 'local' }
+        try { & ./mvnw.cmd '-Dmaven.test.skip=true' 'spring-boot:run' "-Dspring-boot.run.profiles=$taskProfile" }
         finally { Pop-Location }
     }
 }

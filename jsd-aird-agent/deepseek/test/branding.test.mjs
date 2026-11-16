@@ -57,11 +57,12 @@ test('only static UI resources are adapted; API, files, sources and source maps 
     assert.equal(await brandStaticResponse(target,upstream,{'content-type':'application/javascript'}),undefined);
     assert.equal(upstream.readableDidRead,false);
   }
-  const html = '<head><title>DSH Local Build</title><meta name="apple-mobile-web-app-title" content="DSH"></head>';
+  const html = '<head><title>DSH Local Build</title><meta name="apple-mobile-web-app-title" content="DSH"><meta name="theme-color" content="#766381"></head>';
   const headers = {'content-type':'text/html','content-encoding':'gzip','transfer-encoding':'chunked',etag:'original'};
   const bytes = await brandStaticResponse('/',response(gzipSync(html)),headers);
   assert.match(bytes.toString(),new RegExp(productName));
   assert.doesNotMatch(bytes.toString(),/DSH/);
+  assert.match(bytes.toString(), /name="theme-color" content="#fafafa"/);
   assert.equal(headers.etag,undefined);
   assert.equal(headers['content-encoding'],undefined);
   assert.equal(headers['transfer-encoding'],undefined);
@@ -82,6 +83,8 @@ test('only static UI resources are adapted; API, files, sources and source maps 
   const manifest = JSON.parse(await brandStaticResponse('/manifest.webmanifest',response('{"name":"DeepSeek Harness"}'),{}));
   assert.equal(manifest.name,productName);
   assert.equal(manifest.short_name,'AI工作台');
+  assert.equal(manifest.background_color,'#fafafa');
+  assert.equal(manifest.theme_color,'#fafafa');
   assert.equal(manifest.icons[0].src,'favicon.svg');
   const icon = await brandStaticResponse('/favicon.svg',response('upstream icon'),{'content-type':'image/svg+xml'});
   assert.equal(icon.toString(),brandIcon);

@@ -18,8 +18,7 @@ def context(expert_id=None):
     expert = None
     if expert_id:
         row = next(item for item in CATALOG["experts"] if item["id"] == expert_id)
-        revision = row["current_revision"]
-        expert = {**copy.deepcopy(row["versions"][revision]), "id": row["id"], "revision": revision}
+        expert = copy.deepcopy(row)
     return SimpleNamespace(run={"expert": expert})
 
 
@@ -49,7 +48,7 @@ async def test_fixed_expert_required_fields_and_composite_identity_cannot_be_era
     assert result["missing"][0]["fields"] == ["operator", "raw_material_batches"]
     assert result["incomplete_identity"][0]["row"] == 5
     assert ctx.run["expert"] == role_before
-    assert result["expert_revision"]["revision"] == ctx.run["expert"]["revision"]
+    assert result["expert"] == {"id": ctx.run["expert"]["id"]}
     instructions = role_instructions(ctx.run["expert"])
     assert '"formulation_revision"' in instructions and "record_validate" in instructions
 

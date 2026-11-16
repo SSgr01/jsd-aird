@@ -180,7 +180,7 @@
 
 .pm-unified-list-page .ant-table-cell-fix-right-first::after,
 .pm-unified-list-page .ant-table-cell-fix-right-last::after {
-  box-shadow: -6px 0 12px rgb(15 23 42 / 6%);
+  box-shadow: -6px 0 12px rgb(0 0 0 / 6%);
 }
 
 /* The template catalog table is the visual baseline for the management lists. */
@@ -191,7 +191,7 @@
 
 .pm-unified-list-page .ant-table-cell-fix-right {
   background: var(--app-surface);
-  box-shadow: -6px 0 12px rgb(15 23 42 / 6%);
+  box-shadow: -6px 0 12px rgb(0 0 0 / 6%);
 }
 
 .pm-unified-list-page .ant-table-thead > tr > .ant-table-cell-fix-right {
@@ -445,7 +445,7 @@
   border: 1px solid var(--app-border);
   border-radius: 10px;
   background: #fff;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
 .inventory-page > .ant-card,

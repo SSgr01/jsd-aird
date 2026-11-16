@@ -614,6 +614,10 @@ class PermissionRouteFilterTest {
         assertThat(code("GET", "/api/v1/projects/" + projectId + "/experiments")).isEqualTo("project.task.view");
         assertThat(code("GET", "/api/v1/tasks")).isEqualTo("project.task.view");
         assertThat(code("GET", "/api/v1/projects/" + projectId + "/documents")).isEqualTo("project.document.view");
+        assertThat(code("GET", "/api/v1/projects/export")).isEqualTo("project.list.export");
+        assertThat(code("GET", "/api/v1/projects/export.csv")).isEqualTo("project.list.export");
+        assertThat(code("GET", "/api/v1/projects/" + projectId + "/documents/export")).isEqualTo("project.document.export");
+        assertThat(code("GET", "/api/v1/projects/" + projectId + "/documents/"+meetingId+"/export")).isEqualTo("project.document.export");
         assertThat(code("GET", "/api/v1/projects/" + projectId + "/requirements")).isEqualTo("project.customer-needs.view");
         assertThat(code("GET", "/api/v1/projects/" + projectId + "/references")).isEqualTo("project.reference.view");
         assertThat(code("GET", "/api/v1/projects/" + projectId + "/meetings")).isEqualTo("project.meeting.view");

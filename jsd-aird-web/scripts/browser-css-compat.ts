@@ -3,9 +3,9 @@ import postcss, { type Declaration, type Plugin, type Rule } from 'postcss';
 // Default theme tokens. Modern browsers keep evaluating the original variables;
 // Chromium 106 uses these equivalent solid colors instead of color-mix().
 const colors: Record<string, string> = {
-  'app-primary': '#315f91', 'app-success': '#347552', 'app-danger': '#b84a55', 'app-focus': '#315f91',
-  'app-surface': '#ffffff', 'app-border': '#e8eef4',
-  'oa-accent': '#315f91', 'oa-text': '#263548', 'oa-surface': '#ffffff', 'oa-border': '#e8eef4',
+  'app-primary': '#262626', 'app-success': '#347552', 'app-danger': '#b84a55', 'app-focus': '#262626',
+  'app-surface': '#ffffff', 'app-border': '#e5e5e5',
+  'oa-accent': '#262626', 'oa-text': '#262626', 'oa-surface': '#ffffff', 'oa-border': '#e5e5e5',
 };
 const supportsColorMix = '(color: color-mix(in srgb, red, blue))';
 

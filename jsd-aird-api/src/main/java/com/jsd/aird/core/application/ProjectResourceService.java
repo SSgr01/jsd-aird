@@ -31,6 +31,7 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class ProjectResourceService implements ProjectResourceFacade {
+    @org.springframework.beans.factory.annotation.Autowired(required=false) private com.jsd.aird.ops.api.ProjectMaterialActivity materialActivity;
 
     private final JdbcTemplate jdbc;
     private final NamedParameterJdbcTemplate namedJdbc;
@@ -226,6 +227,7 @@ public class ProjectResourceService implements ProjectResourceFacade {
     public void removeReference(Actor actor, UUID referenceId) {
         var row = requireReference(actor.organizationId(), referenceId);
         requireProject(actor, "project.assign", row.projectId(), "WRITE");
+        if("ACTIVE".equals(row.status())&&materialActivity!=null)materialActivity.record("REMOVED","PROJECT_REFERENCE",referenceId,row.projectId(),row.title());
         jdbc.update("""
                 UPDATE core.project_reference
                    SET status = 'REMOVED', removed_by = ?, removed_at = now()
@@ -392,6 +394,9 @@ public class ProjectResourceService implements ProjectResourceFacade {
     /** 取消项目关联时，把该关联对应的活动资料参考软删除（置为“已移除”），保持“关联 ↔ 资料参考”一致。 */
     private void removeReferencesForTarget(Actor actor, ResourceType type, UUID resourceId,
                                            ProjectRelationTarget target) {
+        if(materialActivity!=null)for(var row:jdbc.queryForList("SELECT id,title FROM core.project_reference WHERE organization_id=? AND resource_type=? AND resource_id=? AND project_id=? AND stage_id IS NOT DISTINCT FROM ? AND task_id IS NOT DISTINCT FROM ? AND status='ACTIVE'",
+                actor.organizationId(),type.name(),resourceId,target.projectId(),target.stageId(),target.taskId()))
+            materialActivity.record("REMOVED","PROJECT_REFERENCE",(UUID)row.get("id"),target.projectId(),(String)row.get("title"));
         jdbc.update("""
                 UPDATE core.project_reference
                    SET status = 'REMOVED', removed_by = ?, removed_at = now()

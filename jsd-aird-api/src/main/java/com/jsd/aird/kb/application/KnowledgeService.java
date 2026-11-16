@@ -774,7 +774,8 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         try {
             var embedding = embeddings.getIfAvailable();
             OperationBudget.check();
-            vectors = embedding == null ? List.of() : embedding.embedVectors(queryTexts);
+            vectors = embedding == null ? List.of() : embedding.embedQueryVectors(queryTexts,
+                    KnowledgeEmbeddingFacade.QueryTask.KNOWLEDGE);
             if (vectors == null) vectors = List.of();
         } catch (RuntimeException exception) {
             var embeddingMs = elapsedMs(embeddingStarted);
@@ -792,7 +793,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         for (var ordinal = 0; ordinal < Math.min(queryTexts.size(), vectors.size()); ordinal++) {
             var vector = vectors.get(ordinal);
             if (vector.isPresent()) vectorQueries.add(new KnowledgeRepository.VectorQuery(ordinal,
-                    queryTexts.get(ordinal), vector.get()));
+                    queryTexts.get(ordinal), vector.get(), embeddingModel));
         }
         var fallbacks = new ArrayList<String>();
         if (vectors.isEmpty() || vectors.stream().allMatch(java.util.Optional::isEmpty)) {
@@ -980,10 +981,37 @@ public class KnowledgeService implements KnowledgeSearchFacade {
 
     @Transactional
     public void rebuildPublishedIndex(UUID organizationId, UUID documentId) {
+        rebuildPublishedIndex(organizationId, documentId, null, null, null);
+    }
+
+    public record IndexModel(String model, int dimension) { }
+
+    public IndexModel indexModel() { return new IndexModel(embeddingModel, embeddingDimension); }
+
+    @Transactional
+    public void rebuildPublishedIndex(UUID organizationId, UUID documentId, UUID expectedPublicationId,
+                                      String expectedModel, Integer expectedDimension) {
+        rebuildPublishedIndex(organizationId, documentId, expectedPublicationId, expectedModel, expectedDimension, false);
+    }
+
+    @Transactional
+    public void rebuildPublishedIndex(UUID organizationId, UUID documentId, UUID expectedPublicationId,
+                                      String expectedModel, Integer expectedDimension, boolean vectorsOnly) {
+        if ((expectedModel != null && !java.util.Objects.equals(expectedModel, embeddingModel))
+                || (expectedDimension != null && expectedDimension != embeddingDimension)) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "重建任务与 Worker 的向量模型或维度不一致，请核对配置");
+        }
         var document = repository.findDocument(organizationId, documentId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在"));
         var publication = governance.currentPublication(organizationId, documentId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "当前发布不存在"));
+        if (expectedPublicationId != null && !expectedPublicationId.equals(publication.id())) {
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "发布版本已变化，请重新清点后重建");
+        }
+        if (vectorsOnly) {
+            buildVectors(organizationId, documentId, publication.id(), publication.reviewRevisionId());
+            return;
+        }
         var snapshot = governance.publishedContent(organizationId, documentId, publication.id())
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "当前发布快照不存在"));
         var prepared = prepareIndex(organizationId, documentId, publication.versionId(),

@@ -92,7 +92,7 @@ class KnowledgeServiceIndexingTest {
             assertThat(embeddingStarted.await(1, TimeUnit.SECONDS)).isTrue();
             return List.of(new KnowledgeRepository.RankedChunk(0, bm25Row.chunkId(), bm25Row.score(), 1));
         });
-        when(embedding.embedVectors(anyList())).thenAnswer(ignored -> {
+        when(embedding.embedQueryVectors(anyList(), eq(KnowledgeEmbeddingFacade.QueryTask.KNOWLEDGE))).thenAnswer(ignored -> {
             embeddingStarted.countDown();
             assertThat(bm25Started.await(1, TimeUnit.SECONDS)).isTrue();
             return List.of(Optional.of("[0.1, 0.2]"));

@@ -1,8 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {briefingDefaults,reconcileBriefings,NativeBriefings,beginBriefingPeriod} from '../../enterprise-plugin/src/briefings.mjs';
+import {briefingDefaults,reconcileBriefings,NativeBriefings,beginBriefingPeriod,installBriefingPeriods} from '../../enterprise-plugin/src/briefings.mjs';
 import {Session} from '../../../vendor/deepseek-harness/packages/core/session/lib/index.js';
-import {createUserMessage,createSystemMessage} from '../../../vendor/deepseek-harness/packages/llm/llm/lib/index.js';
+import {sessionFormatCatalog} from '../../../vendor/deepseek-harness/packages/session/session-format-catalog/lib/index.js';
+import {createUserMessage,createSystemMessage,LlmAdapter} from '../../../vendor/deepseek-harness/packages/llm/llm/lib/index.js';
+import {createRequire} from 'node:module';
+import {pathToFileURL} from 'node:url';
+import {mountAgentLoopTestDependencies,mountAgentLoopTestHarness} from '../../../vendor/deepseek-harness/packages/test-support/agent-loop-testkit/lib/index.js';
+
+function restore(session) {
+  const reader=sessionFormatCatalog.createRestore(sessionFormatCatalog.encodeCurrentHeader({...session.header,delegationDepth:0},0),{recovery:'strict',validation:'current'});
+  for(const event of session.snapshotEvents())reader.decodeRow(sessionFormatCatalog.encodeCurrentEvent(event));
+  const artifact=reader.finish();
+  return Session.create(session.id,artifact.events,artifact.header);
+}
 
 test('defaults use Beijing weekdays and readable business instructions',()=>{
   assert.deepEqual(briefingDefaults.map(task=>[task.time,task.weekdays]),[
@@ -13,19 +24,25 @@ test('defaults use Beijing weekdays and readable business instructions',()=>{
 
 test('each period retains the native transcript but cannot reuse stale evidence after restart',()=>{
   const session=Session.create('briefing-periods');
-  session.append('system/message',{turn:0,step:0,message:createSystemMessage({content:[{type:'text',text:'研发助手'}]})},{surfaceOp:'append'});
-  session.append('user/message',createUserMessage({source:{kind:'schedule'},content:[{type:'text',text:'前期正文与旧记录'}]}),{surfaceOp:'append'});
   session.append('turn/start',{turn:1});
-  session.append('user/message',createUserMessage({source:{kind:'schedule'},content:[{type:'text',text:'本期任务'}]}),{surfaceOp:'append'});
+  session.append('step/start',{turn:1,step:1});
+  session.append('system/message',{turn:1,step:1,message:createSystemMessage('研发助手')},{surfaceOp:'append'});
+  session.append('user/message',createUserMessage({source:{kind:'schedule'},content:[{type:'text',text:'前期正文与旧记录'}]}),{surfaceOp:'append'});
+  session.append('step/end',{turn:1,step:1});
+  session.append('turn/end',{turn:1,reason:{kind:'completed'}});
+  session.append('turn/start',{turn:2});
   const original=session.snapshotEvents();
-  beginBriefingPeriod({session},1,0,new AbortController().signal);
+  const decision=beginBriefingPeriod({agent:{session},turn:2,signal:new AbortController().signal},
+    {kind:'enter',messages:[createUserMessage({source:{kind:'schedule'},content:[{type:'text',text:'本期任务'}]})]});
+  session.append('step/start',{turn:2,step:1});
+  for(const message of decision.messages)session.append('user/message',message,{surfaceOp:'append'});
   const context=JSON.stringify(session.deriveMessages());
   assert.match(context,/研发助手/);assert.match(context,/本期任务/);
   assert.doesNotMatch(context,/前期正文与旧记录/);
   assert.deepEqual(session.snapshotEvents().slice(0,original.length),original);
-  const restored=Session.create(session.id,session.snapshotEvents());
+  const restored=restore(session);
   const count=restored.snapshotEvents().length;
-  beginBriefingPeriod({session:restored},1,1,new AbortController().signal);
+  beginBriefingPeriod({agent:{session:restored},turn:2},{kind:'enter',messages:[]});
   assert.equal(restored.snapshotEvents().length,count);
   assert.equal(JSON.stringify(restored.deriveMessages()),context);
 });
@@ -33,14 +50,59 @@ test('each period retains the native transcript but cannot reuse stale evidence 
 test('existing schedules receive current research guidance on their first period without changing the schedule',()=>{
   const session=Session.create('existing-briefing');
   session.append('turn/start',{turn:1});
-  session.append('user/message',createUserMessage({source:{kind:'schedule'},content:[{type:'text',text:'原有日报内容'}]}),{surfaceOp:'append'});
-  beginBriefingPeriod({session},1,0,new AbortController().signal);
+  const decision=beginBriefingPeriod({agent:{session},turn:1,signal:new AbortController().signal},
+    {kind:'enter',messages:[createUserMessage({source:{kind:'schedule'},content:[{type:'text',text:'原有日报内容'}]})]});
+  assert.equal(session.snapshotEvents().length,1);
+  session.append('step/start',{turn:1,step:1});
+  session.append('system/message',{turn:1,step:1,message:createSystemMessage('研发助手')},{surfaceOp:'append'});
+  for(const message of decision.messages)session.append('user/message',message,{surfaceOp:'append'});
   const context=JSON.stringify(session.deriveMessages());
   assert.match(context,/原有日报内容/);assert.match(context,/get_experiment_loop/);assert.match(context,/get_compute_result/);
-  const restored=Session.create(session.id,session.snapshotEvents());
+  const restored=restore(session);
   const count=restored.snapshotEvents().length;
-  beginBriefingPeriod({session:restored},1,1,new AbortController().signal);
+  beginBriefingPeriod({agent:{session:restored},turn:1},{kind:'enter',messages:[]});
   assert.equal(restored.snapshotEvents().length,count);
+});
+
+test('the mounted native loop admits each period after its system prompt and restores the exact request surface',async t=>{
+  const require=createRequire(new URL('../../../vendor/deepseek-harness/packages/core/tools/package.json',import.meta.url));
+  const {Context}=await import(pathToFileURL(require.resolve('@deepseek-ai/cordis')).href);
+  const ctx=new Context();t.after(()=>ctx.fiber.dispose());
+  await mountAgentLoopTestDependencies(ctx,{systemPrompt:{includeRuntimeContext:false}});
+  const requests=[];
+  class ReportAdapter extends LlmAdapter {
+    async resolveModel(provider,model){return {provider,id:model,name:model};}
+    async *stream(options){
+      requests.push(options);
+      yield {type:'block-start',index:0,blockType:'text'};
+      yield {type:'text-delta',index:0,text:'本期内容'+requests.length};
+      yield {type:'block-end',index:0,block:{type:'text',text:'本期内容'+requests.length}};
+      yield {type:'finish',reason:{kind:'stop'}};
+    }
+  }
+  ctx.llm.registerAdapter(['report'],new ReportAdapter());
+  let background=true;
+  installBriefingPeriods(ctx,{binding:()=>({automation:background})});
+  const harness=await mountAgentLoopTestHarness(ctx);
+  const agent=await harness.create('mounted-briefing',{provider:'report',model:'report'});
+  for(const text of ['前期资料','当期资料']){
+    agent.followup(createUserMessage({source:{kind:'schedule'},content:[{type:'text',text}]}));
+    await agent.whenIdle();
+    assert.equal(agent.session.snapshotEvents().at(-1).data.reason.kind,'completed');
+    assert.deepEqual(restore(agent.session).deriveMessages(),agent.session.deriveMessages());
+  }
+  assert.equal(requests.length,2);
+  assert.equal(requests[0].messages[0].role,'system');
+  assert.match(JSON.stringify(requests[0].messages),/enterprise-briefing-period/);
+  assert.match(JSON.stringify(requests[1].messages),/当期资料/);
+  assert.doesNotMatch(JSON.stringify(requests[1].messages),/前期资料|本期内容1/);
+  assert.match(JSON.stringify(agent.session.snapshotEvents()),/前期资料|本期内容1/);
+  background=false;
+  agent.followup(createUserMessage({source:{kind:'user'},content:[{type:'text',text:'解释上期建议'}]}));
+  await agent.whenIdle();
+  assert.match(JSON.stringify(requests[2].messages),/本期内容2/);
+  assert.equal(agent.session.snapshotEvents().filter(event=>event.type==='user/message' && event.data.source.kind==='enterprise-briefing-period').length,2);
+  assert.deepEqual(restore(agent.session).deriveMessages(),agent.session.deriveMessages());
 });
 
 test('reconciliation keeps native edits, pauses and deletions without matching titles',()=>{

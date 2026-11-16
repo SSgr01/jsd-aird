@@ -141,7 +141,7 @@ class JdbcDataScopeResolverTest {
     }
 
     @Test
-    void selectedProductionOrderChecksItsProjectRelation() {
+    void selectedProductionOrderWithoutProjectRelationRetainsOnlyCreatorAccess() {
         when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
         var projectId = UUID.randomUUID();
         var result = resolver.resolve(check("PRODUCTION"),
@@ -150,7 +150,7 @@ class JdbcDataScopeResolverTest {
         assertThat(result.allowed()).isTrue();
         var sql = ArgumentCaptor.forClass(String.class);
         verify(jdbc).queryForObject(sql.capture(), eq(Boolean.class), any(Object[].class));
-        assertThat(sql.getValue()).contains("mfg.production_order", "project_id IN (?)");
+        assertThat(sql.getValue()).contains("mfg.production_order", "created_by = ?").doesNotContain("project_id");
     }
 
     @Test

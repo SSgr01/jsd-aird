@@ -59,13 +59,14 @@ async def test_reconstruction_keeps_native_mapping_deduplicates_events_and_fence
         assert len([item for item in await store.events(principal, rid) if item["type"] == "message.completed"]) == 1
         with pytest.raises(HTTPException, match="TOOL_RESULT_UNKNOWN"):
             await second.tool(principal, rid, epoch, "uncertain-note", "note_save", args)
-        gate = {"run_id": rid, "session_id": sid, "turn": 1, "kind": "model"}
+        gate = {"run_id": rid, "session_id": sid, "turn": 1, "kind": "model", "call_id": "recovery-model"}
+        assert (await second.gate_dsh(principal, gate))['allowed']
         with pytest.raises(HTTPException, match="SIDE_EFFECT_RECONCILIATION_REQUIRED"):
-            await second.gate_dsh(principal, gate)
+            await second.gate_dsh(principal, {**gate, 'kind':'native-tool', 'native_name':'write'})
         host.denied = True
         with pytest.raises(HTTPException, match="ACCESS_REVOKED"):
             await second.gate_dsh(principal, gate)
-        assert (await store.get(principal, "run", rid))["model_calls"] == 0
+        assert (await store.get(principal, "run", rid))["model_calls"] == 1
         assert len((await second.session_conversation(principal, sid))["notes"]) == 1
     finally:
         await first.http.aclose()

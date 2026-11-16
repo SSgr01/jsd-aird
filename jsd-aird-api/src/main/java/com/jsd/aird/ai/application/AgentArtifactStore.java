@@ -68,6 +68,7 @@ public class AgentArtifactStore {
         if (record.hasNonNull("topic_id")) topic(UUID.fromString(record.path("topic_id").asText()));
         authorizeDocuments(record);
         if (record.has("source_refs")) sources.authorize(record.path("source_refs"));
+        if (record.has("export_context")) sources.authorize(record.path("export_context"));
         return record;
     }
 
@@ -83,6 +84,7 @@ public class AgentArtifactStore {
         }
         authorizeDocuments(payload);
         sources.authorize(payload.path("source_refs"));
+        if (payload.has("export_context")) sources.authorize(payload.path("export_context"));
         var actor = ActorContext.required();
         var request = payload.deepCopy();
         request.remove(List.of("id", "revision", "created_at", "updated_at"));

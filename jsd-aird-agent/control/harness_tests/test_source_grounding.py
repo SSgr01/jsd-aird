@@ -74,11 +74,16 @@ def test_partial_findings_keep_a_source_link_but_an_explicit_reading_gap_needs_n
     assert binding.validate_output(run, "The original text could not be read.")[1]
 
 
-async def test_selected_source_is_prepared_via_normal_tool_and_recovery_does_not_repeat_it():
+async def test_selected_source_is_prepared_via_normal_tool_and_recovery_does_not_repeat_it(monkeypatch):
     from types import SimpleNamespace
 
     run, candidate = scoped_run()
     binding = JsdBindings()
+    # This source-reading unit test has no database or pending business writes.
+    # Recovery reconciliation is covered by its own integration tests.
+    binding.runtime = SimpleNamespace()
+    reconcile = AsyncMock(side_effect=lambda service, principal, current: current)
+    monkeypatch.setattr('aird_agent.hosts.jsd.operations.reconcile_business_operations', reconcile)
     binding.store = SimpleNamespace(get=AsyncMock(return_value=run))
     binding.tool = AsyncMock()
     await binding.prepare_run(None, run)

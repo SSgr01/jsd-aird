@@ -99,7 +99,8 @@ public class OperationManualRetrievalService {
         CompletableFuture<java.util.Optional<String>> pending = null;
         try {
             if (!index.key().model().isBlank() && repository.ready(index.key())) {
-                pending = CompletableFuture.supplyAsync(() -> embeddings.embedVector(query), vectorExecutor);
+                pending = CompletableFuture.supplyAsync(() -> embeddings.embedQueryVector(query,
+                        KnowledgeEmbeddingFacade.QueryTask.OPERATION_MANUAL), vectorExecutor);
                 var embedding = pending.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
                 if (embedding.isPresent()) {
                     repository.search(index.key(), embedding.get(), access.sectionIds(), 20)

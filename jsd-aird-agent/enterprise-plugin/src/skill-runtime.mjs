@@ -3,10 +3,13 @@ import { apply as nativeSkills } from '../../../vendor/deepseek-harness/packages
 export const name = 'enterprise-skill-runtime';
 export const inject = ['skills'];
 
-// These bundled enterprise skills consist only of SKILL.md. Their complete
-// content is loaded by dsh; a Windows host directory is not a sandbox resource.
+// Most enterprise skills are self-contained text. Conversion resources are
+// materialized as trusted task copies after source authorization; host paths
+// are never advertised as sandbox resources.
 const inline = skill => skill && ({ ...skill, resourceBase: {
-  kind: 'opaque', description: '完整指导已加载，无需读取额外脚本或资源文件。',
+  kind: 'opaque', description: skill.name === 'jsd-experiment-converter'
+    ? '按系统绑定模式准备资源：服务器文件夹任务用 folder_conversion(action=source)，原上传任务用 experiment_conversion(action=source)。参考文件和脚本在当前任务目录 .conversion-tools/jsd-experiment-converter/；文件夹任务先读 references/server-folder.md。'
+    : '完整指导已加载，无需读取额外脚本或资源文件。',
 } });
 
 export function apply(ctx, config) {

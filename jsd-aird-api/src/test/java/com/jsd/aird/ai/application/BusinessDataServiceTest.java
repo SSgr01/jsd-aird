@@ -53,6 +53,20 @@ class BusinessDataServiceTest {
         assertThat(closed.catalog().path("resource_types").toString()).contains("\"available\":false");
         verify(existing, never()).invoke(anyString(), any());
     }
+    @Test void backgroundProjectSearchFiltersBeforePaginationAndRejectsOutsideReads() {
+        var all=json.createObjectNode();var candidates=all.putArray("candidates");
+        for(int n=1;n<=3;n++)candidates.addObject().put("text","项目 "+n).set("ref",BusinessViews.ref("PROJECT",id(n)));
+        when(existing.invoke(eq("business_search"),any())).thenReturn(all);
+        var request=json.createObjectNode().put("type","PROJECT").put("offset",1).put("limit",1);
+        request.putArray("report_project_ids").add(id(1).toString()).add(id(3).toString());
+        var result=service.invoke("business_search",request);
+        assertThat(result.path("total").asInt()).isEqualTo(2);
+        assertThat(result.path("candidates").path(0).path("ref").path("id").asText()).isEqualTo(id(3).toString());
+        assertThat(result.has("next_offset")).isFalse();
+        var read=json.createObjectNode();read.set("ref",BusinessViews.ref("PROJECT",id(2)));read.set("report_project_ids",request.path("report_project_ids"));
+        assertThatThrownBy(()->service.invoke("business_read",read)).isInstanceOf(ApiException.class).hasMessageContaining("报告范围");
+        verify(existing,never()).invoke(eq("business_read"),any());
+    }
     @Test void explicitLocalAccessConnectsTheRegisteredReaderWithoutReplacingDomainPolicies() throws Exception {
         ActorContext.set(new Actor(org, id(101), "local-admin", "SYSTEM_ADMIN"));
         var row = add(1, "CUSTOMER", "客户", object("{\"name\":\"客户\"}"));

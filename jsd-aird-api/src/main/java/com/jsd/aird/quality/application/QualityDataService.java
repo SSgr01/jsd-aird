@@ -28,6 +28,7 @@ import java.util.regex.Pattern;
 
 @Service
 public class QualityDataService {
+    @org.springframework.beans.factory.annotation.Autowired(required=false) private com.jsd.aird.ops.api.ProjectMaterialActivity materialActivity;
     private final QualityDataStore repository;
     private final ObjectMapper objectMapper;
     private final FileStorageFacade storage;
@@ -110,6 +111,7 @@ public class QualityDataService {
         if (isFinalized(current.data()))
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"正式质量记录不可物理删除，请先归档或走受控作废流程");
         repository.softDeleteOne(actor.organizationId(), id, expectedVersion);
+        if(materialActivity!=null)materialActivity.record("DELETED","QUALITY_"+current.businessType().toUpperCase(java.util.Locale.ROOT),id,current.projectId(),current.displayName());
         audit(actor, "QUALITY_RECORD_DELETED", "QUALITY_RECORD", id, current.businessNo());
     }
 
@@ -142,6 +144,7 @@ public class QualityDataService {
             requireEditable(current);
             if(isFinalized(current.data()))throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"正式质量记录不可删除");
             repository.softDeleteOne(a.organizationId(),target.id(),target.lockVersion());
+            if(materialActivity!=null)materialActivity.record("DELETED","QUALITY_"+current.businessType().toUpperCase(java.util.Locale.ROOT),target.id(),current.projectId(),current.displayName());
         }
         var detail = JsonNodeFactory.instance.objectNode().put("recordCount", records == null ? 0 : records.size());
         var auditId = records == null ? categoryId : records.stream().map(RecordInput::id).filter(java.util.Objects::nonNull).findFirst().orElse(categoryId);
@@ -255,7 +258,7 @@ public class QualityDataService {
                 new com.jsd.aird.iam.api.RecordDataScope(resolved.scopeType(),a.userId(),resolved.targetIds()));
     }
 
-    public void deleteUpload(UUID id) { var a=ActorContext.required(); repository.deleteUpload(a.organizationId(),id); audit(a,"QUALITY_UPLOAD_DELETED","QUALITY_UPLOAD",id,null); }
+    @Transactional public void deleteUpload(UUID id) { var a=ActorContext.required(); var current=repository.findUpload(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"上传记录不存在")); repository.deleteUpload(a.organizationId(),id); if(materialActivity!=null)materialActivity.record("DELETED","QUALITY_UPLOAD",id,current.projectId(),current.originalName()); audit(a,"QUALITY_UPLOAD_DELETED","QUALITY_UPLOAD",id,null); }
 
     /** Re-runs source parsing for an existing upload without creating a second upload row. */
     public QualityDataStore.UploadView retryUpload(UUID id) {

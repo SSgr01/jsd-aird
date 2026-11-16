@@ -6,6 +6,9 @@ import java.util.UUID;
 import com.jsd.aird.iam.api.AuthorizationService;
 import com.jsd.aird.iam.api.PermissionCheck;
 import com.jsd.aird.shared.security.Actor;
+import com.jsd.aird.shared.business.BusinessDataAccess;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -55,16 +58,45 @@ public class FileBusinessPermissionResolver {
 
     private final JdbcTemplate jdbc;
     private final AuthorizationService authorization;
+    private final List<BusinessDataAccess> businessAccess;
 
     public FileBusinessPermissionResolver(JdbcTemplate jdbc, AuthorizationService authorization) {
+        this(jdbc, authorization, List.of());
+    }
+
+    @Autowired
+    public FileBusinessPermissionResolver(JdbcTemplate jdbc, AuthorizationService authorization, List<BusinessDataAccess> businessAccess) {
         this.jdbc = jdbc;
         this.authorization = authorization;
+        this.businessAccess = businessAccess;
     }
 
     public boolean mayRead(Actor actor, UUID fileId) {
         var creator = jdbc.query("SELECT created_by FROM ops.file_object WHERE organization_id = ? AND id = ? AND status <> 'DELETED'",
                 (rs, row) -> rs.getObject(1, UUID.class), actor.organizationId(), fileId);
         if (creator.isEmpty()) return false;
+        if (!businessAccess.isEmpty()) {
+            var sources=jdbc.queryForList("""
+                SELECT 'QUALITY_'||upper(business_type) type,id FROM quality.data_record WHERE organization_id=? AND source_file_id=? AND deleted=false
+                UNION SELECT 'QUALITY_UPLOAD',id FROM quality.upload_file WHERE organization_id=? AND file_id=? AND deleted=false
+                UNION SELECT 'PRODUCTION_UPLOAD',id FROM mfg.production_upload WHERE organization_id=? AND file_id=? AND status<>'DELETED'
+                UNION SELECT 'PRODUCTION_ORDER',o.id FROM mfg.production_order o WHERE o.organization_id=? AND (o.draft_editor_snapshot_file_id=? OR EXISTS(SELECT 1 FROM tpl.record_revision r WHERE r.production_order_id=o.id AND r.editor_snapshot_file_id=?) OR EXISTS(SELECT 1 FROM tpl.record_attachment a WHERE a.production_order_id=o.id AND a.file_object_id=?) OR EXISTS(SELECT 1 FROM mfg.production_ingest_source s JOIN mfg.production_ingest_job j ON j.id=s.ingest_job_id WHERE j.production_order_id=o.id AND j.organization_id=o.organization_id AND j.status='CONFIRMED' AND s.file_object_id=?))
+                UNION SELECT 'RESEARCH_TEST',id FROM rnd.research_test_record WHERE organization_id=? AND source_file_id=? AND deleted=false
+                UNION SELECT 'RESEARCH_TEST_UPLOAD',id FROM rnd.research_test_upload WHERE organization_id=? AND file_id=? AND deleted=false
+                UNION SELECT 'DATA_IMPORT',id FROM data.import_job WHERE organization_id=? AND source_file_id=? AND source_owner='DATA_CENTER'
+                UNION SELECT 'PROJECT_DOCUMENT',d.id FROM mdm.project_document d JOIN mdm.project p ON p.id=d.project_id WHERE p.organization_id=? AND d.file_object_id=? AND d.deleted=false AND p.deleted=false
+                UNION SELECT 'PROJECT_REFERENCE',id FROM core.project_reference WHERE organization_id=? AND file_object_id=? AND status='ACTIVE'
+                UNION SELECT 'SPECTRUM',id FROM spc.chart_asset WHERE organization_id=? AND file_object_id=? AND status<>'DELETED'
+                """, actor.organizationId(),fileId,actor.organizationId(),fileId,actor.organizationId(),fileId,
+                actor.organizationId(),fileId,fileId,fileId,fileId,actor.organizationId(),fileId,actor.organizationId(),fileId,
+                actor.organizationId(),fileId,actor.organizationId(),fileId,actor.organizationId(),fileId,actor.organizationId(),fileId);
+            for(var source:sources) {
+                String type=source.get("type").toString();UUID id=(UUID)source.get("id");
+                for(var policy:businessAccess)if(policy.resourceTypes().contains(type)
+                    && policy.allowed(actor,type,id,"READ",JsonNodeFactory.instance.objectNode())
+                    && policy.allowed(actor,type,id,"DOWNLOAD",JsonNodeFactory.instance.objectNode()))return true;
+            }
+        }
         var args = new Object[33];
         for (var index = 0; index < 32; index += 2) {
             args[index] = actor.organizationId();
@@ -74,6 +106,18 @@ public class FileBusinessPermissionResolver {
         List<Association> associations = jdbc.query(ASSOCIATIONS,
                 (rs, row) -> new Association(rs.getString(1), rs.getObject(2, UUID.class)), args);
         for (var association : associations) {
+            // These domains use their record policy above, including explicit download denial.
+            if(!businessAccess.isEmpty() && (association.permissionCode().startsWith("quality.")
+                || association.permissionCode().startsWith("production.") || association.permissionCode().startsWith("research-test.")
+                || association.permissionCode().equals("data.view.view") || association.permissionCode().equals("project.reference.view")
+                || association.permissionCode().equals("spectrum.view.view")))continue;
+            String transfer=switch(association.permissionCode()) {
+                case "knowledge.view.view" -> "knowledge.download";
+                case "spectrum.upload.view" -> "spectrum.view.download";
+                default -> association.permissionCode().replaceFirst("\\.view$",".download");
+            };
+            // Apply explicit download denials before the legacy scope projection below.
+            if(!authorization.check(new PermissionCheck(actor.organizationId(),actor.userId(),transfer,"FILE",null,"READ")).allowed())continue;
             var scope = authorization.resolveScope(new PermissionCheck(actor.organizationId(), actor.userId(),
                     association.permissionCode(), "FILE", null, "READ"));
             if (!scope.allowed()) continue;

@@ -23,6 +23,8 @@ public class AgentSourceAuthorization {
     private com.jsd.aird.rnd.api.AgentExperimentFacade experiments;
     private org.springframework.beans.factory.ObjectProvider<BusinessDataService> businessData;
     private org.springframework.beans.factory.ObjectProvider<BusinessComputeService> businessCompute;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<ExperimentConversionTools> conversions;
 
     @org.springframework.beans.factory.annotation.Autowired
     void businessServices(org.springframework.beans.factory.ObjectProvider<BusinessDataService> data,
@@ -31,6 +33,10 @@ public class AgentSourceAuthorization {
     }
 
     private boolean businessSource(JsonNode source, String excerpt) {
+        if ("BUSINESS_RECORD".equals(source.path("kind").asText()) && "EXPERIMENT_CONVERSION".equals(source.path("resource_type").asText())
+                && "v1".equals(source.path("anchor").path("conversion_adapter").asText())) {
+            conversions.getObject().validateSource(source,excerpt); return true;
+        }
         if (!"BUSINESS_RECORD".equals(source.path("kind").asText())
                 || !"v1".equals(source.path("anchor").path("business_adapter").asText())) return false;
         if (source.path("anchor").hasNonNull("compute_kind")) businessCompute.getObject().validateSource(source, excerpt);
@@ -184,8 +190,20 @@ public class AgentSourceAuthorization {
             businessData.getObject().requireExport(source);
         for (var source : sources) if ("BUSINESS_RECORD".equals(source.path("kind").asText())
                 && !"v1".equals(source.path("anchor").path("business_adapter").asText())
-                && !"EXPERIMENT".equals(source.path("resource_type").asText()))
-            authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "project.export", "PROJECT",
+                && !"EXPERIMENT".equals(source.path("resource_type").asText())) {
+            if ("EXPERIMENT_CONVERSION".equals(source.path("resource_type").asText()))
+                authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "eln.view.export", "EXPERIMENT", null, "READ"));
+            else authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "project.list.export", "PROJECT",
                 UUID.fromString(source.path("project_id").asText()), "READ"));
+        }
+        for (var source : sources) if ("DATA_SOURCE_FILE".equals(source.path("kind").asText())
+                || "BUSINESS_RECORD".equals(source.path("kind").asText())
+                    && "EXPERIMENT".equals(source.path("resource_type").asText())
+                    && !"v1".equals(source.path("anchor").path("business_adapter").asText())) {
+            boolean experiment = "EXPERIMENT".equals(source.path("resource_type").asText());
+            authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(),
+                experiment ? "eln.view.export" : "data.export", experiment ? "EXPERIMENT" : "DATA",
+                UUID.fromString(source.path("resource_id").asText()), "READ"));
+        }
     }
 }

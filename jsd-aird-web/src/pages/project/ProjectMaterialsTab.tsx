@@ -1,6 +1,7 @@
 import { App, Empty, Table, Tabs, Tag, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { Can } from '@/components/auth/Can';
+import { usePermission } from '@/components/auth/usePermission';
 
 import { downloadFile } from '@/services/files/file-api';
 import { qualityApi, type QualityUpload } from '@/services/quality/quality-api';
@@ -19,6 +20,9 @@ function formatDate(value?: string) {
 
 export function ProjectMaterialsTab({ projectId }: Props) {
   const { message } = App.useApp();
+  const readQuality = usePermission('quality.upload.view');
+  const readProduction = usePermission('production.upload.view');
+  const readReports = usePermission('research-test.report.view.view');
   const [qualityItems, setQualityItems] = useState<QualityUpload[]>([]);
   const [productionItems, setProductionItems] = useState<ProductionUpload[]>([]);
   const [reportItems, setReportItems] = useState<ResearchTestSummary[]>([]);
@@ -26,22 +30,27 @@ export function ProjectMaterialsTab({ projectId }: Props) {
 
   useEffect(() => {
     if (!projectId) return;
+    let active = true;
+    setQualityItems([]);
+    setProductionItems([]);
+    setReportItems([]);
     setLoading(true);
-    void Promise.all([
-      qualityApi.uploads({ projectId, page: 1, size: 100 }),
-      productionUploadApi.list({ projectId, viewableOnly: true, page: 1, size: 100 }),
-      listResearchTests('REPORT', { projectId, page: 1, size: 100 }),
+    void Promise.allSettled([
+      readQuality ? qualityApi.uploads({ projectId, page: 1, size: 100 }) : Promise.resolve({ items: [] }),
+      readProduction ? productionUploadApi.list({ projectId, viewableOnly: true, page: 1, size: 100 }) : Promise.resolve({ items: [] }),
+      readReports ? listResearchTests('REPORT', { projectId, page: 1, size: 100 }) : Promise.resolve({ items: [] }),
     ]).then(([quality, production, reports]) => {
-      setQualityItems(quality.items);
-      setProductionItems(production.items);
-      setReportItems(reports.items);
-    }).catch((reason) => {
-      message.error(reason instanceof Error ? reason.message : '项目关联资料加载失败');
-      setQualityItems([]);
-      setProductionItems([]);
-      setReportItems([]);
-    }).finally(() => setLoading(false));
-  }, [message, projectId]);
+      if (!active) return;
+      setQualityItems(quality.status === 'fulfilled' ? quality.value.items : []);
+      setProductionItems(production.status === 'fulfilled' ? production.value.items : []);
+      setReportItems(reports.status === 'fulfilled' ? reports.value.items : []);
+      const failure = [quality, production, reports].find(result => result.status === 'rejected');
+      if (failure?.status === 'rejected') {
+        message.error(failure.reason instanceof Error ? failure.reason.message : '部分项目关联资料加载失败');
+      }
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [message, projectId, readQuality, readProduction, readReports]);
 
   const download = (fileId: string, name: string) => {
     void downloadFile(fileId, name)
@@ -61,7 +70,7 @@ export function ProjectMaterialsTab({ projectId }: Props) {
     { title: '阶段 / 任务', key: 'relation', render: (_: unknown, row: QualityUpload) => `${row.stageName || '—'} / ${row.taskName || '—'}` },
     { title: '可见范围', dataIndex: 'visibility', render: (value: string) => <Tag>{value === 'PROJECT' ? '项目组可见' : value === 'RND' ? '研发部可见' : value === 'QUALITY' ? '品管部可见' : '全员可见'}</Tag> },
     { title: '上传时间', dataIndex: 'createdAt', render: (value: string) => formatDate(value) },
-    { title: '操作', key: 'action', width: 80, render: (_: unknown, row: QualityUpload) => <Can permission="project.materials.view"><a onClick={() => download(row.fileId, row.originalName)}>下载</a></Can> },
+    { title: '操作', key: 'action', width: 80, render: (_: unknown, row: QualityUpload) => <Can permission="quality.upload.download"><a onClick={() => download(row.fileId, row.originalName)}>下载</a></Can> },
   ];
 
   const productionColumns = [
@@ -71,7 +80,7 @@ export function ProjectMaterialsTab({ projectId }: Props) {
     { title: '品名', dataIndex: 'productName', render: (value: string) => value || '—' },
     { title: '阶段 / 任务', key: 'relation', render: (_: unknown, row: ProductionUpload) => `${row.stageName || '—'} / ${row.taskName || '—'}` },
     { title: '上传时间', dataIndex: 'createdAt', render: (value: string) => formatDate(value) },
-    { title: '操作', key: 'action', width: 80, render: (_: unknown, row: ProductionUpload) => <Can permission="project.materials.view"><a onClick={() => download(row.fileId, row.originalName)}>下载</a></Can> },
+    { title: '操作', key: 'action', width: 80, render: (_: unknown, row: ProductionUpload) => <Can permission="production.upload.download"><a onClick={() => download(row.fileId, row.originalName)}>下载</a></Can> },
   ];
   const reportColumns = [
     { title: '报告编号', dataIndex: 'businessNo' },
@@ -79,7 +88,7 @@ export function ProjectMaterialsTab({ projectId }: Props) {
     { title: '阶段 / 任务', key: 'relation', render: (_: unknown, row: ResearchTestSummary) => `${row.stageName || '—'} / ${row.taskName || '—'}` },
     { title: '负责人', dataIndex: 'ownerName', render: (value?: string) => value || '—' },
     { title: '状态', dataIndex: 'status', render: (value: string) => <Tag color={value === 'PUBLISHED' ? 'green' : 'blue'}>{value === 'PUBLISHED' ? '已发布' : '草稿/审核中'}</Tag> },
-    { title: '操作', key: 'action', width: 80, render: (_: unknown, row: ResearchTestSummary) => <Can permission="project.materials.view"><a onClick={() => downloadReport(row)}>下载</a></Can> },
+    { title: '操作', key: 'action', width: 80, render: (_: unknown, row: ResearchTestSummary) => <Can permission="research-test.report.view.export"><a onClick={() => downloadReport(row)}>下载</a></Can> },
   ];
 
   return (
@@ -87,11 +96,11 @@ export function ProjectMaterialsTab({ projectId }: Props) {
       <Typography.Paragraph type="secondary" className="pm-readonly-materials-tip">
         以下资料由品管部、生产单和研发测试模块维护，项目详情提供只读下载。
       </Typography.Paragraph>
-      <Tabs items={[
+      {!readQuality && !readProduction && !readReports ? <Empty description="暂无可查阅的关联资料" /> : <Tabs items={[
         { key: 'quality', label: `品管部（${qualityItems.length}）`, children: <Table rowKey="id" loading={loading} columns={qualityColumns} dataSource={qualityItems} pagination={false} scroll={{ x: 920 }} locale={{ emptyText: <Empty description="暂无品管部资料" /> }} /> },
         { key: 'production', label: `生产单（${productionItems.length}）`, children: <Table rowKey="id" loading={loading} columns={productionColumns} dataSource={productionItems} pagination={false} scroll={{ x: 1080 }} locale={{ emptyText: <Empty description="暂无生产单资料" /> }} /> },
         { key: 'research-test', label: `综合测试报告（${reportItems.length}）`, children: <Table rowKey="id" loading={loading} columns={reportColumns} dataSource={reportItems} pagination={false} scroll={{ x: 920 }} locale={{ emptyText: <Empty description="暂无综合测试报告" /> }} /> },
-      ]} />
+      ].filter(item => item.key === 'quality' ? readQuality : item.key === 'production' ? readProduction : readReports)} />}
     </div>
   );
 }

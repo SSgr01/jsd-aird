@@ -77,7 +77,7 @@ export function registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton}) {
       'customer-requirements':'客户需求整理与比较','business-reply':'业务回复起草','record-validation':'记录整理与核验',
       'experiment-comparison':'实验对比','quality-review':'检测质量核对与文件草稿','production-reconciliation':'生产库存与数量核对',
       'formulation-analysis':'配方分析','research-design':'竞争假设与实验设计','literature-review':'文献调研与研读',
-      'technical-comparison':'论文专利与技术路线比较','table-preparation':'表格整理'};
+      'technical-comparison':'论文专利与技术路线比较','table-preparation':'表格整理','jsd-experiment-converter':'实验记录标准化转换'};
     return h('section',{className:'jsd-expert-config','aria-label':'默认工作设置'},
       h('h4',null,'默认工作设置'),
       h('dl',null,
@@ -107,7 +107,7 @@ export function registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton}) {
           action(busy?'正在准备…':expert.enabled?'召唤专家':'已停用',()=>start(),{disabled:busy || !expert.enabled,className:'jsd-expert-primary'})),
         h('p',{className:'jsd-expert-summary'},expert.summary),
         h('div',{className:'jsd-expert-tags'},expert.capabilities.map(text=>h('span',{key:text},text))),
-        h('div',{className:'jsd-expert-meta'},h('span',null,expert.category),h('span',null,'版本 '+expert.revision)),
+        h('div',{className:'jsd-expert-meta'},h('span',null,expert.category)),
         h(ErrorNotice,{error,retry:()=>start(lastPrompt.current),busy}),
         h('h4',null,'专家帮你做'),h('p',{className:'jsd-expert-note'},'选择一个任务示例，填入草稿后即可开始。'),
         h('div',{className:'jsd-expert-examples'},expert.examples.map(text=>

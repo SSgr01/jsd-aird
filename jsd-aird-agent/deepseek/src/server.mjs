@@ -3,7 +3,7 @@ import { createServer, request as httpRequest } from 'node:http';
 import { configuration, engine, revision } from './config.mjs';
 import { Hosts } from './hosts.mjs';
 import { credentialMatches, json, readJson, requireSameOrigin, sameOwner } from './security.mjs';
-import { checkRpc, checkStream, checkUpload, nativeFileSession } from './rpc-policy.mjs';
+import { checkRpc, checkStream, checkUpload, nativeFileAuthorization } from './rpc-policy.mjs';
 import { pluginRoute, checkPluginRequest } from './plugin-policy.mjs';
 import { browserMetadata, browserJsonResponse } from './path-view.mjs';
 import { staticBrandingTarget, brandStaticResponse } from './branding.mjs';
@@ -87,9 +87,9 @@ export function gateway(config) {
         const endpoint = decodeURIComponent(url.pathname.slice(host.path.length + 4));
         const envelope = await readJson(req);
         await checkRpc(endpoint, envelope, host);
-        const sessionId = nativeFileSession(endpoint, envelope);
-        if(sessionId) {
-          await hosts.call(host,'authorize',{session_id:sessionId});
+        const fileAuthorization = nativeFileAuthorization(endpoint, envelope);
+        if(fileAuthorization) {
+          await hosts.call(host,'authorize',fileAuthorization);
         }
         rpcBody = JSON.stringify(envelope);
         delete headers['transfer-encoding']; headers['content-length'] = Buffer.byteLength(rpcBody);

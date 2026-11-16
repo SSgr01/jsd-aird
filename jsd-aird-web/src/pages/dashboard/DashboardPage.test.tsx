@@ -16,6 +16,7 @@ vi.mock('@/services/inventory/inventory-api', () => ({ inventoryApi: { balances:
 
 describe('dashboard independent module loading', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     queryClient.clear();
     useAuthStore.setState({ user: testUser, status: 'authenticated' });
     vi.mocked(getProjects).mockResolvedValue({
@@ -38,5 +39,15 @@ describe('dashboard independent module loading', () => {
     vi.spyOn(inventoryApi, 'balances').mockRejectedValueOnce(new Error('inventory unavailable'));
     renderDashboard();
     expect(await screen.findByText('已加载项目')).toBeInTheDocument();
+  });
+
+  it('hides inaccessible entries and does not request their business data', () => {
+    useAuthStore.setState({ user: { ...testUser, permissions: ['ai.use'], menuKeys: ['workbench', 'ai.qa'] } });
+    renderDashboard();
+    expect(screen.queryByRole('link', { name: /我的项目/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /进入模块/ })).not.toBeInTheDocument();
+    expect(getProjects).not.toHaveBeenCalled();
+    expect(getTasks).not.toHaveBeenCalled();
+    expect(inventoryApi.balances).not.toHaveBeenCalled();
   });
 });

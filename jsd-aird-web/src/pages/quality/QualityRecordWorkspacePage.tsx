@@ -520,7 +520,7 @@ export function QualityRecordWorkspacePage() {
                 </>
               ),
             },
-            { key: 'edit', label: '编辑', disabled: !canUpdate || !isDesktop || record.workflowStatus === 'PUBLISHED' },
+            ...(canUpdate ? [{ key: 'edit', label: '编辑', disabled: !isDesktop || record.workflowStatus === 'PUBLISHED' }] : []),
             {
               key: 'versions',
               label: (

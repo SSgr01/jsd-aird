@@ -1969,7 +1969,7 @@ export function TemplateWorkspacePage() {
                 </span>
               ),
             },
-            { key: 'edit', label: '编辑', disabled: !canUpdate || workspace.status !== 'DRAFT' },
+            ...(canUpdate ? [{ key: 'edit', label: '编辑', disabled: workspace.status !== 'DRAFT' }] : []),
             { key: 'versions', label: '版本记录' },
           ]}
         />

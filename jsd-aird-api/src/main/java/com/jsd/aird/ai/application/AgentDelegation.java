@@ -56,9 +56,9 @@ public class AgentDelegation {
     /** A short-lived service proof is exchanged only after checking the live IAM identity. */
     public Map<String, Object> automationIdentity(String proof) {
         var node = claims(proof, "automation-exchange");
-        if (!java.util.Set.of("research-briefings", "personal-memory").contains(node.path("scope").asText())
+        if (!java.util.Set.of("research-briefings", "personal-memory", "folder-conversion").contains(node.path("scope").asText())
                 || node.path("automation_grant_id").asText().isBlank()) throw new ApiException(ApiErrorCode.AUTH_REQUIRED);
-        var user = live(node);
+        var user = live(node, true);
         long now = Instant.now().getEpochSecond();
         var values = new java.util.HashMap<String, Object>();
         values.put("organization_id", user.organizationId()); values.put("actor_id", user.id());
@@ -80,6 +80,11 @@ public class AgentDelegation {
     public void requireAction(String ticket, String action, JsonNode arguments) {
         var node = claims(ticket, "java-tools");
         if (node.path("automation_grant_id").asText("").isBlank()) return;
+        if ("folder-conversion".equals(node.path("scope").asText())) {
+            if (!java.util.Set.of("runtime_context", "authorize_sources", "validate_cached_evidence", "authorize", "expert_catalog", "web_search_status", "normalize_conversion_office").contains(action))
+                throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "文件夹任务仅允许转换及运行授权核验");
+            return;
+        }
         if ("personal-memory".equals(node.path("scope").asText())) {
             if (!java.util.Set.of("runtime_context", "authorize_sources", "validate_cached_evidence").contains(action))
                 throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "记忆后台授权仅用于来源核验");
@@ -96,18 +101,38 @@ public class AgentDelegation {
             String type = "business_search".equals(action) ? arguments.path("type").asText()
                 : arguments.path("ref").path("type").asText();
             if ("business_search".equals(action) && type.isBlank()) return;
-            if (!java.util.Set.of("PROJECT", "STAGE", "TASK", "REQUIREMENT", "MATERIAL", "EXPERIMENT", "STRUCTURED_DATA", "RAW_MATERIAL", "RAW_MATERIAL_SOURCE").contains(type))
+            if (!java.util.Set.of("PROJECT", "STAGE", "TASK", "REQUIREMENT", "MATERIAL", "EXPERIMENT", "STRUCTURED_DATA", "RAW_MATERIAL", "RAW_MATERIAL_SOURCE",
+                    "MEETING_MINUTES", "PROJECT_DOCUMENT", "PROJECT_REFERENCE", "QUALITY_UPLOAD", "PRODUCTION_UPLOAD", "RESEARCH_TEST", "RESEARCH_TEST_UPLOAD",
+                    "QUALITY_STANDARD", "QUALITY_RECORD", "QUALITY_COA", "QUALITY_DEFECT", "QUALITY_MANUAL", "QUALITY_MSDS", "QUALITY_LABEL", "DATA_IMPORT", "SPECTRUM", "CUSTOMER_REQUIREMENT").contains(type))
                 throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "后台授权仅包含研发资料");
+            if (!java.util.Set.of("PROJECT","STAGE","TASK","REQUIREMENT","MATERIAL","EXPERIMENT","STRUCTURED_DATA","RAW_MATERIAL","RAW_MATERIAL_SOURCE").contains(type)
+                    && !arguments.path("report_project_ids").isArray())
+                throw new ApiException(ApiErrorCode.PERMISSION_DENIED,"后台资料读取需要本期报告项目范围");
         }
     }
 
+    public static ApiException backgroundAuthorizationRequired() {
+        return new ApiException(ApiErrorCode.PERMISSION_DENIED, "后台授权已失效，请进入工作台重新授权",
+            Map.of("reason", "BACKGROUND_AUTHORIZATION_REQUIRED"));
+    }
+
     private DelegationIdentity.Identity live(JsonNode node) {
+        return live(node, false);
+    }
+
+    private DelegationIdentity.Identity live(JsonNode node, boolean backgroundExchange) {
+        UUID actorId, organizationId;
         try {
-            var user = auth.delegationUser(UUID.fromString(node.path("actor_id").asText()));
-            if (user == null || !"ACTIVE".equals(user.status()) || user.authVersion() != node.path("auth_version").asLong()
-                    || !user.organizationId().toString().equals(node.path("organization_id").asText())) throw new IllegalArgumentException();
-            return user;
-        } catch (Exception error) { throw new ApiException(ApiErrorCode.AUTH_REQUIRED); }
+            actorId = UUID.fromString(node.path("actor_id").asText());
+            organizationId = UUID.fromString(node.path("organization_id").asText());
+            if (!node.path("auth_version").isIntegralNumber()) throw new IllegalArgumentException();
+        } catch (IllegalArgumentException error) { throw new ApiException(ApiErrorCode.AUTH_REQUIRED); }
+        // A database/identity-service failure is not evidence that authorization was revoked.
+        var user = auth.delegationUser(actorId);
+        if (user == null || !"ACTIVE".equals(user.status()) || user.authVersion() != node.path("auth_version").asLong()
+                || !user.organizationId().equals(organizationId))
+            throw backgroundExchange ? backgroundAuthorizationRequired() : new ApiException(ApiErrorCode.AUTH_REQUIRED);
+        return user;
     }
 
     private JsonNode claims(String ticket, String audience) {

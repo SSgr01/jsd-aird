@@ -487,11 +487,11 @@ export function ResearchTestWorkspacePage({ type }: { type: ResearchTestType }) 
               </>
             ),
           },
-          {
+          ...(canUpdate ? [{
             key: 'edit',
             label: '编辑',
-            disabled: !canUpdate || !editableStatuses.includes(detail.summary.status),
-          },
+            disabled: !editableStatuses.includes(detail.summary.status),
+          }] : []),
           { key: 'versions', label: '版本记录' },
         ]}
       />

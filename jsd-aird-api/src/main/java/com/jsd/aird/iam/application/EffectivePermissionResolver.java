@@ -95,6 +95,9 @@ public class EffectivePermissionResolver {
         if ((roles == null || roles.isEmpty()) && !hasLevel) {
             store.userOverrides(organizationId, user.id()).forEach(binding -> bindings.put(binding.permissionCode(), binding));
         }
+        bindings.values().stream().filter(binding -> "DENY".equals(binding.effect()))
+                .map(Binding::permissionCode).forEach(deniedOperations::add);
+        menuKeys.removeAll(MenuViewPermissions.deniedMenus(deniedOperations));
         MenuViewPermissions.impliedBy(menuKeys).stream()
                 .filter(code -> !deniedOperations.contains(code))
                 .forEach(code -> bindings.compute(code, (key, existing) -> existing == null || "DENY".equals(existing.effect())

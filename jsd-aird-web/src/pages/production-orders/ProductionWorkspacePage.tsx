@@ -501,7 +501,7 @@ export function ProductionWorkspacePage() {
           setView(key as 'preview' | 'edit');
         }} items={[
           { key: 'preview', label: '预览' },
-          { key: 'edit', label: '编辑', disabled: !canUpdate || workspace.status !== 'DRAFT' },
+          ...(canUpdate ? [{ key: 'edit', label: '编辑', disabled: workspace.status !== 'DRAFT' }] : []),
         ]} />
       </nav>
 

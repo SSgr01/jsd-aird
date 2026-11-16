@@ -84,7 +84,7 @@ describe('page operation access', () => {
     ['/spectrum/view', 'spectrum.view.delete'],
   ])('opens %s for a page operation grant', (path, permission) => {
     expect(canViewPathWithMenus(path, [permission])).toBe(true);
-    expect(canViewPathWithMenus(path, [permission], [])).toBe(true);
+    expect(canViewPathWithMenus(path, [permission], [])).toBe(false);
     expect(canViewPathWithMenus(path, [], [])).toBe(false);
   });
 
@@ -101,7 +101,7 @@ describe('page operation access', () => {
     ['/knowledge/library', 'knowledge.upload.create'],
   ])('opens %s for its upload grant', (path, permission) => {
     expect(canViewPathWithMenus(path, [permission])).toBe(true);
-    expect(canViewPathWithMenus(path, [permission], [])).toBe(true);
+    expect(canViewPathWithMenus(path, [permission], [])).toBe(false);
   });
 
   it.each([
@@ -118,7 +118,7 @@ describe('page operation access', () => {
     ['/knowledge/upload-tasks/task-1', 'knowledge.view'],
   ])('opens the read-only %s workspace with its module view grant', (path, viewPermission) => {
     expect(canViewPathWithMenus(path, [viewPermission])).toBe(true);
-    expect(canViewPathWithMenus(path, [viewPermission], [])).toBe(true);
+    expect(canViewPathWithMenus(path, [viewPermission], [])).toBe(false);
     expect(canViewPathWithMenus(path, [], [])).toBe(false);
   });
 
@@ -131,7 +131,20 @@ describe('page operation access', () => {
     ['/data/upload', 'data.upload.retry'],
     ['/quality/upload', 'quality.upload.download'],
   ])('opens %s for a record-only operation', (path, permission) => {
-    expect(canViewPathWithMenus(path, [permission], [])).toBe(true);
+    expect(canViewPathWithMenus(path, [permission], [])).toBe(false);
     expect(canViewPathWithMenus(path, [], [])).toBe(false);
+  });
+});
+
+
+describe('resolved menu boundaries', () => {
+  it('does not restore removed entries through action grants', () => {
+    expect(filterMenuRoute({ path: '/quality/view', name: '品管数据' }, ['quality.view.update'], [])).toBeNull();
+    expect(filterMenuRoute({ path: '/quality/upload', name: '品管上传' }, ['quality.view', 'quality.upload.create'], [])).toBeNull();
+  });
+  it('resolves model center independently of chat', () => {
+    expect(canViewPathWithMenus('/assistant/model-center', ['ai.model.read'], ['ai.model'])).toBe(true);
+    expect(canViewPathWithMenus('/assistant/model-center', ['ai.use'], ['ai.qa'])).toBe(false);
+    expect(canViewPathWithMenus('/assistant', ['ai.model.read'], ['ai.model'])).toBe(false);
   });
 });

@@ -18,7 +18,7 @@ test('source projection keeps native reasoning and image renderers with authoriz
   subscribe:()=>()=>{},inject:(_name,fn)=>fn(),
   register:(options,component)=>{entries.set(options.name,[{options,component}]);return ()=>{};},
  };
- const React={useMemo:fn=>fn(),useCallback:fn=>fn};
+ const React={useMemo:fn=>fn(),useCallback:fn=>fn,useState:fn=>[fn(),()=>{}],useEffect:()=>{}};
  const h=(component,props,...children)=>({component,props,children});
  new Function('React','h','sourceLinks','location',code+';return registerSourceMarkdown;')(
   React,h,sourceLinks,{origin:'http://localhost'})({slots});
@@ -51,9 +51,17 @@ test('source projection keeps native reasoning and image renderers with authoriz
  assert.equal(compact.children.length,1);
  assert.equal(compact.props.onClickCapture,undefined);
  const attrs={};
- const link={textContent:'实验方法 · p5',href:url,setAttribute:(key,value)=>{attrs[key]=value;}};
+ const link={textContent:'实验方法 · p5',href:url,closest:()=>null,querySelector:()=>null,setAttribute:(key,value)=>{attrs[key]=value;}};
  compact.props.ref({querySelectorAll:()=>[link]});
  assert.equal(link.title,'Full paper title · 第 5 页');
  assert.ok(Object.hasOwn(attrs,'data-jsd-citation'));
  assert.equal(attrs['aria-haspopup'],undefined);
+ const web=wrapper.component({node:{data:{blocks:[{kind:'text',text:'[time.is](https://time.is/)'}]}},renderSlot:()=>{}});
+ const webAttrs={};
+ const webLink={...link,href:'https://time.is/',textContent:'time.is',setAttribute:(key,value)=>{webAttrs[key]=value;}};
+ web.props.ref({querySelectorAll:()=>[webLink]});
+ assert.equal(webAttrs['data-jsd-citation'],'web');
+ assert.equal(webLink.title,'time.is\nhttps://time.is/');
+ assert.equal(webAttrs['aria-label'],'查看网页来源：time.is，https://time.is/');
+ assert.equal(web.props.onClickCapture,undefined);
 });

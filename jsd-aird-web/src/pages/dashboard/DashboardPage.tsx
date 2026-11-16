@@ -5,6 +5,8 @@ import {
 import { Link } from 'react-router-dom';
 import { useMemo } from 'react';
 import { useBusinessQuery } from '@/services/query/use-business-query';
+import { useAuthStore } from '@/stores/auth-store';
+import { canViewPathWithMenus } from '@/routes/route-permissions';
 
 import { inventoryApi } from '@/services/inventory/inventory-api';
 import { listExperiments, type ExperimentSummary } from '@/services/experiments/experiment-api';
@@ -151,12 +153,12 @@ function MetricCard({ metric }: { metric: StatMetric }) {
   );
 }
 
-function EmptyModule({ label, entryName }: { label: string; entryName?: string }) {
+function EmptyModule({ label, entryName, to }: { label: string; entryName?: string; to: string }) {
   return (
     <div className="dashboard-module-empty">
       <AppstoreOutlined className="dashboard-module-empty-icon" />
       <div className="dashboard-module-empty-text">{label}</div>
-      <div className="dashboard-module-empty-cta">进入模块{entryName ? `“${entryName}”` : ''}</div>
+      <Link to={to} className="dashboard-module-empty-cta">进入模块{entryName ? `“${entryName}”` : ''}</Link>
     </div>
   );
 }
@@ -192,7 +194,7 @@ function ModuleCard({ module }: { module: DashboardModule }) {
             ))}
           </ul>
         ) : (
-          <EmptyModule label="暂无相关事项" entryName={module.entryName} />
+          <EmptyModule label="暂无相关事项" entryName={module.entryName} to={module.to} />
         )}
       </div>
     </section>
@@ -200,12 +202,14 @@ function ModuleCard({ module }: { module: DashboardModule }) {
 }
 
 export function DashboardPage() {
-  const projectsQuery = useBusinessQuery('projects', {page:1,size:6}, signal=>getProjects({page:1,size:6},signal));
-  const tasksQuery = useBusinessQuery('tasks', {page:1,size:6}, signal=>getTasks({page:1,size:6},signal));
-  const experimentsQuery = useBusinessQuery('experiments', {page:1,size:6}, signal=>listExperiments({page:1,size:6},signal));
-  const pendingQuery = useBusinessQuery('experiments', {status:'PENDING_REVIEW',page:1,size:6}, signal=>listExperiments({status:'PENDING_REVIEW',page:1,size:6},signal));
-  const returnedQuery = useBusinessQuery('experiments', {status:'RETURNED',page:1,size:6}, signal=>listExperiments({status:'RETURNED',page:1,size:6},signal));
-  const inventoryQuery = useBusinessQuery('inventory', {page:1,size:100}, signal=>inventoryApi.balances({page:1,size:100},signal));
+  const user = useAuthStore(state => state.user);
+  const canOpen = (path: string) => Boolean(user && canViewPathWithMenus(path, user.permissions, user.menuKeys));
+  const projectsQuery = useBusinessQuery('projects', {page:1,size:6}, signal=>getProjects({page:1,size:6},signal), { enabled: canOpen('/projects/list') });
+  const tasksQuery = useBusinessQuery('tasks', {page:1,size:6}, signal=>getTasks({page:1,size:6},signal), { enabled: canOpen('/projects/tasks') });
+  const experimentsQuery = useBusinessQuery('experiments', {page:1,size:6}, signal=>listExperiments({page:1,size:6},signal), { enabled: canOpen('/experiments/list') });
+  const pendingQuery = useBusinessQuery('experiments', {status:'PENDING_REVIEW',page:1,size:6}, signal=>listExperiments({status:'PENDING_REVIEW',page:1,size:6},signal), { enabled: canOpen('/experiments/list') });
+  const returnedQuery = useBusinessQuery('experiments', {status:'RETURNED',page:1,size:6}, signal=>listExperiments({status:'RETURNED',page:1,size:6},signal), { enabled: canOpen('/experiments/list') });
+  const inventoryQuery = useBusinessQuery('inventory', {page:1,size:100}, signal=>inventoryApi.balances({page:1,size:100},signal), { enabled: canOpen('/inventory/query') });
   const projects = projectsQuery.data?.items ?? []; const projectTotal = projectsQuery.data?.total ?? 0;
   const tasks = tasksQuery.data?.items ?? []; const taskTotal = tasksQuery.data?.total ?? 0;
   const experiments = experimentsQuery.data?.items ?? []; const experimentTotal = experimentsQuery.data?.total ?? 0;
@@ -245,7 +249,7 @@ export function DashboardPage() {
     <div className="dashboard-page">
       <header className="dashboard-page-head">
         <div>
-          <h2 className="dashboard-page-title">工作台</h2>
+          <h1 className="dashboard-page-title">工作台</h1>
           <p className="dashboard-page-desc">看清今天的重点，把研判接到行动。</p>
         </div>
         <div className="dashboard-page-extra">
@@ -254,7 +258,7 @@ export function DashboardPage() {
       </header>
 
       <section className="dashboard-stats">
-        {dashboardStats.map((metric) => (
+        {dashboardStats.filter(metric => canOpen(metric.to)).map((metric) => (
           <MetricCard key={metric.key} metric={metric} />
         ))}
       </section>
@@ -263,10 +267,10 @@ export function DashboardPage() {
 
       <section className="dashboard-modules">
         <div className="dashboard-modules-row dashboard-modules-row-primary">
-          {[dashboardModules[0]!, dashboardModules[4]!, dashboardModules[5]!].map(module => <ModuleCard key={module.key} module={module} />)}
+          {[dashboardModules[0]!, dashboardModules[4]!, dashboardModules[5]!].filter(module => canOpen(module.to)).map(module => <ModuleCard key={module.key} module={module} />)}
         </div>
         <div className="dashboard-modules-row dashboard-modules-row-secondary">
-          {dashboardModules.slice(1, 4).map((m) => (
+          {dashboardModules.slice(1, 4).filter(module => canOpen(module.to)).map((m) => (
             <ModuleCard key={m.key} module={m} />
           ))}
         </div>

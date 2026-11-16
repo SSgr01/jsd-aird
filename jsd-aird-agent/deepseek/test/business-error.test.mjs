@@ -30,4 +30,8 @@ test('native turn failures retain a useful business or budget diagnosis', async(
   const delivery=deliveryError({completion:{gaps:['CITATION_INVALID']}});
   assert.equal(delivery.failure.code,'CITATION_INVALID');
   assert.match(delivery.failure.message,/引用/);
+  const permission=deliveryError({completion:{gaps:['ARTIFACT_EXPORT_DENIED']}});
+  assert.equal(permission.failure.code,'ARTIFACT_EXPORT_DENIED');
+  assert.match(permission.failure.message,/无权交付/);
+  assert.doesNotMatch(permission.failure.message,/重试/);
 });

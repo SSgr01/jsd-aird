@@ -31,6 +31,24 @@ public class OpenAiCompatibleEmbeddingFacade implements KnowledgeEmbeddingFacade
     private final int dimension;
     private final RestClient client;
     private final ObjectProvider<EmbeddingModel> springModels;
+    private EmbeddingQueryInstructions queryInstructions = EmbeddingQueryInstructions.plain();
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void queryInstructions(EmbeddingQueryInstructions instructions) { this.queryInstructions = instructions; }
+
+    @Override
+    public Optional<String> embedQueryVector(String query, QueryTask task) {
+        return embedVector(queryInstructions.format(query, task));
+    }
+
+    @Override
+    public List<Optional<String>> embedQueryVectors(List<String> queries, QueryTask task) {
+        if (queries == null) return List.of();
+        return embedVectors(queries.stream().map(query -> queryInstructions.format(query, task)).toList());
+    }
+
+    @Override
+    public java.util.Map<String, Object> queryPolicy() { return queryInstructions.describe(); }
 
     public OpenAiCompatibleEmbeddingFacade(
             @Value("${app.ai.embedding.base-url:}") String baseUrl,
@@ -52,8 +70,8 @@ public class OpenAiCompatibleEmbeddingFacade implements KnowledgeEmbeddingFacade
     @Override
     public Optional<String> embedVector(String text) {
         if (!StringUtils.hasText(text)) return Optional.empty();
-        var explicitEndpointConfigured = StringUtils.hasText(baseUrl)
-                && StringUtils.hasText(apiKey) && StringUtils.hasText(model);
+        // Local compatible services may not require authentication.
+        var explicitEndpointConfigured = StringUtils.hasText(baseUrl) && StringUtils.hasText(model);
         if (!explicitEndpointConfigured) {
             var springModel = springModels.getIfAvailable();
             if (springModel != null) {
@@ -111,13 +129,13 @@ public class OpenAiCompatibleEmbeddingFacade implements KnowledgeEmbeddingFacade
         }
         var normalized = texts.stream().map(value -> value == null ? "" : value.strip()).toList();
         if (normalized.size() == 1) return List.of(embedVector(normalized.getFirst()));
-        if (!StringUtils.hasText(baseUrl) || !StringUtils.hasText(apiKey) || !StringUtils.hasText(model)) {
+        if (!StringUtils.hasText(baseUrl) || !StringUtils.hasText(model)) {
             return KnowledgeEmbeddingFacade.super.embedVectors(normalized);
         }
         try {
             var request = client.post().uri(baseUrl + "/embeddings")
                     .header(HttpHeaders.CONTENT_TYPE, "application/json");
-            request.header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey);
+            if (!apiKey.isBlank()) request.header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey);
             var response = request.body(new EmbeddingRequest(model, normalized,
                             dimension > 0 ? dimension : null, "float"))
                     .retrieve().body(JsonNode.class);

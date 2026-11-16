@@ -25,7 +25,7 @@ class KnowledgeRetrievalBudgetTest {
     KnowledgeService service(Executor executor) {
         var provider=(ObjectProvider<KnowledgeEmbeddingFacade>)mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(embeddings);
-        when(embeddings.embedVectors(anyList())).thenReturn(List.of(Optional.of("[0.1,0.2]")));
+        when(embeddings.embedQueryVectors(anyList(), eq(KnowledgeEmbeddingFacade.QueryTask.KNOWLEDGE))).thenReturn(List.of(Optional.of("[0.1,0.2]")));
         var analyzer=mock(LexicalAnalyzer.class);
         when(analyzer.analyzeCompatibleQuery(anyString())).thenReturn(List.of(new LexicalAnalyzer.QueryTermFamily(0,
             List.of(new LexicalAnalyzer.QueryAlternative("material-smartcn-v2","resin")))));
@@ -69,7 +69,7 @@ class KnowledgeRetrievalBudgetTest {
         assertThat(result.trace().fallbacks()).contains("BM25_TIMEOUT","VECTOR_TIMEOUT");
         queued.forEach(Runnable::run);
         verify(repository,never()).batchBm25Rank(any(),anyList(),anyBoolean(),anyList(),anyInt());
-        verify(embeddings,never()).embedVectors(anyList());
+        verify(embeddings,never()).embedQueryVectors(anyList(), any());
     }
 
     @Test void sqlTimeoutDoesNotLaunchMorePhraseQueriesEvenWithTimeRemaining() {

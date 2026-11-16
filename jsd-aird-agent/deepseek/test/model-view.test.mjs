@@ -2,6 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { presentation, modelResult, renderModelResult } from '../../enterprise-plugin/src/model-view.mjs';
 
+test('business discovery retains original-file selection and saved-content page ranges',()=>{
+  const files=[{file_id:'source',name:'固化条件.docx',content_type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',bytes:100,sha256:'fixed'}];
+  const reading={section:'content',offset:20,returned:20,total:41,next_offset:40};
+  const value=modelResult({candidates:[{ref:{type:'PROJECT_DOCUMENT',id:'doc'},source:{kind:'BUSINESS_RECORD',resource_type:'PROJECT_DOCUMENT'},text:'已保存正文',files,reading}]});
+  assert.deepEqual(value.candidates[0].files,files);
+  assert.deepEqual(value.candidates[0].reading,reading);
+});
+
 test('optimization candidates retain identities, inputs and predictions on the model path', () => {
   const raw={candidates:[{id:'candidate-1',inputs:{temperature:83},results:{value:51.8}},
     {candidateId:'candidate-2',predictedResults:{value:52}}]};

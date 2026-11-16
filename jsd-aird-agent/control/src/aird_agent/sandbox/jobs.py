@@ -13,6 +13,7 @@ from pydantic import Field
 from aird_agent.core.contracts import Contract, digest
 from aird_agent.core.workspace import Workspace, relative_path
 from aird_agent.sandbox.streams import ExecutionStreams
+from aird_agent.sandbox.recovery import CleanupPending
 
 
 class TransferFile(Contract):
@@ -78,7 +79,35 @@ class BrokerJobs:
         path = self.path(execution_id) / "receipt.json"
         if not path.is_file():
             raise HTTPException(404, "EXECUTION_NOT_FOUND")
-        return json.loads(path.read_text(encoding="utf-8"))
+        record = json.loads(path.read_text(encoding="utf-8"))
+        pending = record.get('cleanup_pending')
+        if record['status'] == 'UNKNOWN' and pending and getattr(self.runner, 'cleanup_confirmed', lambda name: False)(pending['container']):
+            record.update(status=pending['outcome'], finished_at=time.time(), cleanup_confirmed=True)
+            if 'result' in pending:
+                record['result'] = pending['result']
+            if pending.get('original_error'):
+                record['error'] = pending['original_error']
+            else:
+                record.pop('error', None)
+            record.pop('cleanup_pending')
+            self.save(execution_id, record)
+            getattr(self.runner, 'acknowledge_cleanup', lambda name: None)(pending['container'])
+        return record
+
+    def freeze_result(self, workspace, result):
+        files, size = [], 0
+        for item in result.get('artifacts', []):
+            path = workspace.resolve(item['path'], writable=True)
+            if not item['path'].startswith('output/') or not path.is_file():
+                raise HTTPException(422, 'INVALID_SANDBOX_OUTPUT')
+            content = path.read_bytes()
+            size += len(content)
+            if size > 10 * 1024 * 1024 or len(files) >= 50:
+                raise HTTPException(413, 'SANDBOX_OUTPUT_BUDGET_EXCEEDED')
+            if hashlib.sha256(content).hexdigest() != item['sha256']:
+                raise HTTPException(422, 'INVALID_SANDBOX_OUTPUT')
+            files.append({'path': item['path'], 'base64': base64.b64encode(content).decode(), 'sha256': item['sha256']})
+        return {**result, 'files': files}
 
     def output(self, execution_id, stdout_offset=0, stderr_offset=0):
         record = self.get(execution_id)
@@ -153,23 +182,21 @@ class BrokerJobs:
                 record.update(status="RUNNING", started_at=time.time())
                 self.save(request.execution_id, record)
                 result = await self.runner.execute(workspace, request)
-                files, size = [], 0
-                for item in result.get("artifacts", []):
-                    path = workspace.resolve(item["path"], writable=True)
-                    if not item["path"].startswith("output/") or not path.is_file():
-                        raise HTTPException(422, "INVALID_SANDBOX_OUTPUT")
-                    content = path.read_bytes()
-                    size += len(content)
-                    if size > 10 * 1024 * 1024 or len(files) >= 50:
-                        raise HTTPException(413, "SANDBOX_OUTPUT_BUDGET_EXCEEDED")
-                    files.append(
-                        {
-                            "path": item["path"],
-                            "base64": base64.b64encode(content).decode(),
-                            "sha256": hashlib.sha256(content).hexdigest(),
-                        }
-                    )
-                record.update(status="SUCCEEDED", result={**result, "files": files})
+                record.update(status="SUCCEEDED", result=self.freeze_result(workspace, result))
+        except CleanupPending as error:
+            failure = error.failure
+            pending = {'container': error.container, 'outcome': 'SUCCEEDED' if error.result is not None else
+                'CANCELLED' if isinstance(failure, asyncio.CancelledError) else 'FAILED'}
+            if error.observed_exit_code is not None:
+                pending['observed_exit_code'] = error.observed_exit_code
+            if error.result is not None:
+                try:
+                    pending['result'] = self.freeze_result(workspace, error.result)
+                except Exception as invalid:
+                    pending.update(outcome='FAILED', original_error=invalid.detail if isinstance(invalid, HTTPException) else 'INVALID_SANDBOX_OUTPUT')
+            else:
+                pending['original_error'] = failure.detail if isinstance(failure, HTTPException) else 'SANDBOX_FAILED'
+            record.update(status='UNKNOWN', error='SANDBOX_CLEANUP_PENDING', cleanup_pending=pending)
         except asyncio.CancelledError:
             record.update(status="CANCELLED")
         except Exception as error:

@@ -12,6 +12,24 @@ Example (Linux):
   export JSD_AIRD_USERNAME=admin JSD_AIRD_PASSWORD='...'
   python3 import_knowledge_directory.py /srv/kb/import
 
+Publication requires an approved workspace review. Automatic submission and
+approval are enabled by default (--auto-approve), using an account with
+knowledge.view.submit and knowledge.view.approve permissions through the normal
+audited APIs. Use --no-auto-approve to review in the application and then resume
+with the same manifest.
+
+Use --rebuild-vectors --embedding-model MODEL to rebuild vectors of existing
+published, AI-authorized documents without source files, uploads or OCR. This mode
+requires the matching API/Worker update, paginates all documents, verifies stored
+model/dimension counts, and persists resumable progress in a separate JSONL manifest.
+It updates the existing published chunks' vectors, preserving their IDs and BM25.
+
+Rebuild example (model name and dimension must match the deployed service):
+  python3 import_knowledge_directory.py --rebuild-vectors \
+      --embedding-model Qwen/Qwen3-Embedding-0.6B --embedding-dimension 1024 --dry-run
+Remove --dry-run to submit work. Repeat the same command and --manifest to resume;
+use --retry-failed to retry terminal failures. Update both API and Worker first.
+
 By default, the first relative directory selects/creates a category, deeper
 directories become tags, and the full relative file path becomes the source
 description. Supplying --category-id retains the single-category workflow.
@@ -399,8 +417,32 @@ def wait_for_parse(api: ApiClient, document_id: str, version_id: str, timeout_se
     raise ImportErrorWithMessage(f"解析等待超时，文档 {document_id} 可在知识库查看后续状态")
 
 
+def ensure_publication_review(api: ApiClient, version_id: str, *, auto_approve: bool,
+                              retry_failed: bool) -> None:
+    path = f"/api/v1/workspace-reviews/KNOWLEDGE_VERSION/{version_id}"
+    state = api.json("GET", path)
+    status = state.get("status")
+    if status == "APPROVED":
+        return
+    if not auto_approve:
+        raise ImportErrorWithMessage(
+            f"当前版本须审核通过后才能发布（{status}）。请在页面完成审核后用原清单续跑；"
+            "如需按当前账号权限自动提交并审核，通过 --auto-approve 启用")
+    if status == "REJECTED" and not retry_failed:
+        raise ImportErrorWithMessage("当前版本已被驳回，请核对内容；确需重新提交时使用 --retry-failed --auto-approve")
+    if status in {"NOT_SUBMITTED", "REJECTED"}:
+        state = api.json("POST", path + "/submit", {})
+        status = state.get("status")
+    if status == "SUBMITTED":
+        state = api.json("POST", path + "/approve", {})
+        status = state.get("status")
+    if status != "APPROVED":
+        raise ImportErrorWithMessage(f"版本审核尚未通过（{status}），未提交发布，请核对后续跑")
+
+
 def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_seconds: int,
-                    retry_failed: bool, queue_timeout_seconds: int) -> dict[str, Any]:
+                    retry_failed: bool, queue_timeout_seconds: int, *,
+                    auto_approve: bool = False) -> dict[str, Any]:
     document = api.json("GET", api_path_document(document_id))
     if document.get("currentVersionId") != version_id:
         raise ImportErrorWithMessage("文档的当前文件版本已变化，请核对后重跑")
@@ -429,6 +471,7 @@ def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_s
             raise ImportErrorWithMessage((revision.get("failureReason") or "发布或索引生成失败")
                                          + "；修复原因后可使用 --retry-failed 重试发布")
         if revision.get("status") in {"DRAFT", "FAILED"}:
+            ensure_publication_review(api, version_id, auto_approve=auto_approve, retry_failed=retry_failed)
             queue_api_call(api, lambda: api.json(
                 "POST", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/publish", {
                     "reviewRevisionId": revision["id"],
@@ -641,7 +684,7 @@ def import_directory(args: argparse.Namespace) -> int:
                 sync_document_metadata(api, record)
                 document = finish_document(api, document_id, record["versionId"],
                                            args.parse_timeout_minutes * 60, args.retry_failed,
-                                           queue_timeout_seconds)
+                                           queue_timeout_seconds, auto_approve=args.auto_approve)
                 copy_document_state(record, document)
                 record["message"] = "已发布并授权 AI" + ("（关联已有文档）" if record.get("duplicate") else "")
                 record["bodyImportStatus"] = "COMPLETED"
@@ -815,6 +858,234 @@ def import_directory(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+class TargetChanged(ImportErrorWithMessage):
+    pass
+
+
+class RebuildClient(ApiClient):
+    def _run(self, args, body=None):
+        return super()._run(["--connect-timeout", "10", "--max-time", "120", *args], body)
+
+
+def inventory(api, *, category_id=None, scope=None, page_size=100):
+    """Collect all pages before submitting work so index updates cannot shift pages."""
+    documents = {}
+    page, total = 1, None
+    while True:
+        query = {"page": page, "size": page_size, "lifecycleStatus": "ACTIVE"}
+        if category_id:
+            query["categoryId"] = category_id
+        if scope:
+            query["scope"] = scope
+        result = api.json("GET", "/api/v1/knowledge/documents?" + urllib.parse.urlencode(query))
+        if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+            raise ImportErrorWithMessage("知识库分页响应无效")
+        if total is None:
+            total = int(result["total"])
+        elif int(result["total"]) != total:
+            raise ImportErrorWithMessage("清点期间资料数量变化，请重新运行；尚未提交重建任务")
+        for document in result["items"]:
+            document_id = document["id"]
+            if document_id in documents:
+                raise ImportErrorWithMessage("清点期间资料顺序发生变化，请重新运行；尚未提交重建任务")
+            documents[document_id] = document
+        if len(documents) == total:
+            return list(documents.values())
+        if not result["items"] or page >= int(result["totalPages"]):
+            raise ImportErrorWithMessage("知识库分页数量不完整，未提交重建任务")
+        page += 1
+
+
+def verify_target(state, model, dimension):
+    if (not isinstance(state, dict) or state.get("embeddingModel") != model
+            or state.get("embeddingDimension") != dimension):
+        raise TargetChanged("API 的向量模型/维度与指定目标不符，或接口版本过旧；请先更新并配置 API 和 Worker")
+    if not state.get("publicationId") or not state.get("versionId"):
+        raise TargetChanged("重建状态缺少发布快照信息，请先更新 API")
+
+
+def matching_vectors(vector, model, dimension):
+    total = vector.get("total", 0)
+    models = vector.get("models")
+    return (isinstance(total, int) and total > 0 and vector.get("embedded") == total
+            and vector.get("status") == "PRESENT" and isinstance(models, list) and bool(models)
+            and all(item.get("model") == model and item.get("dimension") == dimension for item in models)
+            and sum(item.get("count", 0) for item in models) == total)
+
+
+def read_progress(path, context):
+    records = {}
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # An interrupted final append is followed by a fresh state check.
+            if isinstance(record, dict) and record.get("context") == context and record.get("documentId"):
+                records[record["documentId"]] = record
+    return records
+
+
+def save(path, record):
+    record["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    append_manifest(path, record)
+
+
+def paths(document_id, request_key=None, *, vectors_only=False):
+    base = f"/api/v1/knowledge/documents/{document_id}/rebuild-index"
+    query = {} if request_key is None else {"requestKey": request_key}
+    if vectors_only:
+        query["vectorsOnly"] = "true"
+    return base if not query else base + "?" + urllib.parse.urlencode(query)
+
+
+def rebuild_document(api, document, args, previous, context, manifest):
+    document_id = document["id"]
+    state = api.json("GET", paths(document_id))
+    verify_target(state, args.model, args.dimension)
+    if not state.get("aiApproved"):
+        return "SKIPPED"
+    publication = state["publicationId"]
+    version = state["versionId"]
+    record = {"context": context, "documentId": document_id, "title": document.get("title"),
+              "publicationId": publication, "versionId": version, "status": "PENDING"}
+    vector_path = f"/api/v1/knowledge/documents/{document_id}/versions/{version}/vector-status"
+    vector = api.json("GET", vector_path)
+    if matching_vectors(vector, args.model, args.dimension):
+        current = api.json("GET", paths(document_id))
+        verify_target(current, args.model, args.dimension)
+        if current["publicationId"] != publication or not current.get("aiApproved"):
+            raise ImportErrorWithMessage("验证时发布版本或 AI 授权发生变化，请重新清点")
+        if not args.dry_run:
+            record.update(status="COMPLETED", vectors=vector)
+            save(manifest, record)
+        return "CURRENT"
+    if "models" not in vector:
+        raise TargetChanged("向量状态接口缺少模型/维度信息，请先更新 API")
+    if args.dry_run:
+        return "NEEDS_REBUILD"
+    prior = previous if previous and previous.get("publicationId") == publication else {}
+    attempt = int(prior.get("attempt", 0))
+    if prior.get("status") == "FAILED":
+        if not args.retry_failed:
+            return "FAILED"
+        attempt += 1
+    elif prior.get("status") == "COMPLETED":
+        attempt += 1
+    request_key = hashlib.sha256(json.dumps(["vectors", context, document_id, publication, attempt], sort_keys=True).encode()).hexdigest()
+    record.update(attempt=attempt, requestKey=request_key)
+    deadline = time.monotonic() + args.timeout_minutes * 60
+    try:
+        tracked = api.json("GET", paths(document_id, request_key))
+        verify_target(tracked, args.model, args.dimension)
+        if tracked["publicationId"] != publication:
+            raise ImportErrorWithMessage("发布版本变化，请重新运行清点")
+        if not tracked.get("job"):
+            # Persist before POST. A lost response is retried with this same key.
+            record["status"] = "SUBMITTING"
+            save(manifest, record)
+            submitted = queue_api_call(api, lambda: api.json("POST", paths(document_id, request_key, vectors_only=True), {}),
+                                       args.queue_wait_timeout_minutes * 60)
+            if not submitted.get("jobId"):
+                raise TargetChanged("重建接口未返回任务编号，请先更新 API")
+            record["jobId"] = submitted["jobId"]
+        record["status"] = "WAITING"
+        save(manifest, record)
+        while True:
+            state = api.json("GET", paths(document_id, request_key))
+            verify_target(state, args.model, args.dimension)
+            if state["publicationId"] != publication or not state.get("aiApproved"):
+                raise ImportErrorWithMessage("发布版本或 AI 授权变化，请重新清点；未修改授权")
+            job = state.get("job")
+            if not job:
+                raise ImportErrorWithMessage("未找到已提交的重建任务，请保留清单后重试")
+            record["jobId"] = job["id"]
+            record["jobStatus"] = job["status"]
+            if job["status"] in {"FAILED", "CANCELLED"}:
+                record["status"] = "FAILED"
+                raise ImportErrorWithMessage(job.get("lastError") or "重建任务失败或被取消")
+            if job["status"] == "SUCCEEDED":
+                vector = api.json("GET", vector_path)
+                # Recheck the snapshot after reading its vectors.
+                current = api.json("GET", paths(document_id, request_key))
+                verify_target(current, args.model, args.dimension)
+                if current["publicationId"] != publication or not current.get("aiApproved"):
+                    record["status"] = "FAILED"
+                    raise ImportErrorWithMessage("验证时发布版本或 AI 授权发生变化，请重新清点")
+                if not matching_vectors(vector, args.model, args.dimension):
+                    record["status"] = "FAILED"
+                    raise ImportErrorWithMessage("任务结束，但向量模型/维度/数量不符合目标，请核对 API 和 Worker 配置")
+                record.update(status="COMPLETED", vectors=vector)
+                save(manifest, record)
+                return "REBUILT"
+            if time.monotonic() >= deadline:
+                save(manifest, record)
+                return "WAITING"
+            time.sleep(args.poll_seconds)
+    except TargetChanged:
+        save(manifest, record)
+        raise
+    except ImportErrorWithMessage as error:
+        # An ambiguous POST or a polling failure retains the same request key.
+        if record["status"] == "SUBMITTING":
+            record["status"] = ("FAILED" if isinstance(error, ApiHttpError) and 400 <= error.status < 500
+                                else "SUBMISSION_UNKNOWN")
+        record["error"] = str(error)
+        save(manifest, record)
+        print(f"未完成：{document.get('title') or document_id} — {error}")
+        return record["status"] if record["status"] in {"FAILED", "SUBMISSION_UNKNOWN"} else "WAITING"
+
+
+
+def rebuild_vectors(args):
+    try:
+        if not args.model or not args.model.strip() or args.dimension <= 0 or not 1 <= args.page_size <= 100:
+            raise ImportErrorWithMessage("模型名、维度和分页大小无效")
+        if args.timeout_minutes <= 0 or args.queue_wait_timeout_minutes <= 0 or args.poll_seconds <= 0:
+            raise ImportErrorWithMessage("超时和轮询间隔必须大于零")
+        if args.category_id:
+            uuid.UUID(args.category_id)
+        username = args.username or os.environ.get("JSD_AIRD_USERNAME")
+        password, curl = os.environ.get("JSD_AIRD_PASSWORD"), shutil.which("curl")
+        if not username or not password or not curl:
+            raise ImportErrorWithMessage("需要 curl、JSD_AIRD_USERNAME 和 JSD_AIRD_PASSWORD（系统登录账号）")
+        context = {"server": args.base_url.rstrip("/"), "model": args.model, "dimension": args.dimension,
+                   "username": username}
+        manifest = Path(args.manifest or ".runtime/knowledge-vector-rebuild.jsonl").expanduser().resolve()
+        previous = read_progress(manifest, context)
+        counts = {}
+        with tempfile.TemporaryDirectory(prefix="jsd-vector-rebuild-") as temp:
+            api = RebuildClient(args.base_url, Path(temp) / "cookies.txt", curl)
+            api.login(username, password)
+            try:
+                documents = inventory(api, category_id=args.category_id, scope=args.scope, page_size=args.page_size)
+                print(f"完整清点 {len(documents)} 份资料；目标 {args.model} / {args.dimension} 维")
+                for index, document in enumerate(documents, 1):
+                    if not document.get("currentPublicationId") or document.get("aiStatus") != "APPROVED":
+                        outcome = "SKIPPED"
+                    else:
+                        try:
+                            outcome = rebuild_document(api, document, args, previous.get(document["id"]), context, manifest)
+                        except TargetChanged:
+                            raise
+                        except ImportErrorWithMessage as error:
+                            print(f"状态检查失败：{document['id']} — {error}")
+                            outcome = "CHECK_FAILED"
+                    counts[outcome] = counts.get(outcome, 0) + 1
+                    print(f"[{index}/{len(documents)}] {outcome}：{document.get('title') or document['id']}")
+            finally:
+                try:
+                    api.json("POST", "/api/v1/auth/logout", {})
+                except ImportErrorWithMessage:
+                    pass
+        print(json.dumps(counts, ensure_ascii=False))
+        return 1 if any(counts.get(key) for key in ("FAILED", "WAITING", "SUBMISSION_UNKNOWN", "CHECK_FAILED")) else 0
+    except (ImportErrorWithMessage, OSError, ValueError) as error:
+        print(f"错误：{error}")
+        return 2
+
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="把服务器文件夹中的资料导入正常知识库文档列表")
     parser.add_argument("source_dir", nargs="?", help="服务器上的资料文件夹")
@@ -824,8 +1095,9 @@ def main() -> int:
     parser.add_argument("--category-id", help="固定分类 UUID；按一级目录分类时，仅用于根目录直属文件")
     parser.add_argument("--category-mode", choices=("first-directory", "fixed"),
                         help="first-directory：一级目录分类、下级目录标签；fixed：统一分类。未指定时，传 category-id 用 fixed，否则按目录分类")
-    parser.add_argument("--scope", choices=("INTERNAL", "EXTERNAL"), default="INTERNAL")
-    parser.add_argument("--manifest", help="断点续跑清单 JSONL，默认写在来源目录内")
+    parser.add_argument("--scope", choices=("INTERNAL", "EXTERNAL"),
+                        help="资料范围；导入默认 INTERNAL，重建向量默认全部范围")
+    parser.add_argument("--manifest", help="断点清单 JSONL；导入默认在来源目录内，重建默认 .runtime/knowledge-vector-rebuild.jsonl")
     parser.add_argument("--include", action="append", help="只导入指定相对路径，可重复；不传时扫描全部来源文件")
     parser.add_argument("--parse-timeout-minutes", type=int, default=24 * 60)
     parser.add_argument("--max-in-flight", type=int, default=8,
@@ -833,8 +1105,19 @@ def main() -> int:
     parser.add_argument("--queue-wait-timeout-minutes", type=int, default=24 * 60,
                         help="单次等待任务队列容量的最长分钟数，默认 1440")
     parser.add_argument("--retry-failed", action="store_true", help="重试解析失败的文档，以及解析完成但发布或索引失败的文档")
-    parser.add_argument("--dry-run", action="store_true", help="只扫描并统计文件，不登录、不上传")
-    parser.add_argument("--enrich-existing", action="store_true", help="仅补全服务器已有资料；按 category-id 或全部，不上传和重新 OCR")
+    parser.add_argument("--auto-approve", action=argparse.BooleanOptionalAction, default=True,
+                        help="默认启用：按当前账号权限自动提交审核、审核通过并发布；--no-auto-approve 改为页面审核后续跑，已驳回项还需 --retry-failed")
+    parser.add_argument("--dry-run", action="store_true", help="导入时仅扫描本地文件；重建向量时登录读取存量状态，不提交重建")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--enrich-existing", action="store_true", help="仅补全服务器已有资料；按 category-id 或全部，不上传和重新 OCR")
+    modes.add_argument("--rebuild-vectors", action="store_true", help="分页重建已发布且已授权 AI 的存量资料向量，无需源目录或 OCR")
+    parser.add_argument("--embedding-model", dest="model", default=os.environ.get("JSD_AIRD_EMBEDDING_MODEL"),
+                        help="重建目标模型名，须与 API 和 Worker 配置完全一致")
+    parser.add_argument("--embedding-dimension", dest="dimension", type=int,
+                        default=os.environ.get("JSD_AIRD_EMBEDDING_DIMENSION", 1024))
+    parser.add_argument("--page-size", type=int, default=100, help="重建清点分页大小，最大 100")
+    parser.add_argument("--vector-poll-seconds", dest="poll_seconds", type=float, default=2)
+    parser.add_argument("--vector-timeout-minutes", dest="timeout_minutes", type=int, default=120)
     parser.add_argument("--request-key", help="已有资料补全任务的幂等请求标识，重跑可复用")
     parser.add_argument("--metadata-wait-seconds", type=int, default=0, help="等候异步补全的秒数，默认提交后记录状态即退出；断点续跑可重新检查")
     args = parser.parse_args()
@@ -844,10 +1127,16 @@ def main() -> int:
         uuid.UUID(args.category_id) if args.category_id else None
         if args.metadata_wait_seconds < 0:
             raise ValueError("等候秒数不能为负数")
+        if args.rebuild_vectors:
+            if args.source_dir or args.include:
+                raise ValueError("重建向量不使用源目录或 --include；请用 --category-id / --scope 限定存量资料")
+            return rebuild_vectors(args)
         if args.enrich_existing:
             return enrich_existing(args)
         if not args.source_dir:
-            raise ValueError("请指定来源目录，或使用 --enrich-existing 补全已入库资料")
+            raise ValueError("请指定来源目录，或使用 --enrich-existing / --rebuild-vectors 处理已入库资料")
+        if args.scope is None:
+            args.scope = "INTERNAL"
         return import_directory(args)
     except (ImportErrorWithMessage, OSError, ValueError) as error:
         print(f"错误：{error}", file=sys.stderr)

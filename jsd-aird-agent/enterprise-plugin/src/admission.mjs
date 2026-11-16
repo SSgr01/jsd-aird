@@ -9,26 +9,57 @@ export function installAdmission(ctx, { business, prepare, ready }) {
   const grants = new Map();
   const stop = sessionId => {
     const grant = grants.get(sessionId);
-    if (grant) { clearTimeout(grant.timer); grant.stopped = true; grants.delete(sessionId); }
+    if (grant) {
+      grant.stopped = true;
+      clearTimeout(grant.timer); clearTimeout(grant.deadline);
+      grant.renewal?.abort(); grants.delete(sessionId);
+    }
     return grant;
   };
   const receipt = (sessionId, grant) => ({ session_id: sessionId, run_id: grant.run_id, epoch: grant.epoch });
+  const active = (agent, grant) => !grant.stopped && grants.get(agent.id) === grant;
+  function fence(agent, grant, code) {
+    if (!active(agent, grant)) return;
+    grant.stopped = true;
+    clearTimeout(grant.timer); clearTimeout(grant.deadline); grant.renewal?.abort();
+    ctx.logger.warn('Run lease fenced run=%s epoch=%s reason=%s', grant.run_id, grant.epoch, code);
+    agent.cancel({ kind: 'user' }, { keepInbox:true });
+  }
+  function deadline(agent, grant) {
+    clearTimeout(grant.deadline);
+    grant.deadline = setTimeout(() => fence(agent, grant, 'LEASE_EXPIRED'),
+      Math.max(1, grant.confirmedAt + grant.lease_seconds*1000 - Date.now()));
+    grant.deadline.unref();
+  }
   function heartbeat(agent, grant) {
     grant.timer = setTimeout(async () => {
-      if (grant.stopped) return;
+      if (!active(agent, grant)) return;
+      const requestedAt = Date.now();
+      const renewal = new AbortController();
+      grant.renewal = renewal;
+      // Leave time for another renewal before the lease expires. A normal
+      // tool request can wait longer than the entire lease and cannot share
+      // the heartbeat's deadline.
+      const timeout = AbortSignal.timeout(Math.max(1, Math.min(5000,
+        grant.confirmedAt + grant.lease_seconds*1000 - requestedAt)));
       try {
-        const result = await business('admission-renew', receipt(agent.id, grant));
-        if (result.terminal) return;
-        grant.confirmedAt = Date.now();
+        const result = await business('admission-renew', receipt(agent.id, grant),
+          AbortSignal.any([renewal.signal, timeout]));
+        if (!active(agent, grant)) return;
+        if (result.terminal) { stop(agent.id); return; }
+        // The server renewed during this request, not when its reply arrived.
+        grant.confirmedAt = requestedAt;
+        deadline(agent, grant);
       } catch (error) {
+        if (!active(agent, grant)) return;
         // A confirmed fence prevents further calls. A brief transport outage is
         // retried; the control service still rejects an expired generation.
         if (error.status === 409 || error.status === 403 || Date.now()-grant.confirmedAt >= grant.lease_seconds*1000) {
-          agent.cancel({ kind: 'user' }, { keepInbox:true }); return;
+          fence(agent, grant, error.code || String(error.status || 'LEASE_EXPIRED')); return;
         }
         ctx.logger.warn('Run lease renewal pending: %s', error.code || 'connection');
       }
-      if (!grant.stopped) heartbeat(agent, grant);
+      if (active(agent, grant)) heartbeat(agent, grant);
     }, grant.heartbeat_seconds * 1000);
     grant.timer.unref();
   }
@@ -70,6 +101,7 @@ export function installAdmission(ctx, { business, prepare, ready }) {
       }
       const grant = { ...state, lease_seconds:state.lease_seconds || 60, confirmedAt:Date.now(), turn, inputSignature:signature, stopped: false };
       grants.set(agent.id, grant);
+      deadline(agent, grant);
       heartbeat(agent, grant);
       await next();
     } catch (error) {
@@ -100,7 +132,12 @@ export function installAdmission(ctx, { business, prepare, ready }) {
     const grant = grants.get(session.id);
     if (!grant || grant.turn !== event.data.turn) return;
     stop(session.id);
-    void business('admission-release', { ...receipt(session.id, grant), stopped: true })
+    // Activation can fail before a Run is bound to the enterprise tool layer.
+    // The admission ticket still identifies the queued Run that must be ended.
+    const failure=event.data.reason?.kind==='error'
+      ? business('failure',{...receipt(session.id,grant),diagnostic:{code:event.data.reason.error?.code,phase:'native-activation'},error_code:event.data.reason.error?.code})
+      : Promise.resolve();
+    void failure.finally(()=>business('admission-release', { ...receipt(session.id, grant), stopped: true }))
       .catch(error => ctx.logger.warn('Run lease release pending: %s', error.code || 'connection'));
   });
   ctx.effect(() => () => { for (const id of grants.keys()) stop(id); });

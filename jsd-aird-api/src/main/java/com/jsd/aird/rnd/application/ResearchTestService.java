@@ -25,6 +25,7 @@ import java.util.UUID;
 
 @Service
 public class ResearchTestService {
+    @org.springframework.beans.factory.annotation.Autowired(required=false) private com.jsd.aird.ops.api.ProjectMaterialActivity materialActivity;
     private static final long MAX_FILE_SIZE=100L*1024*1024;
     private final ResearchTestRepository repository;private final FileStorageFacade files;
     private final ExperimentImportService sourceParser;
@@ -80,7 +81,7 @@ public class ResearchTestService {
     public Detail transition(UUID id,long revision,Status status,String comment){detail(id);var a=ActorContext.required();var result=repository.transition(a.organizationId(),id,revision,status,comment,a.userId(),a.username());audit(a,"RESEARCH_TEST_STATUS_CHANGED","RESEARCH_TEST",id,result.summary().name());return result;}
     public Detail revision(UUID id,long revision,String reason){detail(id);var a=ActorContext.required();var result=repository.createRevision(a.organizationId(),id,revision,reason,a.userId(),a.username());audit(a,"RESEARCH_TEST_REVISION_CREATED","RESEARCH_TEST",id,result.summary().name());return result;}
     public Detail copy(UUID id){detail(id);var a=ActorContext.required();var result=repository.copy(a.organizationId(),id,a.userId(),a.username());audit(a,"RESEARCH_TEST_COPIED","RESEARCH_TEST",result.summary().id(),result.summary().name());return result;}
-    public void delete(UUID id,long revision){detail(id);var a=ActorContext.required();repository.delete(a.organizationId(),id,revision,a.userId(),a.username());audit(a,"RESEARCH_TEST_DELETED","RESEARCH_TEST",id,null);}
+    @Transactional public void delete(UUID id,long revision){var current=detail(id);var a=ActorContext.required();repository.delete(a.organizationId(),id,revision,a.userId(),a.username());if(materialActivity!=null)materialActivity.record("DELETED","RESEARCH_TEST",id,current.summary().projectId(),current.summary().name());audit(a,"RESEARCH_TEST_DELETED","RESEARCH_TEST",id,null);}
     public List<Version> versions(UUID id){detail(id);var a=ActorContext.required();return repository.versions(a.organizationId(),id);}
     public List<Audit> audits(UUID id){detail(id);var a=ActorContext.required();return repository.audits(a.organizationId(),id);}
     @Transactional public Upload upload(UploadCommand c){var a=ActorContext.required();validateFile(c);try(var ignored=files.open(a.organizationId(),c.fileId())){}catch(ApiException e){throw e;}catch(Exception e){throw new ApiException(ApiErrorCode.FILE_NOT_READY,"上传文件不可读取");}
@@ -101,7 +102,7 @@ public class ResearchTestService {
         audit(a,"RESEARCH_TEST_UPLOAD_RETRIED","RESEARCH_TEST_UPLOAD",id,current.originalName());
         return result;
     }
-    public void deleteUpload(Type type,UUID id){var a=ActorContext.required();var current=repository.findUpload(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在"));requireUploadType(a.organizationId(),current,type);repository.deleteUpload(a.organizationId(),id);audit(a,"RESEARCH_TEST_UPLOAD_DELETED","RESEARCH_TEST_UPLOAD",id,current.originalName());}
+    @Transactional public void deleteUpload(Type type,UUID id){var a=ActorContext.required();var current=repository.findUpload(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在"));requireUploadType(a.organizationId(),current,type);var parent=detail(current.recordId());repository.deleteUpload(a.organizationId(),id);if(materialActivity!=null)materialActivity.record("DELETED","RESEARCH_TEST_UPLOAD",id,parent.summary().projectId(),current.originalName());audit(a,"RESEARCH_TEST_UPLOAD_DELETED","RESEARCH_TEST_UPLOAD",id,current.originalName());}
     private void requireUploadType(UUID organizationId,Upload upload,Type expected){
         var detail=repository.detail(organizationId,upload.recordId())
                 .orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"研发测试上传记录不存在"));

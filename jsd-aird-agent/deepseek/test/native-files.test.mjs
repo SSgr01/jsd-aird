@@ -36,6 +36,11 @@ test('native filesystem keeps atomic stale guards and maps the sandbox world ins
  const exposed=fs.processPathFromHostPath(originalPath);
  assert.ok(exposed.startsWith(worldRoot+'/.dsh-attachments/'));
  assert.deepEqual(Buffer.from(await fs.readBytes(await fs.resolve(exposed))),bytes);
+ assert.deepEqual(Buffer.from(await fs.readBytes(await fs.resolve('@'+exposed))),bytes);
+ assert.deepEqual(Buffer.from(await fs.readBytes(await fs.resolve(exposed.replace('/workspaces','/work/scratch/native')))),bytes);
+ await assert.rejects(fs.resolve('/work/scratch/native/../../other/secret'),error=>error.code==='FS_SANDBOX_DENIED');
+ assert.equal((await fs.resolve('@literal.txt')).displayPath,worldRoot+'/@literal.txt');
+ await assert.rejects(fs.resolve('@/workspaces/../../other/secret'),error=>error.code==='FS_SANDBOX_DENIED');
  assert.equal(fs.processPathFromHostPath(join(base,'home','private.txt')),undefined);
  const snapshot=await fs.snapshot(root);
  assert.deepEqual(Buffer.from(snapshot.find(file=>file.path.endsWith('/input.pdf')).base64,'base64'),bytes);

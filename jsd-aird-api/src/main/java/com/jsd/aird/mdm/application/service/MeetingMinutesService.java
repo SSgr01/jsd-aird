@@ -16,6 +16,7 @@ import java.util.function.Supplier;
 
 @Service
 public class MeetingMinutesService {
+    @Autowired(required=false) private com.jsd.aird.ops.api.ProjectMaterialActivity materialActivity;
 
     private final MeetingMinutesRepository repository;
     private final ProjectService projectAccess;
@@ -85,8 +86,10 @@ public class MeetingMinutesService {
 
     @Transactional
     public void delete(UUID id, long version) {
-        requireAction(get(id).projectId(), "project.meeting.delete");
+        var current=get(id);
+        requireAction(current.projectId(), "project.meeting.delete");
         if (!repository.delete(id, version)) CrmServiceSupport.conflict();
+        if(materialActivity!=null)materialActivity.record("DELETED","MEETING_MINUTES",id,current.projectId(),current.title());
     }
 
     @Transactional

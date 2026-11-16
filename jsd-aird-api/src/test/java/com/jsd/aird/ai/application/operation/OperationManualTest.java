@@ -120,7 +120,7 @@ class OperationManualTest {
         var embeddings = mock(KnowledgeEmbeddingFacade.class);
         var index = new OperationManualIndexService(manual, repository, embeddings, "test", 3);
         when(repository.ready(index.key())).thenReturn(true);
-        when(embeddings.embedVector(anyString())).thenReturn(Optional.of("[1,0,0]"));
+        when(embeddings.embedQueryVector(anyString(), eq(KnowledgeEmbeddingFacade.QueryTask.OPERATION_MANUAL))).thenReturn(Optional.of("[1,0,0]"));
         when(repository.search(eq(index.key()), anyString(), anySet(), eq(20)))
                 .thenReturn(List.of(new OperationManualIndexRepository.VectorHit("experiment-import-0", .95),
                         new OperationManualIndexRepository.VectorHit("permissions-0", .99)));
@@ -131,7 +131,7 @@ class OperationManualTest {
                 var found = retrieval.retrieve("把 Excel 放进系统", "experiment-upload", List.of(), access);
                 assertThat(found.mode()).isEqualTo("HYBRID");
                 assertThat(found.evidence()).extracting(item -> item.section().id()).contains("experiment-import").doesNotContain("permissions");
-                when(embeddings.embedVector(anyString())).thenThrow(new IllegalStateException("offline"));
+                when(embeddings.embedQueryVector(anyString(), eq(KnowledgeEmbeddingFacade.QueryTask.OPERATION_MANUAL))).thenThrow(new IllegalStateException("offline"));
                 assertThat(retrieval.retrieve("导入实验", null, List.of(), access).mode()).isEqualTo("KEYWORD");
             } finally { retrieval.close(); }
         }

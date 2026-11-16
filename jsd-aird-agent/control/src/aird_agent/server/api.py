@@ -65,6 +65,7 @@ def create_app(settings=None, store=None, service=None):
             for task in cancellations.values():
                 task.cancel()
             await asyncio.gather(*list(cancellations.values()), return_exceptions=True)
+            await service.folders.close()
             await service.http.aclose()
             await store.pool.close()
 
@@ -76,7 +77,9 @@ def create_app(settings=None, store=None, service=None):
         if user.automation_grant_id:
             if not request.url.path.startswith(PREFIX + "/dsh/"):
                 raise HTTPException(403, "BACKGROUND_SCOPE_DENIED")
-            if user.scope == "personal-memory":
+            if user.scope == "folder-conversion":
+                await service.folders.check(user)
+            elif user.scope == "personal-memory":
                 await service.memory.check(user)
             else:
                 await service.briefings.check(user)
@@ -271,6 +274,10 @@ def create_app(settings=None, store=None, service=None):
         if not hmac.compare_digest(("Bearer " + settings.runtime_secret.get_secret_value()).encode(), authorization.encode()):
             raise HTTPException(401, "Invalid runtime credential")
         body = await request.json()
+        if action == "folder-owners":
+            return await service.folders.owners(body.get("offset", 0))
+        if action == "folder-ticket":
+            return await service.folders.ticket_for(body)
         if action == "owners":
             return await service.briefings.owners(body.get("offset", 0))
         if action == "ticket":
@@ -301,7 +308,17 @@ def create_app(settings=None, store=None, service=None):
         if body.get("session_id") and action in {"register", "admit", "admission-state", "admission-renew", "admission-release", "run-state", "run-diagnostics", "ownership", "restore", "auxiliary-admit", "gate", "tool", "native-tool"}:
             from aird_agent.core.session_deletion import require_session_available
             await require_session_available(store, user, body["session_id"])
-        if user.automation_grant_id and body.get("session_id"):
+        if user.scope == "folder-conversion":
+            await service.folders.check(user, body.get("session_id"))
+            if action not in {"folder-dispatch", "folder-export", "folder-ended", "experts", "model-result", "auxiliary-result", "catalog", "register", "admit", "admission-state", "admission-renew", "admission-release", "run-state", "ownership", "restore", "gate", "tool", "native-tool", "native-output", "native-cancel", "event", "stream", "complete", "failure", "bind", "model", "model-complete", "auxiliary-admit", "auxiliary-release"}:
+                raise HTTPException(403, "FOLDER_SCOPE_DENIED")
+        if action == "folder-ended" and user.scope == "folder-conversion":
+            return await service.folders.ended(user, body["session_id"])
+        if action == "folder-dispatch" and user.scope == "folder-conversion":
+            return await service.folders.dispatch(user, body)
+        if action == "folder-export" and user.scope == "folder-conversion":
+            return await service.folders.export(user, body)
+        if user.automation_grant_id and user.scope != "folder-conversion" and body.get("session_id"):
             owner = await service.briefings.owner(user)
             if not any(task["session_id"] == body["session_id"] and task["status"] in {"active", "paused", "ended", "INSTALLING"} for task in owner["tasks"].values()):
                 raise HTTPException(403, "BACKGROUND_SESSION_DENIED")
@@ -327,6 +344,10 @@ def create_app(settings=None, store=None, service=None):
         if action == "experts":
             from aird_agent.hosts.jsd.experts import expert_action
             return await expert_action(service, user, body)
+        if action == "conversion-queue":
+            if user.automation_grant_id:
+                raise HTTPException(403, "INTERACTIVE_AUTHORIZATION_REQUIRED")
+            return await service.java(user, "experiment_conversion", {"action": "list", "batch_id": body["batch_id"]})
         if action == "catalog":
             if settings.memory_enabled and not user.automation_grant_id:
                 await service.memory.preferences(user, initialize=True)
@@ -394,6 +415,16 @@ def create_app(settings=None, store=None, service=None):
             run = snapshots.get(rid) or await store.get(user, "run", rid)
             await service.authorized_topic(user, run, execution=False)
             if action == "ownership":
+                if body.get("purpose") == "file-export":
+                    from aird_agent.hosts.jsd.business_context import business_export_context
+                    from aird_agent.core.contracts import digest
+                    context = {digest(source): source for snapshot in [*snapshots.values(), run]
+                               for source in business_export_context({"source_refs": snapshot.get("source_refs", []),
+                                   "evidence": snapshot.get("evidence", {})})}
+                    sources = list(context.values())
+                    for start in range(0, len(sources), 500):
+                        await service.host_call(user, "authorize_sources",
+                            {"sources": sources[start:start + 500], "purpose": "export"}, rid)
                 return {"allowed": True}
             return {"run": {**run, "tools": service.tools_for(run), "active_tools": run.get("active_tools", service.bindings.initial_tools(run)),
                 "instructions": service.instructions_for(run)}}
@@ -434,14 +465,8 @@ def create_app(settings=None, store=None, service=None):
         if action == "native-tool":
             run = await service.session_run(user, body)
             await service.authorized_topic(user, run)
-            if body["name"] == "artifact_save" and not body["arguments"].get("source_quotes"):
-                async with store.pool.connection() as conn:
-                    prior = await (await conn.execute(
-                        "SELECT result FROM agent_runtime.harness_calls WHERE run_id=%s AND tool_name='artifact_save' AND status='SUCCEEDED' "
-                        "AND arguments->>'path'=%s AND arguments->>'sha256'=%s ORDER BY updated_at DESC LIMIT 1",
-                        (run["id"], body["arguments"]["path"], body["arguments"]["sha256"]))).fetchone()
-                if prior:
-                    return prior["result"]
+            # A new registration must check current export authority and context,
+            # even for unchanged bytes. Exact call retries keep ledger deduplication.
             return await service.tool(user, run["id"], run["epoch"], body["call_id"], body["name"], body["arguments"], native=True)
         if action == "tool":
             run = await service.session_run(user, body)
@@ -504,7 +529,9 @@ def public_run(run):
 def public_failure(error):
     if not error:
         return None
-    return {"SIDE_EFFECT_RECONCILIATION_REQUIRED":"执行结果需要管理员核对后才能重试",
+    return {"SIDE_EFFECT_RECONCILIATION_REQUIRED":"尚未能自动确认执行结果，请保留当前会话并核对操作回执，勿重复提交",
+            "EXPERT_CHECKS_REQUIRED":"专业核验尚未取得完整计算回执，本轮核对未完成",
             "DSH_SESSION_LOST":"原会话记录已不可用，请新建对话并重新提交原请求",
             "OUTPUT_LIMIT_EXCEEDED":"回答较长，已达到本轮输出上限，可以继续",
+            "ARTIFACT_EXPORT_DENIED":"当前账号无权交付这些业务资料，文件未提供下载；可继续查阅已授权内容",
             "AUTHORIZATION_REQUIRED":"权限已变化，请重新登录并重试"}.get(str(error),"本轮任务未完成，可以重试")

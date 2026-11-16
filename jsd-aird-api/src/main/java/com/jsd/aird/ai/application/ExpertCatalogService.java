@@ -26,18 +26,14 @@ public class ExpertCatalogService {
         return catalog.deepCopy();
     }
 
-    public ObjectNode resolve(String id, String revision, boolean execution) {
+    public ObjectNode resolve(String id, boolean execution) {
         artifacts.requireUse();
         for (var expert : catalog.path("experts")) {
             if (!expert.path("id").asText().equals(id)) continue;
-            // Released revisions stay in the catalog; only the current one is discoverable.
-            var versions = expert.path("versions");
-            var selected = revision == null || revision.isBlank() ? expert.path("current_revision").asText() : revision;
-            if (!versions.has(selected)) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "专家版本已不可用");
             if (execution && !expert.path("enabled").asBoolean())
                 throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "此专家已停用，请新建其他专家会话");
-            var value = ((ObjectNode) versions.path(selected)).deepCopy();
-            value.put("id", id).put("revision", selected).put("enabled", expert.path("enabled").asBoolean());
+            var value = ((ObjectNode) expert).deepCopy();
+            value.put("id", id).put("enabled", expert.path("enabled").asBoolean());
             return value;
         }
         throw new ApiException(ApiErrorCode.NOT_FOUND, "未找到此专家");
@@ -46,8 +42,8 @@ public class ExpertCatalogService {
     public JsonNode invoke(ObjectNode args) {
         return switch (args.path("action").asText("list")) {
             case "list" -> list();
-            case "resolve" -> resolve(args.path("expert_id").asText(), args.path("revision").asText(""), true);
-            case "history" -> resolve(args.path("expert_id").asText(), args.path("revision").asText(""), false);
+            case "resolve" -> resolve(args.path("expert_id").asText(), true);
+            case "history" -> resolve(args.path("expert_id").asText(), false);
             default -> throw new ApiException(ApiErrorCode.BAD_REQUEST);
         };
     }

@@ -148,6 +148,13 @@ public interface KnowledgeRepository {
         throw new UnsupportedOperationException("Scoped vector search must filter before ranking");
     }
 
+    /** Implementations must filter model and scope before ranking, even when dimensions match. */
+    default List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly,
+            List<UUID> categoryIds, Set<UUID> documentIds, int limit, int dimension, String model) {
+        if (model == null || model.isBlank() || (documentIds != null && documentIds.isEmpty())) return List.of();
+        throw new UnsupportedOperationException("Vector search must filter embedding model before ranking");
+    }
+
     default List<RankedChunk> batchBm25Rank(UUID organizationId, List<AnalyzedQuery> queries,
                                             boolean aiOnly, List<UUID> categoryIds, int limit) {
         if (queries == null || queries.isEmpty()) return List.of();
@@ -167,7 +174,7 @@ public interface KnowledgeRepository {
         if (queries == null || queries.isEmpty()) return List.of();
         var result = new java.util.ArrayList<RankedChunk>();
         for (var query : queries) {
-            var rows = vectorSearch(organizationId, query.vector(), aiOnly, categoryIds, limit, dimension);
+            var rows = vectorSearch(organizationId, query.vector(), aiOnly, categoryIds, null, limit, dimension, query.model());
             for (var index = 0; index < rows.size(); index++) {
                 var row = rows.get(index);
                 result.add(new RankedChunk(query.ordinal(), row.chunkId(), row.score(), index + 1));
@@ -196,7 +203,7 @@ public interface KnowledgeRepository {
         var result = new java.util.ArrayList<RankedChunk>();
         for (var query : queries) {
             com.jsd.aird.shared.resource.OperationBudget.check();
-            var rows = vectorSearch(organizationId, query.vector(), aiOnly, categoryIds, documentIds, limit, dimension);
+            var rows = vectorSearch(organizationId, query.vector(), aiOnly, categoryIds, documentIds, limit, dimension, query.model());
             for (var i = 0; i < rows.size(); i++) result.add(new RankedChunk(query.ordinal(), rows.get(i).chunkId(), rows.get(i).score(), i+1));
         }
         return List.copyOf(result);
@@ -254,7 +261,9 @@ public interface KnowledgeRepository {
             terms = terms == null ? List.of() : List.copyOf(terms);
         }
     }
-    record VectorQuery(int ordinal, String query, String vector) { }
+    record VectorQuery(int ordinal, String query, String vector, String model) {
+        public VectorQuery(int ordinal, String query, String vector) { this(ordinal, query, vector, null); }
+    }
     record RankedChunk(int queryOrdinal, UUID chunkId, double score, int rank) { }
     record SearchRow(UUID chunkId, UUID documentId, UUID versionId, String title, String originalName,
                      Integer pageNo, String section, String content, double score, int chunkNo,

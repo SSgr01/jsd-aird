@@ -40,6 +40,7 @@ Thumbs.db
 /docs/*
 !/docs/operation-assistant/
 !/docs/database-upgrade-v76.md
+!/docs/qwen3-embedding.md
 !/docs/图谱分析当前逻辑、性能与输出质量诊断.md
 /tmp/
 /outputs/
@@ -72,3 +73,7 @@ Thumbs.db
 /jsd-aird-web/public/chemistry/RDKit_minimal.wasm
 /jsd-aird-web/public/chemistry/input.js
 /jsd-aird-agent/enterprise-plugin/lib/chemistry/
+/jsd-aird-agent/enterprise-plugin/lib/fonts/
+
+# Source-bound plans contain local business data; runtime uses per-task plans.
+/jsd-aird-agent/enterprise-plugin/skills/jsd-experiment-converter/recipes/

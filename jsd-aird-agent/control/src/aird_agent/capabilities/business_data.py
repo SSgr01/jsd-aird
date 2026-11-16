@@ -13,6 +13,7 @@ READ_TYPES = [
     "SAMPLE_DISPATCH", "SHIPMENT", "PRODUCTION_ORDER", "PRODUCTION_UPLOAD", "QUALITY_STANDARD",
     "QUALITY_RECORD", "QUALITY_COA", "QUALITY_DEFECT", "QUALITY_MANUAL", "QUALITY_MSDS", "QUALITY_LABEL",
     "SPECTRUM", "SPECTRUM_ANALYSIS", "RAW_MATERIAL", "RAW_MATERIAL_SOURCE",
+    "MEETING_MINUTES", "PROJECT_DOCUMENT", "PROJECT_REFERENCE", "QUALITY_UPLOAD", "RESEARCH_TEST_UPLOAD",
 ]
 COMPUTATIONS = {"run_prediction", "run_formula_design", "run_experiment_optimization", "run_model_training", "activate_trained_model", "continue_experiment_optimization"}
 KINDS = {"type": "string", "enum": ["PREDICTION", "FORMULA_DESIGN", "EXPERIMENT_OPTIMIZATION", "MODEL_TRAINING"]}
@@ -35,7 +36,10 @@ RESEARCH_BASIS = {"type": "array", "maxItems": 50, "items": {"type": "object", "
 }, "required": ["source_ref", "variables", "conditions", "metrics", "pending_measurements",
                 "conclusion", "applicability", "project_differences"], "additionalProperties": False}}
 INSTRUCTIONS = """业务读取按查找→完整读取→真实关联展开。business_search不传type只返回可用类型及筛选字段，不执行名称查询；按required_filters补齐筛选。MATERIAL是项目资料，须先取得项目ID并传filters.project_id，不是按型号搜索的物料库。已标明不可用的模块不逐项重试，不绕过权限读取。
+query按连续文本匹配，使用一个明确编号或关键词，不把客户、型号和资料名称拼成一串；品管已知业务编号时，使用filters.business_no精确查找。搜索或关联返回files目录后，可沿ref用business_read获取指定file_id的原件；未请求原件时不能据此声称没有原件。
 沿搜索返回的ref读取具体修订；有next_offset时继续分页。关联只采用business_links返回的已确认关系，同名及相似批号只能作线索。
+品管、生产和研发资料的content为页面已保存正文，登记字段不能代替正文。大正文使用section=content，按reading中的offset、returned、total与next_offset读完；单元格原值、公式与数字格式保持区分。files仅为原文件目录，include_file=true按file_id下载原上传内容；有business_file.reading_path时用原生read阅读该文本投影，图片用read_image。文本投影不能代替内嵌图片和版式阅读。原件可能早于页面保存正文，不能相互替代。没有保存正文时按content_notice说明缺失，并按需要读取原件。
+项目business_links可发现会议纪要、项目文档、资料参考及关联业务资料。日报周报先读完RELATED_ACTIVITY及全部索引分页，再按报告需要展开正文、原文件和附件；发现目录、读取正文、下载原件与实际阅读附件是不同动作。不要求逐个附件全部读取。后台可阅读任务目录中的文件与大结果，不能运行脚本、修改文件或交付文件。
 实验目录不是正文。判断配方、方法或结果是否缺失前先读固定版本概览中的共用字段、背景与方案；样品数为零不代表没有配方说明。项目资料数不是配方物料数。背景引用历史实验时沿明确的实验与版本回读，区分历史值、拟定条件和本次记录。
 精确统计使用business_query；大数据用output=file取得原生分析文件，再用原生文件和脚本能力分析。缺失、未测、零值、单位及条件保持区分。
 计算先读取get_compute_context，沿实际输入、模型版本及适用域填写请求。只有用户要求时运行预测、配方搜索或实验优化；预测和候选不是实测。
@@ -56,6 +60,15 @@ def handler(name):
         if name == "get_research_briefing_context":
             return await context.runtime.briefings.context(context, args)
         payload = dict(args)
+        if context.run.get("automation") and name in {"business_read", "business_search", "business_links"}:
+            kind = args.get("type", args.get("ref", {}).get("type"))
+            scoped = {"MEETING_MINUTES", "PROJECT_DOCUMENT", "PROJECT_REFERENCE", "QUALITY_UPLOAD", "PRODUCTION_UPLOAD", "RESEARCH_TEST", "RESEARCH_TEST_UPLOAD",
+                "QUALITY_STANDARD", "QUALITY_RECORD", "QUALITY_COA", "QUALITY_DEFECT", "QUALITY_MANUAL", "QUALITY_MSDS", "QUALITY_LABEL", "DATA_IMPORT", "SPECTRUM", "CUSTOMER_REQUIREMENT", "PROJECT"}
+            if kind in scoped:
+                snapshot = context.run.get("briefing_snapshot", {})
+                if not snapshot.get("frozen"):
+                    raise HTTPException(409, "BACKGROUND_REPORT_SCOPE_REQUIRED: read get_research_briefing_context first")
+                payload["report_project_ids"] = sorted({item["ref"]["id"] for item in snapshot.get("sections", {}).get("PROJECT", [])})
         if name == "business_read":
             payload = context.runtime.briefings.read_request(context.run, payload)
         if name in COMPUTATIONS:
@@ -83,18 +96,24 @@ def handler(name):
 
 def business_pack():
     specs = (
-        tool("get_research_briefing_context", "读取项目晨报、研发周报、实验复盘的活动索引与固定版本。时间窗口由服务端确定，完整内容仍用business_read；按available_sections和next_offset读完。", {
+        tool("experiment_conversion", "实验记录标准化转换：source取得本人上传原件并准备skill工作区；stage以present登记的三个真实成果ID保存转换结果、映射计划、校验报告，送待人工核对，不确认导入、不发布；fail记录具体文件阻塞。", {
+            "action": {"type": "string", "enum": ["source", "stage", "fail"]},
+            "conversion_id": STRING, "result_artifact_id": STRING, "plan_artifact_id": STRING,
+            "report_artifact_id": STRING, "reason": {"type": "string", "maxLength": 2000},
+        }, ["action", "conversion_id"]),
+        tool("get_research_briefing_context", "读取项目晨报、研发周报、实验复盘的活动索引与固定版本。时间窗口由服务端确定，正文用business_read。以next_request或pending_index_requests中的完整参数继续调用；offset为页起点，不能反复读取offset=0。", {
             "task_type": {"type": "string", "enum": ["project-morning", "research-weekly", "experiment-review"]},
-            "section": {"type": "string", "enum": ["PROJECT", "STAGE", "TASK", "EXPERIMENT"]},
+            "section": {"type": "string", "enum": ["PROJECT", "STAGE", "TASK", "EXPERIMENT", "RELATED_ACTIVITY"]},
             "project_refs": {"type": "array", "maxItems": 20, "items": {"type": "object", "properties": {
                 "type": {"const": "PROJECT"}, "id": STRING}, "required": ["type", "id"], "additionalProperties": False}}, **PAGE,
         }, ["task_type"]),
-        tool("business_search", "按权限查找业务对象。不传type返回可用类型和筛选字段；返回ref供后续读取。", {
+        tool("business_search", "按权限查找业务对象。不传type返回可用类型和筛选字段；query按单个连续文本匹配。品管业务编号优先filters.business_no。返回ref和原文件目录，正文与下载继续用business_read。", {
             "type": {"type": "string", "enum": READ_TYPES}, "query": STRING, "filters": FILTERS, **PAGE,
         }),
-        tool("business_read", "读取ref及固定修订。实验优先section=record，一次读取完整背景、方案、样品、配方、工艺与结果；较大时按overview的分区和next_offset继续分页，不能跳页。谱图include_file=true交给原生文件工具。", {
+        tool("business_read", "读取已保存正文及登记字段。大表格用section=content及offset/limit按next_offset读完。files是原文件目录，include_file=true下载原件；多个文件需指定file_id。原件可能早于保存正文，下载成功不代表已阅读。实验优先section=record，较大时按分区分页。", {
             "ref": REFERENCE, "section": STRING, "sample_key": STRING,
             "include_file": {"type": "boolean"},
+            "file_id": STRING,
             "field_codes": {"type": "array", "maxItems": 8, "items": STRING}, **PAGE,
         }, ["ref"]),
         tool("business_links", "沿真实业务关联读取；先查看available_relations，再传relation选择一类。关联目标分别授权。", {
@@ -138,5 +157,5 @@ def business_pack():
             "kind": KINDS, "run_id": STRING,
         }, ["kind", "run_id"]),
     )
-    return CapabilityPack("business-data", "3", INSTRUCTIONS, specs, ("business_search",),
-                          {spec["name"]: handler(spec["name"]) for spec in specs}, mutations=frozenset(COMPUTATIONS))
+    return CapabilityPack("business-data", "6", INSTRUCTIONS, specs, ("business_search",),
+                          {spec["name"]: handler(spec["name"]) for spec in specs}, mutations=frozenset(COMPUTATIONS | {"experiment_conversion"}))

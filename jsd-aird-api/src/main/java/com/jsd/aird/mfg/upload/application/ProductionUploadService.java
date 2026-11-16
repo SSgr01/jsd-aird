@@ -27,6 +27,7 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class ProductionUploadService {
+    @org.springframework.beans.factory.annotation.Autowired(required=false) private com.jsd.aird.ops.api.ProjectMaterialActivity materialActivity;
 
     private final ProductionUploadRepository repository;
     private final FileObjectRepository files;
@@ -601,6 +602,7 @@ public class ProductionUploadService {
         if (repository.delete(actor.organizationId(), id) == 0) {
             throw new ApiException(ApiErrorCode.NOT_FOUND, "生产单上传记录不存在");
         }
+        if(materialActivity!=null)materialActivity.record("DELETED","PRODUCTION_UPLOAD",id,current.projectId(),current.productionName());
     }
 
     private void claimVersion(UUID id,long expected){

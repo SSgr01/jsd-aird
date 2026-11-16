@@ -3,6 +3,7 @@ package com.jsd.aird.ai.application;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.iam.api.DelegationIdentity;
 import com.jsd.aird.shared.error.ApiException;
+import com.jsd.aird.shared.error.ApiErrorCode;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
@@ -57,9 +58,47 @@ class AgentAutomationDelegationTest {
                 new DelegationIdentity.Identity(user,org,"lin.chen","RND_MANAGER","ACTIVE",8),
                 new DelegationIdentity.Identity(user,UUID.randomUUID(),"lin.chen","RND_MANAGER","ACTIVE",7))) {
             when(iam.delegationUser(user)).thenReturn(current);
-            assertThatThrownBy(()->service.automationIdentity(token("automation-exchange",7))).isInstanceOf(ApiException.class);
-            assertThatThrownBy(()->service.verify(token("java-tools",7))).isInstanceOf(ApiException.class);
+            assertThatThrownBy(()->service.automationIdentity(token("automation-exchange",7)))
+                .isInstanceOfSatisfying(ApiException.class,error->{
+                    assertThat(error.errorCode()).isEqualTo(ApiErrorCode.PERMISSION_DENIED);
+                    assertThat(error.detail()).isEqualTo(Map.of("reason","BACKGROUND_AUTHORIZATION_REQUIRED"));
+                });
+            assertThatThrownBy(()->service.verify(token("java-tools",7)))
+                .isInstanceOfSatisfying(ApiException.class,error->assertThat(error.detail()).isNull());
         }
+        when(iam.delegationUser(user)).thenReturn(null);
+        assertThatThrownBy(()->service.automationIdentity(token("automation-exchange",7)))
+            .isInstanceOfSatisfying(ApiException.class,error->
+                assertThat(error.detail()).isEqualTo(Map.of("reason","BACKGROUND_AUTHORIZATION_REQUIRED")));
+    }
+
+    @Test void invalidServiceProofDoesNotImplyRevokedUserAuthorization() throws Exception {
+        for (var proof : List.of("invalid",token("java-tools",7)))
+            assertThatThrownBy(()->service.automationIdentity(proof)).isInstanceOfSatisfying(ApiException.class,error->{
+                assertThat(error.errorCode()).isEqualTo(ApiErrorCode.AUTH_REQUIRED);
+                assertThat(error.detail()).isNull();
+            });
+        verifyNoInteractions(iam);
+    }
+
+    @Test void iamOutageIsNotMisreportedAsRevokedUserAuthorization() throws Exception {
+        var unavailable = new IllegalStateException("IAM unavailable");
+        when(iam.delegationUser(user)).thenThrow(unavailable);
+        assertThatThrownBy(()->service.automationIdentity(token("automation-exchange",7))).isSameAs(unavailable);
+        assertThatThrownBy(()->service.verify(token("java-tools",7))).isSameAs(unavailable);
+    }
+
+    @Test void folderConversionCannotWriteBusinessRecordsOrReuseResearchGrant() throws Exception {
+        when(iam.delegationUser(user)).thenReturn(new DelegationIdentity.Identity(user,org,"admin","ADMIN","ACTIVE",7));
+        var identity = service.automationIdentity(token("automation-exchange",7,"folder-conversion"));
+        assertThat(identity.get("scope")).isEqualTo("folder-conversion");
+        var ticket = token("java-tools",7,"folder-conversion");
+        for (var action : List.of("runtime_context","authorize_sources","authorize","expert_catalog","normalize_conversion_office"))
+            service.requireAction(ticket,action);
+        for (var action : List.of("artifact_save","experiment_conversion","create_experiment_draft","report_save","business_read","get_research_briefing_context"))
+            assertThatThrownBy(()->service.requireAction(ticket,action)).isInstanceOf(ApiException.class);
+        assertThatThrownBy(()->service.requireInteractive(ticket)).isInstanceOf(ApiException.class);
+        assertThatThrownBy(()->service.requireAction(token("java-tools",7,"research-briefings"),"normalize_conversion_office")).isInstanceOf(ApiException.class);
     }
 
     @Test void personalMemoryCanOnlyValidateItsOwnSources() throws Exception {

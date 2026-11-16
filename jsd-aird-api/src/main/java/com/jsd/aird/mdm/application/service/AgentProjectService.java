@@ -79,6 +79,12 @@ public class AgentProjectService implements AgentProjectFacade {
             if (allowed.size() > 20) result.put("next_offset", offset + 20);
         } else {
             var pid = project(args);
+            requireSection(pid,switch(action) {
+                case "list_project_stages" -> "STAGE";
+                case "list_project_tasks","get_task_detail" -> "TASK";
+                case "get_project_records" -> args.path("record_type").asText();
+                default -> "PROJECT";
+            });
             switch (action) {
                 case "get_project_snapshot" -> {
                     var value = projects.get(pid);
@@ -154,7 +160,8 @@ public class AgentProjectService implements AgentProjectFacade {
         }
         sql.append(" ORDER BY r.updated_at,r.id");
         var authorized = jdbc.queryForList(sql.toString(), values.toArray()).stream()
-            .filter(row -> authorization.check(check((UUID)row.get("project_id"))).allowed()).toList();
+            .filter(row -> authorization.check(check((UUID)row.get("project_id"))).allowed()
+                && authorization.check(sectionCheck((UUID)row.get("project_id"),type)).allowed()).toList();
         var rows = authorized.stream().skip(offset).limit(21).toList();
         var result = mapper.createObjectNode().put("index_revision", sha(authorized.toString()));
         var candidates = result.putArray("candidates");
@@ -213,12 +220,28 @@ public class AgentProjectService implements AgentProjectFacade {
             .put("model_text", com.jsd.aird.shared.business.BusinessViews.modelMarkdown(title, facts)).set("source", source);
     }
 
+    private void requireSection(UUID project,String type) {
+        authorization.require(sectionCheck(project,type));
+    }
+    private PermissionCheck sectionCheck(UUID project,String type) {
+        String code=switch(type) {
+            case "STAGE" -> "project.stage.view";
+            case "TASK" -> "project.task.view";
+            case "REQUIREMENT" -> "project.customer-needs.view";
+            case "MATERIAL" -> "project.materials.view";
+            default -> "project.view";
+        };
+        var actor=ActorContext.required();
+        return new PermissionCheck(actor.organizationId(),actor.userId(),code,"PROJECT",project,"READ");
+    }
+
     @Override public void authorizeSource(JsonNode source) {
         var pid = UUID.fromString(source.path("project_id").asText());
         authorization.require(check(pid));
         projects.get(pid);
         var id = UUID.fromString(source.path("resource_id").asText());
         var type = source.path("resource_type").asText();
+        requireSection(pid,type);
         long version = switch (type) {
             case "PROJECT" -> { if (!pid.equals(id)) throw new ApiException(ApiErrorCode.NOT_FOUND); yield projects.get(id).version(); }
             case "STAGE" -> { var value = stages.get(id); if (!pid.equals(value.projectId())) throw new ApiException(ApiErrorCode.NOT_FOUND); yield value.version(); }

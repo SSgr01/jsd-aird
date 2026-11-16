@@ -1,5 +1,6 @@
 import {
   DatabaseOutlined,
+  DownOutlined,
   ExperimentOutlined,
   EyeOutlined,
   FileSearchOutlined,
@@ -18,6 +19,8 @@ import {
   ProjectOutlined,
   UnorderedListOutlined,
   LineChartOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
   HomeOutlined,
   LockOutlined,
   LogoutOutlined,
@@ -35,6 +38,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSidebarAutoCollapse } from './use-sidebar-auto-collapse';
 import { BrandMark } from '@/components/brand/BrandMark';
 import './desktop-shell.css';
+import './sidebar.css';
 
 import { ContentBoundary } from '@/components/loading/ContentBoundary';
 import { PrefetchLink } from '@/components/loading/PrefetchLink';
@@ -239,8 +243,9 @@ function UserMenu({ profile = false }: { profile?: boolean }) {
     </div>}
   >
     <button type="button" className={`app-user-trigger${profile ? ' app-user-trigger-profile' : ''}`} aria-label="打开用户菜单">
-      <Avatar size={34}>{initial}</Avatar>
+      <Avatar size={profile ? 30 : 34}>{initial}</Avatar>
       {profile && <span className="app-sidebar-user-copy"><strong>{user.displayName || user.username}</strong><span>{user.roleName || '个人工作空间'}</span></span>}
+      {profile && <DownOutlined className="app-sidebar-user-chevron" />}
     </button>
   </Dropdown>
     <Modal title="修改密码" open={passwordOpen} onCancel={() => { if (!submittingPassword) setPasswordOpen(false); }} footer={null} destroyOnHidden>
@@ -336,14 +341,15 @@ export function BasicLayout() {
       <ProLayout
         title={appEnv.title || 'AI 研发平台'}
         logo={<BrandMark />}
-        menuHeaderRender={(logo) => <>{logo}<span className="app-brand-title">{appEnv.title || 'AI 研发平台'}</span></>}
+        menuHeaderRender={(logo) => <div className="app-sidebar-brand">{logo}<span className="app-sidebar-brand-copy"><span className="app-brand-title">{appEnv.title || 'AI 研发平台'}</span><span className="app-sidebar-brand-subtitle">研发工作空间</span></span></div>}
+        menuExtraRender={() => <div className="app-sidebar-caption">工作空间</div>}
         menuFooterRender={() => <div className="app-sidebar-profile"><UserMenu profile /></div>}
         route={visibleRoute}
         location={{ pathname: location.pathname }}
         selectedKeys={[location.pathname.startsWith('/assistant/model-center') ? '/assistant/model-center' : location.pathname]}
         collapsed={layoutCollapsed}
         onCollapse={changeNavigationCollapsed}
-        collapsedButtonRender={() => <Tooltip title={layoutCollapsed ? '展开导航' : '收起导航'}><Button data-sidebar-toggle type="text" aria-expanded={!layoutCollapsed} aria-label={layoutCollapsed ? '展开导航' : '收起导航'} icon={<UnorderedListOutlined />} onClick={(event) => { event.stopPropagation(); changeNavigationCollapsed(!layoutCollapsed); }} /></Tooltip>}
+        collapsedButtonRender={() => <Tooltip title={layoutCollapsed ? '展开导航' : '收起导航'}><Button data-sidebar-toggle type="text" aria-expanded={!layoutCollapsed} aria-label={layoutCollapsed ? '展开导航' : '收起导航'} icon={layoutCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} onClick={(event) => { event.stopPropagation(); changeNavigationCollapsed(!layoutCollapsed); }} /></Tooltip>}
         layout="side"
         fixedHeader
         fixSiderbar

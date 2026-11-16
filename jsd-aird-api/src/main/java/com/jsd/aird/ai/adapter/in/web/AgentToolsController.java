@@ -73,6 +73,25 @@ public class AgentToolsController {
     @org.springframework.beans.factory.annotation.Autowired
     private com.jsd.aird.ai.application.ExpertCatalogService experts;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.jsd.aird.ai.application.ExperimentConversionTools conversions;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.jsd.aird.ops.application.port.TemplateOfficeNormalizationFacade officeNormalization;
+
+    private Object normalizeConversionOffice(ObjectNode args) {
+        String name = args.path("name").asText();
+        if (!name.toLowerCase(java.util.Locale.ROOT).matches(".*\\.(xls|doc)$") || name.contains("/") || name.contains("\\"))
+            throw new ApiException(ApiErrorCode.BAD_REQUEST);
+        byte[] bytes = Base64.getDecoder().decode(args.path("base64").asText());
+        if (bytes.length > 8 * 1024 * 1024) throw new ApiException(ApiErrorCode.BAD_REQUEST);
+        var normalized = officeNormalization.normalizeOfficeFile(name, "application/octet-stream", bytes);
+        if (!"NORMALIZED".equals(normalized.status()))
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "旧版Office转换未通过严格校验");
+        return Map.of("name", normalized.normalizedName(), "base64", Base64.getEncoder().encodeToString(normalized.content()),
+            "status", normalized.status(), "message", normalized.message(), "original_format", normalized.originalFormat(), "working_format", normalized.normalizedFormat());
+    }
+
     public record ToolRequest(String action, ObjectNode arguments) { }
 
     @PostMapping("/internal/v1/agent-tools")
@@ -100,6 +119,8 @@ public class AgentToolsController {
             var args = command.arguments();
             if (args == null || args.toString().length() > 16000000) throw new ApiException(ApiErrorCode.BAD_REQUEST);
             return switch (command.action()) {
+                case "normalize_conversion_office" -> normalizeConversionOffice(args);
+                case "experiment_conversion" -> conversions.invoke(args);
                 case "topic" -> topic(UUID.fromString(args.path("id").asText()));
                 case "runtime_context" -> host.context(args);
                 case "expert_catalog" -> experts.invoke(args);

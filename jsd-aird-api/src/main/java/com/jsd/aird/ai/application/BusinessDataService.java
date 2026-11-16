@@ -21,6 +21,13 @@ public class BusinessDataService {
     private final BusinessExistingData existing;
     private final ObjectMapper json;
     private LocalBusinessAccess localAccess;
+    private BusinessOriginalFiles originalFiles;
+    private BusinessFileProjection fileProjection;
+    @Autowired(required=false) void setFileProjection(BusinessFileProjection projection){this.fileProjection=projection;}
+    private BusinessReportScope reportScope;
+    @Autowired(required=false) void setReportScope(BusinessReportScope reportScope){this.reportScope=reportScope;}
+    @Autowired(required = false)
+    void setOriginalFiles(BusinessOriginalFiles originalFiles) { this.originalFiles = originalFiles; }
     public BusinessDataService(List<BusinessReadPort> readers, List<BusinessDataAccess> access,
             BusinessExistingData existing, ObjectMapper json) {
         for (var reader : readers) for (var type : reader.resourceTypes())
@@ -46,32 +53,107 @@ public class BusinessDataService {
         ActorContext.required();
         if ("business_search".equals(action) && !args.hasNonNull("type")) return catalog();
         String type = args.path("type").asText(args.path("ref").path("type").asText());
-        if (BusinessExistingData.TYPES.contains(type) && !"business_links".equals(action)) return existing.invoke(action, args);
+        if (BusinessExistingData.TYPES.contains(type) && !"business_links".equals(action)) {
+            if("PROJECT".equals(type)&&"business_read".equals(action))requireProjectScope(args,id(reference(args)));
+            if("PROJECT".equals(type)&&"business_search".equals(action)&&args.has("report_project_ids"))return scopedProjectSearch(args);
+            return existing.invoke(action, args);
+        }
         if ("business_links".equals(action)) return links(args);
         if ("business_read".equals(action)) {
             var ref = reference(args); var row = read(ref);
-            var result = json.createObjectNode(); result.putArray("candidates").add(candidate(row));
+            requireReportScope(args,row);
+            var result = json.createObjectNode(); result.putArray("candidates").add(readCandidate(row,args));
+            if ("content".equals(args.path("section").asText())) {
+                result.set("reading", contentPage(row,args).path("reading"));
+                if (result.path("reading").has("next_offset")) result.set("next_offset",result.path("reading").get("next_offset"));
+            }
+            else if (row.facts().has("content")) {
+                var reading=result.putObject("reading").put("section","record").put("complete",!row.facts().path("content").isEmpty());
+                if(row.facts().has("content_notice"))reading.set("reason",row.facts().get("content_notice"));
+            }
+            if("PROJECT_REFERENCE".equals(type))for(var relation:row.relations())if("资料正文".equals(relation.name())) {
+                var target=read(relation.target());requireReportScope(args,target);
+                if(args.path("include_file").asBoolean())require(target.ref().path("type").asText(),id(target.ref()),"DOWNLOAD",target.ref());
+            }
+            var files = originalFiles == null ? List.<BusinessOriginalFiles.Entry>of() : originalFiles.list(row.ref());
+            result.set("files",json.valueToTree(files));
             if (args.path("include_file").asBoolean()) {
-                require(type, id(ref), "EXPORT", row.ref());
-                var file = reader(type).file(row.ref());
+                require(type, id(ref), "DOWNLOAD", row.ref());
+                var selected = optionalId(args,"file_id");
+                var file = originalFiles != null && BusinessOriginalFiles.supports(type) ? originalFiles.open(row.ref(),selected) : reader(type).file(row.ref(),selected);
                 if (file.bytes().length > 8 * 1024 * 1024) throw new ApiException(ApiErrorCode.BAD_REQUEST, "原文件超过8MB，请通过业务页面下载后作为原生附件读取");
                 var transfer = result.putObject("business_file").put("name", file.name()).put("content_type", file.contentType())
                     .put("bytes", file.bytes().length).put("sha256", file.sha256())
                     .put("content_base64", Base64.getEncoder().encodeToString(file.bytes()));
                 transfer.set("ref", row.ref());
+                if(fileProjection!=null)fileProjection.attach(transfer,file);
                 // Reject a concurrent metadata/content change before publishing a file to the harness.
-                validateCandidate(result.path("candidates").path(0).path("source"), null, candidate(read(row.ref())));
+                validateCandidate(candidate(row).path("source"), null, candidate(read(row.ref())));
             }
             return timed(result);
         }
         if (!Set.of("business_search", "business_query").contains(action)) throw new ApiException(ApiErrorCode.BAD_REQUEST);
         var rows = scan(type, filters(args));
+        if(args.has("report_project_ids"))rows=rows.stream().filter(row->withinReportScope(args,row)).toList();
         if ("business_query".equals(action)) return BusinessTables.query(this, json, type, args, rows);
         int offset = offset(args), limit = limit(args); var result = json.createObjectNode();
         var candidates = result.putArray("candidates");
         rows.stream().skip(offset).limit(limit).forEach(row -> candidates.add(candidate(row)));
         result.put("total", rows.size()); if (rows.size() > offset + limit) result.put("next_offset", offset + limit);
         return timed(result);
+    }
+    private ObjectNode scopedProjectSearch(ObjectNode args) {
+        var allowed=new HashSet<String>();args.path("report_project_ids").forEach(value->allowed.add(value.asText()));
+        var matching=json.createArrayNode();int cursor=0,scanned=0;
+        while(!allowed.isEmpty()) {
+            var request=args.deepCopy().put("offset",cursor).put("limit",40);
+            var page=existing.invoke("business_search",request);
+            for(var candidate:page.path("candidates")) {
+                if(++scanned>SCAN_LIMIT)throw new ApiException(ApiErrorCode.BAD_REQUEST,"项目查询超过5000条，请缩小查询范围");
+                if(allowed.contains(candidate.path("ref").path("id").asText()))matching.add(candidate);
+            }
+            if(!page.has("next_offset"))break;
+            int next=page.path("next_offset").asInt();
+            if(next<=cursor)throw new IllegalStateException("Non-progressing business page");
+            cursor=next;
+        }
+        var result=json.createObjectNode().put("total",matching.size());var selected=result.putArray("candidates");
+        int offset=offset(args),limit=limit(args);
+        for(int i=offset;i<Math.min(matching.size(),offset+limit);i++)selected.add(matching.get(i));
+        if(offset+limit<matching.size())result.put("next_offset",offset+limit);
+        return timed(result);
+    }
+    private ObjectNode contentPage(BusinessRecordView row, ObjectNode args) {
+        int start=offset(args), count=limit(args);
+        var content=row.facts().path("content"); var units=json.createArrayNode();
+        boolean text=content.has("text");
+        if(text) {
+            String value=content.path("text").asText();
+            int[] points=value.codePoints().toArray();
+            for(int i=0;i<points.length;i+=1000) units.add(new String(points,i,Math.min(1000,points.length-i)));
+        } else for(var cell:content.path("cells")) units.add(cell);
+        var selected=json.createArrayNode();
+        for(int i=start;i<Math.min(units.size(),start+count);i++) selected.add(units.get(i));
+        var page=json.createObjectNode(); var body=page.putObject("content");
+        if(text) {var value=new StringBuilder();selected.forEach(part->value.append(part.asText()));body.put("text",value.toString());}
+        else body.set("cells",selected);
+        var reading=page.putObject("reading").put("section","content").put("offset",start).put("returned",selected.size())
+            .put("total",units.size()).put("complete",!content.isEmpty() && start==0 && selected.size()==units.size());
+        if(row.facts().has("content_notice"))reading.set("reason",row.facts().get("content_notice"));
+        if(start+selected.size()<units.size()) reading.put("next_offset",start+selected.size());
+        return page;
+    }
+    private ObjectNode readCandidate(BusinessRecordView row,ObjectNode args) {
+        if(!"content".equals(args.path("section").asText())) return candidate(row);
+        var page=contentPage(row,args); var facts=row.facts().deepCopy();facts.set("content",page.path("content"));
+        var value=candidate(new BusinessRecordView(row.ref(),row.title(),facts,row.relations(),row.path()));
+        var options=json.createObjectNode().put("section","content").put("offset",offset(args)).put("limit",limit(args));
+        ((ObjectNode)value.path("source").path("anchor")).set("read_options",options);
+        var anchor=(ObjectNode)value.path("source").path("anchor");
+        anchor.put("read_path",anchor.path("read_path").asText()+"&section=content&offset="+offset(args)+"&limit="+limit(args));
+        ((ObjectNode)value.path("source")).put("source_node_key",value.path("source").path("source_node_key").asText()+":content:"+offset(args)+":"+limit(args));
+        value.set("reading",page.path("reading"));
+        return value;
     }
     public ObjectNode catalog() {
         var result = json.createObjectNode(); var types = result.putArray("resource_types");
@@ -147,7 +229,7 @@ public class BusinessDataService {
     private ObjectNode links(ObjectNode args) {
         var request = reference(args); String type = request.path("type").asText();
         if (BusinessExistingData.TYPES.contains(type)) return existingLinks(args, request);
-        var origin = read(request); var targets = new ArrayList<ObjectNode>();
+        var origin = read(request); requireReportScope(args,origin); var targets = new ArrayList<ObjectNode>();
         var names = new LinkedHashSet<String>(); origin.relations().forEach(relation -> names.add(relation.name()));
         if (!args.hasNonNull("relation")) {
             var result = json.createObjectNode(); result.set("available_relations", json.valueToTree(names));
@@ -166,13 +248,15 @@ public class BusinessDataService {
                     if (found.has("next_offset")) result.set("next_offset", found.path("next_offset"));
                     return timed(result);
                 } else if (allowed(targetType, null, "SEARCH", target.path("filters")))
-                    for (var row : scan(targetType, (ObjectNode)target.path("filters"))) targets.add(linkResult(relation.name(), row));
+                    for (var row : scan(targetType, (ObjectNode)target.path("filters"))) if(withinReportScope(args,row))targets.add(linkResult(relation.name(), row));
             } else if (BusinessExistingData.TYPES.contains(targetType)) {
                 try {
                     var found = existing.invoke("business_read", json.createObjectNode().set("ref", target));
                     for (var candidate : found.path("candidates")) { var copy = (ObjectNode)candidate.deepCopy(); copy.put("relation", relation.name()); targets.add(copy); }
                 } catch (ApiException error) { if (!hidden(error)) throw error; }
-            } else if (allowed(targetType, id(target), "READ", target)) targets.add(linkResult(relation.name(), read(target)));
+            } else if (allowed(targetType, id(target), "READ", target)) {
+                var row=read(target);if(withinReportScope(args,row))targets.add(linkResult(relation.name(),row));
+            }
         }
         var result = json.createObjectNode(); var candidates = result.putArray("candidates"); candidates.add(candidate(origin));
         targets.stream().skip(offset(args)).limit(limit(args)).forEach(candidates::add);
@@ -181,11 +265,13 @@ public class BusinessDataService {
     }
     private ObjectNode existingLinks(ObjectNode args, ObjectNode ref) {
         var source = existing.invoke("business_read", json.createObjectNode().set("ref", ref));
+        if ("PROJECT".equals(ref.path("type").asText()))requireProjectScope(args,id(ref));
         var result = json.createObjectNode(); result.set("candidates", source.path("candidates").deepCopy());
         var links = (com.fasterxml.jackson.databind.node.ArrayNode)result.path("candidates");
         String type = ref.path("type").asText();
         if ("PROJECT".equals(type)) {
-            var relations = Map.of("阶段", "STAGE", "任务", "TASK", "实验", "EXPERIMENT", "客户需求", "REQUIREMENT", "资料", "MATERIAL");
+            var relations = new TreeMap<>(Map.of("阶段", "STAGE", "任务", "TASK", "实验", "EXPERIMENT", "客户需求", "REQUIREMENT", "资料", "MATERIAL"));
+            relations.putAll(BusinessProjectMaterials.RELATIONS);
             result.set("available_relations", json.valueToTree(new TreeSet<>(relations.keySet())));
             if (!args.hasNonNull("relation")) return timed(result);
             if (!relations.containsKey(args.path("relation").asText())) throw new ApiException(ApiErrorCode.BAD_REQUEST, "不存在该项目关系");
@@ -193,8 +279,10 @@ public class BusinessDataService {
                 if (args.hasNonNull("relation") && !relation.getKey().equals(args.path("relation").asText())) continue;
                 var filter = json.createObjectNode().put("project_id", id(ref).toString());
                 var request = json.createObjectNode().put("type", relation.getValue()).put("offset", offset(args)).put("limit", limit(args)); request.set("filters", filter);
-                if (!existing.available(relation.getValue())) continue;
-                var records = existing.invoke("business_search", request);
+                if(args.has("report_project_ids"))request.set("report_project_ids",args.get("report_project_ids"));
+                boolean legacy=BusinessExistingData.TYPES.contains(relation.getValue());
+                if (legacy ? !existing.available(relation.getValue()) : !allowed(relation.getValue(),null,"SEARCH",filter)) continue;
+                var records = legacy ? existing.invoke("business_search", request) : invoke("business_search",request);
                 for (var record : records.path("candidates")) {
                     // A project diagnosis needs the experiment's shared background and plan,
                     // even when no sample rows have been entered. Directory counts are not evidence of absence.
@@ -242,6 +330,13 @@ public class BusinessDataService {
         return timed(result);
     }
     private static boolean hidden(ApiException error) { return Set.of(ApiErrorCode.NOT_FOUND, ApiErrorCode.PERMISSION_DENIED, ApiErrorCode.DATA_SCOPE_DENIED).contains(error.errorCode()); }
+    private void requireProjectScope(ObjectNode args,UUID project){
+        if(!args.has("report_project_ids"))return;
+        for(var value:args.path("report_project_ids"))if(project.toString().equals(value.asText()))return;
+        throw new ApiException(ApiErrorCode.DATA_SCOPE_DENIED,"该项目不属于本期报告范围");
+    }
+    private boolean withinReportScope(ObjectNode args,BusinessRecordView row){return !args.has("report_project_ids") || reportScope!=null && reportScope.contains(args.path("report_project_ids"),row);}
+    private void requireReportScope(ObjectNode args,BusinessRecordView row){if(!withinReportScope(args,row))throw new ApiException(ApiErrorCode.DATA_SCOPE_DENIED,"该资料不属于本期报告项目范围");}
     private ObjectNode linkResult(String relation, BusinessRecordView row) { return candidate(row).put("relation", relation); }
     private BusinessReadPort reader(String type) { var port = readers.get(type); if (port == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "未支持的业务类型：" + type); return port; }
     public ObjectNode candidate(BusinessRecordView row) {
@@ -254,13 +349,16 @@ public class BusinessDataService {
         anchor.put("read_path", "/api/v1/agents/business/records/" + ref.path("type").asText() + "/" + ref.path("id").asText()
             + "?ref=" + java.net.URLEncoder.encode(ref.toString(), java.nio.charset.StandardCharsets.UTF_8));
         var candidate = json.createObjectNode().put("text", text).put("model_text", modelMarkdown(row.title(), row.facts()));
-        candidate.set("source", source); candidate.set("ref", ref); return candidate;
+        candidate.set("source", source); candidate.set("ref", ref);
+        if(originalFiles!=null && BusinessOriginalFiles.supports(ref.path("type").asText()))candidate.set("files",json.valueToTree(originalFiles.list(ref)));
+        return candidate;
     }
     public void validateSource(JsonNode source, String excerpt) {
         if ("BUSINESS_QUERY".equals(source.path("resource_type").asText())) { BusinessTables.validate(this, source, excerpt); return; }
         var requested = source.path("anchor").path("ref");
         if (!requested.isObject()) throw new ApiException(ApiErrorCode.BAD_REQUEST);
-        var actual = candidate(read((ObjectNode)requested));
+        var options=source.path("anchor").path("read_options");
+        var actual = readCandidate(read((ObjectNode)requested),options.isObject()?(ObjectNode)options:json.createObjectNode());
         validateCandidate(source, excerpt, actual);
     }
     public void requireExport(JsonNode source) {

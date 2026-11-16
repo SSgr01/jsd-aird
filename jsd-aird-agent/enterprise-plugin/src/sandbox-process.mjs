@@ -3,6 +3,7 @@ import { relative, sep, isAbsolute } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { OutputCollector } from '../../../vendor/deepseek-harness/packages/subprocess/subprocess-local/lib/output.js';
 import { worldRoot, sha256 } from './filesystem.mjs';
+import { transientControlError } from './control-recovery.mjs';
 
 const terminal = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED']);
 const processLogs = path => path.split('/').includes('.dsh-process-output');
@@ -52,7 +53,7 @@ export class SandboxProcess {
   }
 
   async run() {
-    let submitted;
+    let submitted, reconciled;
     try {
       this.spec.signal?.throwIfAborted();
       const fs=this.ctx.fs, base=await this.ctx.workingDirectory.ensure(this.agent,this.spec.signal);
@@ -77,35 +78,59 @@ export class SandboxProcess {
         ...(typeof this.spec.stdio.stdin==='object'?{stdin:this.spec.stdio.stdin.data}:{}),
       }}).then(value=>{response=value;settled=true;},error=>{failure=error;settled=true;});
       let backlog=true, outputTerminal=false;
+      let recoveryStarted;
       while(!settled || backlog || !outputTerminal) {
-        const output=await this.business('native-output',{...this.payload,
-          stdout_offset:this.streams.stdout.offset,stderr_offset:this.streams.stderr.offset});
+        let output;
+        try {
+          output=await this.business('native-output',{...this.payload,
+            stdout_offset:this.streams.stdout.offset,stderr_offset:this.streams.stderr.offset});
+        } catch(error) {
+          if(!transientControlError(error) || this.spec.signal?.aborted)throw error;
+          this.needsReconciliation=true;
+          recoveryStarted ??= Date.now();
+          if(Date.now()-recoveryStarted>30000)throw new Error('SANDBOX_RESULT_UNKNOWN: 执行状态暂时无法读取；不可重放命令或交付文件。');
+          await delay(500);continue;
+        }
         backlog=false;
         for(const [name,value] of Object.entries(output.streams||{})) {
           if(!this.streams[name])throw new Error('INVALID_SANDBOX_OUTPUT_STREAM');
           backlog=this.consume(name,value)||backlog;
         }
+        if(output.reconciled_result) {
+          reconciled=output.reconciled_result;response=reconciled;failure=undefined;settled=true;
+        }
         outputTerminal=terminal.has(output.status);
         if(outputTerminal)this.quiescent=true;
-        if(failure)throw failure;
+        const uncertain=output.status==='UNKNOWN' || (!settled && outputTerminal)
+          || response?.requires_reconciliation || failure && transientControlError(failure);
+        if(uncertain) {
+          this.needsReconciliation=true;
+          recoveryStarted ??= Date.now();
+          if(Date.now()-recoveryStarted>30000)throw new Error('SANDBOX_RESULT_UNKNOWN: 文件尚未生成完成，执行结果仍待确认；不可重放命令或交付文件。');
+        } else if(failure)throw failure;
         // A denied submission has no output receipt to wait for. Unknown accepted
-        // writes are reconciled by cancellation/readback, never resubmitted.
-        if(settled && response?.error && !response.files) {
+        // writes are reconciled by readback, never resubmitted.
+        if(settled && response?.error && !response.requires_reconciliation && !response.files && !Number.isInteger(response.exit_code)) {
           if(terminal.has(response.receipt?.status))this.quiescent=true;
           throw new Error(response.error);
         }
-        if((!settled || !outputTerminal) && !backlog)await delay(200);
+        if((!settled || !outputTerminal) && !backlog)await delay(uncertain?1000:200);
       }
-      await submitted;
-      if(failure)throw failure;
-      if(terminal.has(response.receipt?.status))this.quiescent=true;
-      if(response.receipt?.status==='CANCELLED')return {exitCode:null,signal:'SIGTERM'};
-      if(response.error && !response.files)throw new Error(response.error);
+      if(!reconciled)await submitted;
+      if(failure && !reconciled)throw failure;
+      const outcome=reconciled ?? response;
+      if(terminal.has(outcome.receipt?.status))this.quiescent=true;
+      if(outcome.receipt?.status==='CANCELLED')return {exitCode:null,signal:'SIGTERM'};
+      if(outcome.error && !outcome.files && !Number.isInteger(outcome.exit_code))throw new Error(outcome.error);
       if(!this.quiescent)throw new Error('SANDBOX_RESULT_UNKNOWN');
       // Cancellation never publishes an uncommitted workspace transfer.
       if(this.stopping || this.spec.signal?.aborted)return {exitCode:null,signal:'SIGTERM'};
+      // A known nonzero exit without an export is an ordinary command failure.
+      // Preserve its collected stderr and the existing workspace for the model;
+      // only an authoritative file transfer can replace/delete workspace files.
+      if(!outcome.files && Number.isInteger(outcome.exit_code))return {exitCode:outcome.exit_code,signal:null};
       const incoming=new Map();let size=0;
-      for(const file of response.files||[]) {
+      for(const file of outcome.files||[]) {
         if(prefix && !file.path.startsWith(prefix+'/'))throw new Error('SANDBOX_OUTPUT_OUTSIDE_SESSION');
         const target=await fs.resolve(worldRoot+'/'+file.path), bytes=Buffer.from(file.base64,'base64');size+=bytes.length;
         if(incoming.has(file.path)||incoming.size>=50||size>10*1024*1024||sha256(bytes)!==file.sha256)throw new Error('SANDBOX_OUTPUT_INVALID');
@@ -116,10 +141,12 @@ export class SandboxProcess {
       this.spec.signal?.throwIfAborted();
       for(const [path,{target,bytes}] of incoming)if(!processLogs(path))await fs.publish(String(target.targetKey),bytes);
       for(const file of visibleFiles(before))if(!incoming.has(file.path))await unlink(await fs.checked(worldRoot+'/'+file.path));
-      return {exitCode:response.exit_code,signal:null};
+      return {exitCode:outcome.exit_code,signal:null};
     } catch(error) {
-      this.terminate();
-      if(submitted)await submitted;
+      // A lost query or UNKNOWN receipt is not a user cancellation. Leave the
+      // accepted command for receipt reconciliation instead of cancelling it.
+      if(!this.needsReconciliation || this.spec.signal?.aborted)this.terminate();
+      if(submitted && !reconciled && !this.needsReconciliation)await submitted;
       throw error;
     }
   }

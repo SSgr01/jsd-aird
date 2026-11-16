@@ -17,8 +17,9 @@ class AgentHostReferencesTest {
     final ResearchKnowledgeFacade knowledge = mock(ResearchKnowledgeFacade.class);
     final AgentProjectFacade projects = mock(AgentProjectFacade.class);
     final AgentExperimentFacade experiments = mock(AgentExperimentFacade.class);
+    final AgentSourceAuthorization sources = mock(AgentSourceAuthorization.class);
     final AgentHostService host = new AgentHostService(mock(LiteratureResearchService.class), knowledge, projects,
-        mock(AgentSourceAuthorization.class), mock(AuthorizationService.class), mapper, mock(PrivateResearchSourceService.class));
+        sources, mock(AuthorizationService.class), mapper, mock(PrivateResearchSourceService.class));
     final UUID doc = UUID.randomUUID(), pub = UUID.randomUUID();
     @BeforeEach void setup() { ActorContext.set(new Actor(UUID.randomUUID(),UUID.randomUUID(),"test","USER"));host.experiments(experiments); }
     @AfterEach void clear() { ActorContext.clear(); }
@@ -50,5 +51,17 @@ class AgentHostReferencesTest {
         args.putObject("ref").put("kind","EXPERIMENT").put("resource_id",doc.toString()).put("version_id",pub.toString());
         host.contextResource(args);
         verify(experiments).read(eq("get_experiment_record"),argThat(value->value.path("version_id").asText().equals(pub.toString())&&!value.has("project_id")));
+    }
+
+    @Test void fileAuthorizationChecksExportWithoutChangingNormalHistoryReads() {
+        var args = mapper.createObjectNode().put("purpose", "export");
+        var refs = args.putArray("sources");
+        refs.addObject().put("kind", "BUSINESS_RECORD").put("resource_type", "QUALITY_RECORD");
+        host.authorizeSources(args);
+        verify(sources).requireExport(refs);
+        verify(sources, never()).authorize(any());
+        args.remove("purpose");
+        host.authorizeSources(args);
+        verify(sources).authorize(refs);
     }
 }

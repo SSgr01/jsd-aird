@@ -34,7 +34,9 @@ class Sandbox:
             if (
                 not isinstance(name, str)
                 or not name.startswith(("input/", "scratch/"))
-                or any(c in name for c in "*?[]")
+                # Explicit paths are resolved and opened literally, never globbed.
+                # Brackets are common in original laboratory report filenames.
+                or any(c in name for c in "*?")
             ):
                 raise HTTPException(422, "INVALID_SANDBOX_INPUT_PATH")
             path = workspace.resolve(name)

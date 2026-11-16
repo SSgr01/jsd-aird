@@ -66,7 +66,7 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
                                po.planned_date, po.owner_id, owner_user.display_name AS owner_name,
                                po.created_by, creator.display_name AS created_by_name, po.created_at,
                                po.updated_by, updater.display_name AS updated_by_name, po.updated_at
-                        """ + from + where + """
+                        """ + from + where + " " + """
                         ORDER BY po.updated_at DESC
                         LIMIT ? OFFSET ?
                         """,
@@ -107,9 +107,9 @@ public class JdbcProductionOrderRepository implements ProductionOrderRepository 
                 where.append(" AND po.department_id = (SELECT department_id FROM iam.app_user WHERE id = ? AND organization_id = po.organization_id)");
                 args.add(scope.actorId());
             }
-            case "SELECTED", "PROJECT" -> {
+            case "SELECTED" -> {
                 if (scope.targetIds().isEmpty()) where.append(" AND false");
-                else { where.append(" AND (po.project_id IN (").append(String.join(",", scope.targetIds().stream().map(id -> "?").toList())).append(") OR po.created_by = ?)"); args.addAll(scope.targetIds()); args.add(scope.actorId()); }
+                else { where.append(" AND po.created_by = ?"); args.add(scope.actorId()); }
             }
             default -> where.append(" AND false");
         }

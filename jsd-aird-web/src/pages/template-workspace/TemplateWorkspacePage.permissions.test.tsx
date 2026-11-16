@@ -24,13 +24,12 @@ vi.mock('@/features/template-workspace/editor-runtime', async () => {
 });
 
 describe('template workspace permissions', () => {
-  it('opens in preview and disables edit without update permission', async () => {
+  it('opens in preview and hides edit without update permission', async () => {
     render(<AppProviders><MemoryRouter initialEntries={['/templates/version-1/workspace']}
       future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Routes><Route path="/templates/:versionId/workspace" element={<TemplateWorkspacePage />} /></Routes>
     </MemoryRouter></AppProviders>);
-    const edit = await screen.findByRole('tab', { name: '编辑' });
-    expect(edit).toHaveAttribute('aria-disabled', 'true');
-    expect(screen.getByRole('tab', { name: /预览/ })).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByRole('tab', { name: /预览/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('tab', { name: '编辑' })).not.toBeInTheDocument();
   });
 });

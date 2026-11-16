@@ -8,7 +8,7 @@
 .workbench-column-choice-list .ant-checkbox-wrapper-checked,
 .workbench-column-choice-list .ant-radio-wrapper-checked { border-color: var(--app-focus-border); background: var(--app-primary-soft); }
 .workbench-column-choice-list .ant-checkbox-wrapper:focus-within,
-.workbench-column-choice-list .ant-radio-wrapper:focus-within { outline: 2px solid rgb(49 95 145 / 30%); outline-offset: 1px; }
+.workbench-column-choice-list .ant-radio-wrapper:focus-within { outline: 2px solid var(--app-focus-border); outline-offset: 1px; }
 .workbench-column-choice-list .ant-checkbox,
 .workbench-column-choice-list .ant-radio { flex: 0 0 auto; margin-top: 2px; }
 .workbench-column-choice-list .ant-checkbox-wrapper-disabled,

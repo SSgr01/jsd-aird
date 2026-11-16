@@ -83,7 +83,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
     return h(HeroContext.Provider,{value:hero},children);
   }
   function StarterArt({kind}) {
-    const pearl = 'var(--dsw-alias-button-primary-fill)', peach = 'var(--dsw-specific-sidebar-nav-item-active)';
+    const pearl = 'var(--dsw-alias-bg-layer-3)', peach = 'var(--dsw-specific-sidebar-nav-item-active)';
     const stroke = 'var(--dsw-alias-state-business-primary)';
     return h('svg',{viewBox:'0 0 40 40',fill:'none','aria-hidden':true},
       kind==='read' ? h(React.Fragment,null,
@@ -209,11 +209,26 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
         current = entry; dispose?.();
         function ReadableSources(props) {
           const data=props.node.data;
-          const {blocks,sources}=React.useMemo(()=>sourceLinks.projectSourceBlocks(data.blocks,location.origin),[data.blocks]);
+          const [names,setNames]=React.useState(()=>new Map());
+          const {blocks,sources,links}=React.useMemo(()=>sourceLinks.projectSourceBlocks(data.blocks,location.origin,names),[data.blocks,names]);
+          const projectEndpoints=[...new Set(links.filter(link=>link.endpoint).map(link=>link.endpoint))].join(',');
+          React.useEffect(()=>{
+            let active=true;
+            for(const endpoint of projectEndpoints.split(',').filter(Boolean)) {
+              if(!sourceTitles.has(endpoint))sourceTitles.set(endpoint,fetch(endpoint,{credentials:'same-origin'})
+                .then(response=>response.ok ? response.json() : null)
+                .then(value=>typeof value?.data?.name==='string' ? value.data.name.replace(/\s+/g,' ').trim() : '')
+                .catch(()=>''));
+              void sourceTitles.get(endpoint).then(name=>{
+                if(active&&name)setNames(previous=>previous.get(endpoint)===name ? previous : new Map([...previous,[endpoint,name]]));
+              });
+            }
+            return ()=>{active=false;};
+          },[projectEndpoints]);
           const renderSlot=React.useCallback((name,owner,options)=>
             props.renderSlot(seats[name] || name,owner,options),[props.renderSlot]);
           const native=h(entry.component,{...props,renderSlot,node:{...props.node,data:{...data,blocks}}});
-          if(!sources.length) return native;
+          if(!sources.length&&!links.length) return native;
           const showSourceTitle=event=>{
             const link=event.target.closest?.('a[data-jsd-citation]');
             if(!link)return;
@@ -233,12 +248,21 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
           };
           return h('div',{className:'jsd-cited-answer',ref:node=>{
             node?.querySelectorAll('a[href]').forEach(link=>{
+              // Inline programs and linked images retain their native treatment.
+              if(link.closest('code,pre')||link.querySelector('img'))return;
               const item=sources.find(candidate=>candidate.locations.some(place=>place.url===link.href));
-              if(!item) return;
+              const other=links.find(candidate=>candidate.url===link.href);
+              if(!item&&!other) return;
+              if(other) {
+                link.title=other.title+'\n'+other.url;
+                link.setAttribute('aria-label','查看'+(other.kind==='project' ? '项目：' : '网页来源：')+other.title+'，'+other.url);
+                link.setAttribute('data-jsd-citation',other.kind);
+                return;
+              }
               const place=item.locations.find(candidate=>candidate.url===link.href);
               const title=item.title+(place.page ? ' · 第 '+place.page+' 页' : '');
               link.title=title;link.setAttribute('aria-label','查看 '+link.textContent.trim()+'：'+title);
-              link.setAttribute('data-jsd-citation','');
+              link.setAttribute('data-jsd-citation','paper');
             });
           },onPointerOverCapture:showSourceTitle,onFocusCapture:showSourceTitle},native);
         }
@@ -576,12 +600,17 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
   return { inject: ['slots','theme'], apply(ctx) {
     ctx.effect(() => ctx.theme.overrideTokens('@jsd-aird/enterprise-plugin',enterpriseTheme.tokens));
     ctx.effect(() => {
+      // The workbench is a separate document; it must load the same self-hosted
+      // font as the business application rather than relying on a previous visit.
+      const fonts = document.createElement('link');
+      fonts.rel = 'stylesheet'; fonts.href = base + 'font-assets/index.css';
+      fonts.dataset.jsdFonts = '';
       const style = document.createElement('style');
       style.dataset.jsdTheme = ''; style.textContent = enterpriseTheme.css;
       const previous = document.body.getAttribute('data-jsd-workbench');
-      document.body.setAttribute('data-jsd-workbench',''); document.head.append(style);
+      document.body.setAttribute('data-jsd-workbench',''); document.head.append(fonts, style);
       return () => {
-        style.remove();
+        fonts.remove(); style.remove();
         if (previous === null) document.body.removeAttribute('data-jsd-workbench');
         else document.body.setAttribute('data-jsd-workbench',previous);
       };
@@ -590,6 +619,10 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
     ctx.slots.inject('sidebar.brand.name',()=>ctx.slots.register({name:'sidebar.brand.name'},()=>h('span',{className:'jsd-brand-name'},'AI工作台')));
     ctx.slots.inject('conversation.hero.brand.mark',()=>ctx.slots.register({name:'conversation.hero.brand.mark'},HeroMark));
     ctx.inject(['uiWorkspace'],registerBriefingNavigation);
+    ctx.inject(['uiWorkspace'],scope=>{
+      const id=new URL(location.href).searchParams.get('conversion');
+      if(id && /^[a-f0-9-]{36}$/.test(id)) scope.uiWorkspace.openSession('session-conversion-'+id);
+    });
     ctx.slots.inject('sidebar.footer.action',()=>ctx.slots.register({name:'sidebar.footer.action',id:'enterprise-navigation'},Navigation));
     ctx.inject(['inputTriggers','uiConversation','sidebarRight','sidebarRightTabs'],registerInputs);
     ctx.inject(['sidebarRight','sidebarRightTabs'],registerOriginals);

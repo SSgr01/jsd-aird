@@ -212,7 +212,7 @@ async def business_check(context, args, name):
     return {**result, "review_state": "DRAFT", "engine_version": "business-checks/1",
             "input_authority": "CALLER_SUPPLIED_NOT_VERIFIED", "inputs": inputs,
             "input_sha256": hashlib.sha256(json.dumps(inputs, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(),
-            "expert_revision": {"id": expert.get("id"), "revision": expert.get("revision")},
+            "expert": {"id": expert.get("id")},
             "precision": "decimal; 60 significant digits; no measurement rounding",
             "notice": "仅核对所提交输入，不验证来源、业务关联及标准适用性，不构成正式判定或放行。"}
 

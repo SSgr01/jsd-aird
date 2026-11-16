@@ -943,6 +943,13 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     @Override
     public List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly,
                                        List<UUID> categoryIds, java.util.Set<UUID> documentIds, int limit, int dimension) {
+        return vectorSearch(organizationId, vector, aiOnly, categoryIds, documentIds, limit, dimension, null);
+    }
+
+    @Override
+    public List<SearchRow> vectorSearch(UUID organizationId, String vector, boolean aiOnly,
+            List<UUID> categoryIds, java.util.Set<UUID> documentIds, int limit, int dimension, String model) {
+        if (model == null || model.isBlank()) return List.of();
         if (documentIds != null && documentIds.isEmpty()) return List.of();
         var aiClause = aiOnly ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g WHERE g.document_id = d.id AND g.status = 'APPROVED')" : "";
         var dimensionClause = dimension > 0 ? " AND vector_dims(c.embedding) = ?\n" : "";
@@ -960,12 +967,13 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                     AND p.status = 'CURRENT'
                 WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
                 """ + aiClause + categoryClause(categoryIds) + documentClause(documentIds) + " AND c.chunk_role = 'CHILD' AND c.embedding IS NOT NULL\n"
-                + dimensionClause
+                + " AND c.embedding_model = ?\n" + dimensionClause
                 + "ORDER BY c.embedding <=> CAST(? AS vector) LIMIT ?";
         var args = new java.util.ArrayList<Object>();
         args.add(vector); args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
         if (documentIds != null) args.addAll(documentIds);
+        args.add(model);
         if (dimension > 0) args.add(dimension);
         args.add(vector); args.add(limit);
         return jdbc.query(sql, this::mapSearch, args.toArray());
@@ -1088,7 +1096,8 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
             boolean aiOnly, List<UUID> categoryIds, java.util.Set<UUID> documentIds, int limit, int dimension) {
         if (documentIds != null && documentIds.isEmpty()) return List.of();
         var safeQueries = queries == null ? List.<VectorQuery>of() : queries.stream()
-                .filter(query -> query != null && org.springframework.util.StringUtils.hasText(query.vector())).toList();
+                .filter(query -> query != null && org.springframework.util.StringUtils.hasText(query.vector())
+                        && org.springframework.util.StringUtils.hasText(query.model())).toList();
         if (safeQueries.isEmpty()) return List.of();
         var aiClause = aiOnly
                 ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g WHERE g.document_id = d.id AND g.status = 'APPROVED')"
@@ -1107,8 +1116,8 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                     WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
                 """ + aiClause + categoryClause(categoryIds) + documentClause(documentIds) + """
                 ), query_vectors AS MATERIALIZED (
-                    SELECT query_ordinal, CAST(vector_text AS vector) AS embedding
-                    FROM unnest(?::int[], ?::text[]) AS q(query_ordinal, vector_text)
+                    SELECT query_ordinal, CAST(vector_text AS vector) AS embedding, embedding_model
+                    FROM unnest(?::int[], ?::text[], ?::text[]) AS q(query_ordinal, vector_text, embedding_model)
                 ), scored AS (
                     SELECT q.query_ordinal, hit.chunk_id, hit.score
                     FROM query_vectors q
@@ -1119,6 +1128,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                             AND c.document_version_id = e.document_version_id
                             AND c.review_revision_id = e.review_revision_id
                         WHERE c.chunk_role = 'CHILD' AND c.embedding IS NOT NULL
+                          AND c.embedding_model = q.embedding_model
                 """ + dimensionClause + """
                         ORDER BY c.embedding <=> q.embedding, c.id
                         LIMIT ?
@@ -1137,6 +1147,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         if (documentIds != null) args.addAll(documentIds);
         args.add(safeQueries.stream().map(VectorQuery::ordinal).toArray(Integer[]::new));
         args.add(safeQueries.stream().map(VectorQuery::vector).toArray(String[]::new));
+        args.add(safeQueries.stream().map(VectorQuery::model).toArray(String[]::new));
         if (dimension > 0) args.add(dimension);
         args.add(limit);
         return jdbc.query(sql, (rs, ignored) -> new RankedChunk(rs.getInt("query_ordinal"),

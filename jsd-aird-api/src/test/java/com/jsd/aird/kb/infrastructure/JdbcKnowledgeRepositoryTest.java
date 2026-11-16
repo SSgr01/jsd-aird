@@ -8,6 +8,7 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -27,8 +28,8 @@ class JdbcKnowledgeRepositoryTest {
             new KnowledgeRepository.AnalyzedTerm("material-smartcn-v2","resin"))),
             new KnowledgeRepository.AnalyzedQuery(1,"adhesive",List.of(new KnowledgeRepository.AnalyzedTerm("material-smartcn-v2","adhesive")))),
             true,List.of(category),java.util.Set.of(document),48);
-        repository.batchVectorRank(org,List.of(new KnowledgeRepository.VectorQuery(0,"resin","[0.1,0.2]"),
-            new KnowledgeRepository.VectorQuery(1,"adhesive","[0.3,0.4]")),true,List.of(category),java.util.Set.of(document),48,2);
+        repository.batchVectorRank(org,List.of(new KnowledgeRepository.VectorQuery(0,"resin","[0.1,0.2]","qwen3"),
+            new KnowledgeRepository.VectorQuery(1,"adhesive","[0.3,0.4]","qwen3")),true,List.of(category),java.util.Set.of(document),48,2);
         var sql=ArgumentCaptor.forClass(String.class);var args=ArgumentCaptor.forClass(Object[].class);
         verify(jdbc,times(2)).query(sql.capture(),any(org.springframework.jdbc.core.RowMapper.class),args.capture());
         assertThat(sql.getAllValues()).allSatisfy(value->assertThat(value).contains("d.id IN (", "p.status = 'CURRENT'", "kb.document_ai_grant"));
@@ -36,6 +37,9 @@ class JdbcKnowledgeRepositoryTest {
         assertThat(sql.getAllValues().getLast().indexOf("d.id IN (")).isLessThan(sql.getAllValues().getLast().indexOf("ORDER BY c.embedding"));
         assertThat(args.getAllValues().getFirst()).containsSubsequence(org,category,document,48,48);
         assertThat(args.getAllValues().getLast()).startsWith(org,category,document).endsWith(2,48);
+        assertThat((String[]) args.getAllValues().getLast()[5]).containsExactly("qwen3", "qwen3");
+        assertThat(sql.getAllValues().getLast().indexOf("c.embedding_model = q.embedding_model"))
+                .isLessThan(sql.getAllValues().getLast().indexOf("ORDER BY c.embedding"));
     }
 
     @Test
@@ -179,8 +183,8 @@ class JdbcKnowledgeRepositoryTest {
                         new KnowledgeRepository.AnalyzedTerm("material-smartcn-v2", "second")))),
                 true, List.of(UUID.randomUUID()), 48);
         repository.batchVectorRank(organizationId, List.of(
-                new KnowledgeRepository.VectorQuery(0, "first", "[0.1,0.2]"),
-                new KnowledgeRepository.VectorQuery(1, "second", "[0.2,0.1]")),
+                new KnowledgeRepository.VectorQuery(0, "first", "[0.1,0.2]", "qwen3"),
+                new KnowledgeRepository.VectorQuery(1, "second", "[0.2,0.1]", "qwen3")),
                 true, List.of(UUID.randomUUID()), 48, 2);
         repository.loadSearchRows(organizationId, chunkIds);
 
@@ -193,11 +197,28 @@ class JdbcKnowledgeRepositoryTest {
                 "PARTITION BY query_ordinal, analyzer_version",
                 "PARTITION BY query_ordinal", "rank_no <= ?", "c.chunk_role = 'CHILD'");
         assertThat(sql.getAllValues().get(1)).contains(
-                "unnest(?::int[], ?::text[])", "CROSS JOIN LATERAL",
+                "unnest(?::int[], ?::text[], ?::text[])", "CROSS JOIN LATERAL",
                 "PARTITION BY query_ordinal", "c.embedding IS NOT NULL");
         assertThat(sql.getAllValues().get(2)).contains(
                 "c.source_anchors_jsonb", "c.review_node_ids_jsonb", "c.source_node_keys_jsonb",
                 "c.id IN (", "?,?)");
+    }
+
+    @Test
+    void refusesVectorQueriesWithoutModelAndFiltersSingleSearchBeforeLimit() {
+        var jdbc = mock(JdbcTemplate.class);
+        var repository = new JdbcKnowledgeRepository(jdbc);
+        var org = UUID.randomUUID();
+        assertThat(repository.batchVectorRank(org, List.of(new KnowledgeRepository.VectorQuery(0, "x", "[1,0]")),
+                false, List.of(), 1, 2)).isEmpty();
+        assertThat(repository.vectorSearch(org, "[1,0]", false, 1)).isEmpty();
+        verifyNoInteractions(jdbc);
+        repository.vectorSearch(org, "[1,0]", false, List.of(), null, 1, 2, "qwen3");
+        var sql = ArgumentCaptor.forClass(String.class);
+        var args = ArgumentCaptor.forClass(Object[].class);
+        verify(jdbc).query(sql.capture(), any(org.springframework.jdbc.core.RowMapper.class), args.capture());
+        assertThat(sql.getValue().indexOf("c.embedding_model = ?")).isLessThan(sql.getValue().indexOf("ORDER BY c.embedding"));
+        assertThat(args.getValue()).containsExactly("[1,0]", org, "qwen3", 2, "[1,0]", 1);
     }
 
     @Test

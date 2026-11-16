@@ -17,7 +17,7 @@ public class ExpertController {
     }
 
     @GetMapping("/{id}")
-    public Object detail(@PathVariable String id, @RequestParam(required=false) String revision) {
-        return ResponseFactory.success(experts.resolve(id, revision, false), RequestIdHolder.currentOrUnknown());
+    public Object detail(@PathVariable String id) {
+        return ResponseFactory.success(experts.resolve(id, false), RequestIdHolder.currentOrUnknown());
     }
 }

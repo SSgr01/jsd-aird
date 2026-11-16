@@ -194,7 +194,7 @@ export default function ProjectDocumentsTab({
           >
             查看
           </Button>
-          <Can permission="project.document.view"><Button
+          <Can permission="project.document.export"><Button
             size="small"
             type="link"
             loading={downloadingId === doc.id}

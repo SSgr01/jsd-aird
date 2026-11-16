@@ -48,7 +48,8 @@ test('native directory projection and overflow text share the sandbox-visible se
 
 test('enterprise composition replaces native providers without replacing native policies', () => {
   const patch = enterprisePatch({ plugin:'G:/enterprise', executionRoot:'G:/execution', model:{id:'deepseek-flash'} });
-  assert.ok(patch.find(row => row.id === 'working-directory').name.endsWith('working-directory.mjs'));
+  assert.equal(patch.find(row => row.id === 'working-directory').disabled,true);
+  assert.ok(patch.flatMap(row=>row.insert||[]).find(row => row.id === 'enterprise-working-directory').name.endsWith('working-directory.mjs'));
   assert.ok(patch.find(row => row.id === 'spill-local').name.endsWith('spill-store.mjs'));
   assert.equal(patch.find(row => row.id === 'spill-policy')?.disabled, undefined);
 });

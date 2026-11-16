@@ -24,10 +24,14 @@ public class BusinessSourceController {
         this.data = data; this.compute = compute; this.authorization = authorization; this.json = json;
     }
     @GetMapping("/records/{type}/{id}")
-    public ResponseEntity<String> record(@PathVariable String type, @PathVariable UUID id, @RequestParam String ref) {
+    public ResponseEntity<String> record(@PathVariable String type, @PathVariable UUID id, @RequestParam String ref,
+            @RequestParam(required=false) String section, @RequestParam(defaultValue="0") int offset,
+            @RequestParam(defaultValue="20") int limit) {
         requireUse(); var reference = object(ref);
         if (!type.equals(reference.path("type").asText()) || !id.toString().equals(reference.path("id").asText())) throw new ApiException(ApiErrorCode.BAD_REQUEST);
-        return original(data.invoke("business_read", json.createObjectNode().set("ref", reference)).path("candidates").path(0));
+        var request=json.createObjectNode().put("offset",offset).put("limit",limit);request.set("ref",reference);
+        if(section!=null)request.put("section",section);
+        return original(data.invoke("business_read", request).path("candidates").path(0));
     }
     @GetMapping("/query")
     public ResponseEntity<String> query(@RequestParam String q, @RequestParam String snapshot_hash) {

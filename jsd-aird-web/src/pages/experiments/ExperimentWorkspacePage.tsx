@@ -1343,7 +1343,7 @@ export function ExperimentWorkspacePage({
               </>
             ),
           },
-          { key: 'edit', label: '编辑', disabled: readonly },
+          ...(canUpdate ? [{ key: 'edit', label: '编辑', disabled: statusLocked }] : []),
           { key: 'versions', label: '版本记录' },
         ]}
       />

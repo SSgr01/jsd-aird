@@ -223,6 +223,9 @@ export function requiredMenuForPath(pathname: string): string | undefined {
   if (path === '/experiments/upload') return 'eln.upload';
   if (path.startsWith('/experiments')) return 'eln.view';
   if (path.startsWith('/knowledge/search')) return 'ai.search';
+  if (path === '/assistant/model-center') return 'ai.model';
+  if (path === '/assistant/formula-prediction') return 'ai.formula';
+  if (path === '/assistant/experiment-optimization') return 'ai.optimization';
   if (path.startsWith('/assistant')) return 'ai.qa';
   if (path === '/research-test/upload') return 'research-test.report.upload';
   if (path.startsWith('/research-test/reports')) return 'research-test.report.view';
@@ -275,12 +278,12 @@ export function canViewPathWithMenus(pathname: string, permissions: string[], me
   }
   // Upload workspaces stay reachable for read-only roles: the page renders the
   // upload history, while the upload controls require their own operation grant.
+  const menu = requiredMenuForPath(pathname);
+  // In the v2 model only an explicitly resolved menu opens a page. Atomic
+  // operations do not restore a menu removed by an administrator.
+  if (menuKeys !== undefined && menu) return hasMenu(menu, menuKeys);
   const uploadView = uploadWorkspaceViewPermission(path);
   if (uploadView && hasPermission(uploadView, permissions)) return true;
-  const menu = requiredMenuForPath(pathname);
-  // In the v2 model business roles own navigation visibility. Permission
-  // levels remain independent and are enforced by page actions and APIs.
-  if (menuKeys !== undefined && menu) return hasMenu(menu, menuKeys) || hasPageOperation(menu, permissions);
   if (menu && hasPageOperation(menu, permissions)) return true;
   if (path === '/assistant/model-center') {
     return hasPermission('ai.model.read', permissions) || hasPermission('ai.modeling.read', permissions);
@@ -381,7 +384,7 @@ export function filterMenuRoute(route: MenuRoute, permissions: string[], menuKey
       return { ...route };
     }
     const menu = menuKeys !== undefined ? requiredMenuForPath(route.path) : undefined;
-    if (menu && !hasMenu(menu, menuKeys!) && !hasPageOperation(menu, permissions)) return null;
+    if (menu && !hasMenu(menu, menuKeys!)) return null;
     if (!menu && !canViewPath(route.path, permissions)) return null;
   }
   if (route.routes && (!children || children.length === 0)) return null;

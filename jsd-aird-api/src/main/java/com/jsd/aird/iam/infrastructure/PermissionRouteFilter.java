@@ -145,7 +145,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         var id = "[0-9a-fA-F-]{36}";
         if ("POST".equals(method) && path.matches("/api/v1/projects/import(/commit)?")) return "project.list.create";
         if ("POST".equals(method) && path.equals("/api/v1/projects/copy")) return "project.list.create";
-        if ("GET".equals(method) && path.matches("/api/v1/projects/export(\\.csv)?")) return "project.list.view";
+        if ("GET".equals(method) && path.matches("/api/v1/projects/export(\\.csv)?")) return "project.list.export";
         if ("GET".equals(method) && (path.equals("/api/v1/projects") || path.matches(project))) return "project.list.view";
         if ("GET".equals(method)) {
             if (path.matches("/api/v1/stages/" + id + "/tasks(/.*)?")
@@ -153,7 +153,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
                     || path.matches(project + "/(tasks|experiments|templates)(/.*)?")) return "project.task.view";
             if (path.equals("/api/v1/project-stages") || path.matches("/api/v1/stages/" + id + "(/.*)?")
                     || path.matches(project + "/stages(/.*)?")) return "project.stage.view";
-            if (path.matches(project + "/documents(/.*)?")) return "project.document.view";
+            if (path.matches(project + "/documents(/.*)?")) return path.endsWith("/export")?"project.document.export":"project.document.view";
             if (path.matches(project + "/requirements(/.*)?")) return "project.customer-needs.view";
             if (path.matches(project + "/references(/.*)?")) return "project.reference.view";
             if (path.matches("/api/v1/meetings/" + id + "(/.*)?")
@@ -170,7 +170,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if ("POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method)) return "eln.view.update";
         }
         if (path.matches(project + "/documents(/.*)?")) {
-            if ("GET".equals(method) && path.endsWith("/export")) return "project.document.view";
+            if ("GET".equals(method) && path.endsWith("/export")) return "project.document.export";
             if ("POST".equals(method) && (path.endsWith("/approve") || path.endsWith("/review"))) return "project.document.approve";
             if ("POST".equals(method) && path.endsWith("/publish")) return "project.document.publish";
             if ("POST".equals(method) && (path.matches(project + "/documents") || path.endsWith("/import"))) return "project.document.create";
@@ -462,7 +462,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
                 return permission("project.create", "PROJECT", "WRITE");
             if (path.equals("/api/v1/projects/copy")) return permission("project.copy", "PROJECT", "WRITE");
             if (path.equals("/api/v1/projects/export") || path.equals("/api/v1/projects/export.csv"))
-                return permission("project.export", "PROJECT", "READ");
+                return permission("project.list.export", "PROJECT", "READ");
             if (read) {
                 var pageCode = projectPageOperation("GET", path);
                 if (pageCode != null) return permission(pageCode, "PROJECT", "READ");
@@ -627,6 +627,9 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             return null;
         }
 
+        if (path.startsWith("/api/v1/data/experiment-conversions")) {
+            return permission(read ? "eln.upload.view" : "eln.upload.create", "EXPERIMENT", read ? "READ" : "WRITE");
+        }
         if (path.startsWith("/api/v1/data/experiment-import-jobs")) {
             if (read) return permission("eln.upload.view", "DATA", "READ");
             if (method.equals("DELETE")) return permission("eln.upload.delete", "EXPERIMENT", "WRITE");

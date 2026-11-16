@@ -14,15 +14,19 @@ READ_TOOLS = frozenset({"tool_search", "business_search", "business_read", "busi
     "get_research_briefing_context", "get_experiment_loop", "get_compute_result", "knowledge_search", "document_read", "document_outline", "table_read",
     "source_context", "evidence_read", "evidence_context", "evidence_image_read", "evidence_quote", "query_structured_data"})
 RESEARCH_TYPES = {"PROJECT", "STAGE", "TASK", "REQUIREMENT", "MATERIAL", "EXPERIMENT", "STRUCTURED_DATA", "RAW_MATERIAL", "RAW_MATERIAL_SOURCE"}
+RESEARCH_TYPES |= {"MEETING_MINUTES", "PROJECT_DOCUMENT", "PROJECT_REFERENCE", "QUALITY_UPLOAD", "PRODUCTION_UPLOAD", "RESEARCH_TEST", "RESEARCH_TEST_UPLOAD",
+    "QUALITY_STANDARD", "QUALITY_RECORD", "QUALITY_COA", "QUALITY_DEFECT", "QUALITY_MANUAL", "QUALITY_MSDS", "QUALITY_LABEL", "DATA_IMPORT", "SPECTRUM", "CUSTOMER_REQUIREMENT"}
 
 
 def window(kind, *, now=None, last_success=None):
     end = now or datetime.now(timezone.utc)
     local = end.astimezone(ZoneInfo("Asia/Shanghai"))
     start = (local - timedelta(days=local.weekday())).replace(hour=0, minute=0, second=0, microsecond=0) if kind == "research-weekly" else end - timedelta(days=7)
-    if kind == "experiment-review" and last_success:
+    if kind == "project-morning":
+        start = end - timedelta(hours=24)
+    if kind in {"experiment-review", "project-morning"} and last_success:
         start = datetime.fromisoformat(last_success)
-    return {"start": None if kind == "project-morning" else start.astimezone(timezone.utc).isoformat(),
+    return {"start": start.astimezone(timezone.utc).isoformat(),
             "end": end.isoformat(), "time_zone": "Asia/Shanghai"}
 
 
@@ -39,6 +43,8 @@ def coverage(snapshot):
         seen = set(snapshot.get("seen", {}).get(section, []))
         if len(seen) < len(entries):
             missing.append({"section": section, "unread_index_count": len(entries) - len(seen)})
+        if section == "RELATED_ACTIVITY":
+            continue  # Directory coverage does not require reading every attachment.
         for item in entries:
             key = ref_key(item["ref"])
             read = snapshot.get("reads", {}).get(key, {})
@@ -89,13 +95,28 @@ class Briefings:
         await self.service.java(user, "runtime_context", {"profile": "agent", "context_refs": []})
         async with self.store.transaction(user, "briefing-install") as conn:
             try:
-                return await self.owner(user, conn)
+                owner = await self.owner(user, conn)
             except HTTPException as error:
                 if error.status_code != 404:
                     raise
+            else:
+                # Explicit user revocation remains durable. Only a current,
+                # authorized interactive visit may renew an expired IAM grant.
+                if owner["grant_status"] == "REVOKED":
+                    return owner
+                if user.auth_version < owner["auth_version"]:
+                    raise HTTPException(403, "STALE_INTERACTIVE_AUTHORIZATION")
+                principal = user.model_dump(mode="json", exclude_none=True)
+                if (owner["grant_status"] == "AUTHORIZATION_REQUIRED" or owner["auth_version"] != user.auth_version
+                        or owner["principal"] != principal):
+                    owner.update(principal=principal, auth_version=user.auth_version, grant_status="ACTIVE",
+                        grant_generation=str(uuid4()))
+                    owner.pop("authorization_error", None)
+                    return await self.store.update(user, "briefing-owner", owner, conn)
+                return owner
             return await self.store.create(user, "briefing-owner", {
                 "principal": user.model_dump(mode="json", exclude_none=True), "auth_version": user.auth_version,
-                "grant_status": "ACTIVE", "grant_scope": "research-briefings", "installed_version": 1,
+                "grant_status": "ACTIVE", "grant_generation": str(uuid4()), "grant_scope": "research-briefings", "installed_version": 1,
                 "tasks": {kind: {"builtin_id": kind, "session_id": "briefing-" + str(uuid4()),
                     "native_id": None, "status": "INSTALLING"} for kind in KINDS},
             }, conn, rid=self.owner_id(user))
@@ -155,8 +176,29 @@ class Briefings:
         result = await self.service.http.post(self.service.settings.java_url + "/internal/v1/agent-identity/automation",
             headers={"Authorization": "Bearer " + self.service.settings.runtime_secret.get_secret_value()}, json={"proof": proof})
         if result.status_code != 200:
+            try:
+                detail = result.json().get("data", {})
+            except (ValueError, AttributeError, TypeError):
+                detail = {}
+            if result.status_code == 403 and isinstance(detail, dict) and detail.get("reason") == "BACKGROUND_AUTHORIZATION_REQUIRED":
+                async with self.store.transaction(user, "briefing-install") as conn:
+                    current = await self.owner(user, conn)
+                    if self.same_grant(current, row["payload"]):
+                        current.update(grant_status="AUTHORIZATION_REQUIRED", authorization_error="BACKGROUND_AUTHORIZATION_REQUIRED")
+                        await self.store.update(user, "briefing-owner", current, conn)
+                raise HTTPException(403, "BACKGROUND_AUTHORIZATION_REQUIRED")
             raise HTTPException(result.status_code, "BACKGROUND_IDENTITY_UNAVAILABLE")
+        if not self.same_grant(await self.owner(user), row["payload"]):
+            raise HTTPException(403, "BACKGROUND_AUTHORIZATION_CHANGED")
         return result.json()
+
+    @staticmethod
+    def same_grant(current, attempted):
+        # A late response for an old grant cannot disable or issue a ticket for
+        # a newer interactive authorization, even at the same IAM version.
+        return (current["grant_status"] == "ACTIVE" and current["auth_version"] == attempted["auth_version"]
+            and current.get("grant_generation") == attempted.get("grant_generation")
+            and current["principal"] == attempted["principal"])
 
     async def pending(self, user):
         owner = await self.owner(user)
@@ -218,8 +260,9 @@ class Briefings:
             raise HTTPException(409, "BRIEFING_SCOPE_FROZEN")
         if not snapshot:
             span = automation["window"] if automation else window(kind)
-            sections = ["EXPERIMENT"] if kind == "experiment-review" else ["PROJECT", "STAGE", "TASK"] + (["EXPERIMENT"] if kind == "research-weekly" else [])
+            sections = ["EXPERIMENT"] if kind == "experiment-review" else ["PROJECT", "STAGE", "TASK"] + (["EXPERIMENT"] if kind == "research-weekly" else []) + ["RELATED_ACTIVITY"]
             snapshot = {"window": span, "project_ids": projects, "sections": {}, "seen": {}, "reads": {}, "frozen": True}
+            related_projects = {}
             for section in sections:
                 items, offset, index_revision = [], 0, None
                 while True:
@@ -231,6 +274,8 @@ class Briefings:
                         raise HTTPException(409, "BRIEFING_INDEX_CHANGED")
                     index_revision = current_revision
                     items.extend(result.get("candidates", []))
+                    for project in result.get("related_projects", []):
+                        related_projects[project["ref"]["id"]] = project
                     if "next_offset" not in result:
                         break
                     following = result["next_offset"]
@@ -239,12 +284,15 @@ class Briefings:
                         break
                     offset = following
                 snapshot["sections"][section] = items
+            if "PROJECT" in snapshot["sections"]:
+                known = {item["ref"]["id"] for item in snapshot["sections"]["PROJECT"]}
+                snapshot["sections"]["PROJECT"].extend(item for pid, item in related_projects.items() if pid not in known)
             async with self.store.transaction(user, run["id"]) as conn:
                 current = await self.store.get(user, "run", run["id"], conn)
                 current.setdefault("briefing_snapshot", snapshot)
                 current = await self.store.update(user, "run", current, conn)
                 snapshot = current["briefing_snapshot"]
-        section = args.get("section", next(iter(snapshot["sections"])))
+        section = args.get("section", "EXPERIMENT" if kind == "experiment-review" else "PROJECT")
         if section not in snapshot["sections"]:
             raise HTTPException(422, "BRIEFING_SECTION_UNAVAILABLE")
         offset, limit = args.get("offset", 0), args.get("limit", 20)
@@ -256,15 +304,22 @@ class Briefings:
             saved["seen"][section] = sorted(set(saved["seen"].get(section, [])) | set(range(offset, min(len(entries), offset+limit))))
             await self.store.update(user, "run", current, conn)
         counts = {key: len(items) for key, items in snapshot["sections"].items()}
-        labels = {"PROJECT": "项目", "STAGE": "阶段", "TASK": "任务", "EXPERIMENT": "实验"}
+        labels = {"PROJECT": "项目", "STAGE": "阶段", "TASK": "任务", "EXPERIMENT": "实验", "RELATED_ACTIVITY": "资料变化"}
         count_text = "、".join(f"{labels[key]} {count} 个" for key, count in counts.items())
+        pending = [{"task_type": kind, "section": name, "offset": next(index for index in range(len(items))
+            if index not in saved["seen"].get(name, [])), "limit": limit}
+            for name, items in snapshot["sections"].items()
+            if any(index not in saved["seen"].get(name, []) for index in range(len(items)))]
         return {"task_type": kind, "window": snapshot["window"], "section": section,
-            "available_sections": list(snapshot["sections"]), "candidates": selected,
+            "available_sections": list(snapshot["sections"]), "candidates": [] if section == "RELATED_ACTIVITY" else selected,
+            **({"activities": selected} if section == "RELATED_ACTIVITY" else {}),
             "index_summary": {"counts": counts, "total": sum(counts.values()),
                 "text": f"本期活动索引：{count_text}，共 {sum(counts.values())} 个业务对象。",
                 "complete": not snapshot.get("truncated", False)},
-            "coverage": coverage(saved), **({"next_offset": offset+limit} if offset+limit < len(entries) else {}),
-            "reading_notice": "索引仅表示活动记录。用business_read完整读取固定ref；实验优先section=record读完整版本，过大时再按分区分页；本周更新时间不代表已知前后差异。"}
+            "coverage": coverage(saved), "pending_index_requests": pending,
+            **({"next_offset": offset+limit, "next_request": {"task_type": kind, "section": section, "offset": offset+limit, "limit": limit}}
+               if offset+limit < len(entries) else {}),
+            "reading_notice": "索引仅表示活动记录，不能代替正文。next_request是本分区下一页的完整参数；pending_index_requests是尚未返回的索引页参数，传入同一工具继续读取。资料变化按报告需要沿ref读取正文；项目business_links可展开当前关联资料。下载原件不代表已阅读。实验优先section=record，过大时按分区分页。更新时间不代表已知前后差异。"}
 
     @staticmethod
     def read_request(run, args):
@@ -272,7 +327,9 @@ class Briefings:
         requested = args.get("ref", {})
         for entries in run.get("briefing_snapshot", {}).get("sections", {}).values():
             for item in entries:
-                expected = item["ref"]
+                expected = item.get("ref")
+                if not expected:
+                    continue
                 if (requested.get("type"), requested.get("id")) != (expected.get("type"), expected.get("id")):
                     continue
                 version = requested.get("version_id", requested.get("revision"))
@@ -320,12 +377,12 @@ class Briefings:
         delivery = await self.store.get(user, "briefing-delivery", meta["id"], conn)
         delivery.update(business_status=run["status"], run_id=run["id"], error=run.get("error"))
         await self.store.update(user, "briefing-delivery", delivery, conn)
-        if run["status"] != "SUCCEEDED" or meta["builtin_id"] != "experiment-review" or not coverage(run.get("briefing_snapshot", {}))["complete"]:
+        if run["status"] != "SUCCEEDED" or meta["builtin_id"] not in {"experiment-review", "project-morning"} or not coverage(run.get("briefing_snapshot", {}))["complete"]:
             return
         owner = await self.owner(user, conn)
         task = owner["tasks"][meta["builtin_id"]]
         # A late completion cannot move the cursor backwards.
         end = meta["window"]["end"]
-        if not task.get("last_success") or end > task["last_success"]:
+        if not task.get("last_success") or datetime.fromisoformat(end) > datetime.fromisoformat(task["last_success"]):
             task.update(last_success=end, last_success_run=run["id"])
             await self.store.update(user, "briefing-owner", owner, conn)

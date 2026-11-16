@@ -1,4 +1,4 @@
 [submodule "vendor/deepseek-harness"]
 	path = vendor/deepseek-harness
-	url = https://github.com/SSgr01/md-harness.git
+	url = https://gitee.com/aiplus_hqkj/md-harness.git
 	branch = master

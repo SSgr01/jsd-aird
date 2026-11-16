@@ -15,9 +15,10 @@ public interface ExperimentAssemblyRepository {
     void lockAssembly(UUID organizationId, UUID importJobId, String assemblyKey);
     Optional<Link> find(UUID organizationId, UUID importJobId, String assemblyKey);
     boolean markRunning(UUID organizationId, UUID importJobId, String assemblyKey);
+    boolean prepareRetry(UUID organizationId, UUID importJobId, String assemblyKey, String planHash);
     void markSynced(UUID organizationId, UUID importJobId, String assemblyKey,
                     UUID experimentId, UUID experimentVersionId, String experimentNo);
-    void markFailed(UUID organizationId, UUID importJobId, String assemblyKey, String error);
+    void markFailed(UUID organizationId, UUID importJobId, String assemblyKey, String planHash, String error);
 
     record SourceImport(UUID id, UUID sourceFileId, String sourceFileName, String sourceSha256,
                         UUID templateVersionId, int importContractVersion, String contractHash,

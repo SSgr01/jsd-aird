@@ -203,24 +203,31 @@ def append_single_group_test(ws, values):
     samples (e.g. a single client sample).  The template spans six group
     columns; only the first one carries data.  Removing columns is not
     supported by openpyxl's merge tracking, so the other group columns are
-    kept blank and the print area is narrowed to the used column.
+    kept blank. Printing retains the full template, including merged headers.
 
     ``values`` maps pristine-template coordinates to values.  Labels live in
-    column B and group values in the group columns; header item fields
+    column B and group values in the first group column; header item fields
     (D2/F2/H2) may be written too.  Formula cells are left alone.
     Returns {coordinate: value} actually written.
     """
     info = layout(ws, "test")
     first = info["first_col"]
     remap = {"C138": "B138"}  # merged remarks block anchored at B138
-    allowed = {2} | set(range(first, ws.max_column+1))
+    headers = {"D2", "F2", "H2"}
+    last_row, last_col = ws.max_row, ws.max_column
+    destinations = set()
     written = {}
     for coord, value in values.items():
         row, col = coordinate_to_tuple(coord)
-        if col not in allowed:
-            raise ValueError("单组测试记录只能写入标签列与分组列：" + coord)
-        if not 1 <= row <= ws.max_row:
+        coord = f"{get_column_letter(col)}{row}"
+        if col not in {2, first} and coord not in headers:
+            raise ValueError("单组测试记录只能写入标签列、首组列或指定表头，其他组列不允许写入：" + coord)
+        if not 1 <= row <= last_row:
             raise ValueError("目标行超出模板：" + coord)
+        coord = remap.get(coord, coord)
+        if coord in destinations:
+            raise ValueError("重复写目标（含合并单元格）：" + coord)
+        destinations.add(coord)
         cell = ws[coord]
         if cell.data_type == "f":
             raise ValueError("拒绝覆盖模板公式：" + coord)
@@ -228,17 +235,11 @@ def append_single_group_test(ws, values):
             raise ValueError("拒绝覆盖模板标签：" + coord)
         if value is None:
             continue
-        coord = remap.get(coord, coord)
-        cell = ws[coord]
-        if cell.data_type == "f":
-            raise ValueError("拒绝覆盖模板公式：" + coord)
-        if cell.value is not None:
-            raise ValueError("拒绝覆盖模板标签：" + coord)
         cell.value = value
         if isinstance(value, str) and value.startswith("="):
             cell.data_type = "s"
         written[coord] = value
-    ws.print_area = f"A1:{get_column_letter(first)}{ws.max_row}"
+    ws.print_area = f"A1:{get_column_letter(last_col)}{last_row}"
     return written
 
 

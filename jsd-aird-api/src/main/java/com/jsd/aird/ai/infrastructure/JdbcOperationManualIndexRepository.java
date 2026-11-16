@@ -14,6 +14,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 @Repository
 public class JdbcOperationManualIndexRepository implements OperationManualIndexRepository {
+    @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.ef-search:100}")
+    private int efSearch=100;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
     private final ObjectMapper mapper;
@@ -68,7 +70,7 @@ public class JdbcOperationManualIndexRepository implements OperationManualIndexR
             jdbc.batchUpdate("""
                     INSERT INTO ai.operation_manual_chunk(manual_version, embedding_model, embedding_dimension,
                         chunk_id, section_id, content, content_hash, embedding)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS vector))
+                    VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS halfvec))
                     """, chunks, 50, (statement, chunk) -> {
                 statement.setString(1, key.manualVersion());
                 statement.setString(2, key.model());
@@ -115,6 +117,7 @@ public class JdbcOperationManualIndexRepository implements OperationManualIndexR
     public List<VectorHit> search(IndexKey key, String vector, Set<String> allowedSections, int limit) {
         if (allowedSections.isEmpty()) return List.of();
         validateVector(vector, key.dimension());
+        String type=com.jsd.aird.shared.retrieval.HalfVectorSearch.type(key.dimension());
         var placeholders = String.join(",", java.util.Collections.nCopies(allowedSections.size(), "?"));
         var arguments = new ArrayList<Object>();
         arguments.add(vector);
@@ -124,13 +127,14 @@ public class JdbcOperationManualIndexRepository implements OperationManualIndexR
         arguments.addAll(allowedSections);
         arguments.add(vector);
         arguments.add(Math.min(20, Math.max(1, limit)));
-        return jdbc.query("""
-                SELECT c.chunk_id, 1 - (c.embedding <=> CAST(? AS vector)) AS score
+        String sql="""
+                SELECT c.chunk_id, 1 - (c.embedding::%s <=> CAST(? AS %s)) AS score
                 FROM ai.operation_manual_chunk c
                 JOIN ai.operation_manual_index i USING (manual_version, embedding_model, embedding_dimension)
                 WHERE c.manual_version = ? AND c.embedding_model = ? AND c.embedding_dimension = ? AND i.status = 'READY'
                 AND c.section_id IN (
-                """ + placeholders + ") ORDER BY c.embedding <=> CAST(? AS vector), c.chunk_id LIMIT ?",
-                (row, number) -> new VectorHit(row.getString("chunk_id"), row.getDouble("score")), arguments.toArray());
+                """ + placeholders + ") AND c.embedding_dimension="+key.dimension()+" ORDER BY c.embedding::%s <=> CAST(? AS %s) LIMIT ?";
+        return com.jsd.aird.shared.retrieval.HalfVectorSearch.query(jdbc,efSearch,()->jdbc.query(sql.formatted(type,type,type,type),
+                (row, number) -> new VectorHit(row.getString("chunk_id"), row.getDouble("score")), arguments.toArray()));
     }
 }

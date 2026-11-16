@@ -52,7 +52,7 @@ python -X utf8 scripts/execute_plan.py --root ROOT --plan ROOT/.dsh/cache/jsd-ex
 - `sample_groups`：与 `groups` 等长的源坐标列表。`groups`仍是实验编号，`sample_groups`写样品/方案编号；缺省保持旧的同步行为。
 - `client_template_additions`：仅供已人工确认的客户标准模板追加项。每项提供 `label_src`、`after_template`（空模板B列前驱坐标）、`after_label`（精确标签）、`values`（每组源坐标）及 `reason`。仅支持配方合计后的无下游公式、无表格/图表/图片/条件格式模板；自动迁移纵向块合并、后续行坐标、验证、冻结及打印范围。标签直接取源原文，不自动判定语义资格。
 - `recipe.source_total_policy`缺省`strict`，不一致仍报错。只有显式`report_conflicts`且输出位于工作区`_work/`时才允许生成审阅文件；实际用量合计仍真实计算，源合计冲突进入verification和unplaced，状态为`review_required`，不得称为validated正式结果。
-- `single_group_test`：源只有一组结果、无配方也无平行样时（例如单一来样测试报告），每张表写 `"single_group_test": {"values": {"C74": "8H", ...}}`，坐标仍是**空模板坐标**；只允许写 B 列标签行、C 起的组值格和表头值区（D2/F2/H2）。备注区写 `C138` 会落到合并锚点 B138。执行器从空模板底稿只填一组，不扩行、不扩列、不生成合计，其余分组列留空，打印区收窄到 C 列；配方填 `{"names": [], "amounts": [], "totals": []}`，不能与 `groups` 同时使用。
+- `single_group_test`：源只有一组结果、无配方也无平行样时（例如单一来样测试报告），每张表写 `"single_group_test": {}`，值统一使用同级 `"writes": [{"src": "B3", "dst": "C74"}]` 从当前源表读取；可复用上述显式 `transform`。不再接受旧式 `values` 常量，不能把模型抄写的数值作为原件核对依据。目标仍是**空模板坐标**，只允许 B 列空白标签格、首组 C 列和指定表头 D2/F2/H2，其他组列禁止写入；已有标签和公式不可覆盖。备注区 C138 会落到合并锚点 B138，合并后的重复目标也会拒绝。执行器不扩行、不扩列、不生成合计，其余组列留空；打印范围保留完整模板宽度，覆盖表头和合并区域。配方填 `{"names": [], "amounts": [], "totals": []}`，不能与 `groups/sample_groups` 同时使用。结构标签和未落位项仍通过 `structural/unplaced` 逐项交代。
 - docx 原件：`source` 可为 `.docx`，`source_sheet` 用 `table-N`。地址按**真实表格网格**推导——`w:gridSpan` 跨列、`w:vMerge` 纵向合并、嵌套表都会改变列号，“第 3 个单元格”不一定是 C 列。先用执行器的 `_docx_table_views(path)` 打印带地址的视图再写计划。附录段落必须在 `docx_paragraphs` 中逐段交代（`text` 与原文完全一致，`handling` 说明去向，空白段也要列出），否则拒绝执行。
 
 先提取一个代表表，保存字段级决策计划。未知测试项语义判断仍需模型完成，无法只靠执行器自动推出。同一前驱的多项插行、插行下方有公式、带图表/条件格式模板扩容、旧格式原件或通用公式求值仍需适配；明确记录阻塞并只扩展需要的能力。

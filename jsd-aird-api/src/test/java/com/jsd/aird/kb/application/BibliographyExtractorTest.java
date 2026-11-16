@@ -51,6 +51,21 @@ class BibliographyExtractorTest {
         assertThat(extract("Confidential customer report\n"+paper()).type()).isEqualTo("INTERNAL");
         assertThat(extract("Product brochure\n10.1234/hydrogel").type()).isEqualTo("UNKNOWN");
     }
+    @Test void businessDocumentHeadingsOverrideQuotedPaperScaffolds() {
+        for(var title:List.of("材料评审会议纪要", "会议记录（研发例会）", "产品说明书：树脂A", "树脂A技术数据表", "设备操作手册",
+                "Meeting Minutes 2026-11-16", "Resin A Technical Data Sheet", "Product Manual: Resin A", "SDS")) {
+            var local=extract("# "+title+"\n引用资料：\n"+paper().replace("Published online: 2018","Published: 2018-03-17")+"\nAuthors: Cited Researcher");
+            assertThat(local.type()).as(title).isEqualTo("INTERNAL");
+            assertThat(local.fields().has("doi")).as(title).isFalse();
+            assertThat(local.fields().fieldNames()).as(title).toIterable().containsExactly("title");
+            assertThat(local.fields().path("title").asText()).isEqualTo(title);
+            assertThat(extractor.match(local,candidate())).as(title).isEmpty();
+        }
+    }
+    @Test void mentioningBusinessDocumentsInAnArticleDoesNotChangeItsType() {
+        assertThat(extract(paper()+"\nThe technical data sheet was consulted for processing parameters.").type()).isEqualTo("PAPER");
+        assertThat(extract(paper()+"\n本研究的方法与产品说明书中的条件进行比较。").type()).isEqualTo("PAPER");
+    }
     @Test void recognizesUnlabelledJournalAbstractButKeepsPrivateAndIncompleteSourcesLocal() {
         String journal="A R T I C L E\nOPEN ACCESS\n# Precise Hydrogel Experimental Methods\nJane Smith\nDepartment of Materials, Example University\nNature Communications\nhttps://doi.org/10.1234/hydrogel\nWe investigate self-healing hydrogels.";
         assertThat(extract(journal).type()).isEqualTo("PAPER");

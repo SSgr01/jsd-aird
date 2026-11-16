@@ -228,20 +228,23 @@ public class KnowledgeGovernanceService {
         return rebuildPublishedIndex(documentId, null);
     }
 
-    private String rebuildKey(UUID documentId, String requestKey) {
+    private String rebuildKey(UUID documentId, UUID publicationId, String requestKey, boolean vectorsOnly) {
         if (requestKey != null && !requestKey.matches("[A-Za-z0-9_-]{1,128}")) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "重建请求标识格式不正确");
         }
-        return "kb-rebuild-published-index:" + documentId + ":" + requestKey;
+        String identity=knowledge.indexModel().model()+"\n"+knowledge.indexModel().dimension()+"\n"+publicationId+"\n"+(vectorsOnly?"vectors":"full");
+        String prefix="kb-rebuild:"+documentId+":"+com.jsd.aird.shared.evidence.EvidenceProtocol.sha(identity).substring(0,32)+":";
+        return prefix+(requestKey==null?"":com.jsd.aird.shared.evidence.EvidenceProtocol.sha(requestKey));
     }
 
-    public RebuildIndexStatusView rebuildIndexStatus(UUID documentId, String requestKey) {
+    public RebuildIndexStatusView rebuildIndexStatus(UUID documentId, String requestKey) {return rebuildIndexStatus(documentId,requestKey,false);}
+    public RebuildIndexStatusView rebuildIndexStatus(UUID documentId, String requestKey, boolean vectorsOnly) {
         var actor = ActorContext.required();
         var publication = governance.currentPublication(actor.organizationId(), documentId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "当前发布不存在"));
         var job = requestKey == null
-                ? async.findLatestJob(actor.organizationId(), "kb-rebuild-published-index:" + documentId + ":")
-                : async.findJob(actor.organizationId(), rebuildKey(documentId, requestKey));
+                ? async.findLatestJob(actor.organizationId(), rebuildKey(documentId,publication.id(),null,vectorsOnly))
+                : async.findJob(actor.organizationId(), rebuildKey(documentId,publication.id(),requestKey,vectorsOnly));
         var profile = knowledge.indexModel();
         return new RebuildIndexStatusView(documentId, publication.id(), publication.versionId(), publication.reviewRevisionId(),
                 profile.model(), profile.dimension(), knowledgeRepository.isAiApproved(actor.organizationId(), documentId),
@@ -267,7 +270,7 @@ public class KnowledgeGovernanceService {
                 .put("expectedEmbeddingModel", profile.model())
                 .put("expectedEmbeddingDimension", profile.dimension());
         var jobId = async.enqueue(actor.organizationId(), "KB_REBUILD_PUBLISHED_INDEX", payload,
-                rebuildKey(documentId, requestKey == null ? UUID.randomUUID().toString() : requestKey), 45);
+                rebuildKey(documentId,publication.id(),requestKey == null ? UUID.randomUUID().toString() : requestKey,vectorsOnly), 45);
         audit(actor.organizationId(), actor.userId(), "KB_PUBLISHED_INDEX_REBUILD_QUEUED", documentId,
                 objectMapper.createObjectNode().put("publicationId", publication.id().toString()));
         return new IndexBuildView(documentId, publication.versionId(), publication.reviewRevisionId(), "QUEUED", jobId);
@@ -280,7 +283,7 @@ public class KnowledgeGovernanceService {
         var payload = objectMapper.createObjectNode()
                 .put("organizationId", actor.organizationId().toString())
                 .put("actorId", actor.userId().toString())
-                .put("rebuildAllPublishedIndexes", true);
+                .put("rebuildAllPublishedIndexes", true).put("expectedEmbeddingModel",knowledge.indexModel().model()).put("expectedEmbeddingDimension",knowledge.indexModel().dimension());
         async.enqueue(actor.organizationId(), "KB_REBUILD_PUBLISHED_INDEX", payload,
                 "kb-rebuild-all-published-indexes:" + System.currentTimeMillis(), 45);
         audit(actor.organizationId(), actor.userId(), "KB_ALL_PUBLISHED_INDEXES_REBUILD_QUEUED",
@@ -506,8 +509,10 @@ public class KnowledgeGovernanceService {
                 .put("actorId", actorId.toString()).put("documentId", documentId.toString())
                 .put("versionId", versionId.toString()).put("reviewRevisionId", reviewRevisionId.toString())
                 .put("lockVersion", lockVersion).put("authorizeAi", authorizeAi);
+        var target=knowledge.autoIndexModel();
+        payload.put("expectedEmbeddingModel",target.model()).put("expectedEmbeddingDimension",target.dimension());
         async.enqueue(organizationId, "KB_BUILD_KNOWLEDGE_INDEX", payload,
-                "kb-index:" + reviewRevisionId + (retryFailed ? ":retry:" + UUID.randomUUID() : ""), 50);
+                "kb-index:" + reviewRevisionId+":"+com.jsd.aird.shared.evidence.EvidenceProtocol.sha(target.model()+":"+target.dimension()).substring(0,32) + (retryFailed ? ":retry:" + UUID.randomUUID() : ""), 50);
     }
 
     private List<BatchResult> batch(List<DocumentRevision> documents, BatchAction action, String auditAction) {

@@ -275,7 +275,7 @@ class KnowledgeServiceIndexingTest {
         });
         verify(embeddingProvider, never()).getIfAvailable();
         verify(repository).finishProcessingStep(organizationId, versionId, reviewRevisionId,
-                "VECTOR_INDEX", "NOT_REQUIRED", null, null);
+                "VECTOR_INDEX:embedding-model:1024", "NOT_REQUIRED", null, null);
     }
 
     @SuppressWarnings("unchecked")

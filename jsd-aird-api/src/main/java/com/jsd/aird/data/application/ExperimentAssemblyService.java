@@ -9,6 +9,7 @@ import com.jsd.aird.recognition.application.port.SourceRecognitionRepository;
 import com.jsd.aird.iam.api.AuthorizationService;
 import com.jsd.aird.iam.api.PermissionCheck;
 import com.jsd.aird.ops.application.port.OpsAsyncFacade;
+import com.jsd.aird.ops.application.port.AsyncJobHandler.ExecutionContext;
 import com.jsd.aird.rnd.api.ExperimentDraftFacade;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
@@ -16,6 +17,9 @@ import com.jsd.aird.shared.security.ActorContext;
 import com.jsd.aird.tpl.api.TemplateDataImportFacade;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -34,17 +38,20 @@ public class ExperimentAssemblyService {
     private final AuthorizationService authorization;
     private final ObjectMapper json;
     private final SourceRecognitionRepository recognition;
+    private final TransactionTemplate writes;
 
     public ExperimentAssemblyService(ExperimentAssemblyRepository repository, ExperimentImportAssembler assembler,
                                      TemplateDataImportFacade templates, ExperimentDraftFacade experiments,
                                      DataWorkbookService workbooks,
                                      ProjectResourceFacade projects, OpsAsyncFacade jobs,
                                      AuthorizationService authorization, ObjectMapper json,
-                                     SourceRecognitionRepository recognition) {
+                                     SourceRecognitionRepository recognition, PlatformTransactionManager transactions) {
         this.repository=repository;this.assembler=assembler;this.templates=templates;this.experiments=experiments;
         this.workbooks=workbooks;
         this.projects=projects;this.jobs=jobs;this.authorization=authorization;this.json=json;
         this.recognition=recognition;
+        this.writes=new TransactionTemplate(transactions);
+        this.writes.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     public AssemblyPlan preview(UUID importJobId) {
@@ -52,6 +59,7 @@ public class ExperimentAssemblyService {
         return plan(actor.organizationId(),importJobId,actor.userId());
     }
 
+    @Transactional(propagation=Propagation.NOT_SUPPORTED)
     public SyncResult sync(UUID importJobId,UUID categoryId,List<String> selectedKeys) {
         var actor=ActorContext.required();
         requireExperimentCreate(actor.organizationId(),actor.userId());
@@ -62,24 +70,45 @@ public class ExperimentAssemblyService {
         var links=projects.links(actor,ProjectResourceFacade.ResourceType.DATA_IMPORT_JOB,importJobId);
         var project=links.size()==1?links.getFirst():null;
         var keys=selectedKeys==null?Set.<String>of():new HashSet<>(selectedKeys);
-        var accepted=new ArrayList<UUID>();var count=0;
+        var accepted=new ArrayList<UUID>();var count=0;boolean alreadyCreated=false;
         for(var candidate:plan.candidates()){
-            if(!"READY".equals(candidate.status())||(!keys.isEmpty()&&!keys.contains(candidate.assemblyKey())))continue;
-            var payload=json.createObjectNode().put("organizationId",actor.organizationId().toString())
-                    .put("actorId",actor.userId().toString()).put("actorName",actor.username())
-                    .put("importJobId",importJobId.toString()).put("assemblyKey",candidate.assemblyKey())
-                    .put("planHash",candidate.planHash()).put("categoryId",targetCategory.toString());
-            if(project!=null){payload.put("projectId",project.projectId().toString());
-                if(project.stageId()!=null)payload.put("stageId",project.stageId().toString());
-                if(project.taskId()!=null)payload.put("taskId",project.taskId().toString());}
-            var id=jobs.enqueue(actor.organizationId(),"DATA_TO_EXPERIMENT_SYNC",payload,
-                    "data-experiment:"+importJobId+":"+candidate.assemblyKey()+":"+candidate.planHash(),40);
-            accepted.add(id);count++;
+            if(!keys.isEmpty()&&!keys.contains(candidate.assemblyKey()))continue;
+            boolean retry="FAILED".equals(candidate.status())&&keys.contains(candidate.assemblyKey());
+            if(!retry&&!Set.of("READY","RUNNING").contains(candidate.status()))continue;
+            var acceptedId=writes.execute(tx->{
+                repository.lockAssembly(actor.organizationId(),importJobId,candidate.assemblyKey());
+                var existing=repository.find(actor.organizationId(),importJobId,candidate.assemblyKey()).orElseThrow();
+                if(existing.experimentId()!=null)return null;
+                if(!candidate.planHash().equals(existing.planHash()))throw validation("组装计划已变化，请重新预览");
+                var key=jobKey(importJobId,candidate.assemblyKey(),candidate.planHash());
+                var previous=latestJob(actor.organizationId(),importJobId,candidate.assemblyKey(),candidate.planHash()).orElse(null);
+                if(previous!=null&&!previous.terminal())return previous.id();
+                if(!retry&&("RUNNING".equals(existing.status())||previous!=null&&"SUCCEEDED".equals(previous.status())))
+                    throw validation("先前任务结果尚未核对，请刷新后查看实验记录");
+                if(retry){
+                    if(previous!=null&&!Set.of("FAILED","CANCELLED").contains(previous.status()))
+                        throw validation("先前任务结果尚未核对，请刷新后查看实验记录");
+                    key+=":retry:"+(previous==null?"initial":previous.id());
+                    if(!repository.prepareRetry(actor.organizationId(),importJobId,candidate.assemblyKey(),candidate.planHash()))
+                        throw validation("实验草稿状态已变化，请刷新后重试");
+                }
+                var payload=json.createObjectNode().put("organizationId",actor.organizationId().toString())
+                        .put("actorId",actor.userId().toString()).put("actorName",actor.username())
+                        .put("importJobId",importJobId.toString()).put("assemblyKey",candidate.assemblyKey())
+                        .put("planHash",candidate.planHash()).put("categoryId",targetCategory.toString());
+                if(project!=null){payload.put("projectId",project.projectId().toString());
+                    if(project.stageId()!=null)payload.put("stageId",project.stageId().toString());
+                    if(project.taskId()!=null)payload.put("taskId",project.taskId().toString());}
+                return jobs.enqueue(actor.organizationId(),"DATA_TO_EXPERIMENT_SYNC",payload,
+                        key,40);
+            });
+            if(acceptedId==null)alreadyCreated=true;
+            else {accepted.add(acceptedId);count++;}
         }
         if(count==0){
             var alreadySynced=plan.candidates().stream().anyMatch(candidate ->
                     "SYNCED".equals(candidate.status())&&(keys.isEmpty()||keys.contains(candidate.assemblyKey())));
-            if(alreadySynced)return new SyncResult(0,List.of());
+            if(alreadyCreated||alreadySynced)return new SyncResult(0,List.of());
             throw validation("当前文件没有可创建的实验草稿");
         }
         return new SyncResult(count,List.copyOf(accepted));
@@ -87,25 +116,24 @@ public class ExperimentAssemblyService {
 
     public SyncStatus status(UUID importJobId) {
         var actor=ActorContext.required();var plan=plan(actor.organizationId(),importJobId,actor.userId());
-        return new SyncStatus(plan,repository.links(actor.organizationId(),importJobId));
+        return new SyncStatus(plan,repository.links(actor.organizationId(),importJobId).stream()
+                .map(link->reconcile(actor.organizationId(),importJobId,link)).toList());
     }
 
-    @Transactional
+    @Transactional(propagation=Propagation.NOT_SUPPORTED)
     public ExperimentDraftFacade.ImportedDraft execute(UUID organizationId,UUID actorId,String actorName,
                                                         UUID importJobId,String assemblyKey,String expectedPlanHash,
-                                                        UUID categoryId,UUID projectId,UUID stageId,UUID taskId) {
+                                                        UUID categoryId,UUID projectId,UUID stageId,UUID taskId,
+                                                        ExecutionContext context) {
         requireExperimentCreate(organizationId,actorId);
         experiments.requireActiveCategory(organizationId,categoryId);
+        var already=repository.find(organizationId,importJobId,assemblyKey).orElse(null);
+        if(already!=null&&already.experimentId()!=null)return created(already);
         var plan=plan(organizationId,importJobId,actorId);
         var candidate=plan.candidates().stream().filter(c->c.assemblyKey().equals(assemblyKey)).findFirst()
                 .orElseThrow(()->validation("组装计划已变化，请重新预览"));
         if(!candidate.planHash().equals(expectedPlanHash))throw validation("组装计划已变化，请重新预览");
-        repository.lockAssembly(organizationId,importJobId,assemblyKey);
-        var existing=repository.find(organizationId,importJobId,assemblyKey).orElseThrow();
-        if(existing.experimentId()!=null)return new ExperimentDraftFacade.ImportedDraft(existing.experimentId(),
-                existing.experimentVersionId(),existing.experimentNo(),candidate.editModel().path("title").asText());
-        if(!"READY".equals(candidate.status()))throw validation("组装计划仍有冲突或已在处理中，请重新预览");
-        if(!repository.markRunning(organizationId,importJobId,assemblyKey))throw validation("该组装项已被处理");
+        if(!Set.of("READY","RUNNING").contains(candidate.status()))throw validation("组装计划仍有冲突或已在处理中，请重新预览");
         var source=repository.load(organizationId,importJobId);
         /*
          * The isolated local acceptance profile deliberately uses local object
@@ -127,6 +155,29 @@ public class ExperimentAssemblyService {
         } catch (ApiException exception) {
             if (exception.errorCode() != ApiErrorCode.FILE_NOT_READY) throw exception;
         }
+        var prepared=new Prepared(source,sourceSnapshot,templateVersionId,templateSnapshotHash,templateSnapshot);
+        return Objects.requireNonNull(writes.execute(tx->{
+            jobs.requireExecution(context,false);
+            requireExperimentCreate(organizationId,actorId);
+            experiments.requireActiveCategory(organizationId,categoryId);
+            repository.lockAssembly(organizationId,importJobId,assemblyKey);
+            var existing=repository.find(organizationId,importJobId,assemblyKey).orElseThrow();
+            if(existing.experimentId()!=null)return created(existing);
+            var current=plan(organizationId,importJobId,actorId).candidates().stream()
+                    .filter(c->c.assemblyKey().equals(assemblyKey)).findFirst().orElseThrow(()->validation("组装计划已变化，请重新预览"));
+            var currentSource=repository.load(organizationId,importJobId);
+            if(!expectedPlanHash.equals(current.planHash())||!source.equals(currentSource))
+                throw validation("读取文件期间导入资料已变化，请重新预览后生成");
+            if(!repository.markRunning(organizationId,importJobId,assemblyKey))throw validation("该组装项已被处理");
+            return saveDraft(organizationId,actorId,actorName,importJobId,assemblyKey,categoryId,projectId,stageId,taskId,current,prepared);
+        }));
+    }
+
+    private ExperimentDraftFacade.ImportedDraft saveDraft(UUID organizationId,UUID actorId,String actorName,
+            UUID importJobId,String assemblyKey,UUID categoryId,UUID projectId,UUID stageId,UUID taskId,
+            Candidate candidate,Prepared prepared) {
+        var source=prepared.source();
+        var sourceSnapshot=prepared.sourceSnapshot();
         var model=(com.fasterxml.jackson.databind.node.ObjectNode)candidate.editModel().deepCopy();
         model.set("documentSnapshot",sourceSnapshot);
         model.put("sourceFileId", source.sourceFileId().toString());
@@ -138,7 +189,7 @@ public class ExperimentAssemblyService {
                         .matches(".*\\.(docx|png|jpg|jpeg|gif|webp|bmp|tif|tiff)")
                         ?"OCR_IMPORT":"EXCEL_IMPORT",
                 projectId,stageId,taskId,blank(model.path("sourceOwnerName").asText()),date(model.path("sourceExperimentDate").asText()),
-                templateVersionId,templateSnapshotHash,templateSnapshot,model));
+                prepared.templateVersionId(),prepared.templateSnapshotHash(),prepared.templateSnapshot(),model));
         repository.markSynced(organizationId,importJobId,assemblyKey,created.experimentId(),created.experimentVersionId(),created.experimentNo());
         var coordinates=json.createObjectNode();
         coordinates.set("sourceRecordKeys",json.valueToTree(candidate.sourceRecordKeys()));
@@ -159,7 +210,36 @@ public class ExperimentAssemblyService {
         return created;
     }
 
-    public void fail(UUID org,UUID job,String key,Exception error){repository.markFailed(org,job,key,error.getMessage());}
+    public void fail(UUID org,UUID job,String key,String planHash,Exception error,ExecutionContext context){
+        writes.executeWithoutResult(tx->{
+            jobs.requireExecution(context,true);
+            repository.lockAssembly(org,job,key);
+            var latest=latestJob(org,job,key,planHash).orElse(null);
+            if(context!=null&&latest!=null&&!latest.id().equals(context.jobId()))return;
+            repository.markFailed(org,job,key,planHash,failureMessage(error));
+        });
+    }
+
+    private static String legacyJobKey(UUID job,String key,String hash){return "data-experiment:"+job+":"+key+":"+hash;}
+    private static String jobKey(UUID job,String key,String hash){
+        try {
+            var digest=java.security.MessageDigest.getInstance("SHA-256").digest(
+                    legacyJobKey(job,key,hash).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return "data-experiment:"+HexFormat.of().formatHex(digest);
+        } catch(java.security.NoSuchAlgorithmException exception){throw new IllegalStateException(exception);}
+    }
+    private Optional<OpsAsyncFacade.AsyncJobView> latestJob(UUID org,UUID job,String key,String hash){
+        var latest=jobs.findLatestJob(org,jobKey(job,key,hash));
+        return latest.isPresent()?latest:jobs.findLatestJob(org,legacyJobKey(job,key,hash));
+    }
+    private static String failureMessage(Exception error){
+        return error instanceof ApiException&&error.getMessage()!=null?error.getMessage():"实验草稿生成失败，请重试；若仍未完成，请联系管理员。";
+    }
+    private static ExperimentDraftFacade.ImportedDraft created(ExperimentAssemblyRepository.Link link){
+        return new ExperimentDraftFacade.ImportedDraft(link.experimentId(),link.experimentVersionId(),link.experimentNo(),link.experimentNo());
+    }
+    private record Prepared(ExperimentAssemblyRepository.SourceImport source,com.fasterxml.jackson.databind.JsonNode sourceSnapshot,
+            UUID templateVersionId,String templateSnapshotHash,com.fasterxml.jackson.databind.JsonNode templateSnapshot){}
 
     private AssemblyPlan plan(UUID org,UUID job,UUID actor){
         var source=repository.load(org,job);if(!"COMPLETED".equals(source.status()))throw validation("数据导入尚未提交完成");
@@ -171,7 +251,7 @@ public class ExperimentAssemblyService {
                 c.assemblyKey(),c.parentAssemblyKey(),c.sourceIdentity(),c.sourceIdentityType(),json.valueToTree(c.sourceRecordKeys()),
                 json.valueToTree(c.sharedContextRecordKeys()),c.planHash(),c.contentHash(),c.status(),c.conflicts(),c.warnings()),actor));
         repository.supersedeOtherPlans(org,job,plan.candidates().getFirst().assemblyKey());
-        var persisted=repository.links(org,job).stream().collect(java.util.stream.Collectors.toMap(
+        var persisted=repository.links(org,job).stream().map(link->reconcile(org,job,link)).collect(java.util.stream.Collectors.toMap(
                 ExperimentAssemblyRepository.Link::assemblyKey,item->item,(a,b)->a));
         var candidates=plan.candidates().stream().map(c->{
             var link=persisted.get(c.assemblyKey());
@@ -186,6 +266,20 @@ public class ExperimentAssemblyService {
                 (int)candidates.stream().filter(c->"BLOCKED".equals(c.status())).count(),
                 plan.sourceRecordCount(),plan.sampleGroupCount(),plan.sourceGroupCount(),
                 plan.sourceContextCount(),plan.sourceIdentityCount(),plan.logicalSampleCount());
+    }
+
+    private ExperimentAssemblyRepository.Link reconcile(UUID org,UUID job,ExperimentAssemblyRepository.Link link){
+        if(link.experimentId()!=null||Set.of("SKIPPED","SYNCED","ALREADY_CREATED").contains(link.status()))return link;
+        var latest=latestJob(org,job,link.assemblyKey(),link.planHash()).orElse(null);
+        if(latest==null)return link;
+        String status=link.status(),error=link.errorMessage();
+        if(Set.of("FAILED","CANCELLED").contains(latest.status())){
+            error="CANCELLED".equals(latest.status())?"实验草稿生成已取消，可重新发起。":
+                    link.errorMessage()!=null?link.errorMessage():"实验草稿生成失败，请重试；若仍未完成，请联系管理员。";
+            status="FAILED";
+        } else if(Set.of("READY","RUNNING").contains(latest.status())){status="RUNNING";error=null;}
+        return new ExperimentAssemblyRepository.Link(link.assemblyKey(),link.parentAssemblyKey(),status,link.resolutionAction(),
+                link.resolutionReason(),link.experimentId(),link.experimentVersionId(),link.experimentNo(),link.planHash(),link.contentHash(),error);
     }
     private void requireExperimentCreate(UUID organizationId,UUID userId){
         authorization.require(new PermissionCheck(organizationId,userId,"experiment.create",

@@ -612,6 +612,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if (path.contains("/export")) return permission("knowledge.export", "KNOWLEDGE", "READ");
             if (path.contains("/ai-grant") || path.contains("/batch/ai-usage")) return permission("ai.external", "KNOWLEDGE", "WRITE");
             if (path.contains("/reparse")) return permission("knowledge.update", "KNOWLEDGE", "WRITE");
+            if (method.equals("POST") && path.endsWith("/metadata-extraction/retry"))
+                return permission("knowledge.update", "KNOWLEDGE", "WRITE");
             // 校对保存属于知识文档编辑，驳回属于审核：与权限配置页「知识库查看」
             // 行发放的页面操作码保持一致。
             if (path.endsWith("/reject")) return permission("knowledge.view.approve", "KNOWLEDGE", "WRITE");

@@ -20,9 +20,15 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 class JdbcKnowledgeRepositoryTest {
+    private JdbcTemplate jdbcMock() {
+        var jdbc=mock(JdbcTemplate.class);
+        var source=mock(javax.sql.DataSource.class);var connection=mock(java.sql.Connection.class);
+        try{when(source.getConnection()).thenReturn(connection);when(connection.getAutoCommit()).thenReturn(true);}catch(java.sql.SQLException failure){throw new IllegalStateException(failure);}
+        when(jdbc.getDataSource()).thenReturn(source);return jdbc;
+    }
     @Test
     void scopedVariantsAreBatchedWithDocumentFilterBeforeRanking() {
-        var jdbc=mock(JdbcTemplate.class);var repository=new JdbcKnowledgeRepository(jdbc);
+        var jdbc=jdbcMock();var repository=new JdbcKnowledgeRepository(jdbc);
         var org=UUID.randomUUID();var document=UUID.randomUUID();var category=UUID.randomUUID();
         repository.batchBm25Rank(org,List.of(new KnowledgeRepository.AnalyzedQuery(0,"resin",List.of(
             new KnowledgeRepository.AnalyzedTerm("material-smartcn-v2","resin"))),
@@ -34,17 +40,17 @@ class JdbcKnowledgeRepositoryTest {
         verify(jdbc,times(2)).query(sql.capture(),any(org.springframework.jdbc.core.RowMapper.class),args.capture());
         assertThat(sql.getAllValues()).allSatisfy(value->assertThat(value).contains("d.id IN (", "p.status = 'CURRENT'", "kb.document_ai_grant"));
         assertThat(sql.getAllValues().getFirst().indexOf("d.id IN (")).isLessThan(sql.getAllValues().getFirst().indexOf("), corpus AS"));
-        assertThat(sql.getAllValues().getLast().indexOf("d.id IN (")).isLessThan(sql.getAllValues().getLast().indexOf("ORDER BY c.embedding"));
+        assertThat(sql.getAllValues().getLast().indexOf("d.id IN (")).isLessThan(sql.getAllValues().getLast().indexOf("ORDER BY e.embedding"));
         assertThat(args.getAllValues().getFirst()).containsSubsequence(org,category,document,48,48);
-        assertThat(args.getAllValues().getLast()).startsWith(org,category,document).endsWith(2,48);
+        assertThat(args.getAllValues().getLast()).startsWith(org,category,document).endsWith(48);
         assertThat((String[]) args.getAllValues().getLast()[5]).containsExactly("qwen3", "qwen3");
-        assertThat(sql.getAllValues().getLast().indexOf("c.embedding_model = q.embedding_model"))
-                .isLessThan(sql.getAllValues().getLast().indexOf("ORDER BY c.embedding"));
+        assertThat(sql.getAllValues().getLast().indexOf("e.embedding_model = q.embedding_model"))
+                .isLessThan(sql.getAllValues().getLast().indexOf("ORDER BY e.embedding"));
     }
 
     @Test
     void attachingLegacyProcessingStepsSkipsStepsAlreadyCreatedForParseRun() {
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = jdbcMock();
         var repository = new JdbcKnowledgeRepository(jdbc);
         var organizationId = UUID.randomUUID();
         var versionId = UUID.randomUUID();
@@ -63,7 +69,7 @@ class JdbcKnowledgeRepositoryTest {
 
     @Test
     void startingProcessingStepReusesAnExistingUnscopedStep() {
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = jdbcMock();
         var repository = new JdbcKnowledgeRepository(jdbc);
         var org = UUID.randomUUID();
         var document = UUID.randomUUID();
@@ -80,7 +86,7 @@ class JdbcKnowledgeRepositoryTest {
 
     @Test
     void writesParentsBeforeChildrenAndIndexesOnlyChildTerms() {
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = jdbcMock();
         var repository = new JdbcKnowledgeRepository(jdbc);
         var parseRunId = UUID.randomUUID();
         when(jdbc.queryForObject(anyString(), eq(UUID.class), any())).thenReturn(parseRunId);
@@ -110,7 +116,7 @@ class JdbcKnowledgeRepositoryTest {
 
     @Test
     void usesCurrentAnalyzerVersionAndExcludesParentsFromStatisticsAndEmbedding() {
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = jdbcMock();
         var repository = new JdbcKnowledgeRepository(jdbc);
 
         repository.bm25Search(UUID.randomUUID(), List.of(
@@ -136,7 +142,7 @@ class JdbcKnowledgeRepositoryTest {
 
     @Test
     void readsCorpusIdfForAnalyzedQueryFamilies() {
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = jdbcMock();
         var repository = new JdbcKnowledgeRepository(jdbc);
 
         repository.termDiscrimination(UUID.randomUUID(), List.of(
@@ -153,7 +159,7 @@ class JdbcKnowledgeRepositoryTest {
 
     @Test
     void selectsTheLatestReviewRevisionStatusForDocumentWorkflow() {
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = jdbcMock();
         var repository = new JdbcKnowledgeRepository(jdbc);
 
         repository.listDocuments(UUID.randomUUID(), null, null, null, null,
@@ -171,7 +177,7 @@ class JdbcKnowledgeRepositoryTest {
 
     @Test
     void batchesAllVariantsAndHydratesRankedChunksWithThreeDatabaseCalls() {
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = jdbcMock();
         var repository = new JdbcKnowledgeRepository(jdbc);
         var organizationId = UUID.randomUUID();
         var chunkIds = List.of(UUID.randomUUID(), UUID.randomUUID());
@@ -198,7 +204,7 @@ class JdbcKnowledgeRepositoryTest {
                 "PARTITION BY query_ordinal", "rank_no <= ?", "c.chunk_role = 'CHILD'");
         assertThat(sql.getAllValues().get(1)).contains(
                 "unnest(?::int[], ?::text[], ?::text[])", "CROSS JOIN LATERAL",
-                "PARTITION BY query_ordinal", "c.embedding IS NOT NULL");
+                "PARTITION BY query_ordinal", "e.embedding IS NOT NULL");
         assertThat(sql.getAllValues().get(2)).contains(
                 "c.source_anchors_jsonb", "c.review_node_ids_jsonb", "c.source_node_keys_jsonb",
                 "c.id IN (", "?,?)");
@@ -206,7 +212,7 @@ class JdbcKnowledgeRepositoryTest {
 
     @Test
     void refusesVectorQueriesWithoutModelAndFiltersSingleSearchBeforeLimit() {
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = jdbcMock();
         var repository = new JdbcKnowledgeRepository(jdbc);
         var org = UUID.randomUUID();
         assertThat(repository.batchVectorRank(org, List.of(new KnowledgeRepository.VectorQuery(0, "x", "[1,0]")),
@@ -217,13 +223,13 @@ class JdbcKnowledgeRepositoryTest {
         var sql = ArgumentCaptor.forClass(String.class);
         var args = ArgumentCaptor.forClass(Object[].class);
         verify(jdbc).query(sql.capture(), any(org.springframework.jdbc.core.RowMapper.class), args.capture());
-        assertThat(sql.getValue().indexOf("c.embedding_model = ?")).isLessThan(sql.getValue().indexOf("ORDER BY c.embedding"));
-        assertThat(args.getValue()).containsExactly("[1,0]", org, "qwen3", 2, "[1,0]", 1);
+        assertThat(sql.getValue().indexOf("e.embedding_model = ?")).isLessThan(sql.getValue().indexOf("ORDER BY e.embedding"));
+        assertThat(args.getValue()).containsExactly("[1,0]", org, "qwen3", "[1,0]", 1);
     }
 
     @Test
     void metadataSearchUsesOnlyCurrentPublishedChunksAndRequiresCurrentAiGrant() {
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = jdbcMock();
         var repository = new JdbcKnowledgeRepository(jdbc);
         var organizationId = UUID.randomUUID();
         var categoryId = UUID.randomUUID();

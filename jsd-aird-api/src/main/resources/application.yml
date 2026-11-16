@@ -214,7 +214,19 @@ app:
     circuit-breaker:
       failure-threshold: ${JSD_AIRD_AI_CIRCUIT_BREAKER_FAILURE_THRESHOLD:3}
       open-seconds: ${JSD_AIRD_AI_CIRCUIT_BREAKER_OPEN_SECONDS:30}
+    knowledge-metadata:
+      enabled: ${JSD_AIRD_KNOWLEDGE_METADATA_ENABLED:true}
+      private-endpoint: ${JSD_AIRD_KNOWLEDGE_METADATA_PRIVATE_ENDPOINT:false}
+      base-url: ${JSD_AIRD_KNOWLEDGE_METADATA_BASE_URL:${app.model.base-url:}}
+      api-key: ${JSD_AIRD_KNOWLEDGE_METADATA_API_KEY:${app.model.api-key:}}
+      model: ${JSD_AIRD_KNOWLEDGE_METADATA_MODEL:${app.model.model:}}
+      prompt-version: ${JSD_AIRD_KNOWLEDGE_METADATA_PROMPT_VERSION:source-metadata-v1}
+      timeout: ${JSD_AIRD_KNOWLEDGE_METADATA_TIMEOUT:60s}
+      max-output-tokens: ${JSD_AIRD_KNOWLEDGE_METADATA_MAX_OUTPUT_TOKENS:3000}
     embedding:
+      auto-build-model: ${JSD_AIRD_EMBEDDING_AUTO_BUILD_MODEL:${app.ai.embedding.model:}}
+      auto-build-dimension: ${JSD_AIRD_EMBEDDING_AUTO_BUILD_DIMENSION:${app.ai.embedding.dimension:1024}}
+      ef-search: ${JSD_AIRD_EMBEDDING_EF_SEARCH:100}
       base-url: ${JSD_AIRD_EMBEDDING_BASE_URL:${app.model.base-url:}}
       api-key: ${JSD_AIRD_EMBEDDING_API_KEY:${app.model.api-key:}}
       model: ${JSD_AIRD_EMBEDDING_MODEL:}

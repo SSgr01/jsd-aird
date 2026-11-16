@@ -14,6 +14,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class JdbcKnowledgeRepository implements KnowledgeRepository {
 
     private final JdbcTemplate jdbc;
+    @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.ef-search:100}")
+    private int efSearch=100;
 
     public JdbcKnowledgeRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -104,8 +106,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 WHERE d.organization_id = ?
                   AND (CAST(? AS text) IS NULL OR d.title ILIKE '%' || ? || '%' OR v.original_name ILIKE '%' || ? || '%'
                     OR EXISTS (SELECT 1 FROM kb.document_bibliography b WHERE b.organization_id=d.organization_id
-                        AND b.version_id=v.id AND concat_ws(' ',b.accepted_jsonb->>'title',b.accepted_jsonb->>'authors',
-                            b.accepted_jsonb->>'doi',b.accepted_jsonb->>'patent_number') ILIKE '%' || ? || '%'))
+                        AND b.version_id=v.id AND b.search_text ILIKE '%' || ? || '%'))
                   AND (CAST(? AS text) IS NULL OR d.status = ?)
                   AND (CAST(? AS text) IS NULL OR d.library_scope = ?)
                   AND (CAST(? AS uuid) IS NULL OR d.category_id = ?)
@@ -157,8 +158,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 WHERE d.organization_id = ?
                   AND (CAST(? AS text) IS NULL OR d.title ILIKE '%' || ? || '%' OR v.original_name ILIKE '%' || ? || '%'
                     OR EXISTS (SELECT 1 FROM kb.document_bibliography b WHERE b.organization_id=d.organization_id
-                        AND b.version_id=v.id AND concat_ws(' ',b.accepted_jsonb->>'title',b.accepted_jsonb->>'authors',
-                            b.accepted_jsonb->>'doi',b.accepted_jsonb->>'patent_number') ILIKE '%' || ? || '%'))
+                        AND b.version_id=v.id AND b.search_text ILIKE '%' || ? || '%'))
                   AND (CAST(? AS text) IS NULL OR d.status = ?)
                   AND (CAST(? AS text) IS NULL OR d.library_scope = ?)
                   AND (CAST(? AS uuid) IS NULL OR d.category_id = ?)
@@ -433,13 +433,17 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                               CAST(? AS jsonb), CAST(? AS jsonb), ?)
                     """, chunkId, documentId, versionId, parseRunId, reviewRevisionId,
                     chunk.chunkNo(), chunk.pageNo(), chunk.section(),
-                    chunk.content(), chunk.vector(), effectiveParentId, chunk.tokenLength(), chunk.analyzerVersion(),
-                    chunk.embeddingModel(), chunk.sheetName(), chunk.cellRange(), chunk.paragraphId(),
+                    chunk.content(), null, effectiveParentId, chunk.tokenLength(), chunk.analyzerVersion(),
+                    null, chunk.sheetName(), chunk.cellRange(), chunk.paragraphId(),
                     chunk.bbox() == null || chunk.bbox().isEmpty() ? null : chunk.bbox().toString(),
                     chunk.startTimeMs(), chunk.endTimeMs(), chunk.chunkRole(), jsonStrings(chunk.headingPath()),
                     jsonUuids(chunk.reviewNodeIds()), jsonUuids(chunk.sourceNodeKeys()), chunk.sourceAnchorJson(),
                     chunk.sourceAnchorsJson(), chunk.relationsJson(), chunk.modelTokenLength());
             if (!"CHILD".equals(chunk.chunkRole())) continue;
+            if(chunk.vector()!=null) {
+                var org=jdbc.queryForObject("SELECT organization_id FROM kb.document WHERE id=?",UUID.class,documentId);
+                jdbc.update("INSERT INTO kb.document_chunk_embedding(organization_id,chunk_id,embedding_model,embedding_dimension,embedding) VALUES (?,?,?,vector_dims(?::halfvec),?::halfvec)",org,chunkId,chunk.embeddingModel(),chunk.vector(),chunk.vector());
+            }
             for (var term : chunk.terms() == null ? List.<TermFrequency>of() : chunk.terms()) {
                 jdbc.update("""
                         INSERT INTO kb.chunk_term (chunk_id, term, term_frequency)
@@ -606,17 +610,35 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
-    public void updateChunkEmbedding(UUID organizationId, UUID chunkId, String vector, String embeddingModel) {
-        jdbc.update("""
-                UPDATE kb.document_chunk c SET embedding = CAST(? AS vector), embedding_model = ?
-                FROM kb.document d WHERE d.id = c.document_id AND d.organization_id = ? AND c.id = ?
-                  AND EXISTS (SELECT 1 FROM kb.document_ai_grant g
-                              WHERE g.document_id = d.id AND g.status = 'APPROVED')
-                """, vector, embeddingModel, organizationId, chunkId);
+    public List<ChunkEmbeddingRow> chunksForEmbedding(UUID org,UUID doc,UUID revision,String model,int dimension) {
+        return jdbc.query("""
+            SELECT c.id,c.content FROM kb.document_chunk c JOIN kb.document d ON d.id=c.document_id
+            WHERE d.organization_id=? AND d.id=? AND c.review_revision_id=? AND c.chunk_role='CHILD'
+            AND NOT EXISTS(SELECT 1 FROM kb.document_chunk_embedding e WHERE e.chunk_id=c.id AND e.organization_id=d.organization_id
+              AND e.embedding_model=? AND e.embedding_dimension=?) ORDER BY c.chunk_no
+            """,(rs,n)->new ChunkEmbeddingRow(rs.getObject(1,UUID.class),rs.getString(2)),org,doc,revision,model,dimension);
     }
 
     @Override
+    @Transactional
+    public void updateChunkEmbedding(UUID organizationId, UUID chunkId, String vector, String embeddingModel) {
+        jdbc.queryForList("SELECT d.id FROM kb.document d JOIN kb.document_chunk c ON c.document_id=d.id WHERE d.organization_id=? AND c.id=? FOR UPDATE OF d",UUID.class,organizationId,chunkId);
+        jdbc.update("""
+            INSERT INTO kb.document_chunk_embedding(organization_id,chunk_id,embedding_model,embedding_dimension,embedding)
+            SELECT d.organization_id,c.id,?,vector_dims(CAST(? AS halfvec)),CAST(? AS halfvec)
+            FROM kb.document_chunk c JOIN kb.document d ON d.id=c.document_id
+            JOIN kb.publication p ON p.id=d.current_publication_id AND p.review_revision_id=c.review_revision_id AND p.document_version_id=c.document_version_id
+            WHERE d.organization_id=? AND c.id=? AND d.lifecycle_status='ACTIVE'
+              AND EXISTS(SELECT 1 FROM kb.document_ai_grant g WHERE g.document_id=d.id AND g.organization_id=d.organization_id AND g.status='APPROVED')
+            ON CONFLICT(chunk_id,embedding_model,embedding_dimension) DO UPDATE SET embedding=excluded.embedding,updated_at=now()
+            """,embeddingModel,vector,vector,organizationId,chunkId);
+    }
+
+    @Override
+    @Transactional
     public void clearDocumentEmbeddings(UUID organizationId, UUID documentId) {
+        jdbc.queryForList("SELECT id FROM kb.document WHERE organization_id=? AND id=? FOR UPDATE",UUID.class,organizationId,documentId);
+        jdbc.update("DELETE FROM kb.document_chunk_embedding e USING kb.document_chunk c WHERE e.chunk_id=c.id AND e.organization_id=? AND c.document_id=?",organizationId,documentId);
         jdbc.update("""
                 UPDATE kb.document_chunk c SET embedding = NULL, embedding_model = NULL
                 FROM kb.document d WHERE d.id = c.document_id AND d.organization_id = ? AND d.id = ?
@@ -660,22 +682,21 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 + " WHERE g.organization_id=d.organization_id AND g.document_id=d.id AND g.status='APPROVED')" : "";
         var match = tags ? """
                 EXISTS (SELECT 1 FROM jsonb_array_elements_text(coalesce(p.metadata_snapshot_jsonb->'tags','[]'::jsonb)) AS tag(name)
-                  WHERE lower(regexp_replace(normalize(tag.name,NFKC),'[^a-z0-9一-龥]','','g'))=search_terms.normalized
+                  WHERE lower(regexp_replace(normalize(tag.name,NFKC),'[^a-zA-Z0-9一-龥]','','g'))=search_terms.normalized
                     OR (tag.name ~ '[一-龥]' AND length(tag.name)>=2 AND position(lower(regexp_replace(normalize(tag.name,NFKC),
-                          '[^a-z0-9一-龥]','','g')) in search_terms.normalized)>0)
+                          '[^a-zA-Z0-9一-龥]','','g')) in search_terms.normalized)>0)
                     OR position(' ' || lower(tag.name) || ' ' in
-                         (' ' || regexp_replace(lower(normalize(search_terms.raw,NFKC)),'[^a-z0-9一-龥]+',' ','g') || ' '))>0)
+                         (' ' || regexp_replace(lower(normalize(search_terms.raw,NFKC)),'[^a-zA-Z0-9一-龥]+',' ','g') || ' '))>0)
                 """ : """
-                search_terms.normalized=lower(regexp_replace(normalize(coalesce(p.metadata_snapshot_jsonb->>'title',d.title),NFKC),'[^a-z0-9一-龥]','','g'))
-                OR search_terms.normalized=lower(regexp_replace(normalize(v.original_name,NFKC),'[^a-z0-9一-龥]','','g'))
-                OR search_terms.normalized=lower(regexp_replace(regexp_replace(normalize(v.original_name,NFKC),'\\.[^.]+$',''),'[^a-z0-9一-龥]','','g'))
+                search_terms.normalized=lower(regexp_replace(normalize(coalesce(p.metadata_snapshot_jsonb->>'title',d.title),NFKC),'[^a-zA-Z0-9一-龥]','','g'))
+                OR search_terms.normalized=lower(regexp_replace(normalize(v.original_name,NFKC),'[^a-zA-Z0-9一-龥]','','g'))
+                OR search_terms.normalized=lower(regexp_replace(regexp_replace(normalize(v.original_name,NFKC),'\\.[^.]+$',''),'[^a-zA-Z0-9一-龥]','','g'))
                 OR EXISTS (SELECT 1 FROM kb.document_bibliography b WHERE b.organization_id=d.organization_id AND b.version_id=v.id
-                  AND lower(regexp_replace(normalize(concat_ws(' ',b.accepted_jsonb->>'title',b.accepted_jsonb->>'authors',
-                    b.accepted_jsonb->>'doi',b.accepted_jsonb->>'patent_number'),NFKC),'[^a-z0-9一-龥]','','g')) LIKE '%' || search_terms.normalized || '%')
+                  AND b.search_normalized LIKE '%' || search_terms.normalized || '%')
                 """;
         var sql = """
                 WITH search_terms AS (
-                    SELECT DISTINCT term AS raw,lower(regexp_replace(normalize(term,NFKC),'[^a-z0-9一-龥]','','g')) AS normalized
+                    SELECT DISTINCT term AS raw,lower(regexp_replace(normalize(term,NFKC),'[^a-zA-Z0-9一-龥]','','g')) AS normalized
                     FROM unnest(?::text[]) AS input(term)
                     WHERE length(regexp_replace(normalize(term,NFKC),'[^a-zA-Z0-9一-龥]','','g'))>=2
                 ), matches AS (
@@ -952,31 +973,32 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         if (model == null || model.isBlank()) return List.of();
         if (documentIds != null && documentIds.isEmpty()) return List.of();
         var aiClause = aiOnly ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g WHERE g.document_id = d.id AND g.status = 'APPROVED')" : "";
-        var dimensionClause = dimension > 0 ? " AND vector_dims(c.embedding) = ?\n" : "";
+        String vectorType=com.jsd.aird.shared.retrieval.HalfVectorSearch.type(dimension);
+        var dimensionClause = " AND e.embedding_dimension = "+dimension+"\n";
         var sql = """
                 SELECT c.id, c.document_id, c.document_version_id,
                        coalesce(p.metadata_snapshot_jsonb->>'title', d.title) AS title, v.original_name,
                        c.page_no, c.section, c.content, c.chunk_no,
-                       (1 - (c.embedding <=> CAST(? AS vector))) AS score
-                FROM kb.document_chunk c
+                       (1 - (e.embedding::%s <=> CAST(? AS %s))) AS score
+                FROM kb.document_chunk_embedding e JOIN kb.document_chunk c ON c.id=e.chunk_id
                 JOIN kb.document d ON d.id = c.document_id
                 JOIN kb.document_version v ON v.id = c.document_version_id
                 JOIN ops.file_object f ON f.id = v.file_object_id AND f.organization_id = d.organization_id AND f.status <> 'DELETED'
                 JOIN kb.publication p ON p.id = d.current_publication_id
                     AND p.document_version_id = c.document_version_id AND p.review_revision_id = c.review_revision_id
                     AND p.status = 'CURRENT'
-                WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
-                """ + aiClause + categoryClause(categoryIds) + documentClause(documentIds) + " AND c.chunk_role = 'CHILD' AND c.embedding IS NOT NULL\n"
-                + " AND c.embedding_model = ?\n" + dimensionClause
-                + "ORDER BY c.embedding <=> CAST(? AS vector) LIMIT ?";
+                WHERE d.organization_id = ? AND e.organization_id=d.organization_id AND d.lifecycle_status = 'ACTIVE'
+                """ + aiClause + categoryClause(categoryIds) + documentClause(documentIds) + " AND c.chunk_role = 'CHILD' AND e.embedding IS NOT NULL\n"
+                + " AND e.embedding_model = ?\n" + dimensionClause
+                + "ORDER BY e.embedding::%s <=> CAST(? AS %s) LIMIT ?";
         var args = new java.util.ArrayList<Object>();
         args.add(vector); args.add(organizationId);
         if (categoryIds != null) args.addAll(categoryIds);
         if (documentIds != null) args.addAll(documentIds);
         args.add(model);
-        if (dimension > 0) args.add(dimension);
+
         args.add(vector); args.add(limit);
-        return jdbc.query(sql, this::mapSearch, args.toArray());
+        return com.jsd.aird.shared.retrieval.HalfVectorSearch.query(jdbc,efSearch,()->jdbc.query(sql.formatted(vectorType,vectorType,vectorType,vectorType), this::mapSearch, args.toArray()));
     }
 
     @Override
@@ -1102,12 +1124,13 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         var aiClause = aiOnly
                 ? "AND EXISTS (SELECT 1 FROM kb.document_ai_grant g WHERE g.document_id = d.id AND g.status = 'APPROVED')"
                 : "";
-        var dimensionClause = dimension > 0 ? " AND vector_dims(c.embedding) = ?\n" : "";
+        String type=com.jsd.aird.shared.retrieval.HalfVectorSearch.type(dimension);
+        var dimensionClause=" AND e.embedding_dimension="+dimension+"\n";
         // Resolve publication and access eligibility once per document. Repeating these
         // joins per chunk magnifies cardinality errors from vector_dims predicates.
         var sql = """
                 WITH eligible_documents AS MATERIALIZED (
-                    SELECT d.id AS document_id, p.document_version_id, p.review_revision_id
+                    SELECT d.organization_id, d.id AS document_id, p.document_version_id, p.review_revision_id
                     FROM kb.document d
                     JOIN kb.publication p ON p.id = d.current_publication_id AND p.status = 'CURRENT'
                     JOIN kb.document_version v ON v.id = p.document_version_id
@@ -1116,21 +1139,22 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                     WHERE d.organization_id = ? AND d.lifecycle_status = 'ACTIVE'
                 """ + aiClause + categoryClause(categoryIds) + documentClause(documentIds) + """
                 ), query_vectors AS MATERIALIZED (
-                    SELECT query_ordinal, CAST(vector_text AS vector) AS embedding, embedding_model
+                    SELECT query_ordinal, CAST(vector_text AS %s) AS embedding, embedding_model
                     FROM unnest(?::int[], ?::text[], ?::text[]) AS q(query_ordinal, vector_text, embedding_model)
                 ), scored AS (
                     SELECT q.query_ordinal, hit.chunk_id, hit.score
                     FROM query_vectors q
                     CROSS JOIN LATERAL (
-                        SELECT c.id AS chunk_id, (1 - (c.embedding <=> q.embedding)) AS score
-                        FROM eligible_documents e
-                        JOIN kb.document_chunk c ON c.document_id = e.document_id
-                            AND c.document_version_id = e.document_version_id
-                            AND c.review_revision_id = e.review_revision_id
-                        WHERE c.chunk_role = 'CHILD' AND c.embedding IS NOT NULL
-                          AND c.embedding_model = q.embedding_model
+                        SELECT c.id AS chunk_id, (1 - (e.embedding::%s <=> q.embedding)) AS score
+                        FROM kb.document_chunk_embedding e
+                        JOIN kb.document_chunk c ON c.id=e.chunk_id
+                        JOIN eligible_documents eligible ON c.document_id=eligible.document_id
+                            AND c.document_version_id=eligible.document_version_id
+                            AND c.review_revision_id=eligible.review_revision_id
+                        WHERE c.chunk_role = 'CHILD' AND e.organization_id=eligible.organization_id AND e.embedding IS NOT NULL
+                          AND e.embedding_model = q.embedding_model
                 """ + dimensionClause + """
-                        ORDER BY c.embedding <=> q.embedding, c.id
+                        ORDER BY e.embedding::%s <=> q.embedding
                         LIMIT ?
                     ) hit
                 ), ranked AS (
@@ -1148,10 +1172,10 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
         args.add(safeQueries.stream().map(VectorQuery::ordinal).toArray(Integer[]::new));
         args.add(safeQueries.stream().map(VectorQuery::vector).toArray(String[]::new));
         args.add(safeQueries.stream().map(VectorQuery::model).toArray(String[]::new));
-        if (dimension > 0) args.add(dimension);
+
         args.add(limit);
-        return jdbc.query(sql, (rs, ignored) -> new RankedChunk(rs.getInt("query_ordinal"),
-                rs.getObject("chunk_id", UUID.class), rs.getDouble("score"), rs.getInt("rank_no")), args.toArray());
+        return com.jsd.aird.shared.retrieval.HalfVectorSearch.query(jdbc,efSearch,()->jdbc.query(sql.formatted(type,type,type), (rs, ignored) -> new RankedChunk(rs.getInt("query_ordinal"),
+                rs.getObject("chunk_id", UUID.class), rs.getDouble("score"), rs.getInt("rank_no")), args.toArray()));
     }
 
     @Override
@@ -1342,7 +1366,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     }
 
     private boolean isReviewStep(String stepKey) {
-        return "CHUNK".equals(stepKey) || "BM25_INDEX".equals(stepKey) || "VECTOR_INDEX".equals(stepKey);
+        return "CHUNK".equals(stepKey) || "BM25_INDEX".equals(stepKey) || "VECTOR_INDEX".equals(stepKey) || stepKey.startsWith("VECTOR_INDEX:");
     }
 
     private String truncate(String value) {

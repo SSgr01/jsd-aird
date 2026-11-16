@@ -50,6 +50,25 @@ class BibliographyPersistenceTest {
         db.jdbc.update("INSERT INTO ops.file_object VALUES (?,'ACTIVE')",file);
         db.jdbc.update("INSERT INTO kb.document_version(id,document_id,file_object_id,extracted_text_sha256) VALUES (?,?,?,?)",version,doc,file,"fingerprint");return new UUID[]{doc,version};
     }
+    @Test void arbitraryMetadataCanBeConfirmedWithHistoryButInvalidShapesAndDuplicateNamesAreRejected() throws Exception {
+        try(var db=database()) {
+            var repo=new JdbcBibliographyRepository(db.jdbc,json);var ids=document(db,1);var doc=ids[0];var version=ids[1];
+            var kb=mock(KnowledgeRepository.class);var row=mock(KnowledgeRepository.VersionRow.class);when(row.documentId()).thenReturn(doc);
+            when(kb.findVersion(org,version)).thenReturn(Optional.of(row));var document=mock(KnowledgeRepository.DocumentRow.class);when(document.lifecycleStatus()).thenReturn("ACTIVE");when(kb.findDocument(org,doc)).thenReturn(Optional.of(document));
+            var service=new BibliographyService(repo,kb,new BibliographyExtractor(json),mock(ScholarlyLiteratureFacade.class),mock(AuthorizationService.class),mock(OpsAsyncFacade.class),mock(AuditLogFacade.class),mock(FileStorageFacade.class),json,new DataSourceTransactionManager(db.source));
+            ActorContext.set(new Actor(org,owner,"fixture","USER"));
+            try {
+                var fields=json.createObjectNode();fields.putArray("extra_fields").addObject().put("label","检验标准").put("value","ABC-123");
+                var saved=service.confirm(doc,version,new BibliographyService.Confirmation(0,"UNKNOWN",fields));
+                assertThat(saved.manualFields().toString()).contains("extra_fields");
+                assertThat(repo.find(org,version,1).orElseThrow().accepted().path("extra_fields").get(0).path("value").asText()).isEqualTo("ABC-123");
+                ((com.fasterxml.jackson.databind.node.ArrayNode)fields.path("extra_fields")).addObject().put("label","检验标准").put("value","DEF-456");
+                assertThatThrownBy(()->service.confirm(doc,version,new BibliographyService.Confirmation(1,"UNKNOWN",fields))).isInstanceOf(com.jsd.aird.shared.error.ApiException.class);
+                var invalid=json.createObjectNode().putObject("extra_fields").put("unsafe","not an array");
+                assertThatThrownBy(()->service.confirm(doc,version,new BibliographyService.Confirmation(1,"UNKNOWN",json.createObjectNode().set("extra_fields",invalid)))).isInstanceOf(com.jsd.aird.shared.error.ApiException.class);
+            } finally {ActorContext.clear();}
+        }
+    }
     @Test void manualSqlEnforcesRevisionHistoryOwnershipIdempotencyAndStableTraversalBeyond1000() throws Exception {
         try(var db=database()) {
             var repo=new JdbcBibliographyRepository(db.jdbc,json);

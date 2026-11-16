@@ -27,6 +27,7 @@ public class KnowledgeIndexJobHandler implements AsyncJobHandler {
 
     @Override
     public JsonNode handle(JsonNode payload) {
+        service.requireEmbeddingTarget(payload);
         var organizationId = uuid(payload, "organizationId");
         if (payload.path("rebuildAllPublishedIndexes").asBoolean(false)) {
             var count = service.rebuildAllPublishedIndexes(organizationId);

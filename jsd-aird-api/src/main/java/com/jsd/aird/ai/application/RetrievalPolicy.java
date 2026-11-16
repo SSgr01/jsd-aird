@@ -12,6 +12,8 @@ public final class RetrievalPolicy {
     public final Profile qa, research;
     public final int rrfK, rerankTop, pageSize, parentCount, parentChars, parentBudget;
     public final boolean parents;
+    @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.ef-search:100}")
+    private int efSearch=100;
     private String dependencies="standalone";
     private org.springframework.beans.factory.ObjectProvider<com.jsd.aird.kb.api.KnowledgeEmbeddingFacade> embeddings;
     @org.springframework.beans.factory.annotation.Autowired
@@ -61,6 +63,9 @@ public final class RetrievalPolicy {
         values.put("page_size",pageSize);values.put("parent_enabled",parents);values.put("parent_count",parentCount);
         values.put("parent_chars",parentChars);values.put("parent_budget",parentBudget);
         values.put("dependencies",dependencies);
+        values.put("metadata_index","source-fields-v1");
+        values.put("vector_storage","dual-model-halfvec-v1");
+        values.put("hnsw_ef_search",efSearch);values.put("hnsw_iterative_scan","strict_order");
         var provider = embeddings == null ? null : embeddings.getIfAvailable();
         values.put("embedding_query", provider == null ? Map.of("profile", "none", "version", "plain-v1") : provider.queryPolicy());
         return values;

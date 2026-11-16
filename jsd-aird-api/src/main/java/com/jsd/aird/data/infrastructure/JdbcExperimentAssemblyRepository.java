@@ -82,8 +82,11 @@ public class JdbcExperimentAssemblyRepository implements ExperimentAssemblyRepos
               source_identity_type=excluded.source_identity_type,source_record_keys_jsonb=excluded.source_record_keys_jsonb,
               shared_context_record_keys_jsonb=excluded.shared_context_record_keys_jsonb,plan_hash=excluded.plan_hash,
               content_hash=excluded.content_hash,conflicts_jsonb=excluded.conflicts_jsonb,warnings_jsonb=excluded.warnings_jsonb,
-              status=CASE WHEN data.import_experiment_link.status IN ('SYNCED','ALREADY_CREATED','RUNNING','SKIPPED')
-                          THEN data.import_experiment_link.status ELSE excluded.status END,updated_at=now()
+              status=CASE WHEN data.import_experiment_link.status IN ('SYNCED','ALREADY_CREATED','SKIPPED')
+                          OR (data.import_experiment_link.status IN ('FAILED','RUNNING') AND data.import_experiment_link.plan_hash=excluded.plan_hash)
+                          THEN data.import_experiment_link.status ELSE excluded.status END,
+              error_message=CASE WHEN data.import_experiment_link.plan_hash=excluded.plan_hash
+                          THEN data.import_experiment_link.error_message ELSE NULL END,updated_at=now()
             """, UUID.randomUUID(),org,job,job,p.assemblyKey(),p.assemblyKey(),p.parentAssemblyKey(),
                 p.sourceIdentity(),p.sourceIdentityType(),pg(p.sourceRecordKeys()),pg(p.sharedContextRecordKeys()),
                 p.planHash(),p.contentHash(),p.status(),pg(p.conflicts()),pg(p.warnings()),
@@ -109,14 +112,20 @@ public class JdbcExperimentAssemblyRepository implements ExperimentAssemblyRepos
             UPDATE data.import_experiment_link SET status='RUNNING',error_message=NULL,updated_at=now()
              WHERE organization_id=? AND import_job_id=? AND assembly_key=? AND status='READY'
             """,org,job,key)==1;}
+    @Override public boolean prepareRetry(UUID org,UUID job,String key,String hash){return jdbc.update("""
+            UPDATE data.import_experiment_link SET status='READY',error_message=NULL,updated_at=now()
+             WHERE organization_id=? AND import_job_id=? AND assembly_key=? AND plan_hash=?
+               AND experiment_id IS NULL AND status IN ('READY','FAILED','RUNNING')
+            """,org,job,key,hash)==1;}
     @Override public void markSynced(UUID org,UUID job,String key,UUID exp,UUID ver,String no){jdbc.update("""
             UPDATE data.import_experiment_link SET status='SYNCED',experiment_id=?,experiment_version_id=?,
                    experiment_no=?,error_message=NULL,updated_at=now() WHERE organization_id=? AND import_job_id=? AND assembly_key=?
             """,exp,ver,no,org,job,key);}
-    @Override public void markFailed(UUID org,UUID job,String key,String error){jdbc.update("""
+    @Override public void markFailed(UUID org,UUID job,String key,String hash,String error){jdbc.update("""
             UPDATE data.import_experiment_link SET status='FAILED',error_message=?,updated_at=now()
-             WHERE organization_id=? AND import_job_id=? AND assembly_key=? AND status<>'SYNCED'
-            """,error,org,job,key);}
+             WHERE organization_id=? AND import_job_id=? AND assembly_key=? AND plan_hash=?
+               AND experiment_id IS NULL AND status NOT IN ('SYNCED','ALREADY_CREATED','SKIPPED')
+            """,error,org,job,key,hash);}
 
     private Link link(ResultSet rs,int n)throws SQLException{return new Link(rs.getString(1),rs.getString(2),rs.getString(3),
             rs.getString(4),rs.getString(5),rs.getObject(6,UUID.class),rs.getObject(7,UUID.class),rs.getString(8),

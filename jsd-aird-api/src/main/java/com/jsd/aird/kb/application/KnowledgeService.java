@@ -88,6 +88,15 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     private final ObjectProvider<KnowledgeEmbeddingFacade> embeddings;
     private final List<MediaExtractionProvider> mediaProviders;
     private final String embeddingModel;
+    @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.auto-build-model:${app.ai.embedding.model:}}")
+    private String autoBuildModel;
+    @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.auto-build-dimension:${app.ai.embedding.dimension:1024}}")
+    private int autoBuildDimension;
+    public IndexModel autoIndexModel(){return new IndexModel(autoBuildModel==null?embeddingModel:autoBuildModel,autoBuildDimension>0?autoBuildDimension:embeddingDimension);}
+    public void requireEmbeddingTarget(com.fasterxml.jackson.databind.JsonNode payload) {
+        if(!embeddingModel.equals(payload.path("expectedEmbeddingModel").asText())||embeddingDimension!=payload.path("expectedEmbeddingDimension").asInt())
+            throw new IllegalStateException("Embedding job target does not match this Worker");
+    }
     private final int embeddingDimension;
     private final Duration presignExpiry;
     private final BlockAwareChunker blockAwareChunker;
@@ -900,7 +909,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
     }
 
     public void markIndexStale(UUID organizationId, UUID documentId, UUID versionId, UUID reviewRevisionId) {
-        for (var step : List.of("CHUNK", "BM25_INDEX", "VECTOR_INDEX")) {
+        for (var step : List.of("CHUNK", "BM25_INDEX", "VECTOR_INDEX:"+embeddingModel+":"+embeddingDimension)) {
             repository.startProcessingStep(organizationId, documentId, versionId, reviewRevisionId, step,
                     "knowledge-index", lexicalAnalyzer.version(), null);
             repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, step,
@@ -953,10 +962,10 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, "BM25_INDEX", "SUCCEEDED", prepared.textHash(), null);
         if (prepared.aiApproved()) {
             repository.startProcessingStep(organizationId, documentId, versionId, reviewRevisionId,
-                    "VECTOR_INDEX", "pgvector", embeddingModel, prepared.textHash());
-            repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, "VECTOR_INDEX", "SUCCEEDED", prepared.textHash(), null);
+                    "VECTOR_INDEX:"+embeddingModel+":"+embeddingDimension, "pgvector", embeddingModel, prepared.textHash());
+            repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, "VECTOR_INDEX:"+embeddingModel+":"+embeddingDimension, "SUCCEEDED", prepared.textHash(), null);
         } else {
-            repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, "VECTOR_INDEX", "NOT_REQUIRED", null, null);
+            repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, "VECTOR_INDEX:"+embeddingModel+":"+embeddingDimension, "NOT_REQUIRED", null, null);
         }
 
         var publication = governance.publish(organizationId, actorId, documentId, versionId,
@@ -1061,9 +1070,11 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         repository.finishProcessingStep(organizationId, publication.versionId(), publication.reviewRevisionId(),
                 "BM25_INDEX", "SUCCEEDED", prepared.textHash(), null);
         repository.startProcessingStep(organizationId, documentId, publication.versionId(),
-                publication.reviewRevisionId(), "VECTOR_INDEX", "pgvector", embeddingModel, prepared.textHash());
+                publication.reviewRevisionId(), "VECTOR_INDEX:"+embeddingModel+":"+embeddingDimension, "pgvector", embeddingModel, prepared.textHash());
         repository.finishProcessingStep(organizationId, publication.versionId(), publication.reviewRevisionId(),
-                "VECTOR_INDEX", prepared.aiApproved() ? "SUCCEEDED" : "NOT_REQUIRED", prepared.textHash(), null);
+                "VECTOR_INDEX:"+embeddingModel+":"+embeddingDimension, prepared.aiApproved() ? "SUCCEEDED" : "NOT_REQUIRED", prepared.textHash(), null);
+        if(prepared.aiApproved()&&(!autoIndexModel().model().equals(embeddingModel)||autoIndexModel().dimension()!=embeddingDimension))
+            enqueueVectorBuild(organizationId,documentId,publication.id(),publication.reviewRevisionId());
     }
 
     private PreparedIndex prepareIndex(UUID organizationId, UUID documentId, UUID versionId, UUID reviewRevisionId,
@@ -1133,8 +1144,8 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var provider = embeddings.getIfAvailable();
         if (provider == null) throw new IllegalStateException("向量服务暂不可用");
         repository.startProcessingStep(organizationId, documentId, publication.versionId(), reviewRevisionId,
-                "VECTOR_INDEX", "pgvector", embeddingModel, null);
-        for (var chunk : repository.chunksForEmbedding(organizationId, documentId, reviewRevisionId)) {
+                "VECTOR_INDEX:"+embeddingModel+":"+embeddingDimension, "pgvector", embeddingModel, null);
+        for (var chunk : repository.chunksForEmbedding(organizationId, documentId, reviewRevisionId,embeddingModel,embeddingDimension)) {
             if (!repository.isAiApproved(organizationId, documentId)) {
                 repository.clearDocumentEmbeddings(organizationId, documentId);
                 return;
@@ -1144,13 +1155,13 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             repository.updateChunkEmbedding(organizationId, chunk.id(), vector, embeddingModel);
         }
         repository.finishProcessingStep(organizationId, publication.versionId(), reviewRevisionId,
-                "VECTOR_INDEX", "SUCCEEDED", null, null);
+                "VECTOR_INDEX:"+embeddingModel+":"+embeddingDimension, "SUCCEEDED", null, null);
     }
 
     public void failIndex(UUID organizationId, UUID documentId, UUID versionId, UUID reviewRevisionId, Exception exception) {
         var error = safeError(exception);
         governance.failRevision(organizationId, reviewRevisionId, error);
-        for (var step : List.of("CHUNK", "BM25_INDEX", "VECTOR_INDEX")) {
+        for (var step : List.of("CHUNK", "BM25_INDEX", "VECTOR_INDEX:"+embeddingModel+":"+embeddingDimension)) {
             repository.finishProcessingStep(organizationId, versionId, reviewRevisionId, step, "FAILED", null, error);
         }
     }
@@ -1160,15 +1171,16 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         governance.currentPublicationById(organizationId, publicationId)
                 .filter(publication -> reviewRevisionId.equals(publication.reviewRevisionId()))
                 .ifPresent(publication -> repository.finishProcessingStep(organizationId, publication.versionId(),
-                        reviewRevisionId, "VECTOR_INDEX", "FAILED", null, safeError(exception)));
+                        reviewRevisionId, "VECTOR_INDEX:"+embeddingModel+":"+embeddingDimension, "FAILED", null, safeError(exception)));
     }
 
     private void enqueueVectorBuild(UUID organizationId, UUID documentId, UUID publicationId, UUID reviewRevisionId) {
-        var payload = objectMapper.createObjectNode().put("organizationId", organizationId.toString())
+        var target=autoIndexModel();
+        var payload = objectMapper.createObjectNode().put("expectedEmbeddingModel",target.model()).put("expectedEmbeddingDimension",target.dimension()).put("organizationId", organizationId.toString())
                 .put("documentId", documentId.toString()).put("publicationId", publicationId.toString())
                 .put("reviewRevisionId", reviewRevisionId.toString());
         async.enqueue(organizationId, "KB_BUILD_KNOWLEDGE_VECTOR", payload,
-                "kb-vector:" + publicationId + ":" + System.currentTimeMillis(), 55);
+                "kb-vector:" + publicationId + ":"+com.jsd.aird.shared.evidence.EvidenceProtocol.sha(target.model()+":"+target.dimension()).substring(0,32)+":" + System.currentTimeMillis(), 55);
     }
 
     public void ingest(UUID organizationId, UUID actorId, UUID documentId, UUID versionId, UUID fileId) {

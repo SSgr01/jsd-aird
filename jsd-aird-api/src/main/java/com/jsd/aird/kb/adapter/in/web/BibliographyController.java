@@ -34,5 +34,10 @@ public class BibliographyController {
     }
     @PostMapping("/bibliography-tasks/{id}/items/{item}/retry")
     public ApiResponse<?> retry(@PathVariable UUID id,@PathVariable UUID item) {service.retry(id,item);return ok(null);}
+    public record MetadataRetry(String requestKey) { }
+    @PostMapping("/documents/{doc}/versions/{version}/metadata-extraction/retry")
+    public ApiResponse<?> retryMetadata(@PathVariable UUID doc,@PathVariable UUID version,@RequestBody MetadataRetry command) {
+        return ok(java.util.Map.of("id",service.retryModelExtraction(doc,version,command.requestKey())));
+    }
     private <T> ApiResponse<T> ok(T data) {return ResponseFactory.success(data,RequestIdHolder.currentOrUnknown());}
 }

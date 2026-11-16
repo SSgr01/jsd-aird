@@ -49,4 +49,33 @@ describe('automatic bibliography display', () => {
     await waitFor(() => expect(save).toHaveBeenCalledWith('doc', 'version', 2, 'PAPER', { title: 'Corrected title' }));
     expect(screen.queryByText('填入候选信息')).toBeNull();
   });
+  it('displays arbitrary source fields for any document kind without empty paper fields', async () => {
+    vi.spyOn(bibliographyApi, 'get').mockResolvedValue({ ...value, documentType: 'UNKNOWN',
+      accepted: { title: '交付记录', document_kind: '交付记录', extra_fields: [{ label: '储存条件', value: '4°C' }, { label: '项目代号', value: 'AX-77' }] },
+      provenance: { _model_extraction: { status: 'SUCCEEDED' } } });
+    render(<App><BibliographyPanel documentId="doc" versionId="version" canUpdate /></App>);
+    await screen.findByText('储存条件');
+    expect(screen.getByText('4°C')).toBeTruthy();expect(screen.getByText('AX-77')).toBeTruthy();
+    expect(screen.queryByText('DOI')).toBeNull();expect(screen.queryByText('会议日期')).toBeNull();
+    fireEvent.click(screen.getByText('资料信息', { exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: '编辑资料信息' }));
+    expect(await screen.findByRole('textbox', { name: '扩展信息名称 1' })).toHaveValue('储存条件');
+    expect(screen.queryByLabelText('DOI')).toBeNull();
+  });
+  it('saves dynamic metadata edits with the existing revision and preserves standard fields', async () => {
+    const record = { ...value, documentType: 'UNKNOWN', accepted: { title: '交付记录', extra_fields: [{ label: '项目代号', value: 'AX-77' }] } };
+    vi.spyOn(bibliographyApi, 'get').mockResolvedValue(record);
+    const save = vi.spyOn(bibliographyApi, 'confirm').mockResolvedValue({ ...record, revision: 3 });
+    render(<App><BibliographyPanel documentId="doc" versionId="version" canUpdate /></App>);
+    await screen.findByText('AX-77');fireEvent.click(screen.getByText('资料信息', { exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: '编辑资料信息' }));
+    fireEvent.change(await screen.findByRole('textbox', { name: '扩展信息内容 1' }), { target: { value: 'AX-78' } });
+    fireEvent.click(screen.getByRole('button', { name: /保\s*存/ }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith('doc', 'version', 2, 'UNKNOWN', { extra_fields: [{ label: '项目代号', value: 'AX-78' }] }));
+  });
+  it('keeps pending extraction visible for unclassified materials', async () => {
+    vi.spyOn(bibliographyApi, 'get').mockResolvedValue({ ...value, documentType: 'UNKNOWN', status: 'PENDING', accepted: {} });
+    render(<App><BibliographyPanel documentId="doc" versionId="version" /></App>);
+    await screen.findByText('正在补全资料信息');expect(screen.queryByText('仅显示已提取的信息；原文未提供的信息留空。')).toBeNull();
+  });
 });

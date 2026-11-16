@@ -39,6 +39,9 @@ public class BibliographyService {
     private final FileStorageFacade files;
     private final ObjectMapper json;
     private final TransactionTemplate tx;
+    private SourceMetadataExtractionService metadataModel;
+    @org.springframework.beans.factory.annotation.Autowired
+    void metadataModel(SourceMetadataExtractionService service){this.metadataModel=service;}
     public record Selection(List<UUID> documentIds,UUID categoryId,String requestKey) { }
     public record Confirmation(int revision,String documentType,JsonNode fields) { }
     public record Parsed(UUID organizationId,UUID actorId,UUID documentId,UUID versionId,UUID parseRunId) { }
@@ -179,14 +182,37 @@ public class BibliographyService {
             throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"此项正在处理、等待恢复或已经完成，请先查看结果");
         tx.executeWithoutResult(status->queue(task,repo.retryItem(item.id(),item.generation()),Instant.now()));
     }
+    public UUID retryModelExtraction(UUID doc,UUID version,String requestKey) {
+        var actor=ActorContext.required();require(actor.organizationId(),actor.userId(),doc,"knowledge.update");
+        var row=version(actor.organizationId(),doc,version);
+        if(requestKey==null||!requestKey.matches("[A-Za-z0-9_-]{1,80}"))throw new ApiException(ApiErrorCode.BAD_REQUEST,"请提供稳定的重试请求标识");
+        if(metadataModel==null||!metadataModel.enabled())throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"原文模型抽取未启用");
+        auth.require(check(actor.organizationId(),actor.userId(),doc,"ai.use"));
+        if(!metadataModel.privateEndpoint())auth.require(check(actor.organizationId(),actor.userId(),doc,"ai.external"));
+        if(repo.find(actor.organizationId(),version,null).filter(record->"ACCEPTED".equals(record.status())||manuallyClassified(record)).isPresent())
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"已核验或人工确认的信息无需重新调用模型");
+        if(!metadataModel.reset(actor.organizationId(),row.sha256(),source(actor.organizationId(),doc,version)))
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"只能显式重试失败、结果未知或超过15分钟的未完成模型抽取；成功结果继续复用");
+        return createFor(actor.organizationId(),actor.userId(),List.of(new Target(doc,version)),"metadata-retry:"+version+":"+requestKey);
+    }
     public Record confirm(UUID doc,UUID version,Confirmation command) {
         var a=ActorContext.required();require(a.organizationId(),a.userId(),doc,"knowledge.update");version(a.organizationId(),doc,version);
         if(command.documentType()==null||!Set.of("PAPER","PATENT","INTERNAL","UNKNOWN").contains(command.documentType())||command.fields()==null
                 ||!command.fields().isObject()||command.fields().toString().length()>100000)throw new ApiException(ApiErrorCode.BAD_REQUEST);
-        command.fields().fieldNames().forEachRemaining(f->{if(!FIELDS.contains(f))throw new ApiException(ApiErrorCode.BAD_REQUEST,"不支持的书目字段："+f);});
+        command.fields().fieldNames().forEachRemaining(f->{if(!FIELDS.contains(f)&&!KnowledgeMetadataFields.MODEL.contains(f)&&!"extra_fields".equals(f))throw new ApiException(ApiErrorCode.BAD_REQUEST,"不支持的资料字段："+f);});
         command.fields().fields().forEachRemaining(e->{
             var value=e.getValue();if(value.isNull())return;
-            if("publication_year".equals(e.getKey())) {
+            if("extra_fields".equals(e.getKey())) {
+                if(!value.isArray()||value.size()>KnowledgeMetadataFields.MAX_EXTRA_FIELDS)throw new ApiException(ApiErrorCode.BAD_REQUEST,"扩展信息最多20项");
+                var labels=new HashSet<String>();
+                for(var item:value) {
+                    if(!item.isObject()||item.size()!=2||!item.path("label").isTextual()||!item.path("value").isTextual()
+                            ||item.path("label").asText().isBlank()||item.path("label").asText().length()>KnowledgeMetadataFields.MAX_EXTRA_LABEL
+                            ||item.path("value").asText().isBlank()||item.path("value").asText().length()>KnowledgeMetadataFields.MAX_EXTRA_VALUE
+                            ||!labels.add(item.path("label").asText().strip().toLowerCase(Locale.ROOT)))
+                        throw new ApiException(ApiErrorCode.BAD_REQUEST,"扩展信息须为不重复的名称和值，名称最多64字符，值最多1000字符");
+                }
+            } else if("publication_year".equals(e.getKey())) {
                 if(!value.isInt()||value.asInt()<1600||value.asInt()>2200)throw new ApiException(ApiErrorCode.BAD_REQUEST,"出版年份须为有效年份");
             } else if(Set.of("authors","topics").contains(e.getKey())) {
                 if(!value.isTextual()&&!value.isArray())throw new ApiException(ApiErrorCode.BAD_REQUEST);
@@ -249,6 +275,10 @@ public class BibliographyService {
         try {return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));}
         catch(java.security.NoSuchAlgorithmException error) {throw new IllegalStateException(error);}
     }
+    private boolean manuallyClassified(Record record) {
+        for(var field:record.manualFields())if("document_type".equals(field.asText()))return true;
+        return false;
+    }
     public JsonNode process(JsonNode payload,AsyncJobHandler.ExecutionContext execution) {
         UUID org=UUID.fromString(payload.path("organizationId").asText()),actor=UUID.fromString(payload.path("actorId").asText());
         var task=repo.task(org,actor,UUID.fromString(payload.path("taskId").asText())).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND));
@@ -264,9 +294,11 @@ public class BibliographyService {
         var input=source(org,item.documentId(),item.versionId());
         var old=repo.find(org,item.versionId(),null).orElseGet(()->empty(item.documentId(),item.versionId()));
         var local=extractor.extract(input.pages());var candidates=json.createArrayNode();JsonNode matched=null,pdfVerification=null;
-        boolean manualType=false;for(var field:old.manualFields())if("document_type".equals(field.asText()))manualType=true;
+        boolean manualType=manuallyClassified(old);
         String documentType=manualType?old.documentType():local.type();
         String state=input.pages().isEmpty()?"MISSING_PARSE":"NEEDS_REVIEW",message=input.pages().isEmpty()?"没有可用的已保存解析结果":"请核对本地提取的信息";
+        if(!input.pages().isEmpty()&&"INTERNAL".equals(documentType))
+            message="按业务资料提取原文信息，不进行外部论文书目核验；本地信息可按需人工核对";
         if("PAPER".equals(documentType)&&!"INTERNAL".equals(local.type())) {
             // Both view/update and external permission are checked at execution time, before sending a public identifier.
             if(!auth.check(check(org,actor,item.documentId(),"ai.external")).allowed())message="尚未允许外部书目核验，可人工核对本地信息";
@@ -309,6 +341,24 @@ public class BibliographyService {
             }
         }
         var fields=(ObjectNode)local.fields().deepCopy();var provenance=(ObjectNode)local.provenance().deepCopy();
+        // Verified bibliography and manual confirmation take priority over another model call.
+        if(metadataModel!=null&&metadataModel.enabled()&&matched==null&&!manualType&&!"ACCEPTED".equals(old.status())) {
+            boolean allowed=auth.check(check(org,actor,item.documentId(),"ai.use")).allowed()
+                &&(metadataModel.privateEndpoint()||auth.check(check(org,actor,item.documentId(),"ai.external")).allowed());
+            var extraction=metadataModel.extract(org,v.sha256(),input,allowed);
+            if("RUNNING".equals(extraction.status())) {
+                postpone(task,item,"METADATA_EXTRACTION_RUNNING",60,false,execution);
+                return json.createObjectNode().put("status","WAITING_PROVIDER");
+            }
+            extraction.fields().fields().forEachRemaining(e->{fields.set(e.getKey(),e.getValue());provenance.set(e.getKey(),extraction.provenance().path(e.getKey()));});
+            provenance.set("_model_extraction",json.createObjectNode().put("status",extraction.status()).put("cacheHit",extraction.cacheHit()));
+            if(!extraction.fields().isEmpty()) {
+                if("NO_MATCH".equals(state)||"FAILED".equals(state))state="NEEDS_REVIEW";
+                message="已从原文提取资料信息，保留原文依据；不代表已通过外部书目核验";
+            } else if(Set.of("FAILED","UNKNOWN","INVALID_RESPONSE").contains(extraction.status())) {
+                message="模型抽取未完成或结果待核对，已保留本地信息；不会自动重复调用";
+            }
+        }
         var externalFields=new HashSet<String>();
         if(matched!=null) {
             var projected=project(matched);
@@ -323,6 +373,7 @@ public class BibliographyService {
             }
         }
         var accepted=(ObjectNode)old.accepted().deepCopy();var origins=(ObjectNode)old.provenance().deepCopy();
+        if(provenance.has("_model_extraction"))origins.set("_model_extraction",provenance.get("_model_extraction"));
         var manual=new HashSet<String>();old.manualFields().forEach(f->manual.add(f.asText()));
         for(var it=fields.fields();it.hasNext();) {
             var e=it.next();

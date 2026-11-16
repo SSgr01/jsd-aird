@@ -205,7 +205,7 @@ def execute(root, plan_path, output=None):
     from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter
     from openpyxl.workbook.properties import CalcProperties
     from template_ops import (pristine_sheet, expand_recipe, expand_groups, insert_client_test_rows,
-                              append_single_group_test, total_formula_and_value, cache_totals)
+                              append_single_group_test, total_formula_and_value, cache_totals, layout)
     wf = None if docx else load_workbook(source, data_only=False)
     wv = None if docx else load_workbook(source, data_only=True)
     wb = load_workbook(template)
@@ -259,12 +259,29 @@ def execute(root, plan_path, output=None):
             if single is not None:
                 # No formulation and no parallel samples: keep one group column
                 # of the pristine test template; nothing is expanded.
-                if kind != "test" or single.get("group"):
-                    raise ValueError("single_group_test 只用于测试模板，不应包含分组编号")
-                if recipe.get("names") or recipe.get("amounts"):
+                if kind != "test" or not isinstance(single, dict):
+                    raise ValueError("single_group_test 只用于测试模板，使用空对象声明")
+                if single or spec.get("groups") or spec.get("sample_groups"):
+                    raise ValueError("single_group_test 不接受直接填写的 values 或分组；请使用 writes 的 src/dst 引用原件")
+                if recipe.get("names") or recipe.get("amounts") or recipe.get("totals"):
                     raise ValueError("single_group_test 与配方不能同时使用")
-                placed = append_single_group_test(ws, single.get("values", {}))
+                writes = spec.get("writes")
+                if not isinstance(writes, list) or not writes:
+                    raise ValueError("单组检测必须通过 writes 的 src/dst 引用原件")
+                values = {}
+                for item in writes:
+                    if (not isinstance(item, dict) or not {"src", "dst"} <= item.keys()
+                            or item.keys() - {"src", "dst", "transform"}):
+                        raise ValueError("单组 writes 只接受 src、dst 和可选 transform，不接受直接填写的值")
+                    row, col = coordinate_to_tuple(item["dst"])
+                    coord = f"{get_column_letter(col)}{row}"
+                    if coord in values:
+                        raise ValueError("重复写目标：" + coord)
+                    values[coord] = convert_value(get(item["src"]), item.get("transform"))
+                placed = append_single_group_test(ws, values)
                 expected[title] = dict(placed)
+                protected[title] = {c.coordinate: c.value for row in blank for c in row
+                                    if c.value is not None and c.data_type != "f"}
                 for item in spec.get("structural", []):
                     if not item.get("reason"):
                         raise ValueError("结构性字段需要 reason")
@@ -278,10 +295,9 @@ def execute(root, plan_path, output=None):
                 if missing:
                     raise ValueError(f"{name} 尚有 {len(missing)} 个非空源单元格未处置：{missing[:20]}")
                 coverage.append({"sheet": name, "nonempty": len(populated), "accounted": len(populated & used)})
-                details.append({"sheet": title, "source_sheet": name, "groups": int(any(placed)),
+                details.append({**layout(ws, kind), "sheet": title, "source_sheet": name, "groups": 1,
                                 "materials": 0, "added_test_items": [], "mode": "single_group_test",
-                                "first": 52, "last": 59, "total": 60, "first_col": 3,
-                                "last_col": 3, "id_row": 7, "recipe_id_row": 51, "output_last_col": 3})
+                                "output_last_col": ws.max_column})
                 continue
             groups = spec["groups"]
             total_policy = recipe.get('source_total_policy', 'strict')
@@ -414,6 +430,15 @@ def execute(root, plan_path, output=None):
                 ws = check[detail["sheet"]]
                 check_inline_lists(ws)
                 if detail.get("mode") == "single_group_test":
+                    from openpyxl.worksheet.cell_range import CellRange
+                    from openpyxl.worksheet.print_settings import PrintArea
+                    areas = list(PrintArea.from_string(str(ws.print_area)).ranges)
+                    if not areas or any(not any(coord in area for area in areas)
+                                        for coord in expected[detail["sheet"]]):
+                        raise ValueError("单组检测打印范围未覆盖全部写入内容")
+                    if any(not any(CellRange(str(merged)).issubset(area) for area in areas)
+                           for merged in ws.merged_cells.ranges):
+                        raise ValueError("单组检测打印范围截断模板合并区域")
                     continue
                 for col in range(detail["first_col"], detail["first_col"]+detail["groups"]):
                     for row in range(detail["first"], detail["last"]+1):

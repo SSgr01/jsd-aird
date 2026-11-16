@@ -18,6 +18,10 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 public class PostgresWorkRepository implements WorkRepository {
 
+    @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.model:}")
+    private String workerEmbeddingModel="";
+    @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.dimension:1024}")
+    private int workerEmbeddingDimension=1024;
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
 
@@ -39,6 +43,8 @@ public class PostgresWorkRepository implements WorkRepository {
                                 status = 'READY'
                                 OR (status = 'RUNNING' AND lease_expires_at < now())
                             )
+                              AND (job_type NOT IN ('KB_BUILD_KNOWLEDGE_INDEX','KB_BUILD_KNOWLEDGE_VECTOR','KB_REBUILD_PUBLISHED_INDEX')
+                                   OR (payload_jsonb->>'expectedEmbeddingModel'=? AND payload_jsonb->>'expectedEmbeddingDimension'=?))
                               AND next_attempt_at <= now()
                               AND attempt_count < max_attempts
                             ORDER BY priority, next_attempt_at, created_at
@@ -93,7 +99,7 @@ public class PostgresWorkRepository implements WorkRepository {
                         rs.getObject("lease_token", UUID.class),
                         rs.getLong("lease_generation")
                 ),
-                workerId,
+                workerEmbeddingModel,Integer.toString(workerEmbeddingDimension),workerId,
                 leaseUntil,
                 leaseToken
         ).stream().findFirst();

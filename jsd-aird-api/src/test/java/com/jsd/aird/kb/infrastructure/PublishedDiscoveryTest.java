@@ -8,10 +8,10 @@ import static org.assertj.core.api.Assertions.*;
 
 @EnabledIfEnvironmentVariable(named="JSD_AIRD_DATASOURCE_URL",matches="jdbc:postgresql://(localhost|127\\.0\\.0\\.1)(:\\d+)?/.*")
 class PublishedDiscoveryTest {
-    @Test void publishedTagsAreSeparateFromBibliographyAndRespectVersionGrantAndScope() {
+    @Test void publishedTagsAreSeparateFromBibliographyAndRespectVersionGrantAndScope() throws Exception {
         try (var db=new IsolatedPostgres(Map.of("kb.document","document","kb.document_version","version",
                 "kb.publication","publication","ops.file_object","file_object","kb.document_chunk","chunk",
-                "kb.document_ai_grant","ai_grant","kb.document_bibliography","bibliography"))) {
+                "kb.document_ai_grant","ai_grant","kb.document_bibliography","bibliography","kb.metadata_search_text","metadata_search_text"))) {
             db.table("document","id uuid PRIMARY KEY,organization_id uuid,current_version_no int,current_publication_id uuid,lifecycle_status text,title text,category_id uuid");
             db.table("version","id uuid PRIMARY KEY,document_id uuid,version_no int,original_name text,file_object_id uuid");
             db.table("publication","id uuid PRIMARY KEY,document_version_id uuid,review_revision_id uuid,status text,metadata_snapshot_jsonb jsonb");
@@ -19,6 +19,7 @@ class PublishedDiscoveryTest {
             db.table("chunk","id uuid PRIMARY KEY,document_id uuid,document_version_id uuid,review_revision_id uuid,chunk_role text,page_no int,section text,content text,chunk_no int");
             db.table("ai_grant","organization_id uuid,document_id uuid,status text");
             db.table("bibliography","organization_id uuid,version_id uuid,accepted_jsonb jsonb");
+            try(var connection=db.source.getConnection()){KnowledgeMigrationTestSupport.executeSection(connection,"metadata-search");}
             UUID org=UUID.randomUUID(),doc=UUID.randomUUID(),version=UUID.randomUUID(),pub=UUID.randomUUID(),review=UUID.randomUUID(),file=UUID.randomUUID(),category=UUID.randomUUID();
             db.jdbc.update("INSERT INTO kb.document VALUES (?,?,2,?,'ACTIVE','Unpublished draft title',?)",doc,org,pub,category);
             db.jdbc.update("INSERT INTO ops.file_object VALUES (?,?,'ACTIVE')",file,org);
@@ -34,6 +35,14 @@ class PublishedDiscoveryTest {
             assertThat(repo.searchPublishedTags(org,List.of("旧版本标签"),true,List.of(),null,20)).isEmpty();
             assertThat(repo.searchPublishedMetadata(org,List.of("10.1234/real.2026"),true,List.of(),null,20)).hasSize(1);
             assertThat(repo.searchPublishedMetadata(org,List.of("Actual Author"),true,List.of(),null,20)).hasSize(1);
+            db.jdbc.update("UPDATE kb.document_bibliography SET accepted_jsonb=accepted_jsonb || ?::jsonb", "{\"organization\":\"ACME Institute\",\"document_number\":\"IC3020-XZ\",\"document_kind\":\"Unverified Kind\",\"abstract\":\"Not an identifier\",\"extra_fields\":[{\"label\":\"储存温度\",\"value\":\"4°C\"},{\"label\":\"项目代号\",\"value\":\"Project AX-77\"}]}");
+            assertThat(repo.searchPublishedMetadata(org,List.of("ic3020-xz"),true,List.of(),null,20)).hasSize(1);
+            assertThat(repo.searchPublishedMetadata(org,List.of("AX-77"),true,List.of(),null,20)).hasSize(1);
+            assertThat(repo.searchPublishedMetadata(org,List.of("ACME Institute"),true,List.of(),null,20)).hasSize(1);
+            assertThat(repo.searchPublishedMetadata(org,List.of("Unverified Kind"),true,List.of(),null,20)).isEmpty();
+            assertThat(repo.searchPublishedMetadata(org,List.of("Not an identifier"),true,List.of(),null,20)).isEmpty();
+            assertThat(repo.searchPublishedMetadata(org,List.of("AX-77"),true,List.of(),Set.of(UUID.randomUUID()),20)).isEmpty();
+            assertThat(repo.searchPublishedMetadata(UUID.randomUUID(),List.of("AX-77"),false,List.of(),null,20)).isEmpty();
             assertThat(repo.searchPublishedMetadata(org,List.of("Unpublished draft title"),true,List.of(),null,20)).isEmpty();
             assertThat(repo.searchPublishedTags(org,List.of("自愈材料"),true,List.of(),Set.of(),20)).isEmpty();
             assertThat(repo.searchPublishedTags(UUID.randomUUID(),List.of("自愈材料"),true,List.of(),null,20)).isEmpty();

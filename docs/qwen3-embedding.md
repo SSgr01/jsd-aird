@@ -5,8 +5,8 @@
 ```dotenv
 JSD_AIRD_EMBEDDING_BASE_URL=http://127.0.0.1:8000/v1
 JSD_AIRD_EMBEDDING_API_KEY=
-JSD_AIRD_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B
-JSD_AIRD_EMBEDDING_DIMENSION=1024
+JSD_AIRD_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
+JSD_AIRD_EMBEDDING_DIMENSION=2560
 JSD_AIRD_EMBEDDING_QUERY_PROFILE=none
 JSD_AIRD_EMBEDDING_QUERY_VERSION=qwen3-instruct-v1
 ```
@@ -24,7 +24,7 @@ JSD_AIRD_EMBEDDING_QUERY_VERSION=qwen3-instruct-v1
 先部署更新后的 API 和 Worker，再使用已有导入脚本的向量重建模式。模型名、维度必须与服务配置一致：
 
 ```bash
-python3 scripts/local/import_knowledge_directory.py --rebuild-vectors --embedding-model Qwen/Qwen3-Embedding-0.6B --embedding-dimension 1024 --dry-run
+python3 scripts/local/import_knowledge_directory.py --rebuild-vectors --embedding-model Qwen/Qwen3-Embedding-4B --embedding-dimension 2560 --dry-run
 ```
 
 核对清单后移除 `--dry-run` 执行。脚本分页处理已发布且允许 AI 使用的文档，记录进度并支持续跑，保留发布版本、分块和词法索引。重建期间尚未迁移的文档仍可通过词法检索召回，向量通道只返回当前模型已建好的文档。操作手册已有模型和维度隔离，会按新模型建立自己的索引。
@@ -52,11 +52,45 @@ python3 scripts/local/import_knowledge_directory.py --rebuild-vectors --embeddin
 脚本不自动加载 `.env`，运行前将所需变量导出至当前终端，或显式传入地址、模型、维度：
 
 ```bash
-python3 scripts/local/evaluate_embedding_instructions.py --cases .runtime/qwen-eval/cases.json --output .runtime/qwen-eval/report.json --base-url http://127.0.0.1:8000/v1 --model Qwen/Qwen3-Embedding-0.6B --dimension 1024 --top-k 5,10,20
+python3 scripts/local/evaluate_embedding_instructions.py --cases .runtime/qwen-eval/cases.json --output .runtime/qwen-eval/report.json --base-url http://127.0.0.1:8000/v1 --model Qwen/Qwen3-Embedding-4B --dimension 2560 --top-k 5,10,20
 ```
 
 云端服务通过 `JSD_AIRD_EMBEDDING_API_KEY` 提供 Key。每个报告使用新文件名，脚本拒绝覆盖已有报告。语料、问题、结果应保存在忽略的 `.runtime` 目录。三组评测期间需固定模型权重、服务配置、问题、语料和标注；另保留未参与指令调优的验收题。
 
 此报告衡量纯向量检索。选择候选后，还应使用现有 `evaluate_knowledge_quality.py` 验证完整检索流程，并人工检查最终证据能否支持回答；纯向量 Recall 或 nDCG 的提升不等于最终回答准确率提升。操作手册需要独立评测，不能用材料题的结果代替。
 
-Qwen 官方提到合适指令在多数下游任务中通常有约 1%～5% 的收益，但这不是某个指标的百分点保证。参考 [官方说明](https://github.com/QwenLM/Qwen3-Embedding/blob/main/README.md) 与 [查询/文档用法](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B#usage)。
+Qwen 官方提到合适指令在多数下游任务中通常有约 1%～5% 的收益，但这不是某个指标的百分点保证。参考 [官方说明](https://github.com/QwenLM/Qwen3-Embedding/blob/main/README.md) 与 [查询/文档用法](https://huggingface.co/Qwen/Qwen3-Embedding-4B#usage)。
+
+## 共用数据库：云端 1024 与 Qwen 4B 2560 并存
+
+升级至 V118 后，知识库向量独立保存在 kb.document_chunk_embedding，按分块、模型、维度分别存储。两种表达式 HNSW 索引只负责检索，不会触发模型调用。Linux 导入只调用 Qwen；1024 云端模型只按需补建。
+
+本地继续保留现有 BASE_URL/API_KEY/MODEL=text-embedding-v4/DIMENSION=1024。服务器 MODEL=Qwen/Qwen3-Embedding-4B、DIMENSION=2560，BASE_URL 指向实际 /v1 地址，API_KEY 可显式留空。两边 API 和 Worker 均设置：
+
+```dotenv
+JSD_AIRD_EMBEDDING_AUTO_BUILD_MODEL=Qwen/Qwen3-Embedding-4B
+JSD_AIRD_EMBEDDING_AUTO_BUILD_DIMENSION=2560
+JSD_AIRD_EMBEDDING_EF_SEARCH=100
+```
+
+服务器 Worker 使用 Qwen 查询模型配置，本地 Worker 使用云端模型配置。数据库领取前匹配任务的 expectedEmbeddingModel/expectedEmbeddingDimension，不匹配不占用租约或重试次数。自动发布任务交给 Qwen Worker；本地 Worker 仅执行明确指向云端模型的补建任务。自动目标服务不可用时任务等待/失败，不自动改调另一模型。
+
+上线前备份并暂停两边 API/Worker 写入，等待在途任务结束。执行新增迁移至 V118，统一更新两边代码后再启动。保留当前可用 pgvector 版本，不降级；先检查 halfvec、HNSW、迭代扫描能力。迁移会将已标记模型的旧向量转换成 FP16，不调用云端 API；旧列保留回溯，转换存在量化误差。未标记模型或不支持的旧向量须先清点，不能直接猜测来源。
+
+旧待执行的知识库向量/发布任务必须补齐 expectedEmbeddingModel/expectedEmbeddingDimension：已有明确目标的重建任务保留原目标，自动发布/授权任务指定 Qwen/2560。不确定来源的任务暂不领取。不要让旧代码 Worker 与新代码同时运行。
+
+服务器补建（先 --dry-run，核对后移除）：
+
+```bash
+python3 scripts/local/import_knowledge_directory.py --rebuild-vectors --embedding-model Qwen/Qwen3-Embedding-4B --embedding-dimension 2560 --manifest /srv/jsd-aird/import-state/qwen4b.jsonl --dry-run
+```
+
+本地按需补建时将脚本 API 地址指向本地 API，目标用 text-embedding-v4/1024，并使用独立 manifest。成功完整的目标模型向量可直接复用；另一套模型的向量不影响完成判定。撤销 AI 授权清除所有模型向量；重新切分内容会使旧分块向量失效。
+
+验收需要在隔离数据库检查两种向量并存、索引 EXPLAIN、权限和撤权、双 Worker 路由，并与精确余弦检索比较 Recall@10 与延迟。HNSW 是近似召回，不保证与精确排序一致。回滚前停止新 Worker 并恢复原云端配置，不能让旧服务以 Qwen 覆盖旧向量列。
+
+停机迁移后，可执行 `psql -v auto_model='Qwen/Qwen3-Embedding-4B' -v auto_dimension=2560 -f scripts/local/migrate_embedding_jobs.sql` 为旧自动任务补目标；脚本保留已有目标，不修改已执行任务，列出仍不确定的重建任务及迁移遗漏向量。先核对参数与备份，再运行；这里的 SQL 不由应用启动自动执行。向量重建状态 GET 请求需带 `vectorsOnly=true`，与 POST 使用相同模式；幂等键按发布、模型、维度和模式区分。
+
+### 本地隔离验证记录
+
+本轮使用401条合成2560维向量、10条查询，在相同组织、授权、发布过滤条件下对比 HNSW 与关闭索引扫描的精确查询：Recall@10=1.0；10次查询合计 HNSW 4522ms、精确查询4571ms。该小样本主要验证类型、过滤、召回和调用链，不构成线上性能提升结论。索引可用性检查通过 EXPLAIN (ANALYZE, BUFFERS) 并关闭顺序扫描确认2560索引可选；真实数据量下的自然执行计划、冷热缓存延迟和业务问题召回仍需部署验收。

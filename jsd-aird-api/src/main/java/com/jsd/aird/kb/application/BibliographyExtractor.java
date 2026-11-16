@@ -16,6 +16,13 @@ public class BibliographyExtractor {
     private static final Pattern DOI = Pattern.compile("(?i)\\b10\\.[0-9]{4,9}/[-._;()/:a-z0-9]+$");
     private static final Pattern DOI_IN_TEXT = Pattern.compile("(?i)\\b10\\.[0-9]{4,9}/[-._;()/:a-z0-9]+");
     private static final Pattern REFERENCES = Pattern.compile("(?im)^\\s*(?:#{1,6}\\s*)?(?:references|bibliography|参考文献)\\s*[:：]?\\s*$");
+    // Recognize document headings, not a mention in a paper's body or references.
+    private static final Pattern BUSINESS_TITLE = Pattern.compile(
+        "(?i)^(?:.{0,80}(?:会议纪要|会议记录|产品(?:技术)?说明书|产品规格书|产品数据(?:表|手册)|技术数据(?:表|手册)|安全(?:技术)?(?:说明书|数据表)|操作手册|用户手册|使用说明书|标准操作规程)"
+        + "(?:\\s*[:：()（）—–-].{0,80})?"
+        + "|(?:.{0,60}\\s+)?(?:meeting minutes|product (?:technical )?(?:manual|specifications?|data sheet)|technical data sheet|(?:material )?safety data sheet|operating manual|standard operating procedure)"
+        + "(?:\\s*[:：()（）—–-].{0,80}|\\s+\\d.{0,40})?"
+        + "|(?:TDS|SDS|MSDS|SOP)(?:\\s*[:：—–-].{0,80})?)$");
     public record Extracted(String type, ObjectNode fields, ObjectNode provenance, String frontText,
                             List<String> titles, String doi, Integer year) { }
     public BibliographyExtractor(ObjectMapper json) { this.json=json; }
@@ -35,6 +42,9 @@ public class BibliographyExtractor {
             if(end) break;
         }
         String text=front.toString();
+        var businessTitle=text.lines().map(line->line.replaceFirst("^\\s*#{1,6}\\s*", "").strip())
+            .filter(line->!line.isBlank()).limit(8).filter(line->BUSINESS_TITLE.matcher(line).matches()).findFirst();
+        boolean businessDocument=businessTitle.isPresent();
         var titles=new LinkedHashSet<String>();
         for (var page:selected) for(var line:page.text().split("\\R")) {
             String clean=line.replaceFirst("^\\s*#{1,6}\\s*", "").strip();
@@ -55,16 +65,22 @@ public class BibliographyExtractor {
         boolean articleScaffold=(compact.startsWith("article")||compact.startsWith("researcharticle"))&&compact.contains("openaccess")
             &&Pattern.compile("(?i)(?:university|institute|department|laboratory|大学|研究所)").matcher(text).find();
         boolean publicScaffold=heading&&DOI_IN_TEXT.matcher(text).find()&&(imprint||articleScaffold);
-        String type=patent?"PATENT":privateText?"INTERNAL":(abstractLabel&&journal||publicScaffold)?"PAPER":"UNKNOWN";
+        String type=businessDocument?"INTERNAL":patent?"PATENT":privateText?"INTERNAL":(abstractLabel&&journal||publicScaffold)?"PAPER":"UNKNOWN";
         var dois=new LinkedHashSet<String>(); var dm=DOI_IN_TEXT.matcher(text);
         while(dm.find()) { String value=doi(dm.group().replaceFirst("[.,;]+$","")); if(DOI.matcher(value).matches())dois.add(value); }
         String doi=dois.size()==1?dois.iterator().next():null;
         Integer year=null;
         var ym=Pattern.compile("(?i)(?:published(?: online)?|publication date|发表日期|出版日期)\\s*[:：]?[^\\n]{0,35}?\\b((?:19|20)\\d{2})\\b").matcher(text);
         if(ym.find())year=Integer.valueOf(ym.group(1));
-        publicationDate(selected,fields,provenance);
+        if(!businessDocument)publicationDate(selected,fields,provenance);
         if(fields.has("publication_date"))year=Integer.valueOf(fields.path("publication_date").asText().substring(0,4));
-        if(type.equals("PATENT")) {
+        if(businessDocument) {
+            // A meeting/manual can quote a paper. Its authors, DOI and publication date
+            // describe that citation, not this business document.
+            for(var page:selected)if(page.text().contains(businessTitle.get())) {
+                fields.put("title",businessTitle.get());provenance.set("title",location(page,businessTitle.get()));break;
+            }
+        } else if(type.equals("PATENT")) {
             labeled(selected,fields,provenance,"title","(?:54|发明名称|Title)");
             labeled(selected,fields,provenance,"patent_number","(?:11|公开号|公布号|授权公告号|Publication number)");
             labeled(selected,fields,provenance,"application_number","(?:21|申请号|Application number)");

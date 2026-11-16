@@ -90,6 +90,9 @@ public interface KnowledgeRepository {
 
     boolean isAiApproved(UUID organizationId, UUID documentId);
     List<ChunkEmbeddingRow> chunksForEmbedding(UUID organizationId, UUID documentId, UUID parseRunId);
+    default List<ChunkEmbeddingRow> chunksForEmbedding(UUID org,UUID doc,UUID revision,String model,int dimension) {
+        return chunksForEmbedding(org,doc,revision);
+    }
     void updateChunkEmbedding(UUID organizationId, UUID chunkId, String vector, String embeddingModel);
     void clearDocumentEmbeddings(UUID organizationId, UUID documentId);
     void cancelPendingVectorJobs(UUID organizationId, UUID documentId);

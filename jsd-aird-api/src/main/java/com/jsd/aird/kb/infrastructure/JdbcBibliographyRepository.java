@@ -14,6 +14,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 public class JdbcBibliographyRepository implements BibliographyRepository {
+    @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.model:}")
+    private String targetModel="";
+    @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.dimension:1024}")
+    private int targetDimension=1024;
+    @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.auto-build-model:${app.ai.embedding.model:}}")
+    private String autoModel;
+    @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.auto-build-dimension:${app.ai.embedding.dimension:1024}}")
+    private int autoDimension;
     private final JdbcTemplate jdbc;
     private final ObjectMapper json;
     public JdbcBibliographyRepository(JdbcTemplate jdbc, ObjectMapper json) { this.jdbc = jdbc; this.json = json; }
@@ -120,32 +128,32 @@ public class JdbcBibliographyRepository implements BibliographyRepository {
         if(rows.isEmpty())throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.NOT_FOUND);
     }
     @Override public JsonNode vectorStatus(UUID org, UUID doc, UUID version) {
-        var result = json.createObjectNode();
-        var counts = jdbc.queryForMap("""
-            SELECT count(c.id) AS total,count(c.embedding) AS embedded FROM kb.document d
-            LEFT JOIN kb.publication p ON p.id=d.current_publication_id AND p.document_version_id=?
-            LEFT JOIN kb.document_chunk c ON c.document_version_id=p.document_version_id
-              AND c.review_revision_id=p.review_revision_id AND c.chunk_role='CHILD'
+        var result=json.createObjectNode();
+        Long count=jdbc.queryForObject("""
+            SELECT count(c.id) FROM kb.document d JOIN kb.publication p ON p.id=d.current_publication_id AND p.document_version_id=?
+            JOIN kb.document_chunk c ON c.document_version_id=p.document_version_id AND c.review_revision_id=p.review_revision_id AND c.chunk_role='CHILD'
             WHERE d.organization_id=? AND d.id=?
+            """,Long.class,version,org,doc);
+        long total=count==null?0:count;
+        var models=jdbc.queryForList("""
+            SELECT e.embedding_model AS model,e.embedding_dimension AS dimension,count(*) AS count
+            FROM kb.document d JOIN kb.publication p ON p.id=d.current_publication_id AND p.document_version_id=?
+            JOIN kb.document_chunk c ON c.document_version_id=p.document_version_id AND c.review_revision_id=p.review_revision_id AND c.chunk_role='CHILD'
+            JOIN kb.document_chunk_embedding e ON e.chunk_id=c.id AND e.organization_id=d.organization_id
+            WHERE d.organization_id=? AND d.id=? GROUP BY e.embedding_model,e.embedding_dimension
             """,version,org,doc);
-        long total=((Number)counts.get("total")).longValue(), embedded=((Number)counts.get("embedded")).longValue();
-        result.put("total",total).put("embedded",embedded);
-        result.put("status", total == 0 ? "NOT_INDEXED" : embedded == total ? "PRESENT" : embedded == 0 ? "MISSING" : "PARTIAL");
-        result.put("modelCompatibilityChecked",false);
-        // Expose stored model/dimension counts so a migration can verify its own
-        // explicit target; PRESENT alone only establishes that vectors exist.
-        var models = jdbc.queryForList("""
-            SELECT c.embedding_model AS model, vector_dims(c.embedding) AS dimension, count(*) AS count
-            FROM kb.document d
-            JOIN kb.publication p ON p.id=d.current_publication_id AND p.document_version_id=?
-            JOIN kb.document_chunk c ON c.document_version_id=p.document_version_id
-              AND c.review_revision_id=p.review_revision_id AND c.chunk_role='CHILD'
-            WHERE d.organization_id=? AND d.id=? AND c.embedding IS NOT NULL
-            GROUP BY c.embedding_model, vector_dims(c.embedding)
-            """, version, org, doc);
-        result.set("models", json.valueToTree(models));
+        result.set("models",json.valueToTree(models));result.put("total",total).put("modelCompatibilityChecked",true);
+        var active=vectorSummary(total,models,targetModel,targetDimension);active.fields().forEachRemaining(e->result.set(e.getKey(),e.getValue()));
+        result.set("autoBuild",vectorSummary(total,models,autoModel==null?targetModel:autoModel,autoDimension>0?autoDimension:targetDimension));
         return result;
     }
+    private com.fasterxml.jackson.databind.node.ObjectNode vectorSummary(long total,List<Map<String,Object>> models,String model,int dimension) {
+        long embedded=models.stream().filter(row->model.equals(row.get("model"))&&((Number)row.get("dimension")).intValue()==dimension)
+            .mapToLong(row->((Number)row.get("count")).longValue()).sum();
+        return json.createObjectNode().put("embeddingModel",model).put("embeddingDimension",dimension).put("total",total).put("embedded",embedded)
+            .put("status",total==0?"NOT_INDEXED":embedded==total?"PRESENT":embedded==0?"MISSING":"PARTIAL");
+    }
+
     @Override public Task createTask(UUID org, UUID owner, String key, String fingerprint) {
         return jdbc.query("""
             INSERT INTO kb.bibliography_task(id,organization_id,owner_id,request_key,scope_fingerprint) VALUES (?,?,?,?,?)

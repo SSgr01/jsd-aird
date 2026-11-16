@@ -3,7 +3,7 @@ import { httpClient } from '@/services/http/client';
 
 export type Bibliography = {
   documentId: string; versionId: string; revision: number; status: string; documentType: string;
-  accepted: Record<string, unknown>; provenance: Record<string, { source?: string; excerpt?: string; anchor?: { page?: number } }>;
+  accepted: Record<string, unknown>; provenance: Record<string, { source?: string; excerpt?: string; status?: string; anchor?: { page?: number } }>;
   candidates: Array<Record<string, unknown>>; message?: string;
 };
 export const bibliographyStatus: Record<string, string> = {

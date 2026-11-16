@@ -6,6 +6,8 @@ so every file appears in the normal knowledge list. Metadata enrichment uses the
 shared backend task APIs; the script does not create upload-task records. Progress
 and resume state stay in a local JSONL manifest beside the selected source directory
 (or --manifest), with body, metadata and vector status tracked separately.
+Only public papers are eligible for external bibliography lookup. Recognized
+business documents use local metadata; optional local review does not block import.
 
 Example (Linux):
   export JSD_AIRD_URL=http://127.0.0.1:8080
@@ -513,12 +515,20 @@ def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_s
 METADATA_FINAL = {"ACCEPTED", "NEEDS_REVIEW", "NO_MATCH", "MISSING_PARSE", "FAILED", "STALE"}
 
 
+def local_metadata_ready(record: dict[str, Any]) -> bool:
+    """Optional source metadata review is not missing paper bibliography."""
+    return record.get("documentType") == "INTERNAL" and record.get("metadataStatus") in {"ACCEPTED", "NEEDS_REVIEW"}
+
+
 def sync_enrichment(api: ApiClient, record: dict[str, Any], *, retry_failed: bool = False) -> None:
     """Never upload, parse, publish, or fabricate vector completion in this phase."""
     base = f"{api_path_document(record['documentId'])}/versions/{record['versionId']}"
     try:
         bibliography = api.json("GET", base + "/bibliography")
         record["metadataStatus"] = bibliography["status"]
+        record["documentType"] = bibliography.get("documentType", "UNKNOWN")
+        record["metadataMode"] = "LOCAL_ONLY" if record["documentType"] == "INTERNAL" else (
+            "BIBLIOGRAPHIC" if record["documentType"] in {"PAPER", "PATENT"} else "UNCLASSIFIED")
         record["metadataRevision"] = bibliography["revision"]
         record["metadataError"] = bibliography.get("message")
         if bibliography["status"] not in {"ACCEPTED", "NEEDS_REVIEW", "NO_MATCH"}:
@@ -542,15 +552,16 @@ def sync_enrichment(api: ApiClient, record: dict[str, Any], *, retry_failed: boo
         record["metadataError"] = str(error)
     try:
         vector = api.json("GET", base + "/vector-status")
-        record["vectorIndexStatus"] = vector["status"]
+        record["vectorIndexStatus"] = vector.get("autoBuild", vector)["status"]
         record["vectorIndexDetail"] = vector
         record.pop("vectorIndexError", None)
     except Exception as error:
         record["vectorIndexStatus"] = "CHECK_FAILED"
         record["vectorIndexError"] = str(error)
+    # Bibliography is optional enrichment for a mixed knowledge library. Keep its
+    # status visible without making missing paper metadata a failed body import.
     # PRESENT describes stored vectors, not compatibility with a new model.
     record["importStatus"] = ("COMPLETED" if record.get("bodyImportStatus") == "COMPLETED"
-                              and record.get("metadataStatus") == "ACCEPTED"
                               and record.get("vectorIndexStatus") == "PRESENT" else "PARTIAL")
 
 
@@ -558,7 +569,8 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, int]:
     return {
         "bodyCompleted": sum(r.get("bodyImportStatus") == "COMPLETED" for r in records),
         "metadataAccepted": sum(r.get("metadataStatus") == "ACCEPTED" for r in records),
-        "metadataNeedsReview": sum(r.get("metadataStatus") in {"NEEDS_REVIEW", "NO_MATCH"} for r in records),
+        "metadataLocalOnly": sum(local_metadata_ready(r) for r in records),
+        "metadataNeedsReview": sum(r.get("metadataStatus") in {"NEEDS_REVIEW", "NO_MATCH"} and not local_metadata_ready(r) for r in records),
         "metadataMissingParse": sum(r.get("metadataStatus") == "MISSING_PARSE" for r in records),
         "metadataFailed": sum(r.get("metadataStatus") in {"FAILED", "CHECK_FAILED", "STALE"} for r in records),
         "metadataPending": sum(r.get("metadataStatus") in {"PENDING", "WAITING_PROVIDER"} for r in records),
@@ -907,10 +919,10 @@ def verify_target(state, model, dimension):
 def matching_vectors(vector, model, dimension):
     total = vector.get("total", 0)
     models = vector.get("models")
-    return (isinstance(total, int) and total > 0 and vector.get("embedded") == total
-            and vector.get("status") == "PRESENT" and isinstance(models, list) and bool(models)
-            and all(item.get("model") == model and item.get("dimension") == dimension for item in models)
-            and sum(item.get("count", 0) for item in models) == total)
+    selected = [item for item in models or [] if item.get("model") == model and item.get("dimension") == dimension]
+    return (isinstance(total, int) and total > 0 and isinstance(models, list)
+            and sum(item.get("count", 0) for item in selected) == total
+            and vector.get("embedded") == total and vector.get("status") == "PRESENT")
 
 
 def read_progress(path, context):
@@ -941,7 +953,7 @@ def paths(document_id, request_key=None, *, vectors_only=False):
 
 def rebuild_document(api, document, args, previous, context, manifest):
     document_id = document["id"]
-    state = api.json("GET", paths(document_id))
+    state = api.json("GET", paths(document_id,vectors_only=True))
     verify_target(state, args.model, args.dimension)
     if not state.get("aiApproved"):
         return "SKIPPED"
@@ -952,7 +964,7 @@ def rebuild_document(api, document, args, previous, context, manifest):
     vector_path = f"/api/v1/knowledge/documents/{document_id}/versions/{version}/vector-status"
     vector = api.json("GET", vector_path)
     if matching_vectors(vector, args.model, args.dimension):
-        current = api.json("GET", paths(document_id))
+        current = api.json("GET", paths(document_id,vectors_only=True))
         verify_target(current, args.model, args.dimension)
         if current["publicationId"] != publication or not current.get("aiApproved"):
             raise ImportErrorWithMessage("验证时发布版本或 AI 授权发生变化，请重新清点")
@@ -976,7 +988,7 @@ def rebuild_document(api, document, args, previous, context, manifest):
     record.update(attempt=attempt, requestKey=request_key)
     deadline = time.monotonic() + args.timeout_minutes * 60
     try:
-        tracked = api.json("GET", paths(document_id, request_key))
+        tracked = api.json("GET", paths(document_id, request_key,vectors_only=True))
         verify_target(tracked, args.model, args.dimension)
         if tracked["publicationId"] != publication:
             raise ImportErrorWithMessage("发布版本变化，请重新运行清点")
@@ -992,7 +1004,7 @@ def rebuild_document(api, document, args, previous, context, manifest):
         record["status"] = "WAITING"
         save(manifest, record)
         while True:
-            state = api.json("GET", paths(document_id, request_key))
+            state = api.json("GET", paths(document_id, request_key,vectors_only=True))
             verify_target(state, args.model, args.dimension)
             if state["publicationId"] != publication or not state.get("aiApproved"):
                 raise ImportErrorWithMessage("发布版本或 AI 授权变化，请重新清点；未修改授权")
@@ -1007,7 +1019,7 @@ def rebuild_document(api, document, args, previous, context, manifest):
             if job["status"] == "SUCCEEDED":
                 vector = api.json("GET", vector_path)
                 # Recheck the snapshot after reading its vectors.
-                current = api.json("GET", paths(document_id, request_key))
+                current = api.json("GET", paths(document_id, request_key,vectors_only=True))
                 verify_target(current, args.model, args.dimension)
                 if current["publicationId"] != publication or not current.get("aiApproved"):
                     record["status"] = "FAILED"

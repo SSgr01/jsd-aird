@@ -58,6 +58,12 @@ class RebuildApi:
 
 
 class VectorRebuildTest(unittest.TestCase):
+    def test_other_model_vectors_do_not_invalidate_complete_target(self):
+        state = vectors("qwen-new", 2560)
+        state["models"].append({"model": "text-embedding-v4", "dimension": 1024, "count": 2})
+        self.assertTrue(module.matching_vectors(state, "qwen-new", 2560))
+        self.assertFalse(module.matching_vectors(state, "qwen-new", 1024))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

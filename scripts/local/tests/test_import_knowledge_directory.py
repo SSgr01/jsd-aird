@@ -57,11 +57,48 @@ class EnrichmentResumeTest(unittest.TestCase):
         self.assertTrue(all(call.args[0] == "GET" for call in api.json.call_args_list))
         self.assertEqual(1, module.summarize([record])["vectorIncomplete"])
 
-    def test_manual_review_is_not_reported_as_complete(self):
+    def test_optional_bibliography_review_is_separate_from_import_completion(self):
         record = self.record()
         module.sync_enrichment(self.api("NEEDS_REVIEW", "PRESENT"), record)
-        self.assertEqual("PARTIAL", record["importStatus"])
+        self.assertEqual("COMPLETED", record["importStatus"])
+        self.assertEqual("NEEDS_REVIEW", record["metadataStatus"])
         self.assertEqual(1, module.summarize([record])["metadataNeedsReview"])
+
+    def test_business_document_local_review_does_not_require_paper_bibliography(self):
+        api = self.api("NEEDS_REVIEW", "PRESENT")
+        original = api.json.side_effect
+        def call(method, path, value=None):
+            result = original(method, path, value)
+            return {**result, "documentType": "INTERNAL"} if path.endswith("/bibliography") else result
+        api.json.side_effect = call
+        record = self.record()
+        module.sync_enrichment(api, record)
+        self.assertEqual("COMPLETED", record["importStatus"])
+        self.assertEqual("NEEDS_REVIEW", record["metadataStatus"])
+        self.assertEqual("LOCAL_ONLY", record["metadataMode"])
+        self.assertEqual(1, module.summarize([record])["metadataLocalOnly"])
+        self.assertEqual(0, module.summarize([record])["metadataNeedsReview"])
+        self.assertTrue(all(call.args[0] == "GET" for call in api.json.call_args_list))
+
+    def test_metadata_failure_is_separate_but_missing_vectors_still_prevent_completion(self):
+        for status, vector in (("FAILED", "PRESENT"), ("MISSING_PARSE", "PRESENT"), ("NEEDS_REVIEW", "MISSING")):
+            api = self.api(status, vector)
+            original = api.json.side_effect
+            def call(method, path, value=None):
+                result = original(method, path, value)
+                return {**result, "documentType": "INTERNAL"} if path.endswith("/bibliography") else result
+            api.json.side_effect = call
+            record = self.record()
+            module.sync_enrichment(api, record)
+            self.assertEqual("PARTIAL" if vector != "PRESENT" else "COMPLETED", record["importStatus"])
+
+    def test_unclassified_document_is_imported_without_inventing_paper_identity(self):
+        record = self.record()
+        module.sync_enrichment(self.api("NEEDS_REVIEW", "PRESENT"), record)
+        self.assertEqual("UNKNOWN", record["documentType"])
+        self.assertEqual("UNCLASSIFIED", record["metadataMode"])
+        self.assertEqual("NEEDS_REVIEW", record["metadataStatus"])
+        self.assertEqual("COMPLETED", record["importStatus"])
 
     def test_query_failure_does_not_reuse_stale_success(self):
         record = {**self.record(), "metadataStatus": "ACCEPTED", "vectorIndexStatus": "PRESENT"}

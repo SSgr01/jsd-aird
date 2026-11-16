@@ -21,13 +21,14 @@ class KnowledgeVectorRankingPostgresTest {
         db = new IsolatedPostgres(Map.of(
                 "kb.document_chunk", "chunk", "kb.document", "document",
                 "kb.publication", "publication", "kb.document_version", "version",
-                "kb.document_ai_grant", "grant", "ops.file_object", "file"));
+                "kb.document_ai_grant", "grant", "ops.file_object", "file", "kb.document_chunk_embedding", "embedding"));
         db.table("document", "id uuid PRIMARY KEY,organization_id uuid,lifecycle_status text,current_publication_id uuid,category_id uuid");
         db.table("publication", "id uuid PRIMARY KEY,document_version_id uuid,review_revision_id uuid,status text,metadata_snapshot_jsonb jsonb DEFAULT '{}'::jsonb");
         db.table("version", "id uuid PRIMARY KEY,file_object_id uuid");
         db.table("file", "id uuid PRIMARY KEY,organization_id uuid,status text");
         db.table("grant", "document_id uuid PRIMARY KEY,status text");
         db.table("chunk", "id uuid PRIMARY KEY,document_id uuid,document_version_id uuid,review_revision_id uuid,chunk_role text,embedding vector,embedding_model text DEFAULT 'qwen3'");
+        db.table("embedding","chunk_id uuid,organization_id uuid,embedding_model text,embedding_dimension int,embedding halfvec");
         repository = new JdbcKnowledgeRepository(db.jdbc);
     }
     @AfterAll static void cleanup() { if (db != null) db.close(); }
@@ -44,6 +45,7 @@ class KnowledgeVectorRankingPostgresTest {
     }
     private UUID chunk(Document d, UUID id, String vector) {
         db.jdbc.update("INSERT INTO kb.document_chunk(id,document_id,document_version_id,review_revision_id,chunk_role,embedding) VALUES(?,?,?,?,'CHILD',CAST(? AS vector))", id, d.id(), d.version(), d.review(), vector);
+        db.jdbc.update("INSERT INTO kb.document_chunk_embedding SELECT c.id,d.organization_id,'qwen3',vector_dims(c.embedding),c.embedding::halfvec FROM kb.document_chunk c JOIN kb.document d ON d.id=c.document_id WHERE c.id=?",id);
         return id;
     }
     private List<KnowledgeRepository.VectorQuery> queries() {
@@ -91,8 +93,8 @@ class KnowledgeVectorRankingPostgresTest {
                 case "parent" -> db.jdbc.update("UPDATE kb.document_chunk SET chunk_role='PARENT' WHERE id=?", id);
                 case "version" -> db.jdbc.update("UPDATE kb.document_chunk SET document_version_id=? WHERE id=?", UUID.randomUUID(), id);
                 case "review" -> db.jdbc.update("UPDATE kb.document_chunk SET review_revision_id=? WHERE id=?", UUID.randomUUID(), id);
-                case "old-model" -> db.jdbc.update("UPDATE kb.document_chunk SET embedding_model='old-model' WHERE id=?", id);
-                case "unknown-model" -> db.jdbc.update("UPDATE kb.document_chunk SET embedding_model=NULL WHERE id=?", id);
+                case "old-model" -> db.jdbc.update("UPDATE kb.document_chunk_embedding SET embedding_model='old-model' WHERE chunk_id=?", id);
+                case "unknown-model" -> db.jdbc.update("UPDATE kb.document_chunk_embedding SET embedding_model=NULL WHERE chunk_id=?", id);
                 default -> { }
             }
         }

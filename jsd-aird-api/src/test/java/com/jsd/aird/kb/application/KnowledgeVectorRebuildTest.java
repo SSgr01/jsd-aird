@@ -1,5 +1,6 @@
 package com.jsd.aird.kb.application;
 
+import org.springframework.test.util.ReflectionTestUtils;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
@@ -79,7 +80,7 @@ class KnowledgeVectorRebuildTest {
     @Test void enqueueReturnsTheDurableJobAndBindsSnapshotAndWorkerProfile() {
         var service = api(mock(KnowledgeService.class));
         var actor = ActorContext.required();
-        var key = "kb-rebuild-published-index:" + doc + ":resume-key";
+        var key = "kb-rebuild:"+doc+":"+com.jsd.aird.shared.evidence.EvidenceProtocol.sha("qwen-new\n1024\n"+pub+"\nfull").substring(0,32)+":"+com.jsd.aird.shared.evidence.EvidenceProtocol.sha("resume-key");
         when(async.enqueue(eq(actor.organizationId()), eq("KB_REBUILD_PUBLISHED_INDEX"), any(), eq(key), eq(45)))
                 .thenReturn(job);
         assertThat(service.rebuildPublishedIndex(doc, "resume-key").jobId()).isEqualTo(job);
@@ -95,7 +96,7 @@ class KnowledgeVectorRebuildTest {
         var service = api(mock(KnowledgeService.class));
         var actor = ActorContext.required();
         when(repository.isAiApproved(actor.organizationId(), doc)).thenReturn(true);
-        when(async.findJob(actor.organizationId(), "kb-rebuild-published-index:" + doc + ":resume-key"))
+        when(async.findJob(actor.organizationId(), "kb-rebuild:"+doc+":"+com.jsd.aird.shared.evidence.EvidenceProtocol.sha("qwen-new\n1024\n"+pub+"\nfull").substring(0,32)+":"+com.jsd.aird.shared.evidence.EvidenceProtocol.sha("resume-key")))
                 .thenReturn(Optional.of(new OpsAsyncFacade.AsyncJobView(job, "KB_REBUILD_PUBLISHED_INDEX", "RUNNING",
                         0, null, 1, 5, null, null, null)));
         var result = service.rebuildIndexStatus(doc, "resume-key");
@@ -140,7 +141,7 @@ class KnowledgeVectorRebuildTest {
         when(governance.currentPublication(org, doc)).thenReturn(Optional.of(current));
         when(governance.currentPublicationById(org, pub)).thenReturn(Optional.of(current));
         when(repository.isAiApproved(org, doc)).thenReturn(true);
-        when(repository.chunksForEmbedding(org, doc, revision))
+        when(repository.chunksForEmbedding(org, doc, revision,"qwen-new",1024))
                 .thenReturn(List.of(new KnowledgeRepository.ChunkEmbeddingRow(chunkId, "published evidence")));
         var embedding = mock(KnowledgeEmbeddingFacade.class);
         when(embedding.embedVector("published evidence")).thenReturn(Optional.of("[0.1,0.2]"));
@@ -161,14 +162,37 @@ class KnowledgeVectorRebuildTest {
 
     @Test void vectorStatusExposesMixedStoredModelsInsteadOfEquatingPresenceWithCompatibility() {
         var jdbc = mock(JdbcTemplate.class);
-        when(jdbc.queryForMap(anyString(), eq(version), eq(org), eq(doc))).thenReturn(Map.of("total", 2L, "embedded", 2L));
+        when(jdbc.queryForObject(anyString(),eq(Long.class), eq(version), eq(org), eq(doc))).thenReturn(2L);
         when(jdbc.queryForList(anyString(), eq(version), eq(org), eq(doc))).thenReturn(List.of(
                 Map.of("model", "old-cloud-model", "dimension", 1024, "count", 1L),
                 Map.of("model", "qwen-new", "dimension", 1024, "count", 1L)));
-        var result = new JdbcBibliographyRepository(jdbc, json).vectorStatus(org, doc, version);
-        assertThat(result.path("status").asText()).isEqualTo("PRESENT");
-        assertThat(result.path("modelCompatibilityChecked").asBoolean()).isFalse();
+        var repo=new JdbcBibliographyRepository(jdbc,json);
+        ReflectionTestUtils.setField(repo,"targetModel","qwen-new");
+        var result = repo.vectorStatus(org, doc, version);
+        assertThat(result.path("status").asText()).isEqualTo("PARTIAL");
+        assertThat(result.path("modelCompatibilityChecked").asBoolean()).isTrue();
         assertThat(result.path("models").size()).isEqualTo(2);
         assertThat(result.path("models").get(0).path("model").asText()).isEqualTo("old-cloud-model");
     }
+    @Test void localPublicationQueuesOnlyTheAutomaticQwenTarget() {
+        var knowledge=mock(KnowledgeService.class);var service=api(knowledge);
+        when(knowledge.indexModel()).thenReturn(new KnowledgeService.IndexModel("text-embedding-v4",1024));
+        when(knowledge.autoIndexModel()).thenReturn(new KnowledgeService.IndexModel("Qwen/Qwen3-Embedding-4B",2560));
+        ReflectionTestUtils.invokeMethod(service,"enqueueIndex",org,UUID.randomUUID(),doc,version,revision,1,true,false);
+        var payload=ArgumentCaptor.forClass(JsonNode.class);
+        verify(async).enqueue(eq(org),eq("KB_BUILD_KNOWLEDGE_INDEX"),payload.capture(),anyString(),eq(50));
+        assertThat(payload.getValue().path("expectedEmbeddingModel").asText()).isEqualTo("Qwen/Qwen3-Embedding-4B");
+        assertThat(payload.getValue().path("expectedEmbeddingDimension").asInt()).isEqualTo(2560);
+        verify(knowledge,never()).buildAndPublish(any(),any(),any(),any(),any(),anyInt(),anyBoolean());
+    }
+    @Test void idempotencySeparatesModesAndFitsTheExistingDatabaseKeyLimit() {
+        var service=api(mock(KnowledgeService.class));
+        service.rebuildPublishedIndex(doc,"r".repeat(128),false);
+        service.rebuildPublishedIndex(doc,"r".repeat(128),true);
+        var keys=ArgumentCaptor.forClass(String.class);
+        verify(async,times(2)).enqueue(any(),eq("KB_REBUILD_PUBLISHED_INDEX"),any(),keys.capture(),eq(45));
+        assertThat(keys.getAllValues().get(0)).isNotEqualTo(keys.getAllValues().get(1));
+        assertThat(keys.getAllValues()).allSatisfy(key->assertThat(key.length()).isLessThanOrEqualTo(160));
+    }
+
 }

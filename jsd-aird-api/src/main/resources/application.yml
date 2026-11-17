@@ -108,6 +108,7 @@ app:
     cookie-secure: ${JSD_AIRD_COOKIE_SECURE:false}
     cookie-same-site: ${JSD_AIRD_COOKIE_SAME_SITE:Lax}
     enforcement-mode: ${JSD_AIRD_IAM_ENFORCEMENT_MODE:ENFORCE}
+    single-session-enabled: ${JSD_AIRD_SINGLE_SESSION_ENABLED:false}
   iam:
     bootstrap:
       enabled: ${JSD_AIRD_IAM_BOOTSTRAP_ENABLED:false}

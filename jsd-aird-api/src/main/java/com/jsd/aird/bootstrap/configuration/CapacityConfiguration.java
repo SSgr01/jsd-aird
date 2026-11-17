@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.boot.context.properties.*;
+import org.springframework.boot.autoconfigure.flyway.FlywayDataSource;
 import org.springframework.context.annotation.*;
 import org.springframework.jdbc.datasource.*;
 import org.springframework.transaction.*;
@@ -23,14 +24,24 @@ public class CapacityConfiguration {
     @Bean(destroyMethod="close") @ConfigurationProperties("spring.datasource.hikari")
     HikariDataSource capacityPool(DataSourceProperties properties){return properties.initializeDataSourceBuilder().type(HikariDataSource.class).build();}
 
+    @Bean(destroyMethod="close") @FlywayDataSource
+    HikariDataSource flywayDataSource(DataSourceProperties properties){
+        var pool=properties.initializeDataSourceBuilder().type(HikariDataSource.class).build();
+        pool.setPoolName("flyway-migration");
+        pool.setMaximumPoolSize(2);
+        return pool;
+    }
+
     @Bean @Primary
     DataSource dataSource(@Qualifier("capacityPool") HikariDataSource pool,CapacityProperties limits,io.micrometer.core.instrument.MeterRegistry metrics){
         pool.addDataSourceProperty("connectTimeout","1");pool.addDataSourceProperty("cancelSignalTimeout","1");
         pool.setConnectionInitSql("SELECT set_config('lock_timeout','"+limits.lockMillis()+"ms',false),set_config('statement_timeout','"+limits.writeSqlMillis()+"ms',false),set_config('idle_in_transaction_session_timeout','10000ms',false)");
         return new BudgetDataSource(pool,limits,metrics);
     }
-    @Bean
+    @Bean @Primary
     PlatformTransactionManager transactionManager(DataSource source,CapacityProperties limits){return new BudgetTransactionManager(source,limits);}
+    @Bean
+    PlatformTransactionManager bootstrapTransactionManager(DataSource source){return new DataSourceTransactionManager(source);}
 
     @Bean TemporarySpace temporarySpace(CapacityProperties limits,@Value("${app.capacity.temporary-root:${java.io.tmpdir}/jsd-aird-bounded}") String root){return new TemporarySpace(limits.temporaryBytes(),Path.of(root));}
     @Bean(destroyMethod="close") CapacityDiagnostics capacityDiagnostics(org.springframework.jdbc.core.JdbcTemplate jdbc,@Qualifier("capacityPool") HikariDataSource pool,io.micrometer.core.instrument.MeterRegistry metrics){return new CapacityDiagnostics(jdbc,pool,metrics);}

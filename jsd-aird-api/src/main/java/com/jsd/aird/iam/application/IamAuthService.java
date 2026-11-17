@@ -40,13 +40,15 @@ public class IamAuthService implements com.jsd.aird.iam.api.DelegationIdentity {
     private final boolean developmentMode;
     private final int maxLoginFailures;
     private final Duration loginLockDuration;
+    private final boolean singleSessionEnabled;
 
     public IamAuthService(IamStore store, PasswordEncoder passwordEncoder,
                           @Value("${app.security.session-idle-timeout:30m}") Duration idleTimeout,
                           @Value("${app.security.session-absolute-timeout:30d}") Duration absoluteTimeout,
                           @Value("${app.identity.development-mode:false}") boolean developmentMode,
                           @Value("${app.security.max-login-failures:5}") int maxLoginFailures,
-                          @Value("${app.security.login-lock-duration:5m}") Duration loginLockDuration) {
+                          @Value("${app.security.login-lock-duration:5m}") Duration loginLockDuration,
+                          @Value("${app.security.single-session-enabled:true}") boolean singleSessionEnabled) {
         if (maxLoginFailures < 1 || loginLockDuration.isZero() || loginLockDuration.isNegative()) {
             throw new IllegalArgumentException("登录失败阈值和锁定时长必须大于零");
         }
@@ -57,6 +59,7 @@ public class IamAuthService implements com.jsd.aird.iam.api.DelegationIdentity {
         this.developmentMode = developmentMode;
         this.maxLoginFailures = maxLoginFailures;
         this.loginLockDuration = loginLockDuration;
+        this.singleSessionEnabled = singleSessionEnabled;
     }
 
     @Transactional(noRollbackFor = LoginFailure.class)
@@ -82,7 +85,9 @@ public class IamAuthService implements com.jsd.aird.iam.api.DelegationIdentity {
                 .orElseThrow(() -> new ApiException(ApiErrorCode.AUTH_REQUIRED)).lastLoginAt() == null;
         store.attempt(organization.id(), user.username(), ip, true);
         store.markLoginSuccess(organization.id(), user.id());
-        store.replaceUserSessions(organization.id(), user.id());
+        if (singleSessionEnabled) {
+            store.replaceUserSessions(organization.id(), user.id());
+        }
         var token = randomToken();
         var session = store.createSession(organization.id(), user.id(), user.authVersion(), hash(token),
                 now.plus(idleTimeout), now.plus(absoluteTimeout), ip, userAgent, command.rememberMe());
@@ -123,7 +128,7 @@ public class IamAuthService implements com.jsd.aird.iam.api.DelegationIdentity {
     }
 
     public boolean wasReplaced(String token) {
-        return token != null && !token.isBlank() && store.wasReplaced(token);
+        return singleSessionEnabled && token != null && !token.isBlank() && store.wasReplaced(token);
     }
 
     public IamStore.User user(UUID userId) {

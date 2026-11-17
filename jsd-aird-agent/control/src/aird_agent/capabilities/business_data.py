@@ -12,7 +12,7 @@ READ_TYPES = [
     "CUSTOMER_COMMUNICATION", "CUSTOMER_REQUIREMENT", "INVENTORY_BALANCE", "INVENTORY_TRANSACTION",
     "SAMPLE_DISPATCH", "SHIPMENT", "PRODUCTION_ORDER", "PRODUCTION_UPLOAD", "QUALITY_STANDARD",
     "QUALITY_RECORD", "QUALITY_COA", "QUALITY_DEFECT", "QUALITY_MANUAL", "QUALITY_MSDS", "QUALITY_LABEL",
-    "SPECTRUM", "SPECTRUM_ANALYSIS", "RAW_MATERIAL", "RAW_MATERIAL_SOURCE",
+    "SPECTRUM", "RAW_MATERIAL", "RAW_MATERIAL_SOURCE",
     "MEETING_MINUTES", "PROJECT_DOCUMENT", "PROJECT_REFERENCE", "QUALITY_UPLOAD", "RESEARCH_TEST_UPLOAD",
 ]
 COMPUTATIONS = {"run_prediction", "run_formula_design", "run_experiment_optimization", "run_model_training", "activate_trained_model", "continue_experiment_optimization"}
@@ -41,6 +41,7 @@ query按连续文本匹配，使用一个明确编号或关键词，不把客户
 品管、生产和研发资料的content为页面已保存正文，登记字段不能代替正文。大正文使用section=content，按reading中的offset、returned、total与next_offset读完；单元格原值、公式与数字格式保持区分。files仅为原文件目录，include_file=true按file_id下载原上传内容；有business_file.reading_path时用原生read阅读该文本投影，图片用read_image。文本投影不能代替内嵌图片和版式阅读。原件可能早于页面保存正文，不能相互替代。没有保存正文时按content_notice说明缺失，并按需要读取原件。
 项目business_links可发现会议纪要、项目文档、资料参考及关联业务资料。日报周报先读完RELATED_ACTIVITY及全部索引分页，再按报告需要展开正文、原文件和附件；发现目录、读取正文、下载原件与实际阅读附件是不同动作。不要求逐个附件全部读取。后台可阅读任务目录中的文件与大结果，不能运行脚本、修改文件或交付文件。
 实验目录不是正文。判断配方、方法或结果是否缺失前先读固定版本概览中的共用字段、背景与方案；样品数为零不代表没有配方说明。项目资料数不是配方物料数。背景引用历史实验时沿明确的实验与版本回读，区分历史值、拟定条件和本次记录。
+实验section=record包含结构化分区及页面保存正文；过大时按section_counts逐分区读取，其中content保留未绑定字段的备注、额外工作表及Word文字。实验原上传文件也通过files及include_file/file_id按需读取，历史版本仅列该版本来源；附加文件仅在当前版本目录列出。没有上传文件的在线实验不生成原件。
 精确统计使用business_query；大数据用output=file取得原生分析文件，再用原生文件和脚本能力分析。缺失、未测、零值、单位及条件保持区分。
 计算先读取get_compute_context，沿实际输入、模型版本及适用域填写请求。只有用户要求时运行预测、配方搜索或实验优化；预测和候选不是实测。
 计算提交后保留真实id，使用get_compute_result查询；停止会话不代表后台计算已取消。结果未知先对账，不重建操作身份或重复提交。
@@ -112,6 +113,7 @@ def business_pack():
         }),
         tool("business_read", "读取已保存正文及登记字段。大表格用section=content及offset/limit按next_offset读完。files是原文件目录，include_file=true下载原件；多个文件需指定file_id。原件可能早于保存正文，下载成功不代表已阅读。实验优先section=record，较大时按分区分页。", {
             "ref": REFERENCE, "section": STRING, "sample_key": STRING,
+            "page": {"type": "integer", "minimum": 1, "description": "图谱原始页码；section=page且include_file=true取得该页图片，再用read_image实际看图。"},
             "include_file": {"type": "boolean"},
             "file_id": STRING,
             "field_codes": {"type": "array", "maxItems": 8, "items": STRING}, **PAGE,
@@ -157,5 +159,5 @@ def business_pack():
             "kind": KINDS, "run_id": STRING,
         }, ["kind", "run_id"]),
     )
-    return CapabilityPack("business-data", "6", INSTRUCTIONS, specs, ("business_search",),
+    return CapabilityPack("business-data", "7", INSTRUCTIONS, specs, ("business_search",),
                           {spec["name"]: handler(spec["name"]) for spec in specs}, mutations=frozenset(COMPUTATIONS | {"experiment_conversion"}))

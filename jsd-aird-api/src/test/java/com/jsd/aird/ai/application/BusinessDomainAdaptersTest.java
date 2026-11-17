@@ -161,7 +161,8 @@ class BusinessDomainAdaptersTest {
         var chart=new SpectrumRepository.ChartRow(id(1),actor.organizationId(),id(2),"ISO","隔离图谱",id(3),"样品A","isolated.pdf","application/pdf",bytes.length,hash,"A","ISO-B01","25°C", "{}",1,"READY",Instant.EPOCH,Instant.EPOCH);
         when(repo.findChart(actor.organizationId(),id(1))).thenReturn(Optional.of(chart));
         when(files.openChart(id(1))).thenAnswer(call->new SpectrumService.StoredChartFile(chart,new com.jsd.aird.ops.api.FileStorageFacade.StoredFile(id(3),"isolated.pdf","application/pdf",bytes.length,hash,new ByteArrayInputStream(bytes))));
-        var reader=new BusinessSpectrumReader(repo,files,json); var service=service(reader);
+        when(files.requireCategory(actor.organizationId(),id(2))).thenReturn(new SpectrumRepository.CategoryRow(id(2),actor.organizationId(),"ISO","隔离图谱","","按可见特征分析","[]",0,false,1));
+        var reader=new BusinessSpectrumReader(repo,files,json,new com.jsd.aird.spc.application.SpectrumPageRenderer(files)); var service=service(reader);
         var args=json.createObjectNode().put("include_file",true); args.set("ref",BusinessViews.ref("SPECTRUM",id(1)));
         var result=service.invoke("business_read",args);
         assertThat(Base64.getDecoder().decode(result.path("business_file").path("content_base64").asText())).isEqualTo(bytes);

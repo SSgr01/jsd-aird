@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, StrictInt, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from aird_agent.core.contracts import Contract as Contract
@@ -15,13 +15,21 @@ from aird_agent.evidence.models import SourceRef as SourceRef
 
 
 class ContextRef(Contract):
-    kind: Literal["PROJECT", "EXPERIMENT", "KB_PUBLICATION"]
+    kind: Literal["PROJECT", "EXPERIMENT", "KB_PUBLICATION", "SPECTRUM"]
     resource_id: UUID
     publication_id: UUID | None = None
     version_id: str | None = Field(default=None, min_length=1, max_length=100)
+    pages: list[StrictInt] | None = Field(default=None, min_length=1, max_length=5)
 
     @model_validator(mode="after")
     def coherent(self):
+        if self.kind == "SPECTRUM":
+            if self.version_id is None or not re.fullmatch(r"[a-f0-9]{64}", self.version_id):
+                raise ValueError("A spectrum reference must pin the original SHA256")
+            if not self.pages or any(page < 1 for page in self.pages) or len(set(self.pages)) != len(self.pages):
+                raise ValueError("A spectrum reference must select distinct original pages")
+        elif self.pages is not None:
+            raise ValueError("Page selections are only supported for spectra")
         if self.kind == "KB_PUBLICATION" and self.publication_id is None:
             raise ValueError("A knowledge context must pin a publication")
         if self.kind == "EXPERIMENT":

@@ -60,7 +60,6 @@ public final class PermissionModelCatalog {
             m("spectrum", "图谱中心", null, "/spectrum/view"),
             m("spectrum.upload", "图谱上传", "spectrum", "/spectrum/view"),
             m("spectrum.view", "图谱查看", "spectrum", "/spectrum/view"),
-            m("spectrum.ai", "AI图谱分析", "spectrum", "/spectrum/view"),
             m("spectrum.category", "图谱分类", "spectrum", "/spectrum/view"),
             m("production", "生产单管理", null, "/production-orders/list"),
             m("production.upload", "生产单上传", "production", "/production-orders/list"),

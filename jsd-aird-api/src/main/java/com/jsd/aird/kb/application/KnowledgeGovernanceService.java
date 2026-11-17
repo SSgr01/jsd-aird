@@ -207,7 +207,7 @@ public class KnowledgeGovernanceService {
                 review.reviewRevision().excludedReviewNodeIds());
         var tableText = governance.largeTableRows(actor.organizationId(), reviewRevisionId).stream()
                 .map(KnowledgeGovernanceRepository.LargeTableRow::projectedText)
-                .reduce((left, right) -> left + "\n\n" + right).orElse("");
+                .collect(java.util.stream.Collectors.joining("\n\n"));
         var confirmedText = projection.confirmedText();
         if (StringUtils.hasText(tableText)) confirmedText = StringUtils.hasText(confirmedText)
                 ? confirmedText + "\n\n" + tableText : tableText;

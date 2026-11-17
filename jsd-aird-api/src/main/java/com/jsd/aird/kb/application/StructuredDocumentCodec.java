@@ -34,11 +34,14 @@ public class StructuredDocumentCodec {
     public static final int SCHEMA_VERSION = 1;
     public static final int MAX_NODE_COUNT = 20_000;
     public static final int MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
+    private static final int PART_NODE_TARGET = 4_000;
+    private static final int PART_BYTE_TARGET = 1024 * 1024;
+    private static final int MAX_PARTS = 256;
 
     private static final Set<String> ALLOWED_NODES = Set.of(
             "doc", "paragraph", "heading", "text", "bulletList", "orderedList", "listItem",
             "blockquote", "codeBlock", "horizontalRule", "hardBreak", "table", "tableRow",
-            "tableHeader", "tableCell", "image", "audioSegment", "formula", "inlineMath", "dataTableRef"
+            "tableHeader", "tableCell", "image", "audioSegment", "formula", "inlineMath", "dataTableRef", "documentPart"
     );
     private static final Set<String> ALLOWED_MARKS = Set.of(
             "bold", "italic", "underline", "strike", "code", "link", "superscript", "subscript");
@@ -149,14 +152,99 @@ public class StructuredDocumentCodec {
         }
         var copy = candidate.deepCopy();
         ((ObjectNode) copy).put("schemaVersion", SCHEMA_VERSION);
-        var count = validateNode(copy, true, new HashSet<>());
-        if (count > MAX_NODE_COUNT) {
-            throw new ApiException(ApiErrorCode.BAD_REQUEST, "确认内容超过 20,000 个节点，请拆分文档");
+        var count = validateNode(copy, true, new HashSet<>(), 0);
+        if (count > 1_000_000 || copy.toString().getBytes(StandardCharsets.UTF_8).length > 64 * 1024 * 1024)
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "结构化内容超过后端单文件处理容量，请联系管理员检查解析结果");
+        return segment(copy);
+    }
+
+    /** Partition large documents server-side without changing file/version/source identities. */
+    public JsonNode segment(JsonNode candidate) {
+        if (candidate == null || !candidate.isObject() || !"doc".equals(candidate.path("type").asText())) return candidate;
+        var content = candidate.path("content");
+        if (!content.isArray() || content.isEmpty()) return candidate;
+        boolean hasParts = false;
+        for (var node : content) hasParts |= "documentPart".equals(node.path("type").asText());
+        if (hasParts) {
+            if (content.size() > MAX_PARTS) throw new ApiException(ApiErrorCode.BAD_REQUEST, "文档分段数超过后端处理容量");
+            boolean resize = false;
+            for (var part : content) {
+                if (!"documentPart".equals(part.path("type").asText()))
+                    throw new ApiException(ApiErrorCode.BAD_REQUEST, "分段文档结构不一致");
+                if (nodeCount(part) > MAX_NODE_COUNT || byteSize(part) > MAX_DOCUMENT_BYTES)
+                    resize = true;
+            }
+            if (resize) {
+                var flattened = (ObjectNode) candidate.deepCopy();
+                var blocks = objectMapper.createArrayNode();
+                for (var part : content) part.path("content").forEach(blocks::add);
+                flattened.set("content", blocks);
+                return segment(flattened);
+            }
+            return candidate;
         }
-        if (copy.toString().getBytes(StandardCharsets.UTF_8).length > MAX_DOCUMENT_BYTES) {
-            throw new ApiException(ApiErrorCode.BAD_REQUEST, "确认内容超过 5 MiB，请拆分文档");
+        if (nodeCount(candidate) <= MAX_NODE_COUNT && byteSize(candidate) <= MAX_DOCUMENT_BYTES) return candidate;
+        var blocks = new ArrayList<JsonNode>();
+        for (var node : content) splitContainer(node, blocks);
+        var parts = objectMapper.createArrayNode();
+        ArrayNode current = objectMapper.createArrayNode();
+        int nodes = 1, bytes = 128;
+        for (var block : blocks) {
+            int blockNodes = nodeCount(block), blockBytes = byteSize(block);
+            if (blockNodes + 1 > MAX_NODE_COUNT || blockBytes + 128 > MAX_DOCUMENT_BYTES)
+                throw new ApiException(ApiErrorCode.BAD_REQUEST, "单个解析内容块异常过大，请联系管理员检查解析结果");
+            if (!current.isEmpty() && (nodes + blockNodes > PART_NODE_TARGET || bytes + blockBytes > PART_BYTE_TARGET)) {
+                parts.add(documentPart(parts.size(), current));
+                current = objectMapper.createArrayNode(); nodes = 1; bytes = 128;
+            }
+            current.add(block); nodes += blockNodes; bytes += blockBytes + 1;
         }
-        return copy;
+        if (!current.isEmpty()) parts.add(documentPart(parts.size(), current));
+        if (parts.size() > MAX_PARTS) throw new ApiException(ApiErrorCode.BAD_REQUEST, "文档分段数超过后端处理容量");
+        var result = (ObjectNode) candidate.deepCopy();
+        result.set("content", parts);
+        return result;
+    }
+
+    private ObjectNode documentPart(int index, ArrayNode content) {
+        var part = objectMapper.createObjectNode().put("type", "documentPart");
+        part.putObject("attrs").put("partNo", index + 1);
+        part.set("content", content);
+        return part;
+    }
+
+    private void splitContainer(JsonNode node, List<JsonNode> output) {
+        if (!Set.of("table", "bulletList", "orderedList").contains(node.path("type").asText())
+                || !node.path("content").isArray() || node.path("attrs").has("reviewNodeId")
+                || (nodeCount(node) <= PART_NODE_TARGET && byteSize(node) <= PART_BYTE_TARGET)) {
+            output.add(node); return;
+        }
+        ArrayNode current = objectMapper.createArrayNode();
+        int nodes = 1, bytes = 256, offset = 0;
+        for (var child : node.path("content")) {
+            int childNodes = nodeCount(child), childBytes = byteSize(child);
+            if (!current.isEmpty() && (nodes + childNodes > PART_NODE_TARGET || bytes + childBytes > PART_BYTE_TARGET)) {
+                addContainerPart(node, current, offset, output); offset += current.size();
+                current = objectMapper.createArrayNode(); nodes = 1; bytes = 256;
+            }
+            current.add(child); nodes += childNodes; bytes += childBytes + 1;
+        }
+        if (!current.isEmpty()) addContainerPart(node, current, offset, output);
+    }
+
+    private void addContainerPart(JsonNode source, ArrayNode content, int offset, List<JsonNode> output) {
+        var part = (ObjectNode) source.deepCopy();
+        part.set("content", content);
+        if ("orderedList".equals(source.path("type").asText()))
+            part.withObject("/attrs").put("start", source.path("attrs").path("start").asInt(1) + offset);
+        output.add(part);
+    }
+
+    private int byteSize(JsonNode node) { return node.toString().getBytes(StandardCharsets.UTF_8).length; }
+    private int nodeCount(JsonNode node) {
+        int count = 1;
+        for (var child : node.path("content")) count += nodeCount(child);
+        return count;
     }
 
     public Projection project(JsonNode confirmedDocument, List<UUID> excludedReviewNodeIds) {
@@ -165,7 +253,7 @@ public class StructuredDocumentCodec {
         collectProjection(validate(confirmedDocument), excluded, new LinkedHashSet<>(), new HeadingState(), paragraphs);
         var text = paragraphs.stream().map(ProjectedNode::text)
                 .filter(value -> value != null && !value.isBlank())
-                .reduce((left, right) -> left + "\n\n" + right).orElse("");
+                .collect(java.util.stream.Collectors.joining("\n\n"));
         return new Projection(text, List.copyOf(paragraphs));
     }
 
@@ -178,8 +266,10 @@ public class StructuredDocumentCodec {
         return List.copyOf(result);
     }
 
-    private int validateNode(JsonNode node, boolean root, Set<UUID> reviewNodeIds) {
+    private int validateNode(JsonNode node, boolean root, Set<UUID> reviewNodeIds, int depth) {
         var type = node.path("type").asText();
+        if (depth > 128 || ("documentPart".equals(type) && depth != 1))
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "确认内容的分段位置或嵌套层级无效");
         if (!ALLOWED_NODES.contains(type) || (root && !"doc".equals(type))) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "确认内容包含不支持的节点：" + type);
         }
@@ -209,7 +299,7 @@ public class StructuredDocumentCodec {
         var count = 1;
         if (node.has("content")) {
             if (!node.path("content").isArray()) throw new ApiException(ApiErrorCode.BAD_REQUEST, "节点内容必须是数组");
-            for (var child : node.path("content")) count += validateNode(child, false, reviewNodeIds);
+            for (var child : node.path("content")) count += validateNode(child, false, reviewNodeIds, depth + 1);
         }
         return count;
     }
@@ -260,8 +350,9 @@ public class StructuredDocumentCodec {
     }
 
     private ObjectNode document(ArrayNode content) {
-        return objectMapper.createObjectNode().put("type", "doc").put("schemaVersion", SCHEMA_VERSION)
-                .set("content", content);
+        var value = objectMapper.createObjectNode().put("type", "doc").put("schemaVersion", SCHEMA_VERSION);
+        value.set("content", content);
+        return (ObjectNode) segment(value);
     }
 
     private List<ObjectNode> structuredNodes(String sourceType, UUID sourceKey, UUID firstReviewNodeId, String text,

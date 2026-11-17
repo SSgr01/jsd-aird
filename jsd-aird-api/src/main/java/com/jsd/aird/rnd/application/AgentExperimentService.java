@@ -112,6 +112,10 @@ public class AgentExperimentService implements AgentExperimentFacade {
         } else if ("get_experiment_record".equals(action)) {
             var id = UUID.fromString(args.path("experiment_id").asText());
             var item = detail(id);
+            if (args.path("include_file").asBoolean()) {
+                var actor = ActorContext.required();
+                authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "eln.view.download", "EXPERIMENT", id, "READ"));
+            }
             var vid = uuid(args, "version_id");
             candidates.add(candidate(id, version(id, vid == null ? item.currentVersionId() : vid), item.summary().title(), args));
             result.put("path", "/experiments/" + id);
@@ -156,7 +160,7 @@ public class AgentExperimentService implements AgentExperimentFacade {
             .put("versionNo", version.versionNo()).put("version_hash", canonical.hash(version.editModel())).set("page", page);
         var result = json.createObjectNode().put("text", text).put("model_text", relationText + projection.modelText(content));
         var reading = result.putObject("reading").put("section", content.path("section").asText()).put("offset", content.path("offset").asInt());
-        for (var key : List.of("section_counts", "next_offset", "total", "complete")) if (content.has(key)) reading.set(key, content.get(key));
+        for (var key : List.of("section_counts", "next_offset", "total", "returned", "complete", "content_notice")) if (content.has(key)) reading.set(key, content.get(key));
         result.set("source", source); return result;
     }
 

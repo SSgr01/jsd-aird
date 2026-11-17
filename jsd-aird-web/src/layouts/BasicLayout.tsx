@@ -120,7 +120,6 @@ const route = {
       routes: [
         { path: '/spectrum/upload', name: '图谱上传', icon: <UploadOutlined /> },
         { path: '/spectrum/view', name: '图谱查看', icon: <EyeOutlined /> },
-        { path: '/spectrum/chat', name: 'AI图谱分析', icon: <RobotOutlined /> },
       ],
     },
     {
@@ -358,12 +357,11 @@ export function BasicLayout() {
         actionsRender={false}
         rightContentRender={() => null}
         contentStyle={{ minHeight: 'calc(var(--app-viewport-height, 100vh) - 64px)', padding: 0 }}
-        menuItemRender={(item: MenuDataItem & { isUrl: boolean; onClick: () => void }, dom: React.ReactNode, menuProps: { isMobile?: boolean }) => (item.path ? <PrefetchLink to={item.path} onClick={() => {
-          if (item.path === '/assistant' && location.pathname !== '/assistant') {
-            try {
-              sessionStorage.setItem('jsd.ai-workbench.return', location.pathname + location.search + location.hash);
-            } catch { /* Returning to the system homepage remains available without browser storage. */ }
-          }
+        menuItemRender={(item: MenuDataItem & { isUrl: boolean; onClick: () => void }, dom: React.ReactNode, menuProps: { isMobile?: boolean }) => (item.path === '/assistant' ? (
+          // Keep the business page mounted, including unsaved edits. The workbench
+          // shares its login cookie and uses the same-origin referrer to return.
+          <a href="/agent/" target="_blank" rel="noopener" title="在新标签页打开 AI工作台">{dom}</a>
+        ) : item.path ? <PrefetchLink to={item.path} onClick={() => {
           if (menuProps.isMobile) item.onClick();
         }}>{dom}</PrefetchLink> : dom)}
       >

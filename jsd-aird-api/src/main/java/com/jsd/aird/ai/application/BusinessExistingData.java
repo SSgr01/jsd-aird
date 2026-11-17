@@ -18,6 +18,12 @@ public class BusinessExistingData {
     private final AgentExperimentFacade experiments;
     private final SharedRetrievalService retrieval;
     private final ObjectMapper json;
+    private BusinessOriginalFiles originalFiles;
+    private BusinessFileProjection fileProjection;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setOriginalFiles(BusinessOriginalFiles originalFiles) { this.originalFiles = originalFiles; }
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setFileProjection(BusinessFileProjection fileProjection) { this.fileProjection = fileProjection; }
     public BusinessExistingData(AgentProjectFacade projects, AgentExperimentFacade experiments, SharedRetrievalService retrieval, ObjectMapper json) {
         this.projects = projects; this.experiments = experiments; this.retrieval = retrieval; this.json = json;
     }
@@ -37,7 +43,8 @@ public class BusinessExistingData {
         String type = args.path("type").asText(args.path("ref").path("type").asText());
         if (!Set.of("business_search", "business_read").contains(action)) throw new ApiException(ApiErrorCode.BAD_REQUEST, "该类型请使用查找和完整读取");
         var filters = BusinessDataService.filters(args);
-        if (args.path("include_file").asBoolean()) throw new ApiException(ApiErrorCode.BAD_REQUEST, "此类型请使用已有原生附件或资料原文件入口");
+        if (args.path("include_file").asBoolean() && !("EXPERIMENT".equals(type) && "business_read".equals(action)))
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "此类型请使用已有原生附件或资料原文件入口");
         filters.fieldNames().forEachRemaining(field -> {
             if (!filters(type).contains(field)) throw BusinessDataService.invalidFilter(
                 filters(type), requiredFilters(type), field, "unsupported_filter", "不支持该筛选字段：" + field);
@@ -113,7 +120,24 @@ public class BusinessExistingData {
             if (!search && ref.hasNonNull("version_hash")) for (var item : result.path("candidates"))
                 if (!ref.path("version_hash").equals(item.path("source").path("anchor").path("version_hash")))
                     throw new ApiException(ApiErrorCode.VERSION_CONFLICT, "实验草稿正文已改变，请重新读取活动索引");
-            return decorate(result, type);
+            decorate(result, type);
+            if (originalFiles != null) for (var item : result.path("candidates")) {
+                var files = json.valueToTree(originalFiles.list((ObjectNode)item.path("ref")));
+                ((ObjectNode)item).set("files", files);
+                if (!search) result.set("files", files);
+            }
+            if (!search && args.path("include_file").asBoolean()) {
+                if (originalFiles == null) throw new ApiException(ApiErrorCode.BAD_REQUEST, "实验原文件读取暂不可用");
+                var candidate = result.path("candidates").path(0);
+                var file = originalFiles.open((ObjectNode)candidate.path("ref"), BusinessViews.optionalId(args, "file_id"));
+                var transfer = result.putObject("business_file").put("name", file.name()).put("content_type", file.contentType())
+                    .put("bytes", file.bytes().length).put("sha256", file.sha256())
+                    .put("content_base64", Base64.getEncoder().encodeToString(file.bytes()));
+                transfer.set("ref", candidate.path("ref"));
+                if (fileProjection != null) fileProjection.attach(transfer, file);
+                experiments.validateSource(candidate.path("source"), null);
+            }
+            return result;
         }
         String operation;
         if (search && "PROJECT".equals(type)) operation = "search_projects";

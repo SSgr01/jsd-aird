@@ -12,7 +12,7 @@ business documents use local metadata; optional local review does not block impo
 Example (Linux):
   export JSD_AIRD_URL=http://127.0.0.1:8080
   export JSD_AIRD_USERNAME=admin JSD_AIRD_PASSWORD='...'
-  python3 import_knowledge_directory.py /srv/kb/import
+  python3.12 import_knowledge_directory.py /srv/kb/import --max-in-flight 4
 
 Publication requires an approved workspace review. Automatic submission and
 approval are enabled by default (--auto-approve), using an account with
@@ -27,10 +27,17 @@ model/dimension counts, and persists resumable progress in a separate JSONL mani
 It updates the existing published chunks' vectors, preserving their IDs and BM25.
 
 Rebuild example (model name and dimension must match the deployed service):
-  python3 import_knowledge_directory.py --rebuild-vectors \
+  python3.12 import_knowledge_directory.py --rebuild-vectors \
       --embedding-model Qwen/Qwen3-Embedding-0.6B --embedding-dimension 1024 --dry-run
 Remove --dry-run to submit work. Repeat the same command and --manifest to resume;
 use --retry-failed to retry terminal failures. Update both API and Worker first.
+--max-in-flight controls bounded document concurrency for import and rebuild (1–16).
+Workers reuse one login with isolated cookie jars; never run other scripts or a
+browser session under the same account while this script runs. HTTP 401 stops the
+run immediately, preserving submitted jobs and the manifest for resume. Uploads
+and category resolution remain ordered; publication waits complete concurrently.
+Metadata backfill is dispatched by the server; submitting concurrent backfill
+tasks does not increase its Worker capacity and may duplicate external lookups.
 
 By default, the first relative directory selects/creates a category, deeper
 directories become tags, and the full relative file path becomes the source
@@ -40,7 +47,8 @@ description. Supplying --category-id retains the single-category workflow.
 from __future__ import annotations
 
 import argparse
-from collections import deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+import copy
 import hashlib
 import json
 import os
@@ -48,6 +56,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unicodedata
 import urllib.parse
@@ -75,6 +84,73 @@ class ApiHttpError(ImportErrorWithMessage):
         self.code = code
 
 
+class SessionExpired(ApiHttpError):
+    def __init__(self):
+        super().__init__(401, None, "登录已失效，已停止本次脚本；请勿使用同账号同时登录浏览器或其他脚本，保留 manifest 后续跑")
+
+
+def require_session(error):
+    if isinstance(error, ApiHttpError) and error.status == 401:
+        raise SessionExpired() from error
+
+
+def pause(api, seconds):
+    event = getattr(api, 'cancelled', None)
+    if isinstance(event, threading.Event):
+        if event.wait(seconds):
+            raise SessionExpired()
+    else:
+        time.sleep(seconds)
+
+
+MANIFEST_LOCK = threading.Lock()
+
+
+class SessionThreadPool(ThreadPoolExecutor):
+    api = None
+
+    def __exit__(self, exception_type, exception, traceback):
+        if exception_type is not None and self.api is not None:
+            self.api.cancelled.set()
+        self.shutdown(wait=True, cancel_futures=exception_type is not None)
+        return False
+
+
+def parallel_items(api, items, workers, operation):
+    """Bounded in-flight work; one login, separate cookie jars per worker thread."""
+    local = threading.local()
+
+    def run(item):
+        if not hasattr(local, 'api'):
+            local.api = api.fork()
+        return operation(local.api, item)
+
+    iterator = iter(items)
+    executor = ThreadPoolExecutor(max_workers=workers)
+    pending = {}
+    try:
+        def fill():
+            while len(pending) < workers:
+                try:
+                    item = next(iterator)
+                except StopIteration:
+                    break
+                pending[executor.submit(run, item)] = item
+        fill()
+        while pending:
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            results = [(pending.pop(future), future.result()) for future in done]
+            for result in results:
+                yield result
+            fill()
+    finally:
+        if pending:
+            api.cancelled.set()
+            for future in pending:
+                future.cancel()
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
 class ApiClient:
     def __init__(self, base_url: str, cookie_file: Path, curl: str):
         self.base_url = base_url.rstrip("/")
@@ -82,10 +158,19 @@ class ApiClient:
         self.cookie_file.touch(exist_ok=True)
         self.curl = curl
         self.csrf_token: str | None = None
+        self.cancelled = threading.Event()
+
+    def fork(self):
+        child = copy.copy(self)
+        child.cookie_file = self.cookie_file.with_name(f"cookies-{uuid.uuid4().hex}.txt")
+        child.cookie_file.write_bytes(self.session_cookies)
+        return child
 
     def _run(self, args: list[str], body: bytes | None = None) -> Any:
+        if self.cancelled.is_set():
+            raise SessionExpired()
         command = [
-            self.curl, "--silent", "--show-error", "--cookie", str(self.cookie_file),
+            self.curl, "--silent", "--show-error", "--connect-timeout", "10", "--max-time", "300", "--cookie", str(self.cookie_file),
             "--cookie-jar", str(self.cookie_file), "--write-out", "\n%{http_code}", *args,
         ]
         result = subprocess.run(command, input=body, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -103,6 +188,9 @@ class ApiClient:
         except json.JSONDecodeError:
             payload = response_body.decode("utf-8", errors="replace")
         if not 200 <= status < 300:
+            if status == 401:
+                self.cancelled.set()
+                raise SessionExpired()
             if isinstance(payload, dict):
                 message = payload.get("message") or payload.get("error") or str(payload)
                 code = payload.get("code")
@@ -139,6 +227,7 @@ class ApiClient:
             "password": password,
             "rememberMe": False,
         })
+        self.session_cookies = self.cookie_file.read_bytes()
 
     def stage_file(self, file_path: Path) -> dict[str, Any]:
         # curl parses commas/semicolons inside --form itself, independently of
@@ -159,7 +248,7 @@ class ApiClient:
 
 def append_manifest(path: Path, record: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as stream:
+    with MANIFEST_LOCK, path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(record, ensure_ascii=False) + "\n")
         stream.flush()
         os.fsync(stream.fileno())
@@ -395,7 +484,7 @@ def queue_api_call(api: ApiClient, operation: Any, timeout_seconds: int,
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise ImportErrorWithMessage("等待知识库任务队列容量超时")
-        time.sleep(min(retry_after, remaining))
+        pause(api, min(retry_after, remaining))
 
 
 def wait_for_parse(api: ApiClient, document_id: str, version_id: str, timeout_seconds: int) -> dict[str, Any]:
@@ -415,7 +504,7 @@ def wait_for_parse(api: ApiClient, document_id: str, version_id: str, timeout_se
         if failed_parse or (state.get("terminal") and status != "SUCCEEDED"):
             reason = state.get("parseRunError") or state.get("lastError") or "文件解析失败"
             raise ImportErrorWithMessage(reason)
-        time.sleep(10)
+        pause(api, 10)
     raise ImportErrorWithMessage(f"解析等待超时，文档 {document_id} 可在知识库查看后续状态")
 
 
@@ -494,7 +583,7 @@ def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_s
             latest_revision = latest_review.get("reviewRevision") or {}
             if latest_revision.get("status") == "FAILED":
                 raise ImportErrorWithMessage(latest_revision.get("failureReason") or "发布任务失败")
-            time.sleep(3)
+            pause(api, 3)
         else:
             raise ImportErrorWithMessage("发布任务已提交，尚未看到发布版本；可在知识库继续查看")
 
@@ -548,6 +637,7 @@ def sync_enrichment(api: ApiClient, record: dict[str, Any], *, retry_failed: boo
                 api.json("POST", f"/api/v1/knowledge/bibliography-tasks/{task['id']}/items/{item['id']}/retry", {})
                 record["metadataStatus"] = "PENDING"
     except Exception as error:
+        require_session(error)
         record["metadataStatus"] = "CHECK_FAILED"
         record["metadataError"] = str(error)
     try:
@@ -556,6 +646,7 @@ def sync_enrichment(api: ApiClient, record: dict[str, Any], *, retry_failed: boo
         record["vectorIndexDetail"] = vector
         record.pop("vectorIndexError", None)
     except Exception as error:
+        require_session(error)
         record["vectorIndexStatus"] = "CHECK_FAILED"
         record["vectorIndexError"] = str(error)
     # Bibliography is optional enrichment for a mixed knowledge library. Keep its
@@ -598,11 +689,11 @@ def enrich_existing(args: argparse.Namespace) -> int:
             print(f"补全任务：{task['id']}；重复提交请沿用 --request-key {selection['requestKey']}")
             deadline = time.monotonic() + args.metadata_wait_seconds
             while True:
-                result = api.json("GET", f"/api/v1/knowledge/bibliography-tasks/{task['id']}")
+                result = api.json("GET", f"/api/v1/knowledge/bibliography-tasks/{task['id']}?limit=1")
                 print(json.dumps(result['counts'], ensure_ascii=False))
                 if result['finished'] or time.monotonic() >= deadline:
                     return 1 if result['counts'].get('FAILED') else 0
-                time.sleep(min(3, max(0, deadline - time.monotonic())))
+                pause(api, min(3, max(0, deadline - time.monotonic())))
         finally:
             api.json("POST", "/api/v1/auth/logout", {})
 
@@ -668,10 +759,11 @@ def import_directory(args: argparse.Namespace) -> int:
         raise ImportErrorWithMessage("需要在服务器安装 curl")
     completed = 0
     failed = 0
-    pending: deque[dict[str, Any]] = deque()
+    pending = set()
     finished_records: list[dict[str, Any]] = []
-    with tempfile.TemporaryDirectory(prefix="jsd-kb-import-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="jsd-kb-import-") as temp_dir, SessionThreadPool(max_workers=args.max_in_flight) as executor:
         api = ApiClient(args.base_url, Path(temp_dir) / "cookies.txt", curl)
+        executor.api = api
         api.login(username, password)
         categories = CategoryResolver(api, args.scope)
         capabilities = upload_capabilities(api)
@@ -683,11 +775,11 @@ def import_directory(args: argparse.Namespace) -> int:
         effective_max_in_flight = min(args.max_in_flight, max(1, organization_limit // 2))
         queue_timeout_seconds = args.queue_wait_timeout_minutes * 60
         processed_pending = 0
+        thread_client = threading.local()
+        document_locks = {}
 
-        def finish_next() -> None:
-            nonlocal completed, failed, processed_pending
-            record = pending.popleft()
-            processed_pending += 1
+        def finish_record(record, worker_api):
+            api = worker_api
             relative = record["relativePath"]
             document_id = record.get("documentId")
             try:
@@ -701,25 +793,49 @@ def import_directory(args: argparse.Namespace) -> int:
                 record["message"] = "已发布并授权 AI" + ("（关联已有文档）" if record.get("duplicate") else "")
                 record["bodyImportStatus"] = "COMPLETED"
                 sync_enrichment(api, record, retry_failed=args.retry_failed)
-                finished_records.append(record)
                 record["documentUrl"] = f"{api.base_url}/knowledge/documents/{document_id}"
                 record["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
                 append_manifest(manifest, record)
-                print(f"[处理 {processed_pending}] {record['message']}：{relative}；"
+                print(f"[处理] {record['message']}：{relative}；"
                       f"分类：{document.get('categoryName')}；文档：{document.get('title')}；{record['documentUrl']}")
-                completed += 1
+                return True, record
             except Exception as error:
-                failed += 1
+                require_session(error)
                 record.update({"sha256": record.get("sha256", ""), "message": str(error), "importStatus": "FAILED",
                                "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
                 if document_id:
                     try:
                         refresh_document_state(api, record, document_id)
-                    except Exception:
+                    except Exception as refresh_error:
+                        require_session(refresh_error)
                         for field in DOCUMENT_STATE_FIELDS:
                             record.pop(field, None)
                 append_manifest(manifest, record)
-                print(f"[处理 {processed_pending}] 失败：{relative} — {error}", file=sys.stderr)
+                print(f"[处理] 失败：{relative} — {error}", file=sys.stderr)
+                return False, record
+
+        def submit_record(record):
+            # Duplicate files may resolve to one document: serialize its review/metadata writes.
+            lock = document_locks.setdefault(record.get('documentId'), threading.Lock())
+            def run():
+                if not hasattr(thread_client, 'api'):
+                    thread_client.api = api.fork()
+                with lock:
+                    return finish_record(record.copy(), thread_client.api)
+            pending.add(executor.submit(run))
+
+        def finish_next():
+            nonlocal completed, failed, processed_pending
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                pending.remove(future)
+                success, record = future.result()
+                processed_pending += 1
+                if success:
+                    completed += 1
+                    finished_records.append(record)
+                else:
+                    failed += 1
 
         for index, file_path in enumerate(files, start=1):
             relative = file_path.relative_to(source).as_posix()
@@ -775,7 +891,7 @@ def import_directory(args: argparse.Namespace) -> int:
                     version_id = document["currentVersionId"]
                     record.update(documentId=document_id, versionId=version_id, fileId=file_id)
                     append_manifest(manifest, record)
-                    pending.append(record.copy())
+                    submit_record(record)
                     print(f"[{index}/{len(files)}] 已加入处理队列：{relative}")
                     if len(pending) >= effective_max_in_flight:
                         finish_next()
@@ -804,7 +920,7 @@ def import_directory(args: argparse.Namespace) -> int:
                         require_document_target(api, duplicate_document_value, record)
                         record["message"] = "内容相同，继续核对元数据、发布和 AI 授权"
                         append_manifest(manifest, record)
-                        pending.append(record.copy())
+                        submit_record(record)
                         print(f"[{index}/{len(files)}] 已存在，继续处理：{relative}；"
                               f"原文档：{document_location(api, duplicate_document_value)}")
                         if len(pending) >= effective_max_in_flight:
@@ -829,11 +945,12 @@ def import_directory(args: argparse.Namespace) -> int:
                     record.update(documentId=document_id, versionId=version_id)
                     refresh_document_state(api, record, document_id)
                     append_manifest(manifest, record)
-                    pending.append(record.copy())
+                    submit_record(record)
                     print(f"[{index}/{len(files)}] 已建文档并加入解析队列：{relative}")
                     if len(pending) >= effective_max_in_flight:
                         finish_next()
             except Exception as error:  # Preserve progress for this item and continue the directory.
+                require_session(error)
                 failed += 1
                 record.update({"sha256": digest or record.get("sha256", ""), "importStatus": "FAILED",
                                "message": str(error),
@@ -841,7 +958,8 @@ def import_directory(args: argparse.Namespace) -> int:
                 if record.get("documentId"):
                     try:
                         refresh_document_state(api, record, record["documentId"])
-                    except Exception:
+                    except Exception as refresh_error:
+                        require_session(refresh_error)
                         for field in DOCUMENT_STATE_FIELDS:
                             record.pop(field, None)
                 else:
@@ -853,15 +971,19 @@ def import_directory(args: argparse.Namespace) -> int:
         while pending:
             finish_next()
         deadline = time.monotonic() + args.metadata_wait_seconds
-        while True:
-            for record in finished_records:
-                sync_enrichment(api, record)
+        while args.metadata_wait_seconds > 0:
+            def refresh_one(client, record):
+                sync_enrichment(client, record)
+            outstanding = [record for record in finished_records
+                           if record.get('metadataStatus') in {'PENDING', 'WAITING_PROVIDER', 'CHECK_FAILED'}
+                           or record.get('vectorIndexStatus') != 'PRESENT']
+            for record, _ in parallel_items(api, outstanding, effective_max_in_flight, refresh_one):
                 record["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
                 append_manifest(manifest, record)
             if (all(r.get("metadataStatus") not in {"PENDING", "WAITING_PROVIDER"} for r in finished_records)
                     or time.monotonic() >= deadline):
                 break
-            time.sleep(min(3, max(0, deadline - time.monotonic())))
+            pause(api, min(3, max(0, deadline - time.monotonic())))
         api.json("POST", "/api/v1/auth/logout", {})
 
     summary = summarize(finished_records)
@@ -1033,11 +1155,12 @@ def rebuild_document(api, document, args, previous, context, manifest):
             if time.monotonic() >= deadline:
                 save(manifest, record)
                 return "WAITING"
-            time.sleep(args.poll_seconds)
+            pause(api, args.poll_seconds)
     except TargetChanged:
         save(manifest, record)
         raise
     except ImportErrorWithMessage as error:
+        require_session(error)
         # An ambiguous POST or a polling failure retains the same request key.
         if record["status"] == "SUBMITTING":
             record["status"] = ("FAILED" if isinstance(error, ApiHttpError) and 400 <= error.status < 500
@@ -1072,17 +1195,21 @@ def rebuild_vectors(args):
             try:
                 documents = inventory(api, category_id=args.category_id, scope=args.scope, page_size=args.page_size)
                 print(f"完整清点 {len(documents)} 份资料；目标 {args.model} / {args.dimension} 维")
-                for index, document in enumerate(documents, 1):
+                def rebuild_one(client, document):
                     if not document.get("currentPublicationId") or document.get("aiStatus") != "APPROVED":
-                        outcome = "SKIPPED"
-                    else:
-                        try:
-                            outcome = rebuild_document(api, document, args, previous.get(document["id"]), context, manifest)
-                        except TargetChanged:
-                            raise
-                        except ImportErrorWithMessage as error:
-                            print(f"状态检查失败：{document['id']} — {error}")
-                            outcome = "CHECK_FAILED"
+                        return "SKIPPED"
+                    try:
+                        return rebuild_document(client, document, args, previous.get(document["id"]), context, manifest)
+                    except TargetChanged:
+                        raise
+                    except ImportErrorWithMessage as error:
+                        require_session(error)
+                        print(f"状态检查失败：{document['id']} — {error}")
+                        return "CHECK_FAILED"
+
+                concurrency = min(args.max_in_flight, 16)
+                print(f"最多同时跟踪 {concurrency} 份资料；共享一次登录，保留原断点清单")
+                for index, (document, outcome) in enumerate(parallel_items(api, documents, concurrency, rebuild_one), 1):
                     counts[outcome] = counts.get(outcome, 0) + 1
                     print(f"[{index}/{len(documents)}] {outcome}：{document.get('title') or document['id']}")
             finally:
@@ -1113,7 +1240,7 @@ def main() -> int:
     parser.add_argument("--include", action="append", help="只导入指定相对路径，可重复；不传时扫描全部来源文件")
     parser.add_argument("--parse-timeout-minutes", type=int, default=24 * 60)
     parser.add_argument("--max-in-flight", type=int, default=8,
-                        help="同时处于解析/发布流程的最大文件数，默认 8，并自动受组织队列容量限制")
+                        help="并行跟踪解析/发布或向量重建的文件数，默认 8，最多 16；导入另受组织队列容量限制")
     parser.add_argument("--queue-wait-timeout-minutes", type=int, default=24 * 60,
                         help="单次等待任务队列容量的最长分钟数，默认 1440")
     parser.add_argument("--retry-failed", action="store_true", help="重试解析失败的文档，以及解析完成但发布或索引失败的文档")
@@ -1134,8 +1261,8 @@ def main() -> int:
     parser.add_argument("--metadata-wait-seconds", type=int, default=0, help="等候异步补全的秒数，默认提交后记录状态即退出；断点续跑可重新检查")
     args = parser.parse_args()
     try:
-        if args.parse_timeout_minutes < 1 or args.max_in_flight < 1 or args.queue_wait_timeout_minutes < 1:
-            raise ValueError("超时和并行参数必须为正整数")
+        if args.parse_timeout_minutes < 1 or not 1 <= args.max_in_flight <= 16 or args.queue_wait_timeout_minutes < 1:
+            raise ValueError("超时必须为正整数，并行文件数须为 1–16")
         uuid.UUID(args.category_id) if args.category_id else None
         if args.metadata_wait_seconds < 0:
             raise ValueError("等候秒数不能为负数")

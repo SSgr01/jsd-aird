@@ -1,5 +1,7 @@
 # 校验与停止条件
 
+本地历史提取另按[history-data.md](history-data.md)验收：区分提取完整度与训练资格，检查每项观测的组别、条件、原值类型、单位和来源。图片转录必须保留原图；未知单位不补猜；未落位数单独报告。历史数据脚本回归为`python -m unittest test_history_data test_history_template`，原有模板回归继续执行。
+
 服务器文件夹模式的检查针对当前文件；校验状态表示机器执行情况，不维护人工核对状态。完成后按 [server-folder.md](server-folder.md) 用受控文件出口保存，客户在文件夹自行逐份核对，不能说已人工确认或已导入。
 
 ## 每个文件一次验收

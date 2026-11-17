@@ -5,10 +5,8 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -237,10 +235,9 @@ public class SpectrumService {
     public void deleteChart(UUID chartId, String revision) {
         var actor = ActorContext.required();
         requireChartRevision(actor.organizationId(),chartId,revision);
-        if (repository.hasActiveProjectReference(actor.organizationId(), chartId)
-                || repository.hasAnalysisReportReference(actor.organizationId(), chartId)) {
+        if (repository.hasActiveProjectReference(actor.organizationId(), chartId)) {
             throw new ApiException(ApiErrorCode.REFERENCE_IN_USE,
-                    "图谱已被项目参考资料或分析记录引用，暂不能删除；请先处理相关引用");
+                    "图谱已被项目参考资料引用，暂不能删除；请先处理相关引用");
         }
         repository.deleteChart(actor.organizationId(), chartId);
         audit(actor, "SPECTRUM_CHART_DELETED", "SPECTRUM_CHART", chartId, null);
@@ -325,76 +322,6 @@ public class SpectrumService {
         return pages;
     }
 
-    public SessionView createSession() {
-        var actor = ActorContext.required();
-        var id = repository.createSession(actor.organizationId(), actor.userId(), "新的图谱分析对话");
-        audit(actor, "SPECTRUM_SESSION_CREATED", "SPECTRUM_SESSION", id, "新的图谱分析对话");
-        return new SessionView(id, "新的图谱分析对话", Instant.now(), Instant.now(), List.of(), List.of(), Map.of());
-    }
-
-    public List<SessionView> sessions(int limit) {
-        var actor = ActorContext.required();
-        return repository.listSessions(actor.organizationId(), actor.userId(), Math.min(100, Math.max(1, limit)))
-                .stream().map(item -> sessionView(item, List.of())).toList();
-    }
-
-    public SessionView session(UUID sessionId) {
-        var actor = ActorContext.required();
-        if (!repository.sessionExists(actor.organizationId(), actor.userId(), sessionId)) throw new ApiException(ApiErrorCode.NOT_FOUND, "图谱对话不存在");
-        var messages = repository.listMessages(actor.organizationId(), sessionId, 200).stream().map(this::messageView).toList();
-        var item = repository.findSession(actor.organizationId(), actor.userId(), sessionId)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "图谱对话不存在"));
-        return sessionView(item, messages);
-    }
-
-    private SessionView sessionView(SpectrumRepository.SessionRow item, List<MessageView> messages) {
-        try {
-            var charts = objectMapper.readTree(item.chartIdsJson());
-            var chartIds = new ArrayList<UUID>();
-            if (charts != null && charts.isArray()) charts.forEach(value -> {
-                try { chartIds.add(UUID.fromString(value.asText())); } catch (IllegalArgumentException ignored) { }
-            });
-            var rawPages = objectMapper.readTree(item.pageSelectionsJson());
-            var pageSelections = new java.util.LinkedHashMap<UUID, List<Integer>>();
-            if (rawPages != null && rawPages.isObject()) rawPages.fields().forEachRemaining(entry -> {
-                try {
-                    var pages = new ArrayList<Integer>();
-                    if (entry.getValue().isArray()) entry.getValue().forEach(value -> {
-                        if (value.canConvertToInt()) pages.add(value.asInt());
-                    });
-                    pageSelections.put(UUID.fromString(entry.getKey()), pages);
-                } catch (IllegalArgumentException ignored) { }
-            });
-            return new SessionView(item.id(), item.title(), item.createdAt(), item.updatedAt(), messages,
-                    List.copyOf(chartIds), Map.copyOf(pageSelections));
-        } catch (Exception exception) {
-            throw new IllegalStateException("图谱会话引用数据无效", exception);
-        }
-    }
-
-    @Transactional
-    public void renameSession(UUID sessionId, String title) {
-        var actor = ActorContext.required();
-        if (!StringUtils.hasText(title) || title.strip().length() > 80) {
-            throw new ApiException(ApiErrorCode.BAD_REQUEST, "标题不能为空且不超过 80 字符");
-        }
-        if (!repository.sessionExists(actor.organizationId(), actor.userId(), sessionId)) {
-            throw new ApiException(ApiErrorCode.NOT_FOUND, "图谱对话不存在");
-        }
-        repository.renameSession(actor.organizationId(), actor.userId(), sessionId, title.strip());
-        audit(actor, "SPECTRUM_SESSION_RENAMED", "SPECTRUM_SESSION", sessionId, title.strip());
-    }
-
-    @Transactional
-    public void deleteSession(UUID sessionId) {
-        var actor = ActorContext.required();
-        if (!repository.sessionExists(actor.organizationId(), actor.userId(), sessionId)) {
-            throw new ApiException(ApiErrorCode.NOT_FOUND, "图谱对话不存在");
-        }
-        repository.deleteSession(actor.organizationId(), actor.userId(), sessionId);
-        audit(actor, "SPECTRUM_SESSION_DELETED", "SPECTRUM_SESSION", sessionId, null);
-    }
-
     private void audit(com.jsd.aird.shared.security.Actor actor, String action, String type, UUID id, String name) {
         if (audit == null) return;
         ObjectNode detail = JsonNodeFactory.instance.objectNode();
@@ -437,12 +364,6 @@ public class SpectrumService {
                 row.title(), row.originalName(), row.contentType(), row.size(), row.sha256(), row.sampleName(),
                 row.batchNo(), row.testConditions(), parse(row.metadataJson(), objectMapper.createObjectNode()),
                 row.pageCount(), row.status(), row.createdAt(), row.updatedAt());
-    }
-
-    private MessageView messageView(SpectrumRepository.MessageRow row) {
-        return new MessageView(row.id(), row.analysisRunId(), row.role(), row.content(),
-                parse(row.citationsJson(), objectMapper.createArrayNode()), parse(row.resultJson(), objectMapper.createObjectNode()),
-                parse(row.warningJson(), objectMapper.createArrayNode()), row.createdAt());
     }
 
     private JsonNode parse(String value, JsonNode fallback) {
@@ -582,12 +503,6 @@ public class SpectrumService {
     }
 
     public record StoredChartFile(SpectrumRepository.ChartRow chart, FileStorageFacade.StoredFile file) { }
-
-    public record SessionView(UUID id, String title, Instant createdAt, Instant updatedAt, List<MessageView> messages,
-                              List<UUID> chartIds, Map<UUID, List<Integer>> pageSelections) { }
-
-    public record MessageView(UUID id, UUID analysisRunId, String role, String content, JsonNode citations,
-                              JsonNode result, JsonNode warnings, Instant createdAt) { }
 
     private record BuiltInCategory(String code, String name, String description, String analysisHint,
                                    String fieldsJson, int sortOrder) { }

@@ -38,7 +38,7 @@ class SpectrumConcurrencyPostgresTest {
         repository=spy(new JdbcSpectrumRepository(db.jdbc));
         // External project/report reference checks have separate unit coverage;
         // this isolated fixture intentionally has no such references.
-        doReturn(false).when(repository).hasActiveProjectReference(any(),any());doReturn(false).when(repository).hasAnalysisReportReference(any(),any());
+        doReturn(false).when(repository).hasActiveProjectReference(any(),any());
         audit=mock(AuditLogFacade.class);service=new SpectrumService(repository,mock(FileStorageFacade.class),JSON,audit);
     }
     @AfterEach void clearActor(){ActorContext.clear();}

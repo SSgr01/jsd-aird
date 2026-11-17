@@ -7,6 +7,7 @@ import { useEffect, useRef } from 'react';
 import type { StructuredDocument } from '@/services/knowledge';
 import { generateUUID } from '@/utils/uuid';
 import { knowledgeDocumentExtensions } from './document-extensions';
+import { DocumentParts } from './DocumentParts';
 
 export interface StructuredDocumentEditorProps {
   value: StructuredDocument;
@@ -18,7 +19,13 @@ export interface StructuredDocumentEditorProps {
 
 const reviewable = new Set(['paragraph', 'heading', 'blockquote', 'codeBlock', 'listItem', 'tableRow', 'formula', 'audioSegment', 'dataTableRef']);
 
-export function StructuredDocumentEditor({ value, onChange, onSelectionChange, selectedSourceNodeKey, disabled }: StructuredDocumentEditorProps) {
+export function StructuredDocumentEditor(props: StructuredDocumentEditorProps) {
+  return <DocumentParts value={props.value} onChange={props.onChange} selectedSourceNodeKey={props.selectedSourceNodeKey}>
+    {(page, change, key) => <StructuredDocumentPageEditor key={key} {...props} value={page} onChange={change} />}
+  </DocumentParts>;
+}
+
+function StructuredDocumentPageEditor({ value, onChange, onSelectionChange, selectedSourceNodeKey, disabled }: StructuredDocumentEditorProps) {
   // Tiptap may emit an update while it is mounting the initial document. Keep
   // that lifecycle event out of the review autosave pipeline.
   const settingContent = useRef(true);

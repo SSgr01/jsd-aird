@@ -10,19 +10,33 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import static com.jsd.aird.shared.business.BusinessViews.*;
 
-/** Original-file associations only. The caller must authorize the business record before listing, and EXPORT before opening. */
+/** Original-file associations only. The caller must authorize the business record before listing, and DOWNLOAD before opening. */
 @Service
 public class BusinessOriginalFiles {
     public record Entry(UUID file_id, String name, String content_type, long bytes, String sha256) { }
     private final JdbcTemplate jdbc;
     private final FileStorageFacade storage;
     public BusinessOriginalFiles(JdbcTemplate jdbc, FileStorageFacade storage) { this.jdbc = jdbc; this.storage = storage; }
-    public static boolean supports(String type) { return type.startsWith("QUALITY_") || Set.of("PRODUCTION_UPLOAD","PRODUCTION_ORDER","RESEARCH_TEST","RESEARCH_TEST_UPLOAD","DATA_IMPORT","PROJECT_DOCUMENT","PROJECT_REFERENCE").contains(type); }
+    public static boolean supports(String type) { return type.startsWith("QUALITY_") || Set.of("EXPERIMENT","PRODUCTION_UPLOAD","PRODUCTION_ORDER","RESEARCH_TEST","RESEARCH_TEST_UPLOAD","DATA_IMPORT","PROJECT_DOCUMENT","PROJECT_REFERENCE").contains(type); }
 
     public List<Entry> list(ObjectNode ref) {
         var org = ActorContext.required().organizationId();
         String type = ref.path("type").asText();
         String source = switch (type) {
+            case "EXPERIMENT" -> """
+                WITH selected AS (
+                  SELECT e.id,e.organization_id,e.current_version_id,e.source_file_id,v.id version_id,v.edit_model_jsonb
+                  FROM rnd.experiment e JOIN rnd.experiment_version v ON v.experiment_id=e.id AND v.organization_id=e.organization_id
+                  WHERE e.organization_id=? AND e.id=? AND e.deleted=false AND v.id=?
+                )
+                SELECT CASE WHEN edit_model_jsonb->>'sourceFileId' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+                  THEN (edit_model_jsonb->>'sourceFileId')::uuid
+                  WHEN version_id=current_version_id THEN source_file_id END FROM selected
+                UNION SELECT r.source_file_id FROM rnd.experiment_source_reference r JOIN selected s
+                  ON r.organization_id=s.organization_id AND r.experiment_id=s.id AND r.experiment_version_id=s.version_id
+                UNION SELECT a.file_id FROM rnd.experiment_attachment a JOIN selected s ON a.experiment_id=s.id
+                  WHERE s.version_id=s.current_version_id
+                """;
             case "PRODUCTION_UPLOAD" -> "SELECT file_id FROM mfg.production_upload WHERE organization_id=? AND id=? AND status<>'DELETED'";
             case "QUALITY_UPLOAD" -> "SELECT file_id FROM quality.upload_file WHERE organization_id=? AND id=? AND deleted=false";
             case "RESEARCH_TEST_UPLOAD" -> "SELECT file_id FROM rnd.research_test_upload WHERE organization_id=? AND id=? AND deleted=false";
@@ -45,6 +59,7 @@ public class BusinessOriginalFiles {
         };
         if (source == null) return List.of();
         var args = new ArrayList<Object>(List.of(org, org, id(ref)));
+        if ("EXPERIMENT".equals(type)) args.add(uuid(ref,"version_id"));
         if ("RESEARCH_TEST".equals(type) || type.startsWith("QUALITY_") && !"QUALITY_UPLOAD".equals(type)) { args.add(org); args.add(id(ref)); }
         if ("PRODUCTION_ORDER".equals(type) && ref.hasNonNull("version_id")) args.add(uuid(ref,"version_id"));
         else if("PRODUCTION_ORDER".equals(type)){args.add(org);args.add(id(ref));}

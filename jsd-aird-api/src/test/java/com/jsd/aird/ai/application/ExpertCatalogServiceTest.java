@@ -15,6 +15,8 @@ class ExpertCatalogServiceTest {
         doThrow(new ApiException(ApiErrorCode.PERMISSION_DENIED)).when(authority).requireUse();
         assertThrows(ApiException.class, service::list);
         assertThrows(ApiException.class, () -> service.resolve("project-assistant", true));
+        assertThrows(ApiException.class, () -> service.resolve("technical-assistant", true));
+        assertThrows(ApiException.class, () -> service.resolve("technical-assistant", false));
     }
 
     @Test void everyExpertHasOneCurrentDefinitionWithoutVersionHistory() throws Exception {
@@ -33,6 +35,9 @@ class ExpertCatalogServiceTest {
         var experiment = service.resolve("experiment-assistant", true);
         assertTrue(experiment.path("skills").toString().contains("jsd-experiment-converter"));
         assertTrue(experiment.path("instructions").asText().contains("folder_conversion"));
+        var spectrum = service.resolve("spectrum-assistant", true);
+        assertEquals("图谱分析助手", spectrum.path("name").asText());
+        assertTrue(spectrum.path("skills").toString().contains("spectrum-analysis"));
         assertThrows(ApiException.class, () -> service.resolve("unknown", true));
     }
 
@@ -52,5 +57,36 @@ class ExpertCatalogServiceTest {
         var command = mapper.createObjectNode().put("action", "resolve").put("expert_id", "experiment-assistant").put("revision", "4");
         assertEquals(service.resolve("experiment-assistant", true), service.invoke(command));
         assertFalse(service.invoke(command).has("revision"));
+    }
+
+    @Test void mergedResearchExpertResolvesOldIdentityWithoutAnExtraCatalogEntry() throws Exception {
+        var service = new ExpertCatalogService(new ObjectMapper(), mock(AgentArtifactService.class));
+        var current = service.resolve("materials-advisor", true);
+        assertEquals("材料研发助理", current.path("name").asText());
+        assertEquals(current, service.resolve("technical-assistant", true));
+        assertEquals(current, service.resolve("technical-assistant", false));
+        var skills = new java.util.HashSet<String>();
+        current.path("skills").forEach(skill -> skills.add(skill.asText()));
+        assertEquals(java.util.Set.of("literature-review", "technical-comparison", "formulation-analysis",
+                "experiment-comparison", "research-design"), skills);
+        for (var expert : service.list().path("experts"))
+            assertNotEquals("technical-assistant", expert.path("id").asText());
+        current.put("name", "caller mutation");
+        assertEquals("材料研发助理", service.resolve("technical-assistant", true).path("name").asText());
+    }
+
+    @Test void legacyIdentityCannotBypassDisabledCanonicalExpert() throws Exception {
+        var mapper = spy(new ObjectMapper());
+        doAnswer(invocation -> {
+            var catalog = (com.fasterxml.jackson.databind.JsonNode) invocation.callRealMethod();
+            for (var expert : catalog.path("experts"))
+                if (expert.path("id").asText().equals("materials-advisor"))
+                    ((ObjectNode) expert).put("enabled", false);
+            return catalog;
+        }).when(mapper).readTree(any(java.io.InputStream.class));
+        var service = new ExpertCatalogService(mapper, mock(AgentArtifactService.class));
+        assertThrows(ApiException.class, () -> service.resolve("materials-advisor", true));
+        assertThrows(ApiException.class, () -> service.resolve("technical-assistant", true));
+        assertFalse(service.resolve("technical-assistant", false).path("enabled").asBoolean());
     }
 }

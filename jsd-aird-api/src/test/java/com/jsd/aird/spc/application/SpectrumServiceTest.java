@@ -138,23 +138,6 @@ class SpectrumServiceTest {
     }
 
     @Test
-    void preventsDeletingChartReferencedByAnAnalysisReport() {
-        ActorContext.set(new Actor(ORGANIZATION_ID, USER_ID, "tester"));
-        var repository = mock(SpectrumRepository.class);
-        var chart = chart(UUID.randomUUID(), UUID.randomUUID());
-        when(repository.findChart(ORGANIZATION_ID, chart.id())).thenReturn(Optional.of(chart));
-        when(repository.hasAnalysisReportReference(ORGANIZATION_ID, chart.id())).thenReturn(true);
-
-        var service = new SpectrumService(repository, mock(FileStorageFacade.class), new ObjectMapper());
-        var revision = service.chart(chart.id()).getRevision();
-        assertThatThrownBy(() -> service.deleteChart(chart.id(), revision))
-                .isInstanceOf(ApiException.class)
-                .satisfies(error -> assertThat(((ApiException) error).errorCode())
-                        .isEqualTo(ApiErrorCode.REFERENCE_IN_USE));
-        verify(repository, never()).deleteChart(ORGANIZATION_ID, chart.id());
-    }
-
-    @Test
     void exportContainsOnlyOriginalFiles() throws Exception {
         ActorContext.set(new Actor(ORGANIZATION_ID, USER_ID, "tester"));
         var repository = mock(SpectrumRepository.class);

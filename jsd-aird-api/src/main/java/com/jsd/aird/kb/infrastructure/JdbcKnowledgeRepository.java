@@ -445,6 +445,7 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 jdbc.update("INSERT INTO kb.document_chunk_embedding(organization_id,chunk_id,embedding_model,embedding_dimension,embedding) VALUES (?,?,?,vector_dims(?::halfvec),?::halfvec)",org,chunkId,chunk.embeddingModel(),chunk.vector(),chunk.vector());
             }
             for (var term : chunk.terms() == null ? List.<TermFrequency>of() : chunk.terms()) {
+                if (!com.jsd.aird.kb.domain.LexicalAnalyzer.indexableTerm(term.term())) continue;
                 jdbc.update("""
                         INSERT INTO kb.chunk_term (chunk_id, term, term_frequency)
                         VALUES (?, ?, ?)

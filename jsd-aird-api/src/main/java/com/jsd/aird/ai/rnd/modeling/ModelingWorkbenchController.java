@@ -12,8 +12,9 @@ import java.util.UUID;
 public class ModelingWorkbenchController {
     private final ModelingWorkbenchService service;
     private final WorkbenchModelRegistrationService registration;
+    private final ModelingSelectionService selection;
 
-    public ModelingWorkbenchController(ModelingWorkbenchService service, WorkbenchModelRegistrationService registration) { this.service = service; this.registration = registration; }
+    public ModelingWorkbenchController(ModelingWorkbenchService service, WorkbenchModelRegistrationService registration,ModelingSelectionService selection) { this.service = service; this.registration = registration;this.selection=selection; }
 
     @GetMapping("/datasets")
     public ApiResponse<?> datasets(@RequestParam(required = false) String keyword) {
@@ -22,6 +23,19 @@ public class ModelingWorkbenchController {
 
     @GetMapping("/datasets/{id}")
     public ApiResponse<?> dataset(@PathVariable UUID id) { return ok(service.dataset(id)); }
+
+    @GetMapping("/datasets/{id}/batches")
+    public ApiResponse<?> batches(@PathVariable UUID id) {return ok(selection.batches(id));}
+
+    @GetMapping("/datasets/{id}/experiments")
+    public ApiResponse<?> experiments(@PathVariable UUID id,@RequestParam(required=false) String batch,
+        @RequestParam(required=false) String keyword,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int size) {
+        return ok(selection.experiments(id,batch,keyword,page,size));
+    }
+
+    public record Selection(java.util.List<UUID> experimentIds){}
+    @PostMapping("/datasets/{id}/selection")
+    public ApiResponse<?> selected(@PathVariable UUID id,@RequestBody Selection command) {return ok(service.selectedDataset(id,command.experimentIds()));}
 
     @PostMapping("/runs")
     public ApiResponse<?> train(@RequestBody ModelingWorkbenchService.TrainCommand command,

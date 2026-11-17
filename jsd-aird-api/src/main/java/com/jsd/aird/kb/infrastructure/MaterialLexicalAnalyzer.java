@@ -136,7 +136,7 @@ public final class MaterialLexicalAnalyzer implements LexicalAnalyzer {
         tokens.sort(Comparator.comparingInt(LocatedToken::offset));
         return tokens.stream().filter(token -> {
             var value = TechnicalTextNormalizer.canonicalToken(token.value());
-            return !value.isBlank() && !STOP_WORDS.contains(value) && !singleHan(value);
+            return LexicalAnalyzer.indexableTerm(value) && !STOP_WORDS.contains(value) && !singleHan(value);
         }).toList();
     }
 

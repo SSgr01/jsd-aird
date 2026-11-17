@@ -28,6 +28,25 @@ def layout(ws, kind):
     total = find_label(ws, total_label, 2).row
     spans = [r for dv in ws.data_validations.dataValidation if dv.type == "custom"
              for r in dv.ranges.ranges if r.max_row == total-1]
+    # The published XLSX exporter omits validation rules. Recognize only the
+    # exact current synthesis layout, then restore validation on its recipe.
+    if not spans and kind == 'synthesis' and not ws.data_validations.dataValidation:
+        landmarks = {'A9': '实验编号', 'A10': '配方', 'B24': '质量合计（g）',
+                     'B36': '工艺简介', 'B47': '固含（%）', 'A52': '备注'}
+        metadata = {s.title for s in ws.parent if s.sheet_state != 'visible'}
+        if (metadata == {'_JSD_LAB_META', '_JSD_EXPORT_META'} and total == 24
+            and ws.max_column == 8 and 'A10:A23' in ws.merged_cells
+            and all(norm(ws[a].value) == norm(v) for a, v in landmarks.items())
+            and all(ws.cell(r, c).value is None for r in range(10, 24) for c in range(2, 9))):
+            from openpyxl.worksheet.datavalidation import DataValidation
+            rule = DataValidation(type='custom',
+                formula1='OR(C10="",C10="/",AND(ISNUMBER(C10),C10>=0))',
+                allow_blank=True)
+            rule.errorTitle, rule.error = '投料量无效', '请输入非负数值（g）或未投料记号/'
+            rule.showErrorMessage = True
+            ws.add_data_validation(rule)
+            rule.add('C10:H23')
+            spans = list(rule.ranges.ranges)
     if len(spans) != 1:
         raise ValueError("配方验证区域与合计行不匹配；模板已改变，需要一次适配")
     area = spans[0]

@@ -297,7 +297,7 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
             var sourceNodes = sourceNodes(publication.parseRunId());
             return new PublishedContentView(publication, rs.getObject("file_object_id", UUID.class),
                     rs.getString("original_name"), rs.getString("content_type"), rs.getLong("size_bytes"),
-                    sourceNodes, read(rs.getString("confirmed_document_jsonb")),
+                    sourceNodes, documents.segment(read(rs.getString("confirmed_document_jsonb"))),
                     uuidList(rs.getString("excluded_review_node_ids")));
         }, args).stream().findFirst();
     }
@@ -462,7 +462,7 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
         if (parseRunId != null) {
             parse = new ParseRunRow(parseRunId, documentId, versionId, rs.getInt("run_no"),
                     rs.getString("parse_status"), rs.getString("error_message"),
-                    rs.getTimestamp("parse_created_at").toInstant(), read(rs.getString("source_document_jsonb")),
+                    rs.getTimestamp("parse_created_at").toInstant(), documents.segment(read(rs.getString("source_document_jsonb"))),
                     rs.getInt("document_schema_version"), read(rs.getString("parse_result_jsonb")),
                     rs.getString("parser_version"), rs.getString("provider"), rs.getString("provider_task_id"),
                     (Boolean) rs.getObject("effective_ocr"), rs.getString("parser_mode"));
@@ -472,7 +472,7 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
         if (revisionId != null) {
             revision = new ReviewRevisionView(revisionId, parseRunId, rs.getInt("revision_no"),
                     rs.getInt("lock_version"), rs.getObject("base_publication_id", UUID.class),
-                    read(rs.getString("confirmed_document_jsonb")), uuidList(rs.getString("excluded_review_node_ids")),
+                    documents.segment(read(rs.getString("confirmed_document_jsonb"))), uuidList(rs.getString("excluded_review_node_ids")),
                     rs.getString("revision_status"), rs.getString("failure_reason"),
                     rs.getTimestamp("revision_updated_at").toInstant());
         }

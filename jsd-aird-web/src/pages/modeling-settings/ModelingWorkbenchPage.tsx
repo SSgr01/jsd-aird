@@ -15,6 +15,7 @@ import { checkWorkbenchData } from '@/services/ai-rnd/workbench-data-checks'
 import { mergeHistoryDatasets, selectedRowIdsByDataset } from '@/services/ai-rnd/history-dataset-utils'
 import { workbenchFailureMessage, workbenchRegistrationMessage, workbenchRequestMessage } from './modeling-workbench-feedback'
 import { TestMetricCatalogManager } from './TestMetricCatalogManager'
+import { ModelingExperimentSelector } from './ModelingExperimentSelector'
 import './modeling-workbench.css'
 
 const { Paragraph, Text, Title } = Typography
@@ -29,8 +30,8 @@ const algorithmLabels: Record<string, string> = {
   CATBOOST: 'CatBoost',
   LOGISTIC_REGRESSION: '逻辑回归 Logistic Regression',
 }
-type SavedDraft = { datasetId?: string; datasetIds?: string[]; selectedRowIdsByDataset?: Record<string, string[]>; xColumns?: string[]; yColumn?: string; runId?: string; activeStep?: number }
-type PendingTraining = { key: string; request: { datasetIds: string[]; selectedRowIdsByDataset: Record<string, string[]>; xColumns: string[]; yColumn: string }; runId?: string }
+type SavedDraft = { selectedExperimentIdsByDataset?: Record<string, string[]>; datasetId?: string; datasetIds?: string[]; selectedRowIdsByDataset?: Record<string, string[]>; xColumns?: string[]; yColumn?: string; runId?: string; activeStep?: number }
+type PendingTraining = { key: string; request: { selectedExperimentIdsByDataset?: Record<string, string[]>; datasetIds: string[]; selectedRowIdsByDataset: Record<string, string[]>; xColumns: string[]; yColumn: string }; runId?: string }
 
 function cellText(value: unknown) {
   if (typeof value === 'number') return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(4)))
@@ -59,6 +60,7 @@ function ModelingWorkbenchPageInner({ canManageCatalog = false, canRegister = fa
   const [datasets, setDatasets] = useState<HistoryDatasetOption[]>([])
   const [datasetKeyword, setDatasetKeyword] = useState('')
   const [selectedDatasetIds, setSelectedDatasetIds] = useState<string[]>([])
+  const [selectedExperimentIds, setSelectedExperimentIds] = useState<Record<string, string[]>>({})
   const [datasetCache, setDatasetCache] = useState<Record<string, HistoryDataset>>({})
   const [frozenDataset, setFrozenDataset] = useState<HistoryDataset>()
   const [selectedRowIds, setSelectedRowIds] = useState<Record<string, string[]>>({})
@@ -110,7 +112,7 @@ function ModelingWorkbenchPageInner({ canManageCatalog = false, canRegister = fa
   const dataset = runId && frozenDataset ? frozenDataset : liveDataset
 
   const toggleDataset = (ids: Key[]) => {
-    if (pendingTraining) return
+    if (pendingTraining || loadingDataset) return
     const nextIds = ids.map(String)
     if (nextIds.join('|') === selectedDatasetIds.join('|')) return
     setSelectedDatasetIds(nextIds)
@@ -118,22 +120,24 @@ function ModelingWorkbenchPageInner({ canManageCatalog = false, canRegister = fa
     setPendingTraining(undefined); window.localStorage.removeItem(operationKey)
   }
 
-  useEffect(() => {
-    const missing = selectedDatasetIds.filter(id => !datasetCache[id])
-    if (!missing.length) { setLoadingDataset(false); return }
-    let cancelled = false
-    setLoadingDataset(true)
-    setLoadError('')
-    void Promise.all(missing.map(id => modelingWorkbenchApi.dataset(id))).then(values => {
-      if (cancelled) return
-      setDatasetCache(current => ({ ...current, ...Object.fromEntries(values.map(value => [value.id, value])) }))
-    }).catch(error => {
-      if (!cancelled) setLoadError(workbenchRequestMessage(error))
-    }).finally(() => {
-      if (!cancelled) setLoadingDataset(false)
-    })
-    return () => { cancelled = true }
-  }, [datasetCache, selectedDatasetIds])
+  const loadSelectedExperiments = async () => {
+    if (loadingDataset || pendingTraining) return
+    const scope = Object.fromEntries(selectedDatasetIds.map(id => [id, selectedExperimentIds[id] ?? []]))
+    if (Object.values(scope).some(ids => !ids.length)) { message.warning('请为每张表勾选实验。'); return }
+    setLoadingDataset(true); setLoadError('')
+    try {
+      const values = await Promise.all(selectedDatasetIds.map(id => modelingWorkbenchApi.selection(id, scope[id]!)))
+      setDatasetCache(Object.fromEntries(values.map(value => [value.id, value])))
+      setSelectedRowIds({}); setXColumns([]); setYColumn('')
+    } catch (error) { setLoadError(workbenchRequestMessage(error)) }
+    finally { setLoadingDataset(false) }
+  }
+
+  const changeExperiments = (id: string, ids: string[]) => {
+    setSelectedExperimentIds(current => ({ ...current, [id]: ids }))
+    setDatasetCache({}); setSelectedRowIds({}); setXColumns([]); setYColumn('')
+    setRunId(undefined); setRun(undefined); setFrozenDataset(undefined)
+  }
 
   useEffect(() => {
     if (!dataset) return
@@ -150,7 +154,7 @@ function ModelingWorkbenchPageInner({ canManageCatalog = false, canRegister = fa
       let changed = false
       const next = { ...current }
       for (const id of dataset.sourceDatasetIds ?? []) {
-        const available = dataset.rows.filter(row => row.sourceDatasetId === id).map(row => row.id)
+        const available = dataset.rows.filter(row => (row.sourceDatasetId ?? dataset.id) === id).map(row => row.id)
         if (!Object.prototype.hasOwnProperty.call(next, id)) {
           next[id] = available
           changed = true
@@ -177,10 +181,11 @@ function ModelingWorkbenchPageInner({ canManageCatalog = false, canRegister = fa
         const availableIds = savedDatasetIds.filter(id => response.items.some(item => item.id === id))
         if (availableIds.length) {
           setSelectedDatasetIds(availableIds)
+          setSelectedExperimentIds(saved.selectedExperimentIdsByDataset ?? {})
           setSelectedRowIds(saved.selectedRowIdsByDataset ?? {})
           setXColumns(saved.xColumns ?? [])
           setYColumn(saved.yColumn ?? '')
-          if (!userNavigated.current) setActiveStep(saved.activeStep === 0 ? 0 : saved.activeStep === 1 ? 1 : saved.runId ? 2 : 1)
+          if (!userNavigated.current) setActiveStep(saved.runId ? 2 : 0)
         }
         if (saved.runId) setRunId(saved.runId)
       } catch (error) {
@@ -195,9 +200,9 @@ function ModelingWorkbenchPageInner({ canManageCatalog = false, canRegister = fa
 
   useEffect(() => {
     if (!draftReady) return
-    const draft: SavedDraft = { datasetIds: selectedDatasetIds, selectedRowIdsByDataset: selectedRowIds, xColumns, yColumn, runId, activeStep }
+    const draft: SavedDraft = { selectedExperimentIdsByDataset: selectedExperimentIds, datasetIds: selectedDatasetIds, selectedRowIdsByDataset: selectedRowIds, xColumns, yColumn, runId, activeStep }
     window.localStorage.setItem(draftKey, JSON.stringify(draft))
-  }, [activeStep, draftReady, runId, selectedDatasetIds, selectedRowIds, xColumns, yColumn])
+  }, [activeStep, draftReady, runId, selectedDatasetIds, selectedRowIds, selectedExperimentIds, xColumns, yColumn])
 
   useEffect(() => {
     setRunLoadError('')
@@ -327,7 +332,7 @@ function ModelingWorkbenchPageInner({ canManageCatalog = false, canRegister = fa
     return () => { cancelled = true; if (timer) clearTimeout(timer) }
   }, [operationKey, pendingTraining?.key, pendingTraining?.runId])
 
-  const startTraining = async () => {
+  const startTraining = () => {
     if (submitting || trainingActive) return
     if (!selectedDatasetIds.length || !dataset) { message.warning('先选择实验数据表。'); return }
     if (!selectedRows.length) { message.warning('请至少勾选一条实验记录。'); return }
@@ -342,6 +347,7 @@ function ModelingWorkbenchPageInner({ canManageCatalog = false, canRegister = fa
       const key = globalThis.crypto?.randomUUID?.() ?? `modeling-${Date.now()}-${Math.random().toString(16).slice(2)}`
       const request = {
         datasetIds: selectedDatasetIds,
+        selectedExperimentIdsByDataset: Object.fromEntries(selectedDatasetIds.map(id => [id, [...new Set(dataset.rows.filter(row => (row.sourceDatasetId ?? dataset.id) === id).map(row => row.sourceExperimentId).filter((value): value is string => Boolean(value)))]])),
         selectedRowIdsByDataset: selectedIdsByDataset,
         xColumns,
         yColumn,
@@ -383,13 +389,13 @@ function ModelingWorkbenchPageInner({ canManageCatalog = false, canRegister = fa
 
     {activeStep === 0 && <section className="modeling-workbench-panel">
       <div className="workbench-panel-heading">
-      <div><Title level={3}>选择实验数据并预览原表</Title><Paragraph>这里只显示已完成的实验数据；按实验表单整理为数据表。可合并多张表，也可在预览中取消不需要的实验记录。</Paragraph></div>
+      <div><Title level={3}>选择实验数据并预览原表</Title><Paragraph>先选数据表，再按日期批次筛选并分页勾选实验；确认后仅加载所选实验的原表数据。</Paragraph></div>
         <Input.Search allowClear value={datasetKeyword} placeholder="搜索数据名称" onSearch={value => { setDatasetKeyword(value); void loadDatasets(value) }} onChange={event => { setDatasetKeyword(event.target.value); if (!event.target.value) void loadDatasets('') }} style={{ maxWidth: 280 }} />
       </div>
       <div className="workbench-data-layout">
         <Card className="workbench-dataset-card" title={<Space>实验数据表<Text type="secondary">共 {datasets.length} 张</Text></Space>} extra={<Button type="text" icon={<ReloadOutlined />} aria-label="刷新实验数据" onClick={() => void loadDatasets(datasetKeyword)}>刷新</Button>}>
           <Table<HistoryDatasetOption> size="small" rowKey="id" loading={loadingDatasets} dataSource={datasets} pagination={{ pageSize: 6, showSizeChanger: false }}
-            rowSelection={{ selectedRowKeys: selectedDatasetIds, onChange: toggleDataset, getCheckboxProps: () => ({ disabled: trainingActive }) }}
+            rowSelection={{ selectedRowKeys: selectedDatasetIds, onChange: toggleDataset, getCheckboxProps: () => ({ disabled: trainingActive || loadingDataset }) }}
             rowClassName={row => selectedDatasetIds.includes(row.id) ? 'selected-dataset-row' : ''}
             columns={[
               { title: '数据名称', dataIndex: 'name', ellipsis: true, render: (value: string, row) => <Button type="link" disabled={trainingActive} className="workbench-dataset-link" onClick={() => toggleDataset(selectedDatasetIds.includes(row.id) ? selectedDatasetIds.filter(id => id !== row.id) : [...selectedDatasetIds, row.id])}>{value}</Button> },
@@ -397,9 +403,14 @@ function ModelingWorkbenchPageInner({ canManageCatalog = false, canRegister = fa
             ]}
             locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={loadError ? '数据暂时无法读取' : '没有已完成的实验数据'} /> }} />
         </Card>
+        {selectedDatasetIds.map(id => <Card key={id} title={`${datasets.find(item => item.id === id)?.name ?? '实验数据'} · 选择实验`}>
+          <ModelingExperimentSelector id={id} selected={selectedExperimentIds[id] ?? []} onChange={ids => changeExperiments(id, ids)} disabled={trainingActive || loadingDataset} />
+        </Card>)}
+        {Boolean(selectedDatasetIds.length) && <Button type="primary" loading={loadingDataset} disabled={trainingActive || selectedDatasetIds.some(id => !(selectedExperimentIds[id]?.length))} onClick={() => void loadSelectedExperiments()}>加载所选实验并预览</Button>}
         <Card className="workbench-preview-card" title={dataset ? <Space wrap><span>原表预览</span><Tag color="blue">{selectedDatasetIds.length} 张表</Tag><Tag>{dataset.rows.length} 条记录</Tag><Tag color="green">已选 {selectedRows.length} 条</Tag></Space> : '原表预览'}>
           {!selectedDatasetIds.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="先从上方勾选一张或多张实验数据表" />
             : <>
+              {!dataset && <Empty description="筛选并勾选实验后，点击加载所选实验并预览" />}
               {dataset && selectedDatasetIds.length > 1 && !dataset.columns.length && <Alert type="warning" showIcon message="这些数据表没有可共同使用的字段" description="请取消不匹配的数据表，选择字段名称、单位和数据类型一致的表后再继续。" />}
               {dataset && <Table<HistoryDatasetRow> size="small" rowKey="id" loading={loadingDataset} columns={columns} dataSource={dataset.rows}
                 rowSelection={{

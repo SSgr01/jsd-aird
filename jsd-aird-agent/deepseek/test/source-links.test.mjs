@@ -1,9 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {normalizeOriginalLinks,shortSourceTitle,projectSourceBlocks,describeSourceLink} from '../../enterprise-plugin/src/source-links.mjs';
+import {normalizeOriginalLinks,shortSourceTitle,projectSourceBlocks,describeSourceLink,originalAddress} from '../../enterprise-plugin/src/source-links.mjs';
 const origin='http://127.0.0.1:5184';
 const id='11111111-1111-1111-1111-111111111111', version='22222222-2222-2222-2222-222222222222';
 const url=origin+'/api/v1/knowledge/documents/'+id+'/versions/'+version+'/content';
+
+test('spectrum page citations keep their pinned reference and exact original page',()=>{
+ const path='/api/v1/agents/business/images/SPECTRUM/'+id+'?ref='+encodeURIComponent(JSON.stringify({resource_type:'SPECTRUM',resource_id:id,revision:'pinned'}))+'&page=2#page=2';
+ const target=origin+path;
+ assert.equal(originalAddress(path,origin).href,target);
+ const result=projectSourceBlocks([{kind:'text',text:'[样品 A · 第2页]('+target+')'}],origin);
+ assert.equal(result.sources.length,1);
+ assert.equal(result.sources[0].locations[0].url,target);
+ assert.equal(result.sources[0].locations[0].page,2);
+ assert.equal(originalAddress('https://untrusted.example'+path,origin),null);
+ assert.equal(originalAddress(path.replace('&page=2','&page=0'),origin),null);
+});
 test('same-document page shortcuts become descriptive native Markdown links',()=>{
  const input='- 总入口：'+url+'\n  - 配方与固化工艺：`#page=3`\n  - 雾度方法：`#page=4`；耐磨方法：`#page=4`';
  const actual=normalizeOriginalLinks(input,origin);

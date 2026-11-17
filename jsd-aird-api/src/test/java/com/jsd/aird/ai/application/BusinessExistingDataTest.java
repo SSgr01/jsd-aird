@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jsd.aird.mdm.api.AgentProjectFacade;
 import com.jsd.aird.rnd.api.AgentExperimentFacade;
+import com.jsd.aird.shared.business.BusinessViews;
 import com.jsd.aird.shared.error.*;
 import java.util.*;
 import org.junit.jupiter.api.Test;
@@ -84,5 +85,30 @@ class BusinessExistingDataTest {
             .isInstanceOfSatisfying(ApiException.class,e->assertThat(e.errorCode()).isEqualTo(ApiErrorCode.VERSION_CONFLICT));
         ref.put("version_hash","changed");
         assertThat(service.invoke("business_read",json.createObjectNode().set("ref",ref)).path("candidates").path(0).path("ref").path("version_hash").asText()).isEqualTo("changed");
+    }
+
+    @Test void experimentOriginalsUseTheReturnedVersionAndValidateAgainBeforeTransfer() {
+        var originals = mock(BusinessOriginalFiles.class);
+        var projection = mock(BusinessFileProjection.class);
+        service.setOriginalFiles(originals); service.setFileProjection(projection);
+        byte[] bytes = "实验上传原文".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        var file = new com.jsd.aird.shared.business.BusinessReadPort.FileContent("实验.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytes, BusinessViews.hash(bytes));
+        var row = candidate(1); ((ObjectNode)row.path("source")).put("version_id", id(2).toString());
+        when(experiments.read(eq("get_experiment_record"), any())).thenAnswer(call -> json.createObjectNode().set("candidates", json.createArrayNode().add(row.deepCopy())));
+        var selected = id(3);
+        when(originals.list(any())).thenReturn(List.of(new BusinessOriginalFiles.Entry(selected, file.name(), file.contentType(), bytes.length, file.sha256())));
+        when(originals.open(any(), eq(selected))).thenReturn(file);
+        var request = json.createObjectNode().put("include_file", true).put("file_id", selected.toString());
+        request.set("ref", json.createObjectNode().put("type", "EXPERIMENT").put("id", id(1).toString()));
+        var result = service.invoke("business_read", request);
+        assertThat(Base64.getDecoder().decode(result.path("business_file").path("content_base64").asText())).isEqualTo(bytes);
+        assertThat(result.path("files").path(0).path("file_id").asText()).isEqualTo(selected.toString());
+        assertThat(result.path("candidates").path(0).path("files")).isEqualTo(result.path("files"));
+        verify(originals).open(argThat(ref -> ref.path("version_id").asText().equals(id(2).toString())), eq(selected));
+        verify(experiments).read(eq("get_experiment_record"), argThat(args -> args.path("include_file").asBoolean()));
+        verify(experiments).validateSource(row.path("source"), null);
+        verify(projection).attach(any(), eq(file));
+        doThrow(new ApiException(ApiErrorCode.VERSION_CONFLICT)).when(experiments).validateSource(any(), isNull());
+        assertThatThrownBy(() -> service.invoke("business_read", request)).isInstanceOf(ApiException.class);
     }
 }

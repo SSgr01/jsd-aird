@@ -15,29 +15,39 @@ public class BusinessSpectrumReader implements BusinessReadPort {
     private final SpectrumRepository spectra;
     private final SpectrumService files;
     private final ObjectMapper json;
-    public BusinessSpectrumReader(SpectrumRepository spectra, SpectrumService files, ObjectMapper json) { this.spectra = spectra; this.files = files; this.json = json; }
-    public Set<String> resourceTypes() { return Set.of("SPECTRUM", "SPECTRUM_ANALYSIS"); }
+    private final SpectrumPageRenderer pages;
+    public BusinessSpectrumReader(SpectrumRepository spectra, SpectrumService files, ObjectMapper json, SpectrumPageRenderer pages) { this.spectra = spectra; this.files = files; this.json = json; this.pages = pages; }
+    public Set<String> resourceTypes() { return Set.of("SPECTRUM"); }
     public Set<String> filters(String type) { return "SPECTRUM".equals(type) ? Set.of("query", "category_id", "status") : Set.of(); }
     public Page references(String type, ObjectNode filter, int page, int size) {
-        if (!"SPECTRUM".equals(type)) throw new ApiException(ApiErrorCode.BAD_REQUEST, "历史谱图分析请按已有运行id读取，不提供全局历史搜索");
+        if (!"SPECTRUM".equals(type)) throw new ApiException(ApiErrorCode.BAD_REQUEST, "不支持此业务类型");
         var actor = ActorContext.required();
         var rows = spectra.listCharts(actor.organizationId(), filter.path("query").asText(""), optionalId(filter, "category_id"), filter.path("status").asText(null), page, size);
         return new Page(rows.stream().map(row -> ref(type, row.id())).toList(), rows.size() == size);
     }
     public BusinessRecordView read(ObjectNode request) {
         var actor = ActorContext.required(); var id = id(request); var type = request.path("type").asText();
-        if ("SPECTRUM_ANALYSIS".equals(type)) {
-            var row = spectra.findAnalysisForUser(actor.organizationId(), actor.userId(), id).orElseThrow(BusinessViews::missing);
-            var body = facts(json, row, "status", "question", "resultJson", "warningJson", "model", "createdAt", "completedAt");
-            body.put("source_status", "SECONDARY_AI_ANALYSIS");
-            var result = view(type, id, null, "历史谱图分析", body, "/spectrum/chat?sessionId=" + row.sessionId(), List.of()); pinned(request, result); return result;
-        }
         var row = spectra.findChart(actor.organizationId(), id).orElseThrow(BusinessViews::missing);
         var body = facts(json, row, "title", "categoryId", "originalName", "sampleName", "batchNo", "testConditions", "metadataJson", "pageCount", "status", "fileObjectId", "sha256");
         body.put("measurement_data", "原文件及页面；未提供可直接计算峰面积的原始数值曲线");
         body.put("original_path", "/api/v1/spc/charts/" + id + "/content");
         body.put("file_read_hint", "business_read设置include_file=true可把完整原文件交给原生文件读取；按原生PDF页码选择页面");
+        body.put("page_read_hint", "按页看图：business_read(ref=本记录ref,section=page,page=原始页码,include_file=true)，再用read_image读取business_file.path。只有图片实际进入视觉模型才算看图。");
+        body.put("categoryHint", files.requireCategory(actor.organizationId(), row.categoryId()).analysisHint());
         var result = view(type, id, null, row.title(), body, "/spectrum/view?chartId=" + id, List.of()); pinned(request, result); return result;
+    }
+    @Override public BusinessRecordView imagePage(ObjectNode reference, int page) {
+        var record = read(reference);
+        if (!"SPECTRUM".equals(reference.path("type").asText()) || !"READY".equals(record.facts().path("status").asText())
+                || page < 1 || page > record.facts().path("pageCount").asInt())
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "图谱页面不可用或页码超出范围");
+        var facts = record.facts().deepCopy();
+        facts.put("originalPage", page).put("visualReading", "本条仅为页面来源与样品信息；须读取对应图片后再作图像判断。");
+        return new BusinessRecordView(record.ref(), record.title() + " · 第 " + page + " 页", facts, record.relations(), record.path());
+    }
+    @Override public FileContent imagePageFile(ObjectNode reference, int page) {
+        var record = imagePage(reference, page);
+        return pages.render(id(reference), record.facts().path("sha256").asText(), page);
     }
     @Override public FileContent file(ObjectNode reference) {
         if (!"SPECTRUM".equals(reference.path("type").asText())) return BusinessReadPort.super.file(reference);

@@ -29,11 +29,12 @@ public class ExpertCatalogService {
     public ObjectNode resolve(String id, boolean execution) {
         artifacts.requireUse();
         for (var expert : catalog.path("experts")) {
-            if (!expert.path("id").asText().equals(id)) continue;
+            boolean matches = expert.path("id").asText().equals(id);
+            for (var alias : expert.path("aliases")) matches |= alias.asText().equals(id);
+            if (!matches) continue;
             if (execution && !expert.path("enabled").asBoolean())
                 throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN, "此专家已停用，请新建其他专家会话");
             var value = ((ObjectNode) expert).deepCopy();
-            value.put("id", id).put("enabled", expert.path("enabled").asBoolean());
             return value;
         }
         throw new ApiException(ApiErrorCode.NOT_FOUND, "未找到此专家");

@@ -27,7 +27,7 @@ interface CategoryCardGridProps {
   variant?: 'compact' | 'descriptive';
 }
 
-export function CategoryCardGrid({ categories, activeId, addLabel = '新增分类', countLabel = '条记录', onSelect, onCreate, onRename, onDelete, variant = 'compact' }: CategoryCardGridProps) {
+export function CategoryCardGrid({ categories, activeId, addLabel = '新增分类', countLabel = '条记录', onSelect, onCreate, onRename, onDelete, variant = 'descriptive' }: CategoryCardGridProps) {
   const gridRef = useRef<HTMLDivElement>(null);
   const categorySignature = categories.map((category) => category.id).join('|');
 

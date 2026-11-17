@@ -14,7 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-/** Generates both AI Q&A and spectrum chat titles inside the existing worker. */
+/** Generates conversation titles inside the existing worker. */
 @Component
 public class ConversationTitleJobHandler implements AsyncJobHandler {
 

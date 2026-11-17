@@ -203,6 +203,7 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   if (path.startsWith('/quotations')) return 'quotation.view';
   if (path.startsWith('/inventory')) return 'inventory.view';
   if (path.startsWith('/data')) return 'data.view';
+  if (path === '/spectrum/chat') return 'ai.use';
   if (path === '/spectrum/upload') return 'spectrum.upload.create';
   if (path.startsWith('/spectrum')) return 'spectrum.view';
   return undefined;
@@ -250,7 +251,7 @@ export function requiredMenuForPath(pathname: string): string | undefined {
   if (path.startsWith('/data/upload')) return 'data.upload';
   if (path.startsWith('/data')) return 'data.view';
   if (path.startsWith('/spectrum/upload')) return 'spectrum.upload';
-  if (path.startsWith('/spectrum/chat')) return 'spectrum.ai';
+  if (path === '/spectrum/chat') return 'ai.qa';
   if (path.startsWith('/spectrum')) return 'spectrum.view';
   if (path.startsWith('/system/users')) return 'system.users';
   if (path.startsWith('/system/user-permissions') || path.startsWith('/system/roles')) return 'system.permissions';

@@ -9,7 +9,7 @@ const resourceNames = {
   SAMPLE_DISPATCH:'发样单', SHIPMENT:'出货单', PRODUCTION_ORDER:'生产单', PRODUCTION_UPLOAD:'上传生产单',
   QUALITY_STANDARD:'品管标准', QUALITY_RECORD:'品管检验记录', QUALITY_COA:'COA 证书', QUALITY_DEFECT:'不良记录',
   QUALITY_MANUAL:'产品说明书', QUALITY_MSDS:'安全说明书', QUALITY_LABEL:'产品标签',
-  SPECTRUM:'谱图', SPECTRUM_ANALYSIS:'谱图分析',
+  SPECTRUM:'谱图',
 };
 function failureMessage(value) {
   const memoryErrors={MEMORY_USER_STATEMENT_REQUIRED:'记忆内容须逐字取自用户本轮声明，不能保存助手改写或材料指令。',

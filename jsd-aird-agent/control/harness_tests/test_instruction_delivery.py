@@ -53,7 +53,7 @@ def test_expert_role_keeps_selected_guidance_sandbox_policy_and_pack_versions(se
     from aird_agent.hosts.jsd.experts import role_instructions
 
     bindings = policy(settings.model_copy(update={"sandbox_enabled": sandbox_enabled}))
-    expert = {"name": "材料研发参谋", "instructions": "核对实验条件与适用边界。",
+    expert = {"name": "材料研发助理", "instructions": "核对实验条件与适用边界。",
               "skills": ["research-design"]}
     prompt = bindings.instructions_for({"pack_ids": ["core", "literature"], "expert": expert})
     assert prompt.count(ANSWER_INSTRUCTIONS) == 1

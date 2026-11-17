@@ -393,8 +393,9 @@ export async function apply(ctx) {
       return isFolderSession(payload.agent.id) ? decision : await memory.prepare(payload,decision,bound);
     } finally { preparedBindings.delete(payload.agent.id); }
   });
-  // All native provider calls share enterprise admission and metering. Title
-  // requests can precede the first Run and use their own session-bound budget.
+  // Workbench conversations share enterprise admission and metering. Spectrum
+  // jobs use Java's separate authorization, queue and result/usage persistence.
+  // Title requests can precede the first Run and use their own session-bound budget.
   ctx.on('llm/stream', async function* (options, next) {
     const callId = randomUUID();
     const title = options.purpose === 'session-title';
@@ -491,9 +492,9 @@ export async function apply(ctx) {
       cancelled: cancelled.has(agent.id), error_code: error?.code }));
   });
 
-  async function readBody(req) {
+  async function readBody(req, limit = 20 * 1024 * 1024) {
     let size = 0; const chunks = [];
-    for await (const chunk of req) { size += chunk.length; if (size > 20 * 1024 * 1024) throw new Error('PAYLOAD_TOO_LARGE'); chunks.push(chunk); }
+    for await (const chunk of req) { size += chunk.length; if (size > limit) throw new Error('PAYLOAD_TOO_LARGE'); chunks.push(chunk); }
     return JSON.parse(Buffer.concat(chunks).toString() || '{}');
   }
   // Public static code only; source structures stay in the browser URL fragment.

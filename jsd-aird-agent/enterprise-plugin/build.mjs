@@ -2,13 +2,14 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { themeTokens } from './src/theme.mjs';
 import './prepare-chemistry-renderer.mjs';
 
-const [client, css, sourceLinks, memoryUI, briefingEntry, expertsUI] = await Promise.all([
+const [client, css, sourceLinks, memoryUI, briefingEntry, expertsUI, spectrumUI] = await Promise.all([
   readFile(new URL('./src/client.js', import.meta.url), 'utf8'),
   readFile(new URL('./src/theme.css', import.meta.url), 'utf8'),
   readFile(new URL('./src/source-links.mjs', import.meta.url), 'utf8'),
   readFile(new URL('./src/memory-client.mjs', import.meta.url), 'utf8'),
   readFile(new URL('./src/briefing-entry.mjs', import.meta.url), 'utf8'),
   readFile(new URL('./src/experts-client.mjs', import.meta.url), 'utf8'),
+  readFile(new URL('./src/spectrum-client.mjs', import.meta.url), 'utf8'),
 ]);
 const marker = '/* @enterprise-theme */ null';
 if (client.split(marker).length !== 2) throw new Error('Expected one enterprise theme insertion point');
@@ -18,7 +19,8 @@ await writeFile(new URL('./lib/client.js', import.meta.url),
     .replace('/* @source-links */ null', () => '(()=>{'+sourceLinks.replaceAll('export function ', 'function ')+';return {normalizeOriginalLinks,sourceLinkLabel,shortSourceTitle,projectSourceBlocks};})()')
     .replace('/* @memory-ui */ null', () => '(()=>{'+memoryUI.replace('export function ','function ')+';return {registerMemoryUI};})()')
     .replace('/* @briefing-entry */ null', () => '(()=>{'+briefingEntry.replace('export function ','function ')+';return {readBriefingEntry};})()')
-    .replace('/* @experts-ui */ null', () => '(()=>{'+expertsUI.replace('export function ','function ')+';return {registerExpertsUI};})()'));
+    .replace('/* @experts-ui */ null', () => '(()=>{'+expertsUI.replace('export function ','function ')+';return {registerExpertsUI};})()')
+    .replace('/* @spectrum-ui */ null', () => '(()=>{'+spectrumUI.replaceAll('export function ','function ')+';return {registerSpectrumUI,SpectrumResourceBody};})()'));
 
 await import('../../jsd-aird-web/scripts/prepare-chemistry.mjs');
 const { copyFile } = await import('node:fs/promises');

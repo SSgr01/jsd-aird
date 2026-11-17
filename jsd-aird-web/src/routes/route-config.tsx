@@ -61,7 +61,7 @@ const DataRecognitionPage = routePage(async () => ({ default: (await import('@/p
 const ResearchTestListPage = routePage(async () => ({ default: (await import('@/pages/research-test/ResearchTestListPage')).ResearchTestListPage }));
 const ResearchTestUploadPage = routePage(async () => ({ default: (await import('@/pages/research-test/ResearchTestUploadPage')).ResearchTestUploadPage }));
 const ResearchTestWorkspacePage = routePage(async () => ({ default: (await import('@/pages/research-test/ResearchTestWorkspacePage')).ResearchTestWorkspacePage }));
-const SpectrumChatPage = routePage(async () => ({ default: (await import('@/pages/spectrum/SpectrumChatPage')).SpectrumChatPage }));
+const SpectrumWorkbenchEntry = routePage(async () => ({ default: (await import('@/pages/spectrum/SpectrumWorkbenchEntry')).SpectrumWorkbenchEntry }));
 const SpectrumUploadPage = routePage(async () => ({ default: (await import('@/pages/spectrum/SpectrumUploadPage')).SpectrumUploadPage }));
 const SpectrumViewPage = routePage(async () => ({ default: (await import('@/pages/spectrum/SpectrumViewPage')).SpectrumViewPage }));
 const LoginPage = routePage(async () => ({ default: (await import('@/pages/auth/LoginPage')).LoginPage }));
@@ -146,7 +146,7 @@ const applicationRoutes: RouteObject[] = [
       { path: 'spectrum', element: <Navigate to="/spectrum/upload" replace /> },
       { path: 'spectrum/upload', element: <PageAnyPermissionGate permissions={['spectrum.upload.view', 'spectrum.upload.create', 'spectrum.view']}><SpectrumUploadPage /></PageAnyPermissionGate> },
       { path: 'spectrum/view', element: <SpectrumViewPage /> },
-      { path: 'spectrum/chat', element: <SpectrumChatPage /> },
+      { path: 'spectrum/chat', element: <SpectrumWorkbenchEntry /> },
       { path: 'quality', element: <Navigate to="/quality/upload" replace /> },
       { path: 'quality/upload', element: <PageAnyPermissionGate permissions={['quality.upload.view', 'quality.upload.create', 'quality.upload.download', 'quality.upload.retry', 'quality.upload.delete', 'quality.view']}><QualityUploadPage /></PageAnyPermissionGate> },
       { path: 'quality/view', element: <PagePermissionGate permission="quality.view"><QualityDataPage /></PagePermissionGate> },
@@ -247,7 +247,7 @@ registerRoutePreload('/data/recognition-jobs/:id', DataRecognitionPage.preload);
 registerRoutePreload('/data/view', DataViewPage.preload);
 registerRoutePreload('/spectrum/upload', SpectrumUploadPage.preload);
 registerRoutePreload('/spectrum/view', SpectrumViewPage.preload);
-registerRoutePreload('/spectrum/chat', SpectrumChatPage.preload);
+registerRoutePreload('/spectrum/chat', SpectrumWorkbenchEntry.preload);
 registerRoutePreload('/quality/upload', QualityUploadPage.preload);
 registerRoutePreload('/quality/view', QualityDataPage.preload);
 registerRoutePreload('/quality/records/:id', QualityRecordWorkspacePage.preload);

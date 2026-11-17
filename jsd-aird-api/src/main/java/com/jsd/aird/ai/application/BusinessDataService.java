@@ -78,15 +78,17 @@ public class BusinessDataService {
             var files = originalFiles == null ? List.<BusinessOriginalFiles.Entry>of() : originalFiles.list(row.ref());
             result.set("files",json.valueToTree(files));
             if (args.path("include_file").asBoolean()) {
-                require(type, id(ref), "DOWNLOAD", row.ref());
+                boolean visualPage = "page".equals(args.path("section").asText());
+                require(type, id(ref), visualPage ? "READ" : "DOWNLOAD", row.ref());
                 var selected = optionalId(args,"file_id");
-                var file = originalFiles != null && BusinessOriginalFiles.supports(type) ? originalFiles.open(row.ref(),selected) : reader(type).file(row.ref(),selected);
+                var file = visualPage ? imagePageFile(row.ref(), args.path("page").asInt())
+                    : originalFiles != null && BusinessOriginalFiles.supports(type) ? originalFiles.open(row.ref(),selected) : reader(type).file(row.ref(),selected);
                 if (file.bytes().length > 8 * 1024 * 1024) throw new ApiException(ApiErrorCode.BAD_REQUEST, "原文件超过8MB，请通过业务页面下载后作为原生附件读取");
                 var transfer = result.putObject("business_file").put("name", file.name()).put("content_type", file.contentType())
                     .put("bytes", file.bytes().length).put("sha256", file.sha256())
                     .put("content_base64", Base64.getEncoder().encodeToString(file.bytes()));
                 transfer.set("ref", row.ref());
-                if(fileProjection!=null)fileProjection.attach(transfer,file);
+                if(fileProjection!=null && !visualPage)fileProjection.attach(transfer,file);
                 // Reject a concurrent metadata/content change before publishing a file to the harness.
                 validateCandidate(candidate(row).path("source"), null, candidate(read(row.ref())));
             }
@@ -144,6 +146,18 @@ public class BusinessDataService {
         return page;
     }
     private ObjectNode readCandidate(BusinessRecordView row,ObjectNode args) {
+        if ("page".equals(args.path("section").asText())) {
+            int page = args.path("page").asInt();
+            var value = candidate(reader(row.ref().path("type").asText()).imagePage(row.ref(), page));
+            var source = (ObjectNode)value.path("source");
+            var anchor = (ObjectNode)source.path("anchor");
+            anchor.put("page_no", page);
+            anchor.set("read_options", json.createObjectNode().put("section", "page").put("page", page));
+            anchor.put("read_path", "/api/v1/agents/business/images/" + row.ref().path("type").asText() + "/" + row.ref().path("id").asText()
+                + "?ref=" + java.net.URLEncoder.encode(row.ref().toString(), java.nio.charset.StandardCharsets.UTF_8) + "&page=" + page + "#page=" + page);
+            source.put("source_node_key", source.path("source_node_key").asText() + ":page:" + page);
+            return value;
+        }
         if(!"content".equals(args.path("section").asText())) return candidate(row);
         var page=contentPage(row,args); var facts=row.facts().deepCopy();facts.set("content",page.path("content"));
         var value=candidate(new BusinessRecordView(row.ref(),row.title(),facts,row.relations(),row.path()));
@@ -352,6 +366,13 @@ public class BusinessDataService {
         candidate.set("source", source); candidate.set("ref", ref);
         if(originalFiles!=null && BusinessOriginalFiles.supports(ref.path("type").asText()))candidate.set("files",json.valueToTree(originalFiles.list(ref)));
         return candidate;
+    }
+    public BusinessReadPort.FileContent imagePageFile(ObjectNode reference, int page) {
+        var row = read(reference);
+        var file = reader(row.ref().path("type").asText()).imagePageFile(row.ref(), page);
+        // Recheck the pinned metadata after rendering, before bytes reach a native attachment.
+        read(row.ref());
+        return file;
     }
     public void validateSource(JsonNode source, String excerpt) {
         if ("BUSINESS_QUERY".equals(source.path("resource_type").asText())) { BusinessTables.validate(this, source, excerpt); return; }

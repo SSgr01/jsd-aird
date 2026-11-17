@@ -10,9 +10,9 @@ import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
 import java.util.*;
 
-/** Bounded, versioned business records; editor snapshots stay in the experiment editor. */
+/** Bounded, versioned business records and saved document values, without editor internals. */
 final class AgentExperimentProjection {
-    static final Set<String> SECTIONS = Set.of("overview", "samples", "formulaItems", "processSteps", "testResults", "tables", "events");
+    static final Set<String> SECTIONS = Set.of("overview", "samples", "formulaItems", "processSteps", "testResults", "tables", "events", "content");
     private static final Set<String> VALUE_SECTIONS = Set.of("formulaItems", "processSteps", "testResults");
     private final ObjectMapper json;
 
@@ -57,6 +57,26 @@ final class AgentExperimentProjection {
         // Search resolves identities. Detailed fields, metrics and sample
         // columns belong to the explicit versioned read, not every search hit.
         if ("summary".equals(section)) return result.put("sample_count", model.path("sampleGroups").size());
+        if ("content".equals(section)) {
+            if (query.hasNonNull("sample_key") || query.hasNonNull("field_codes"))
+                throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "保存正文不接受样品或字段筛选，请按 offset/limit 分页");
+            var document = savedDocument(version);
+            var units = contentUnits(document);
+            var selected = result.putArray("records");
+            int cursor = offset;
+            while (cursor < units.size() && selected.size() < limit) {
+                selected.add(units.get(cursor));
+                if (text(result).length() > 9000 && selected.size() > 1) { selected.remove(selected.size() - 1); break; }
+                cursor++;
+            }
+            result.put("offset", offset).put("returned", selected.size()).put("total", units.size())
+                .put("complete", !document.isEmpty() && offset == 0 && cursor == units.size());
+            if (document.isEmpty()) result.put("content_notice", "没有已保存的文档正文；结构化实验内容仍可按其他分区读取，原上传文件请查看 files 目录。");
+            if (cursor < units.size()) result.put("next_offset", cursor);
+            if (result.toString().length() > 80000)
+                throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "单个正文单元格过大，请在实验页面查看");
+            return result;
+        }
         var sampleColumns = result.putArray("sample_columns");
         int sampleIndex = 0;
         for (var sample : model.path("sampleGroups")) {
@@ -90,7 +110,9 @@ final class AgentExperimentProjection {
             var counts = result.putObject("section_counts");
             var cellCounts = result.putObject("section_cell_counts");
             for (var name : SECTIONS.stream().sorted().toList()) if (!"overview".equals(name)) {
-                counts.put(name, rows(model, name, "", Set.of()).size());
+                counts.put(name, "content".equals(name)
+                    ? contentUnits(savedDocument(version)).size()
+                    : rows(model, name, "", Set.of()).size());
                 if (VALUE_SECTIONS.contains(name)) cellCounts.put(name, model.path(name).size());
             }
             var metrics = result.putArray("available_metrics");
@@ -139,6 +161,24 @@ final class AgentExperimentProjection {
         if (result.toString().length() > 80000)
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "实验概览过大，请在原实验页查看");
         return result;
+    }
+
+    private List<JsonNode> contentUnits(JsonNode document) {
+        var units = new ArrayList<JsonNode>();
+        if (document.has("text")) {
+            int[] points = document.path("text").asText().codePoints().toArray();
+            for (int i = 0; i < points.length; i += 1000)
+                units.add(json.createObjectNode().put("text", new String(points, i, Math.min(1000, points.length - i))));
+        } else document.path("cells").forEach(units::add);
+        return units;
+    }
+
+    private JsonNode savedDocument(ExperimentModels.Version version) {
+        var snapshot = version.editModel().path("documentSnapshot");
+        // Legacy Word records display the version's retained document when no edit snapshot exists.
+        if (!snapshot.isObject() && version.templateSnapshot() != null && version.templateSnapshot().has("body"))
+            snapshot = version.templateSnapshot();
+        return com.jsd.aird.shared.business.BusinessViews.document(snapshot);
     }
 
     /** Overview counts and page cursors must describe the same rows, not sample cells. */
@@ -262,6 +302,14 @@ final class AgentExperimentProjection {
         String section = page.path("section").asText();
         if ("summary".equals(section)) return output.append("这是目录摘要，正文尚未读取。结构化样品数：")
             .append(page.path("sample_count").asInt()).append("。样品数不包括背景中的方案、配方或历史引用；请读取同一版本概览后再判断资料缺口。").toString();
+        if ("content".equals(section)) {
+            output.append(com.jsd.aird.shared.business.BusinessViews.modelMarkdown("页面保存正文", page.path("records"))).append('\n');
+            if (page.has("content_notice")) output.append(page.path("content_notice").asText()).append('\n');
+            output.append("本页范围：").append(page.path("offset").asInt()).append(" 起，返回 ")
+                .append(page.path("returned").asInt()).append(" 项，共 ").append(page.path("total").asInt()).append(" 项。\n");
+            if (page.has("next_offset")) output.append("正文尚未读完，下一页偏移量：").append(page.path("next_offset").asInt()).append("。\n");
+            return output.toString();
+        }
         if ("overview".equals(section)) {
             output.append(com.jsd.aird.shared.business.BusinessViews.modelMarkdown("实验共用内容", page.path("fields"))).append('\n');
             output.append("| 共用字段 | 内容 | 记录状态 |\n| --- | --- | --- |\n");
@@ -278,9 +326,9 @@ final class AgentExperimentProjection {
                     .append(info.path("unit").asText().isBlank() ? "" : " " + cell(info.path("unit").asText()))
                     .append(" | ").append(com.jsd.aird.shared.business.BusinessViews.displayValue(info.path("valueStatus").asText())).append(" |\n");
             }
-            output.append("\n结构化分区行数（与分区分页总行数一致，不包含上面的背景、方案及历史引用）：\n");
+            output.append("\n分区总量（与分页一致；保存正文按单元格或每1000个Unicode码点计项，其余按行计，不包含上面的背景、方案及历史引用）：\n");
             page.path("section_counts").properties().forEach(entry -> output.append("- ").append(sectionLabel(entry.getKey()))
-                .append("：").append(entry.getValue().asInt()).append(" 行")
+                .append("：").append(entry.getValue().asInt()).append("content".equals(entry.getKey()) ? " 项" : " 行")
                 .append(page.path("section_cell_counts").has(entry.getKey())
                     ? "；样品数据单元格 " + page.path("section_cell_counts").path(entry.getKey()).asInt() + " 个（含未记录项）" : "")
                 .append('\n'));
@@ -332,7 +380,7 @@ final class AgentExperimentProjection {
     private String sectionLabel(String section) {
         return switch (section) {
             case "samples" -> "样品"; case "formulaItems" -> "配方"; case "processSteps" -> "工艺";
-            case "testResults" -> "结果"; case "tables" -> "表格"; case "events" -> "事件"; default -> section;
+            case "testResults" -> "结果"; case "tables" -> "表格"; case "events" -> "事件"; case "content" -> "页面保存正文"; default -> section;
         };
     }
 

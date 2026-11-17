@@ -21,6 +21,21 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 
 class PostgresWorkerTest {
+    @Test void knowledgeJobsHaveTheirOwnTimeoutWithoutExtendingOtherJobs() {
+        var mapper = new ObjectMapper();
+        var worker = new PostgresWorker(mock(WorkRepository.class), mock(FileObjectRepository.class), mapper,
+                List.of(), "timeouts", Duration.ofSeconds(30), Duration.ofMinutes(15));
+        try {
+            for (var type : List.of("KB_INGEST_DOCUMENT", "KB_BUILD_KNOWLEDGE_INDEX", "KB_BUILD_KNOWLEDGE_VECTOR", "KB_REBUILD_PUBLISHED_INDEX")) {
+                var job = new WorkRepository.AsyncJob(UUID.randomUUID(), type, mapper.createObjectNode(), 1, 5);
+                Duration actual = org.springframework.test.util.ReflectionTestUtils.invokeMethod(worker, "timeoutFor", job);
+                org.assertj.core.api.Assertions.assertThat(actual).isEqualTo(Duration.ofHours(2));
+            }
+            var other = new WorkRepository.AsyncJob(UUID.randomUUID(), "OTHER", mapper.createObjectNode(), 1, 5);
+            Duration actual = org.springframework.test.util.ReflectionTestUtils.invokeMethod(worker, "timeoutFor", other);
+            org.assertj.core.api.Assertions.assertThat(actual).isEqualTo(Duration.ofMinutes(15));
+        } finally { worker.shutdownExecutors(); }
+    }
     @Test void resourceContentionDefersTheExistingJobInsteadOfFailingIt(){
         var repository=mock(WorkRepository.class);var mapper=new ObjectMapper();var job=new WorkRepository.AsyncJob(UUID.randomUUID(),"BUSY",mapper.createObjectNode(),1,5);var handler=mock(AsyncJobHandler.class);
         when(repository.claimOutbox(any(),any())).thenReturn(Optional.empty());when(repository.claimJob(any(),any())).thenReturn(Optional.of(job),Optional.empty());when(handler.supports("BUSY")).thenReturn(true);

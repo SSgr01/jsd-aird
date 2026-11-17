@@ -104,7 +104,7 @@ export function DocumentComparisonViewer({ original, result, originalTitle = '�
       title={originalTitle}
       icon={<FileTextOutlined />}
       hidden={narrow ? active !== 'source' : focusedPane === 'result'}
-      focusAction={narrow ? undefined : focusedPane ? restoreAction : <Tooltip title="仅看解析结果"><Button size="small" type="text" aria-label="仅看解析结果" icon={<RightOutlined />} onClick={() => setFocusedPane('result')} /></Tooltip>}
+      focusAction={narrow ? undefined : focusedPane ? restoreAction : <Tooltip title="仅看原文件"><Button size="small" type="text" aria-label="仅看原文件" icon={<LeftOutlined />} onClick={() => setFocusedPane('source')} /></Tooltip>}
     >{original}</ComparisonPane>
     <div
       className="knowledge-comparison-divider"
@@ -132,7 +132,7 @@ export function DocumentComparisonViewer({ original, result, originalTitle = '�
       icon={<FormOutlined />}
       extra={resultExtra}
       hidden={narrow ? active !== 'result' : focusedPane === 'source'}
-      focusAction={narrow ? undefined : focusedPane ? restoreAction : <Tooltip title="仅看原文件"><Button size="small" type="text" aria-label="仅看原文件" icon={<LeftOutlined />} onClick={() => setFocusedPane('source')} /></Tooltip>}
+      focusAction={narrow ? undefined : focusedPane ? restoreAction : <Tooltip title="仅看解析结果"><Button size="small" type="text" aria-label="仅看解析结果" icon={<RightOutlined />} onClick={() => setFocusedPane('result')} /></Tooltip>}
     >{result}</ComparisonPane>
   </div>;
 }

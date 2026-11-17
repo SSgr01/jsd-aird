@@ -1,3 +1,3 @@
 interface:
   display_name: "JSD Experiment Converter"
-  short_description: "Normalize Jieshida test and synthesis experiment records into the official Excel templates"
+  short_description: "提取可追溯的历史实验数据、筛选建模候选，并按需生成标准Excel"

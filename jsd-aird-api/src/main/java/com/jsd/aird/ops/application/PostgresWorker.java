@@ -45,6 +45,8 @@ public class PostgresWorker {
     private final Duration leaseDuration;
     private final Duration jobTimeout;
     private final Duration formulaModelBuildTimeout;
+    @Value("${app.worker.knowledge-job-timeout:2h}")
+    private Duration knowledgeJobTimeout = Duration.ofHours(2);
     private final java.util.concurrent.ThreadPoolExecutor jobExecutor = new java.util.concurrent.ThreadPoolExecutor(
             0,2,30,TimeUnit.SECONDS,new java.util.concurrent.SynchronousQueue<>(),Thread.ofVirtual().name("aird-job-",0).factory(),new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     private com.jsd.aird.shared.resource.BoundedGate executionGate=new com.jsd.aird.shared.resource.BoundedGate(2,0);
@@ -249,6 +251,8 @@ public class PostgresWorker {
     }
 
     private Duration timeoutFor(WorkRepository.AsyncJob job) {
+        if (Set.of("KB_INGEST_DOCUMENT", "KB_BUILD_KNOWLEDGE_INDEX", "KB_BUILD_KNOWLEDGE_VECTOR",
+                "KB_REBUILD_PUBLISHED_INDEX").contains(job.jobType())) return knowledgeJobTimeout;
         return Set.of("AI_MODEL_TRAIN_V2", "AI_FORMULA_DESIGN_V2", "AI_EXPERIMENT_OPTIMIZATION_V2")
                 .contains(job.jobType())
                 ? formulaModelBuildTimeout : jobTimeout;

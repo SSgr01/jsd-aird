@@ -23,7 +23,6 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -219,33 +218,6 @@ public class SpectrumController {
         }
     }
 
-    @PostMapping("/chat/sessions")
-    public ApiResponse<SpectrumService.SessionView> createSession() {
-        return success(service.createSession());
-    }
-
-    @GetMapping("/chat/sessions")
-    public ApiResponse<List<SpectrumService.SessionView>> sessions(@RequestParam(defaultValue = "50") int limit) {
-        return success(service.sessions(limit));
-    }
-
-    @GetMapping("/chat/sessions/{sessionId}")
-    public ApiResponse<SpectrumService.SessionView> session(@PathVariable UUID sessionId) {
-        return success(service.session(sessionId));
-    }
-
-    @PatchMapping("/chat/sessions/{sessionId}")
-    public ApiResponse<Void> renameSession(@PathVariable UUID sessionId, @Valid @RequestBody SessionTitleRequest request) {
-        service.renameSession(sessionId, request.title());
-        return success(null);
-    }
-
-    @DeleteMapping("/chat/sessions/{sessionId}")
-    public ApiResponse<Void> deleteSession(@PathVariable UUID sessionId) {
-        service.deleteSession(sessionId);
-        return success(null);
-    }
-
     private <T> ApiResponse<T> success(T value) {
         return ResponseFactory.success(value, RequestIdHolder.currentOrUnknown());
     }
@@ -259,8 +231,6 @@ public class SpectrumController {
             return new SpectrumService.CategoryCommand(code, name, description, analysisHint, fields);
         }
     }
-
-    public record SessionTitleRequest(@NotBlank @Size(max = 80) String title) { }
 
     public record UpdateCategoryRequest(@NotBlank @Size(max = 120) String name,
                                          @Size(max = 64) String code,

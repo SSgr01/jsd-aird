@@ -26,7 +26,8 @@ async def experts(settings, store):
         assert action == "expert_catalog"
         if args["action"] == "list":
             return catalog
-        item = next(row for row in catalog["experts"] if row["id"] == args["expert_id"])
+        item = next(row for row in catalog["experts"]
+                    if args["expert_id"] in [row["id"], *row.get("aliases", [])])
         if args["action"] == "resolve" and not item["enabled"]:
             raise HTTPException(403, "EXPERT_DISABLED")
         return copy.deepcopy(item)

@@ -697,7 +697,6 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         if (path.startsWith("/api/v1/spc") || path.startsWith("/api/v1/spectrum")) {
             if (method.equals("DELETE") && path.matches("/api/v1/spc/uploads/attempts/[0-9a-fA-F-]{36}"))
                 return permission("spectrum.upload.delete", "SPECTRUM", "WRITE");
-            if (path.startsWith("/api/v1/spc/chat")) return permission("ai.use", "AI", "USE");
             if (path.contains("/export")) return permission("spectrum.export", "SPECTRUM", "READ");
             if (path.contains("/download")) return permission("spectrum.download", "SPECTRUM", "READ");
             if (read) return permission("spectrum.view", "SPECTRUM", "READ");
@@ -761,6 +760,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         if (path.equals("/api/v1/ai/rnd/experiment-optimizations") && method.equals("POST"))
             return permission("ai.experiment.optimize", "AI_EXPERIMENT", "USE");
         if (path.startsWith("/api/v1/ai/rnd/modeling-workbench/datasets") && read)
+            return permission("ai.modeling.read", "AI_MODELING", "READ");
+        if (path.matches("/api/v1/ai/rnd/modeling-workbench/datasets/[0-9a-f-]{36}/selection") && method.equals("POST"))
             return permission("ai.modeling.read", "AI_MODELING", "READ");
         if (path.matches("/api/v1/ai/rnd/modeling-workbench/runs/[0-9a-f-]{36}") && read)
             return permission("ai.modeling.read", "AI_MODELING", "READ");

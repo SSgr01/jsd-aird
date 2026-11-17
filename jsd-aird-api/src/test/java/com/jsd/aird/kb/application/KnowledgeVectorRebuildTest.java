@@ -33,6 +33,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 class KnowledgeVectorRebuildTest {
     private final ObjectMapper json = new ObjectMapper();
@@ -144,7 +145,7 @@ class KnowledgeVectorRebuildTest {
         when(repository.chunksForEmbedding(org, doc, revision,"qwen-new",1024))
                 .thenReturn(List.of(new KnowledgeRepository.ChunkEmbeddingRow(chunkId, "published evidence")));
         var embedding = mock(KnowledgeEmbeddingFacade.class);
-        when(embedding.embedVector("published evidence")).thenReturn(Optional.of("[0.1,0.2]"));
+        when(embedding.embedVectors(List.of("published evidence"))).thenReturn(List.of(Optional.of("[0.1,0.2]")));
         worker(embedding).rebuildPublishedIndex(org, doc, pub, "qwen-new", 1024, true);
         verify(repository).updateChunkEmbedding(org, chunkId, "[0.1,0.2]", "qwen-new");
         verify(repository, never()).replaceChunks(any(), any(), any(), anyList());
@@ -158,6 +159,75 @@ class KnowledgeVectorRebuildTest {
                 .put("expectedEmbeddingModel", "qwen-new").put("expectedEmbeddingDimension", 1024);
         new KnowledgeIndexJobHandler(service, json).handle(payload);
         verify(service).rebuildPublishedIndex(org, doc, pub, "qwen-new", 1024, true);
+    }
+
+    @Test void vectorRebuildSuspendsAnyEnclosingTransactionWhileCallingEmbedding() throws Exception {
+        var current = publication();
+        when(repository.findDocument(org, doc)).thenReturn(Optional.of(mock(KnowledgeRepository.DocumentRow.class)));
+        when(governance.currentPublication(org, doc)).thenReturn(Optional.of(current));
+        when(governance.currentPublicationById(org, pub)).thenReturn(Optional.of(current));
+        when(repository.isAiApproved(org, doc)).thenReturn(true);
+        when(repository.chunksForEmbedding(org, doc, revision, "qwen-new", 1024))
+                .thenReturn(List.of(new KnowledgeRepository.ChunkEmbeddingRow(UUID.randomUUID(), "evidence")));
+        var embedding = mock(KnowledgeEmbeddingFacade.class);
+        when(embedding.embedVectors(List.of("evidence"))).thenAnswer(invocation -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            return List.of(Optional.of("[1,0]"));
+        });
+        var connection = mock(java.sql.Connection.class);
+        when(connection.getAutoCommit()).thenReturn(true);
+        var source = mock(javax.sql.DataSource.class);
+        when(source.getConnection()).thenReturn(connection);
+        var manager = new org.springframework.jdbc.datasource.DataSourceTransactionManager(source);
+        var factory = new org.springframework.aop.framework.ProxyFactory(worker(embedding));
+        factory.setProxyTargetClass(true);
+        factory.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(manager,
+                new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource()));
+        var service = (KnowledgeService) factory.getProxy();
+        new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(status -> {
+            service.rebuildPublishedIndex(org, doc, pub, "qwen-new", 1024, true);
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isTrue();
+        });
+        verify(embedding).embedVectors(List.of("evidence"));
+        assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+    }
+
+    @Test void vectorBuildBatchesChunksInOrderAndKeepsCompletedBatchesOnFailure() {
+        var chunks = java.util.stream.IntStream.range(0, 5)
+                .mapToObj(i -> new KnowledgeRepository.ChunkEmbeddingRow(UUID.randomUUID(), "text-" + i)).toList();
+        when(repository.isAiApproved(org, doc)).thenReturn(true);
+        var published = publication();
+        when(governance.currentPublicationById(org, pub)).thenReturn(Optional.of(published));
+        when(repository.chunksForEmbedding(org, doc, revision, "qwen-new", 1024)).thenReturn(chunks);
+        var embedding = mock(KnowledgeEmbeddingFacade.class);
+        when(embedding.embedVectors(List.of("text-0", "text-1")))
+                .thenReturn(List.of(Optional.of("[1,0]"), Optional.of("[0,1]")));
+        when(embedding.embedVectors(List.of("text-2", "text-3")))
+                .thenReturn(List.of(Optional.of("[1,1]"), Optional.empty()));
+        var service = worker(embedding);
+        ReflectionTestUtils.setField(service, "embeddingBuildBatchSize", 2);
+        assertThatThrownBy(() -> service.buildVectors(org, doc, pub, revision))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("完整结果");
+        verify(repository).updateChunkEmbedding(org, chunks.get(0).id(), "[1,0]", "qwen-new");
+        verify(repository).updateChunkEmbedding(org, chunks.get(1).id(), "[0,1]", "qwen-new");
+        verify(repository, times(2)).updateChunkEmbedding(any(), any(), anyString(), anyString());
+        verify(embedding, never()).embedVectors(List.of("text-4"));
+        verify(repository, never()).finishProcessingStep(any(), any(), any(), anyString(), eq("SUCCEEDED"), any(), any());
+    }
+
+    @Test void batchBuildStopsOnRevokedAiGrantAndBoundsRequestText() {
+        var chunks = List.of(new KnowledgeRepository.ChunkEmbeddingRow(UUID.randomUUID(), "a".repeat(20000)),
+                new KnowledgeRepository.ChunkEmbeddingRow(UUID.randomUUID(), "b".repeat(20000)));
+        when(repository.isAiApproved(org, doc)).thenReturn(true, true, false);
+        var published = publication();
+        when(governance.currentPublicationById(org, pub)).thenReturn(Optional.of(published));
+        when(repository.chunksForEmbedding(org, doc, revision, "qwen-new", 1024)).thenReturn(chunks);
+        var embedding = mock(KnowledgeEmbeddingFacade.class);
+        when(embedding.embedVectors(List.of(chunks.getFirst().content()))).thenReturn(List.of(Optional.of("[1,0]")));
+        worker(embedding).buildVectors(org, doc, pub, revision);
+        verify(embedding, times(1)).embedVectors(anyList());
+        verify(repository).clearDocumentEmbeddings(org, doc);
+        verify(repository, never()).updateChunkEmbedding(eq(org), eq(chunks.getLast().id()), anyString(), anyString());
     }
 
     @Test void vectorStatusExposesMixedStoredModelsInsteadOfEquatingPresenceWithCompatibility() {

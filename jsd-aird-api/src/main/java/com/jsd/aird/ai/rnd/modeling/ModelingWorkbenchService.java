@@ -68,6 +68,8 @@ public class ModelingWorkbenchService {
         return optimization.modelingHistoryDataset(id);
     }
 
+    public JsonNode selectedDataset(UUID id,List<UUID> experiments) { return optimization.selectedModelingDataset(id,experiments,false); }
+
     @Transactional
     public JsonNode train(TrainCommand command, String idempotencyKey) {
         var actor = ActorContext.required();
@@ -87,7 +89,9 @@ public class ModelingWorkbenchService {
         }
         var datasetIds = requestedDatasetIds(command);
 
-        var dataset = optimization.modelingHistoryDatasetSetForTraining(datasetIds);
+        var dataset = command.selectedExperimentIdsByDataset()==null
+            ? optimization.modelingHistoryDatasetSetForTraining(datasetIds)
+            : optimization.selectedModelingDatasetSet(datasetIds,command.selectedExperimentIdsByDataset());
         // Check the exact snapshot that is about to be persisted, including unselected rows.
         if (sourceAccess != null) {
             var checked = new LinkedHashSet<String>();
@@ -425,7 +429,11 @@ public class ModelingWorkbenchService {
     private ApiException validation(String message) { return new ApiException(ApiErrorCode.VALIDATION_ERROR, message); }
 
     public record TrainCommand(UUID datasetId, List<UUID> datasetIds, List<String> xColumns, String yColumn,
-                               Map<String, List<String>> selectedRowIdsByDataset) {}
+                               Map<String, List<String>> selectedRowIdsByDataset,Map<String,List<UUID>> selectedExperimentIdsByDataset) {
+        public TrainCommand(UUID datasetId,List<UUID> datasetIds,List<String> xColumns,String yColumn,Map<String,List<String>> rows) {
+            this(datasetId,datasetIds,xColumns,yColumn,rows,null);
+        }
+    }
     private record WorkbenchRun(UUID id, String datasetName, String status, int progress, String stage,
                                 JsonNode request, JsonNode xColumns, JsonNode yColumn, JsonNode result,
                                 JsonNode error, UUID opsJobId, Instant createdAt, Instant updatedAt) {}

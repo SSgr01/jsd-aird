@@ -16,6 +16,61 @@ import org.junit.jupiter.api.Test;
 
 class StructuredDocumentCodecTest {
 
+    @Test
+    void automaticallyPartitionsOldLargeDocumentsAndProjectsEveryPartWithoutLosingExclusions() {
+        var mapper = new ObjectMapper();
+        var codec = new StructuredDocumentCodec(mapper);
+        var document = mapper.createObjectNode().put("type", "doc");
+        var content = document.putArray("content");
+        var excluded = UUID.randomUUID();
+        for (int index = 0; index < 11000; index++) {
+            var paragraph = content.addObject().put("type", "paragraph");
+            paragraph.putObject("attrs").put("reviewNodeId", (index == 6000 ? excluded : UUID.randomUUID()).toString())
+                    .put("origin", "source").putArray("sourceNodeKeys").add(UUID.randomUUID().toString());
+            paragraph.putArray("content").addObject().put("type", "text").put("text", "paragraph-" + index + ".");
+        }
+        var segmented = codec.validate(document);
+        assertThat(segmented.path("content").size()).isGreaterThan(1);
+        assertThat(segmented.path("content")).allSatisfy(part -> assertThat(part.path("type").asText()).isEqualTo("documentPart"));
+        assertThat(codec.validate(segmented)).isEqualTo(segmented);
+        var projected = codec.project(segmented, List.of(excluded));
+        assertThat(projected.nodes()).hasSize(10999);
+        assertThat(projected.confirmedText()).contains("paragraph-0.", "paragraph-10999.").doesNotContain("paragraph-6000.");
+        assertThat(document.path("content").get(0).path("type").asText()).isEqualTo("paragraph");
+    }
+
+    @Test
+    void partitionsDocumentsLargerThanFiveMiBWithoutDiscardingText() {
+        var mapper = new ObjectMapper();
+        var codec = new StructuredDocumentCodec(mapper);
+        var document = mapper.createObjectNode().put("type", "doc");
+        var content = document.putArray("content");
+        for (int index = 0; index < 40; index++)
+            content.addObject().put("type", "paragraph").putArray("content")
+                    .addObject().put("type", "text").put("text", "a".repeat(160000));
+        var segmented = codec.validate(document);
+        assertThat(segmented.path("content").size()).isGreaterThan(1);
+        assertThat(codec.project(segmented, List.of()).confirmedText().length()).isEqualTo(6400000 + 39 * 2);
+    }
+
+    @Test
+    void partitionsLargeTablesByRowsWithoutDroppingTheirText() {
+        var mapper = new ObjectMapper();
+        var codec = new StructuredDocumentCodec(mapper);
+        var document = mapper.createObjectNode().put("type", "doc");
+        var rows = document.putArray("content").addObject().put("type", "table").putArray("content");
+        for (int index = 0; index < 7000; index++)
+            rows.addObject().put("type", "tableRow").putArray("content")
+                    .addObject().put("type", "tableCell").putArray("content")
+                    .addObject().put("type", "paragraph").putArray("content")
+                    .addObject().put("type", "text").put("text", "row-" + index + ".");
+        var segmented = codec.validate(document);
+        var projection = codec.project(segmented, List.of());
+        assertThat(segmented.path("content").size()).isGreaterThan(1);
+        assertThat(projection.nodes()).hasSize(7000);
+        assertThat(projection.confirmedText()).startsWith("row-0.").endsWith("row-6999.");
+    }
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final StructuredDocumentCodec codec = new StructuredDocumentCodec(objectMapper);
 

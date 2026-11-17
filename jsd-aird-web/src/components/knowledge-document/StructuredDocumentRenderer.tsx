@@ -3,9 +3,18 @@ import { useEffect, useRef } from 'react';
 
 import type { StructuredDocument } from '@/services/knowledge';
 import { knowledgeDocumentExtensions } from './document-extensions';
+import { DocumentParts } from './DocumentParts';
 import './knowledge-document.css';
 
-export function StructuredDocumentRenderer({ value, onSourceSelect, selectedSourceNodeKey }: { value: StructuredDocument; onSourceSelect?: (sourceNodeKeys: string[]) => void; selectedSourceNodeKey?: string }) {
+type RendererProps = { value: StructuredDocument; onSourceSelect?: (sourceNodeKeys: string[]) => void; selectedSourceNodeKey?: string };
+
+export function StructuredDocumentRenderer(props: RendererProps) {
+  return <DocumentParts value={props.value} selectedSourceNodeKey={props.selectedSourceNodeKey}>
+    {(page, _change, key) => <StructuredDocumentPage key={key} {...props} value={page} />}
+  </DocumentParts>;
+}
+
+function StructuredDocumentPage({ value, onSourceSelect, selectedSourceNodeKey }: RendererProps) {
   const renderedValue = useRef(value);
   const container = useRef<HTMLDivElement>(null);
   const editor = useEditor({ extensions: knowledgeDocumentExtensions, content: value, editable: false, immediatelyRender: true, editorProps: { attributes: { class: 'knowledge-structured-content knowledge-structured-content--readonly', 'aria-label': '已发布内容' }, handleClick: (_view, _pos, event) => { const element = (event.target as HTMLElement).closest<HTMLElement>('[data-source-node-keys]'); const sources = element?.dataset.sourceNodeKeys?.split(',').filter(Boolean) || []; if (sources.length) onSourceSelect?.(sources); return false; } } });

@@ -45,10 +45,11 @@ export function gateway(config) {
       }
       if (url.pathname.startsWith('/internal/')) {
         if (!credentialMatches(req.headers.authorization, config.secret)) return json(res, 401, { error: 'AUTH_REQUIRED' });
+        const action = url.pathname.slice('/internal/'.length);
+        if (req.method !== 'POST') return json(res, 405, { error: 'METHOD_NOT_ALLOWED' });
         const body = await readJson(req);
         const user = await identity(config, { 'x-jsd-agent-ticket': body.ticket || '' });
         const host = await hosts.ensure(user);
-        const action = url.pathname.slice('/internal/'.length);
         if (!['create', 'prompt', 'cancel', 'queue', 'resume', 'wake', 'state', 'review', 'models', 'memory-history'].includes(action)) return json(res, 404, { error: 'NOT_FOUND' });
         return json(res, 200, { ...await hosts.call(host, action, { ...body, identity: undefined, ticket: user.ticket }), workspace_url: host.path });
       }

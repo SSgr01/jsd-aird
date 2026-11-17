@@ -12,6 +12,7 @@ REQUIRED_UUID = {**UUID, "type": "string"}
 INSTRUCTIONS = """实验查询先解析真实对象；同名实验有歧义时询问用户，不猜编号。
 按返回的具体版本比较，保留样品、配方、工艺、测定方法、条件和结果的对应关系；缺失事实标明缺失。
 查询返回有界概览、available_metrics及section_counts；用get_experiment_record的section、sample_key、field_codes读取所需业务记录，按next_offset继续，不能把概览当作完整结果。
+section=content读取该版本页面保存的全部工作表单元格或Word文字，包括未绑定模板字段的备注；按reading.next_offset继续，不接受样品或字段筛选。section=record包含结构化分区和保存正文，过大时按概览section_counts逐分区读取。原上传文件由business_read(ref={type:EXPERIMENT,id,version_id},include_file=true)按需获取；files目录、保存正文和原件分别核对，下载后仍需实际阅读。
 目前主要使用两份标准模板(SYNTHESIS与TEST)，读取以实际模板字段定义为准，不根据模板名称猜内容。formulaItems、processSteps、testResults按指标/配方行分组，行头给中文名称、阶段、单位和方法，values给各样品的值及原单元格，sample_columns给可读样品编号及组合身份。
 value是规范化值，rawValue是原单元格值（例如百分比0.446规范化为44.6%），不重复乘100；NOT_MEASURED不是零，空方法不能当成方法相同。先读processSteps核对条件，再按available_metrics读取相关结果；合成配方与设计参数、实测结果分别判断。
 样品身份使用experiment_id + version_id + sample_key；不同实验可有相同sample_key，禁止据此合并。
@@ -43,7 +44,7 @@ def experiment_pack():
              {"query": STRING, "offset": INTEGER, "project_id": UUID}),
         tool("get_experiment_record", "读取指定版本的业务概览或分页记录，保留样品和测定条件。默认overview；业务记录在对应section中，按next_offset继续。",
              {"experiment_id": REQUIRED_UUID, "version_id": UUID,
-              "section": {"type": "string", "enum": ["overview", "samples", "formulaItems", "processSteps", "testResults", "tables", "events"]},
+              "section": {"type": "string", "enum": ["overview", "record", "content", "samples", "formulaItems", "processSteps", "testResults", "tables", "events"]},
               "offset": {"type": "integer", "minimum": 0, "maximum": 100000},
               "limit": {"type": "integer", "minimum": 1, "maximum": 40},
               "sample_key": STRING,

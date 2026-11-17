@@ -10,7 +10,7 @@ from pathlib import Path
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 
-from execute_plan import execute
+from execute_plan import execute, convert_value
 from template_ops import pristine_sheet, expand_recipe, expand_groups
 from workflow import write_json, extract_docx, extract, digest
 
@@ -64,6 +64,82 @@ class WorkflowTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_customer_no_charge_is_explicit_and_measurements_stay_strict(self):
+        for raw in (None, '', '/', '-', '－'):
+            self.assertEqual(convert_value(raw, 'customer_charge_g'), 0)
+        self.assertEqual(convert_value('39.760', 'customer_charge_g'), 39.760)
+        with self.assertRaises(ValueError):
+            convert_value('1/2', 'customer_charge_g')
+        with self.assertRaises(ValueError):
+            convert_value('-1', 'customer_charge_g')
+        self.assertIsNone(convert_value(None, None))
+
+    def test_repeated_charges_keep_original_names_order_and_path_inference(self):
+        source=self.root/'原始实验/合成实验/林志华实验记录/fixture.xlsx'
+        source.parent.mkdir()
+        wb=Workbook();ws=wb.active
+        ws['B1']='sample-1'
+        for r,name,qty in [(2,'S-8',10),(3,'S-8',2),(4,'P-O',0.5)]:
+            ws.cell(r,1,name);ws.cell(r,2,qty)
+        wb.save(source);wb.close()
+        recipe=dict(names=['A2','A3','A4'],amounts=[['B2'],['B3'],['B4']],preserve_repeated_lines=True)
+        plan=dict(version=1,source=source.relative_to(self.root).as_posix(),kind='synthesis',
+            source_sha256=digest(source),template_sha256=digest(self.root/'标准模板/synthesis.xlsx'),
+            sheets=[dict(source_sheet='Sheet',groups=['B1'],recipe=recipe,
+                writes=[dict(src='@source.parent',dst='B2',transform={'pattern':'(.+)实验记录'})])],skipped=[])
+        write_json(self.plan_path,plan)
+        result=execute(self.root,self.plan_path)
+        out=load_workbook(self.root/result['output'],data_only=True)
+        try:
+            self.assertEqual([(out.active.cell(r,2).value,out.active.cell(r,3).value) for r in range(10,13)], [('S-8',10),('S-8',2),('P-O',.5)])
+            self.assertEqual(out.active['C24'].value,12.5)
+            self.assertEqual(out.active['B2'].value,'林志华')
+        finally:out.close()
+        recipe['preserve_repeated_lines']=False
+        write_json(self.plan_path,plan)
+        with self.assertRaisesRegex(ValueError,'物料名称重复'):
+            execute(self.root,self.plan_path,self.root/'_work/rejected.xlsx')
+
+    def test_published_metadata_stays_hidden_and_total_cache_stays_on_business_sheet(self):
+        template = self.root / '标准模板/test.xlsx'
+        wb = load_workbook(template)
+        expand_recipe(wb.active, 9, 'test')
+        for name in ('_JSD_LAB_META', '_JSD_EXPORT_META'):
+            meta = wb.create_sheet(name)
+            meta['A1'], meta['B1'] = 'templateVersionId', 'published-fixture'
+            meta.sheet_state = 'hidden'
+        wb.save(template); wb.close()
+        self.plan['template_sha256'] = digest(template)
+        self.plan['sheets'] = self.plan['sheets'][:1]
+        self.plan['skipped'] = [dict(source_sheet='Sheet2', reason='not selected')]
+        write_json(self.plan_path, self.plan)
+        result = execute(self.root, self.plan_path)
+        out = load_workbook(self.root / result['output'], data_only=True)
+        try:
+            self.assertEqual(out.sheetnames, ['测试实验', '_JSD_LAB_META', '_JSD_EXPORT_META'])
+            self.assertEqual(out.active.title, '测试实验')
+            self.assertEqual(out['测试实验']['C61'].value, 100)
+            for name in ('_JSD_LAB_META', '_JSD_EXPORT_META'):
+                self.assertEqual(out[name].sheet_state, 'hidden')
+                self.assertEqual(out[name]['B1'].value, 'published-fixture')
+        finally:
+            out.close()
+
+    def test_exported_synthesis_validation_restored_only_for_known_layout(self):
+        wb = load_workbook(self.root / '标准模板/synthesis.xlsx')
+        ws = wb.active
+        ws.data_validations.dataValidation.clear()
+        for name in ('_JSD_LAB_META', '_JSD_EXPORT_META'):
+            wb.create_sheet(name).sheet_state = 'hidden'
+        info, _ = expand_recipe(ws, 4, 'synthesis')
+        self.assertEqual((info['first'], info['last'], info['total']), (10, 23, 24))
+        self.assertTrue(any('C10' in dv.sqref and 'H23' in dv.sqref for dv in ws.data_validations.dataValidation))
+        ws.data_validations.dataValidation.clear()
+        ws['B47'] = '不同指标'
+        with self.assertRaisesRegex(ValueError, '验证区域'):
+            expand_recipe(ws, 4, 'synthesis')
+        wb.close()
 
     def test_synthetic_two_sheet_data_and_restart(self):
         first = execute(self.root, self.plan_path)

@@ -7,6 +7,8 @@ export function originalAddress(value, origin) {
   try {
     const url=new URL(String(value).replace(/\\([&()])/g,'$1'),origin), id='[0-9a-f-]{36}';
     if(url.origin!==new URL(origin).origin) return null;
+    if(new RegExp('^/api/v1/agents/business/images/SPECTRUM/'+id+'$').test(url.pathname)
+      && url.searchParams.has('ref') && /^[1-9]\d*$/.test(url.searchParams.get('page')||'')) return url;
     if(new RegExp('^/api/v1/knowledge/documents/'+id+'/versions/'+id+'/content$').test(url.pathname)) return url;
     if(new RegExp('^/api/v1/agents/private-sources/'+id+'/content$').test(url.pathname)
       && new RegExp('^'+id+'$').test(url.searchParams.get('version_id')||'')) return url;

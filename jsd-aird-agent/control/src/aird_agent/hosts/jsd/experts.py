@@ -57,7 +57,9 @@ async def bind(service, principal, sid, expert):
         current = await service.store.get(principal, "conversation", conversation["id"], conn)
         if current.get("expert"):
             if current["expert"]["id"] != expert["id"]:
-                raise HTTPException(409, "EXPERT_REQUIRES_NEW_SESSION")
+                bound = await resolve(service, principal, current["expert"])
+                if bound["id"] != expert["id"]:
+                    raise HTTPException(409, "EXPERT_REQUIRES_NEW_SESSION")
             return expert
         if current.get("messages") or current.get("active_run") or current.get("last_run"):
             raise HTTPException(409, "EXPERT_REQUIRES_NEW_SESSION")
@@ -98,6 +100,11 @@ async def expert_action(service, principal, body):
         raise HTTPException(422, "EXPERT_ACTION_DENIED")
     catalog = await service.java(principal, "expert_catalog", {"action": "list"})
     rows = catalog["experts"]
+    identities = {identity: row["id"] for row in rows for identity in [row["id"], *row.get("aliases", [])]}
+
+    def current_ids(values):
+        return list(dict.fromkeys(identities[value] for value in values if value in identities))
+
     preference_id = str(uuid5(NAMESPACE_URL, "jsd:expert-preferences:" + ":".join(principal.key)))
     async with service.store.transaction(principal, "expert-preferences") as conn:
         try:
@@ -107,19 +114,19 @@ async def expert_action(service, principal, body):
                 raise
             prefs = await service.store.create(principal, "expert-preferences", {"pinned": []}, conn, rid=preference_id)
         if action == "pin":
-            if type(body.get("pinned")) is not bool or body.get("expert_id") not in {row["id"] for row in rows}:
+            if type(body.get("pinned")) is not bool or body.get("expert_id") not in identities:
                 raise HTTPException(422, "INVALID_EXPERT_PIN")
-            pinned = list(prefs.get("pinned", []))
-            pinned = [value for value in pinned if value != body["expert_id"]]
+            expert_id = identities[body["expert_id"]]
+            pinned = [value for value in current_ids(prefs.get("pinned", [])) if value != expert_id]
             if body["pinned"]:
-                pinned.append(body["expert_id"])
+                pinned.append(expert_id)
             prefs["pinned"] = pinned
             await service.store.update(principal, "expert-preferences", prefs, conn)
     recent = []
     for conversation in await service.store.list(principal, "conversation", 100):
-        eid = conversation.get("expert", {}).get("id")
+        eid = identities.get((conversation.get("expert") or {}).get("id"))
         if eid and eid not in recent:
             recent.append(eid)
         if len(recent) == 5:
             break
-    return {"experts": rows, "pinned": prefs["pinned"], "recent": recent}
+    return {"experts": rows, "pinned": current_ids(prefs.get("pinned", [])), "recent": recent}

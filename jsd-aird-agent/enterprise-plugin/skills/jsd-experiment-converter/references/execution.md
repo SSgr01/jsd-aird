@@ -27,6 +27,7 @@
 
 - `source` 是相对工作区的精确路径；SHA256 可用 `workflow.digest(path)`。所有非空源表都必须进入 sheets 或有原因的 skipped；真正空表无需写。
 - `groups`、`names`、`amounts`、`totals` 都是**源单元格地址**，不用复制一遍测量数据。amounts 外层是物料、内层是组。源无合计时可不提供 totals。
+- Word配方数字文本可显式声明`recipe.amount_transform="numeric_text"`；保留转前原值及转换明细，拒绝异常数字、单位文本及百分比。每组各自列物料名/用量时，可用与groups等长的`recipe.entries`（每组一份`{"name":"源名称格","amount":"源用量格"}`列表）代替names/amounts。缺项保持空白，不造来源坐标；单组同名重复投料不能自动合并。相同样品可参与多次实验，sample_groups允许重复，groups仍需唯一。
 - `writes.dst` 使用**扩容前的空模板坐标**，执行器负责把合计行及后面的目标行往下移。配方和组编号由专用字段写，别再在 writes 重复写它们。模板标签不可覆盖。
 - 同一源可以写到多处，例如实验编号需同步两行；同一目标不能被多个源覆盖。
 - `structural` 逐个列源标签并说明；不要把未读懂的数字或观察放进它。`unplaced` 保留原值及原因；未交代的非空源单元格会报错。

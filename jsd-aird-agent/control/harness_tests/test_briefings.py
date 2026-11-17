@@ -57,6 +57,29 @@ def test_overlapping_pages_cover_real_rows_but_gaps_do_not():
     assert not coverage(snapshot)['complete']
 
 
+def test_saved_experiment_body_requires_all_pages_and_download_does_not_replace_reading():
+    ref = {'type': 'EXPERIMENT', 'id': 'experiment', 'version_id': 'version'}
+    snapshot = {'frozen': True, 'sections': {'EXPERIMENT': [{'ref': ref}]},
+        'seen': {'EXPERIMENT': [0]}, 'reads': {}}
+    run = {'briefing_snapshot': snapshot}
+    Briefings.record_read(run, 'business_read', {'ref': ref}, {'candidates': [{}],
+        'reading': {'section': 'overview', 'section_counts': {'content': 6, 'events': 0}}})
+    Briefings.record_read(run, 'business_read', {'ref': ref, 'include_file': True},
+        {'candidates': [{}], 'business_file': {'name': 'original.xlsx'},
+         'reading': {'section': 'overview', 'section_counts': {'content': 6, 'events': 0}}})
+    assert not coverage(snapshot)['complete']
+    for offset, next_offset in ((0, 2), (4, None)):
+        reading = {'section': 'content', 'total': 6, 'returned': 2}
+        if next_offset is not None:
+            reading['next_offset'] = next_offset
+        Briefings.record_read(run, 'business_read', {'ref': ref, 'section': 'content', 'offset': offset},
+            {'candidates': [{}], 'reading': reading})
+    assert not coverage(snapshot)['complete']
+    Briefings.record_read(run, 'business_read', {'ref': ref, 'section': 'content', 'offset': 2},
+        {'candidates': [{}], 'reading': {'section': 'content', 'next_offset': 4, 'total': 6, 'returned': 2}})
+    assert coverage(snapshot)['complete']
+
+
 def test_complete_version_read_counts_all_server_confirmed_sections():
     ref = {'type': 'EXPERIMENT', 'id': 'experiment', 'version_id': 'version'}
     snapshot = {'frozen': True, 'sections': {'EXPERIMENT': [{'ref': ref}]}, 'seen': {'EXPERIMENT': [0]}}

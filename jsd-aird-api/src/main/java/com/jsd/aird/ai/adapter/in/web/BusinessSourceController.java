@@ -39,6 +39,16 @@ public class BusinessSourceController {
         if (!snapshot_hash.equals(result.path("snapshot_hash").asText())) throw new ApiException(ApiErrorCode.VERSION_CONFLICT, "查询对应的数据快照已变化");
         return original(result.path("candidates").path(0));
     }
+    @GetMapping("/images/{type}/{id}")
+    public ResponseEntity<byte[]> image(@PathVariable String type, @PathVariable UUID id, @RequestParam String ref,
+            @RequestParam int page) {
+        requireUse(); var reference = object(ref);
+        if (!type.equals(reference.path("type").asText()) || !id.toString().equals(reference.path("id").asText()))
+            throw new ApiException(ApiErrorCode.BAD_REQUEST);
+        var image = data.imagePageFile(reference, page);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(MediaType.IMAGE_PNG)
+            .header("X-Content-Type-Options", "nosniff").header("X-Content-SHA256", image.sha256()).body(image.bytes());
+    }
     @GetMapping("/compute/{kind}/{id}")
     public ResponseEntity<String> compute(@PathVariable String kind, @PathVariable UUID id, @RequestParam String revision) {
         requireUse(); var result = compute.result(kind, id); var candidate = result.path("candidates").path(0);

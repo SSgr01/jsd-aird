@@ -384,7 +384,7 @@ export function SpectrumUploadPage() {
       },
       actions: (
         attempt.chartId ? <Button type="link" icon={<MessageOutlined />}
-          onClick={() => navigate(`/spectrum/chat?chartIds=${attempt.chartId}`)}>AI 对话</Button> : null
+          onClick={() => { window.location.assign(`/agent/?spectrum=${attempt.chartId}`); }}>图谱分析助手</Button> : null
       ),
     };
   });

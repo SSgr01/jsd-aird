@@ -24,6 +24,8 @@ public class AgentHostService {
     private final PrivateResearchSourceService privateSources;
     private RetrievalPipeline retrieval;
     private com.jsd.aird.rnd.api.AgentExperimentFacade experiments;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<BusinessDataService> businessData;
 
     @org.springframework.beans.factory.annotation.Autowired
     void experiments(com.jsd.aird.rnd.api.AgentExperimentFacade experiments) { this.experiments = experiments; }
@@ -54,14 +56,19 @@ public class AgentHostService {
         var refs = request.path("context_refs");
         if (!refs.isMissingNode() && !refs.isNull() && (!refs.isArray() || refs.size() > 100)) throw new ApiException(ApiErrorCode.BAD_REQUEST);
         var contexts = result.putArray("context_refs");
+        int spectrumCount = 0, spectrumPages = 0;
         for (var ref : refs) {
+            if ("SPECTRUM".equals(ref.path("kind").asText())) {
+                spectrumCount++; spectrumPages += ref.path("pages").size();
+                if (spectrumCount > 12 || spectrumPages > 20) throw new ApiException(ApiErrorCode.BAD_REQUEST, "一次最多选择12张图谱、20页");
+            }
             var id = UUID.fromString(ref.path("resource_id").asText());
             if ("KB_PUBLICATION".equals(ref.path("kind").asText())) {
                 var publication = UUID.fromString(ref.path("publication_id").asText());
                 knowledge.authorize(List.of(new ResearchKnowledgeFacade.DocumentRef(id, publication)));
                 ((com.fasterxml.jackson.databind.node.ArrayNode) result.path("documents")).add(mapper.createObjectNode()
                     .put("document_id", id.toString()).put("publication_id", publication.toString()));
-            } else if (Set.of("PROJECT", "EXPERIMENT").contains(ref.path("kind").asText())) {
+            } else if (Set.of("PROJECT", "EXPERIMENT", "SPECTRUM").contains(ref.path("kind").asText())) {
                 var record = resource(ref, 0);
                 if (!result.has("context_candidates")) result.putArray("context_candidates");
                 ((com.fasterxml.jackson.databind.node.ArrayNode) result.path("context_candidates")).addAll(
@@ -173,6 +180,33 @@ public class AgentHostService {
         var id = UUID.fromString(ref.path("resource_id").asText());
         ObjectNode result;
         switch (ref.path("kind").asText()) {
+            case "SPECTRUM" -> {
+                if (!ref.path("version_id").asText().matches("[a-f0-9]{64}") || !ref.path("pages").isArray()
+                        || ref.path("pages").isEmpty() || ref.path("pages").size() > 5)
+                    throw new ApiException(ApiErrorCode.BAD_REQUEST, "请选择图谱原文件版本和页面");
+                var request = mapper.createObjectNode();
+                request.set("ref", mapper.createObjectNode().put("type", "SPECTRUM").put("id", id.toString()));
+                var metadata = businessData.getObject().invoke("business_read", request);
+                var record = metadata.path("candidates").path(0);
+                if (!record.path("ref").isObject()) throw new ApiException(ApiErrorCode.NOT_FOUND);
+                // SHA256 is supplied by the catalog, never inferred from an attachment name.
+                var body = businessData.getObject().read((ObjectNode)record.path("ref")).facts();
+                if (!ref.path("version_id").asText().equals(body.path("sha256").asText()))
+                    throw new ApiException(ApiErrorCode.VERSION_CONFLICT, "图谱原文件已变化，请重新选择");
+                request.set("ref", record.path("ref")); request.put("section", "page");
+                result = mapper.createObjectNode(); var candidates = result.putArray("candidates");
+                var presentation = result.putObject("spectrum");
+                for (var field : List.of("title", "sampleName", "batchNo", "testConditions", "originalName", "pageCount"))
+                    if (body.has(field)) presentation.set(field, body.get(field));
+                var seen = new HashSet<Integer>();
+                for (var page : ref.path("pages")) {
+                    if (!page.isIntegralNumber() || !page.canConvertToInt() || page.asInt() < 1 || !seen.add(page.asInt()))
+                        throw new ApiException(ApiErrorCode.BAD_REQUEST, "图谱页码无效或重复");
+                    request.put("page", page.asInt());
+                    candidates.addAll((com.fasterxml.jackson.databind.node.ArrayNode)businessData.getObject().invoke("business_read", request).path("candidates"));
+                }
+                result.put("title", body.path("title").asText() + " · 第 " + String.join("、", seen.stream().sorted().map(String::valueOf).toList()) + " 页");
+            }
             case "KB_PUBLICATION" -> {
                 var document = new ResearchKnowledgeFacade.DocumentRef(id, UUID.fromString(ref.path("publication_id").asText()));
                 knowledge.authorize(List.of(document));
@@ -193,7 +227,7 @@ public class AgentHostService {
         }
         result.set("ref", ref);
         var source = result.path("candidates").path(0).path("source");
-        result.put("title", source.path("title").asText("资料"));
+        if (!result.has("title")) result.put("title", source.path("title").asText("资料"));
         return result;
     }
 

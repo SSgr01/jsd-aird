@@ -39,6 +39,9 @@ def request_inputs(text):
     cleaned = MARKER.sub(resolve, text)
     if "jsd-resource:" in cleaned or len(refs) > 100:
         raise HTTPException(422, "INVALID_RESOURCE_REFERENCE")
+    spectra = [ref for ref in refs if ref["kind"] == "SPECTRUM"]
+    if len(spectra) > 12 or sum(len(ref["pages"]) for ref in spectra) > 20:
+        raise HTTPException(422, "SPECTRUM_PAGE_LIMIT_EXCEEDED")
     return {"request": cleaned.strip() or "请处理这些资料", "context_refs": refs,
             "retrieval_scope": {"knowledge_documents": documents} if documents else {}}
 

@@ -60,12 +60,6 @@ import type {
 import { preloadWorkspaceEditor } from '@/features/template-workspace/preload-editor';
 import { getAtPath, setAtPath } from '@/features/template-workspace/path-utils';
 import {
-  reviewInformation,
-  reviewInformationMissing,
-  withReviewInformation,
-  type ReviewInformation,
-} from './experiment-review-information';
-import {
   actExperiment,
   createRevision,
   getExperiment,
@@ -214,7 +208,6 @@ export function ExperimentWorkspacePage({
   const [saveState, setSaveState] = useState<SaveState>('SAVED');
   const [editRevision, setEditRevision] = useState(0);
   const [loadError, setLoadError] = useState<string>();
-  const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewAction, setReviewAction] = useState<'return' | 'void'>();
   const [reviewReason, setReviewReason] = useState('');
   const voiding = reviewAction === 'void';
@@ -226,8 +219,6 @@ export function ExperimentWorkspacePage({
   }>();
   const [recognitionBusy, setRecognitionBusy] = useState(false);
   const [recognitionProgress, setRecognitionProgress] = useState<number>();
-  const [reviewForm] = Form.useForm<ReviewInformation>();
-  const reviewFormValuesRef = useRef<ReviewInformation>();
   const [templateDraftOpen, setTemplateDraftOpen] = useState(false);
   const [templateDraftSaving, setTemplateDraftSaving] = useState(false);
   const [templateCategories, setTemplateCategories] = useState<TemplateCategory[]>([]);
@@ -859,66 +850,6 @@ export function ExperimentWorkspacePage({
     metadataSaving,
   ]);
 
-  const openReviewInformation = () => {
-    reviewFormValuesRef.current = reviewInformation(editModel);
-    setReviewOpen(true);
-  };
-
-  useEffect(() => {
-    if (!reviewOpen || !reviewFormValuesRef.current) return;
-    reviewForm.setFieldsValue(reviewFormValuesRef.current);
-  }, [reviewForm, reviewOpen]);
-
-  const submitReviewWithInformation = async () => {
-    if (!detail) return;
-    let values: ReviewInformation;
-    try {
-      values = await reviewForm.validateFields();
-    } catch {
-      return;
-    }
-    setBusy(true);
-    setSaveState('SAVING');
-    const session = saveSession.current,
-      editor = editorRef.current;
-    const isCurrent = () => session.active && saveSession.current === session;
-    const resume = pauseWorkspaceInputs(workspaceRootRef.current);
-    try {
-      await Promise.all(pendingTemplateWrites.current);
-      await savePromiseRef.current;
-      if (!isCurrent()) return;
-      flushEditorChanges(editor);
-      const generation = editGenerationRef.current,
-        revision = editor?.getContentRevision?.();
-      const nextModel = withReviewInformation(draftModelRef.current(), values);
-      const savedDetail = await persistDraft(nextModel);
-      if (!isCurrent()) return;
-      if (!savedDetail) {
-        setSaveState('DIRTY');
-        return;
-      }
-      if (
-        generation !== editGenerationRef.current ||
-        !editorUnchanged(editorRef.current, editor, revision)
-      ) {
-        setSaveState('DIRTY');
-        return;
-      }
-      await actExperiment(id, 'submit-review', savedDetail.summary.revision);
-      if (!isCurrent()) return;
-      setReviewOpen(false);
-      void message.success('已提交审核');
-      await load();
-    } catch (error) {
-      if (!isCurrent()) return;
-      setSaveState('DIRTY');
-      void message.error(error instanceof Error ? error.message : '提交审核失败');
-    } finally {
-      resume();
-      if (isCurrent()) setBusy(false);
-    }
-  };
-
   const publish = (action: PublishAction) => {
     if (
       action === 'submit-review' &&
@@ -929,10 +860,6 @@ export function ExperimentWorkspacePage({
     ) {
       setReviewTrigger((current) => current + 1);
       void message.warning('请先确认 Excel 识别区域与字段绑定，再提交审核');
-      return;
-    }
-    if (action === 'submit-review' && reviewInformationMissing(editModel)) {
-      openReviewInformation();
       return;
     }
     void act(action);
@@ -1432,36 +1359,6 @@ export function ExperimentWorkspacePage({
         </Form>
       </FormModal>
 
-      <FormModal form={reviewForm}
-        title="审核信息"
-        open={reviewOpen}
-        okText="保存并提交审核"
-        cancelText="取消"
-        confirmLoading={busy}
-        onCancel={() => setReviewOpen(false)}
-        onOk={() => submitReviewWithInformation()}
-        destroyOnHidden
-      >
-        <Typography.Paragraph type="secondary">
-          这两项属于实验审核信息，不会改变已冻结的实验模板版式。
-        </Typography.Paragraph>
-        <Form form={reviewForm} layout="vertical" preserve={false}>
-          <Form.Item
-            name="purpose"
-            label="实验目的"
-            rules={[{ required: true, whitespace: true, message: '请填写实验目的' }]}
-          >
-            <Input.TextArea rows={3} placeholder="说明本次实验的目标" />
-          </Form.Item>
-          <Form.Item
-            name="mainConclusion"
-            label="主要结论"
-            rules={[{ required: true, whitespace: true, message: '请填写主要结论' }]}
-          >
-            <Input.TextArea rows={4} placeholder="填写真实实验完成后得到的主要结论" />
-          </Form.Item>
-        </Form>
-      </FormModal>
       <FormModal draft={reviewReason}
         title={voiding ? '作废实验' : '驳回'}
         open={Boolean(reviewAction)}

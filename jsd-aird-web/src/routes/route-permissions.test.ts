@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import { canViewPathWithMenus, filterMenuRoute, firstAccessiblePath, firstAccessibleSystemPath } from './route-permissions';
 
+it('opens the retired spectrum chat entry with workbench access while chart access stays separate', () => {
+  expect(canViewPathWithMenus('/spectrum/chat', ['ai.use'], ['ai.qa'])).toBe(true);
+  expect(canViewPathWithMenus('/spectrum/chat', ['spectrum.view'], ['spectrum.ai'])).toBe(false);
+  expect(canViewPathWithMenus('/spectrum/view', ['ai.use'], ['ai.qa'])).toBe(false);
+});
+
 describe('knowledge workspace access', () => {
   it('allows the catalog workspace for viewers and reviewers', () => {
     expect(canViewPathWithMenus('/knowledge/view', ['knowledge.view'])).toBe(true);

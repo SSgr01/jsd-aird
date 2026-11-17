@@ -5,7 +5,8 @@ const root = new URL('../skills/jsd-experiment-converter/', import.meta.url);
 // Only reviewed runtime resources enter a task. No desktop paths, caches or sample data.
 export const conversionFiles = [
   'scripts/workflow.py','scripts/execute_plan.py','scripts/template_ops.py','scripts/workbook_audit.py','scripts/is_template_copy.py',
-  ...['workspace','execution','decisions','template-layouts','qa','legacy-formats','server-folder'].map(name=>'references/'+name+'.md'),
+  'scripts/history_sources.py','scripts/history_data.py','scripts/history_training.py','scripts/history_template.py','scripts/history_review.py','scripts/history_materials.py',
+  ...['workspace','execution','decisions','template-layouts','qa','legacy-formats','server-folder','history-data'].map(name=>'references/'+name+'.md'),
 ];
 
 /** Materialize trusted working copies through the existing native file boundary. */

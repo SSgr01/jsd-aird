@@ -6,6 +6,7 @@ const root = '/api/v1/ai/rnd/modeling-workbench'
 const unwrap = <T>(response: { data: ApiResponse<T> }) => response.data.data
 
 export type WorkbenchMetric = number | string | Record<string, unknown> | Array<unknown>
+export type ModelingExperiment = { id: string; versionId: string; label: string; title: string; owner: string; date: string }
 export type WorkbenchRegistration = { modelVersionId: string; targetId: string; version: number; status: string; registeredAt: string }
 export type ModelingWorkbenchRun = {
   datasetSnapshot?: HistoryDataset
@@ -38,7 +39,16 @@ export const modelingWorkbenchApi = {
   async dataset(id: string) {
     return unwrap(await httpClient.get<ApiResponse<HistoryDataset>>(`${root}/datasets/${encodeURIComponent(id)}`))
   },
-  async train(command: { datasetIds: string[]; selectedRowIdsByDataset: Record<string, string[]>; xColumns: string[]; yColumn: string }, idempotencyKey: string) {
+  async batches(id: string) {
+    return unwrap(await httpClient.get<ApiResponse<{ items: Array<{ id: string; count: number }> }>>(`${root}/datasets/${encodeURIComponent(id)}/batches`))
+  },
+  async experiments(id: string, params: { batch?: string; keyword?: string; page: number; size: number }, signal?: AbortSignal) {
+    return unwrap(await httpClient.get<ApiResponse<{ items: ModelingExperiment[]; total: number }>>(`${root}/datasets/${encodeURIComponent(id)}/experiments`, { params, signal }))
+  },
+  async selection(id: string, experimentIds: string[]) {
+    return unwrap(await httpClient.post<ApiResponse<HistoryDataset>>(`${root}/datasets/${encodeURIComponent(id)}/selection`, { experimentIds }))
+  },
+  async train(command: { datasetIds: string[]; selectedRowIdsByDataset: Record<string, string[]>; selectedExperimentIdsByDataset?: Record<string, string[]>; xColumns: string[]; yColumn: string }, idempotencyKey: string) {
     return unwrap(await httpClient.post<ApiResponse<{ runId: string; status: string; pollAfterMs: number }>>(
       `${root}/runs`, command, { headers: { 'Idempotency-Key': idempotencyKey } },
     ))

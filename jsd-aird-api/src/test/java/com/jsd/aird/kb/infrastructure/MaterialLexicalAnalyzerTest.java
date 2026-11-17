@@ -9,6 +9,19 @@ class MaterialLexicalAnalyzerTest {
     private final MaterialLexicalAnalyzer analyzer = new MaterialLexicalAnalyzer();
 
     @Test
+    void ignoresOversizedOcrIdentifiersWithoutTruncatingThemIntoFalseKeywords() {
+        var oversized = "UV-" + "Resin".repeat(50);
+        var text = "正常材料 " + oversized + " zirconia UV-203";
+        var analysis = analyzer.analyzeDocument(text);
+        assertThat(analysis.frequencies()).containsKey("uv-203");
+        assertThat(analysis.frequencies().keySet()).allSatisfy(term ->
+                assertThat(term.codePointCount(0, term.length())).isLessThanOrEqualTo(160));
+        assertThat(analysis.documentLength()).isEqualTo(analysis.frequencies().values().stream().mapToInt(Integer::intValue).sum());
+        assertThat(analyzer.analyzeCompatibleQuery(text)).flatExtracting(family -> family.alternatives())
+                .allSatisfy(term -> assertThat(term.term().codePointCount(0, term.term().length())).isLessThanOrEqualTo(160));
+    }
+
+    @Test
     void protectsCrossDomainCodesFormulaeRangesAndCompoundUnits() {
         var analysis = analyzer.analyzeDocument(
                 "UA-1117 的参数为 400-700cps 和 25 mJ/cm²；CaCl<sub>2</sub> 为 1 mol L−1，"

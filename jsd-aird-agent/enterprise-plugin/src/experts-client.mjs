@@ -16,6 +16,7 @@ export function registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton}) {
   }
   function Avatar({expert,small=false}) {
     const paths={
+      'spectrum-assistant':[['path',{d:'M3 3v18h18M5 17l3-2 2 1 3-11 3 13 2-6 3-1'}]],
       'project-assistant':[['rect',{x:3.5,y:5,width:17,height:15,rx:2.5}],['path',{d:'M8 3v4m8-4v4M4 10h16M8 14h2m-2 3h2m4-3h2m-2 3h2'}]],
       'customer-assistant':[['path',{d:'M7 16.5 3.5 20v-5A8 8 0 0 1 3 12c0-4.4 4-8 9-8s9 3.6 9 8-4 8-9 8c-1.2 0-2.4-.2-3.5-.6'}],['circle',{cx:12,cy:9.5,r:2}],['path',{d:'M8 16c.6-2.6 7.4-2.6 8 0'}]],
       'experiment-assistant':[['path',{d:'M9 3h6m-5 0v6l-5.5 9.2A2.5 2.5 0 0 0 6.7 22h10.6a2.5 2.5 0 0 0 2.2-3.8L14 9V3M8 15h8'}],['circle',{cx:10,cy:18,r:.7,fill:'currentColor',stroke:'none'}],['circle',{cx:14.5,cy:19,r:.7,fill:'currentColor',stroke:'none'}]],
@@ -77,7 +78,7 @@ export function registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton}) {
       'customer-requirements':'客户需求整理与比较','business-reply':'业务回复起草','record-validation':'记录整理与核验',
       'experiment-comparison':'实验对比','quality-review':'检测质量核对与文件草稿','production-reconciliation':'生产库存与数量核对',
       'formulation-analysis':'配方分析','research-design':'竞争假设与实验设计','literature-review':'文献调研与研读',
-      'technical-comparison':'论文专利与技术路线比较','table-preparation':'表格整理','jsd-experiment-converter':'实验记录标准化转换'};
+      'technical-comparison':'论文专利与技术路线比较','table-preparation':'表格整理','jsd-experiment-converter':'实验记录标准化转换','spectrum-analysis':'图谱解读与来源核对'};
     return h('section',{className:'jsd-expert-config','aria-label':'默认工作设置'},
       h('h4',null,'默认工作设置'),
       h('dl',null,

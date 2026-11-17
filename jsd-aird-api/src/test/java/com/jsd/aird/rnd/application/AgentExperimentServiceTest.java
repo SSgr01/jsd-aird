@@ -24,8 +24,9 @@ class AgentExperimentServiceTest {
     final JdbcTemplate jdbc = mock(JdbcTemplate.class);
     final TemplateDataImportFacade templates = mock(TemplateDataImportFacade.class);
     final ExperimentRepository repository = mock(ExperimentRepository.class);
+    final AuthorizationService authorization = mock(AuthorizationService.class);
     final AgentExperimentService service = new AgentExperimentService(repository, drafts,
-        mock(AuthorizationService.class), jdbc, json, new JsonCanonicalizer(json), templates);
+        authorization, jdbc, json, new JsonCanonicalizer(json), templates);
     final UUID experiment = UUID.randomUUID(), version = UUID.randomUUID();
 
     @BeforeEach void actor() { ActorContext.set(new Actor(UUID.randomUUID(), UUID.randomUUID(), "test")); }
@@ -41,6 +42,95 @@ class AgentExperimentServiceTest {
             .put("template_version_id", UUID.randomUUID().toString());
         args.putObject("edit_model").put("plan", "用户给定方案；未知条件留空");
         return args;
+    }
+
+    @Test void savedWorkbookIncludesUnboundNotesEverySheetAndExactVersionPageReadback() throws Exception {
+        var model = json.createObjectNode().put("plan", "结构化方案");
+        model.set("documentSnapshot", json.readTree("""
+            {"sheetOrder":["notes","main"],"sheets":{
+              "main":{"name":"实验记录","cellData":{"10":{"0":{"v":"000123"}},"2":{"0":{"v":0},"1":{"v":null},"2":{"v":1,"f":"=A3+1"}},"3":{"0":{"v":46342,"s":{"n":{"pattern":"yyyy-mm-dd"}}}}}},
+              "notes":{"name":"补充说明","cellData":{"0":{"0":{"v":"仅保存在工作簿中的照射距离12mm"}}}},
+              "system":{"name":"_JSD_INTERNAL","cellData":{"0":{"0":{"v":"内部信息"}}}}
+            }}
+            """));
+        var projection = new AgentExperimentProjection(json);
+        var overview = projection.page(experiment, version(model), json.createObjectNode());
+        assertThat(overview.path("section_counts").path("content").asInt()).isEqualTo(6);
+        var cells = new ArrayList<com.fasterxml.jackson.databind.JsonNode>();
+        for (int offset = 0; offset < 6; offset += 2) {
+            var page = projection.page(experiment, version(model), json.createObjectNode().put("section", "content").put("offset", offset).put("limit", 2));
+            page.path("records").forEach(cells::add);
+            assertThat(page.path("returned").asInt()).isEqualTo(2);
+            assertThat(page.path("total").asInt()).isEqualTo(6);
+            assertThat(page.path("complete").asBoolean()).isFalse();
+            assertThat(page.has("next_offset")).isEqualTo(offset < 4);
+        }
+        assertThat(cells).hasSize(6).doesNotHaveDuplicates();
+        assertThat(cells.stream().map(cell -> cell.path("cell").asText()).toList()).containsExactly("A1", "A3", "B3", "C3", "A4", "A11");
+        assertThat(cells.get(0).path("sheet").asText()).isEqualTo("补充说明");
+        assertThat(cells.get(1).path("value").asInt()).isZero();
+        assertThat(cells.get(2).path("value").isNull()).isTrue();
+        assertThat(cells.get(3).path("formula").asText()).isEqualTo("=A3+1");
+        assertThat(cells.get(4).path("number_format").asText()).isEqualTo("yyyy-mm-dd");
+        assertThat(cells.get(5).path("value").asText()).isEqualTo("000123");
+        assertThat(projection.modelText(projection.page(experiment, version(model), json.createObjectNode().put("section", "record"))))
+            .contains("仅保存在工作簿中的照射距离12mm", "000123", "=A3+1").doesNotContain("内部信息");
+
+        var detail = mock(ExperimentModels.Detail.class);
+        var summary = mock(ExperimentModels.Summary.class);
+        when(detail.summary()).thenReturn(summary); when(summary.title()).thenReturn("实验记录");
+        when(detail.currentVersionId()).thenReturn(version);
+        when(repository.detail(ActorContext.required().organizationId(), experiment)).thenReturn(Optional.of(detail));
+        when(repository.version(ActorContext.required().organizationId(), experiment, version)).thenReturn(Optional.of(version(model)));
+        var args = json.createObjectNode().put("experiment_id", experiment.toString()).put("version_id", version.toString())
+            .put("section", "content").put("offset", 2).put("limit", 2);
+        var result = service.read("get_experiment_record", args);
+        var source = result.path("candidates").path(0).path("source");
+        service.validateSource(source, null);
+        assertThat(result.path("reading").path("returned").asInt()).isEqualTo(2);
+        assertThat(source.path("anchor").path("page").path("offset").asInt()).isEqualTo(2);
+        var changedRange = source.deepCopy();
+        ((ObjectNode)changedRange.path("anchor").path("page")).put("offset", 0);
+        assertThatThrownBy(() -> service.validateSource(changedRange, null)).isInstanceOf(ApiException.class);
+        ((ObjectNode)model.path("documentSnapshot").path("sheets").path("notes").path("cellData").path("0").path("0"))
+            .put("v", "本次保存后修改");
+        assertThatThrownBy(() -> service.validateSource(source, null)).isInstanceOf(ApiException.class);
+    }
+
+    @Test void manualWordBodyPagesUnicodeWithoutARequiredTemplateAndMissingBodyIsExplicit() {
+        var model = json.createObjectNode();
+        String body = "自由录入实验🙂".repeat(350);
+        model.putObject("documentSnapshot").putObject("body").put("dataStream", body);
+        var projection = new AgentExperimentProjection(json);
+        var actual = new StringBuilder(); int offset = 0;
+        do {
+            var page = projection.page(experiment, version(model), json.createObjectNode().put("section", "content").put("offset", offset).put("limit", 1));
+            page.path("records").forEach(part -> actual.append(part.path("text").asText()));
+            offset = page.path("next_offset").asInt(-1);
+        } while (offset >= 0);
+        assertThat(actual.toString()).isEqualTo(body);
+        assertThatThrownBy(() -> projection.page(experiment, version(model), json.createObjectNode().put("section", "content").put("sample_key", "one")))
+            .isInstanceOf(ApiException.class).hasMessageContaining("不接受");
+        var missing = projection.page(experiment, version(json.createObjectNode().put("plan", "仅有方案")), json.createObjectNode().put("section", "content"));
+        assertThat(missing.path("complete").asBoolean()).isFalse();
+        assertThat(missing.path("content_notice").asText()).contains("没有已保存的文档正文");
+        var legacy = new ExperimentModels.Version(version, 1, "DRAFT", null, null,
+            json.createObjectNode().set("body", json.createObjectNode().put("dataStream", "旧版Word正文")), json.createObjectNode(), "", null, null, Instant.EPOCH, UUID.randomUUID());
+        assertThat(projection.modelText(projection.page(experiment, legacy, json.createObjectNode().put("section", "content")))).contains("旧版Word正文");
+    }
+
+    @Test void originalDownloadRequiresExperimentDownloadPermissionInAdditionToRead() {
+        var detail = mock(ExperimentModels.Detail.class);
+        var summary = mock(ExperimentModels.Summary.class);
+        when(detail.summary()).thenReturn(summary); when(summary.title()).thenReturn("实验记录");
+        when(detail.currentVersionId()).thenReturn(version);
+        when(repository.detail(ActorContext.required().organizationId(), experiment)).thenReturn(Optional.of(detail));
+        when(repository.version(ActorContext.required().organizationId(), experiment, version)).thenReturn(Optional.of(version(json.createObjectNode())));
+        doThrow(new ApiException(com.jsd.aird.shared.error.ApiErrorCode.PERMISSION_DENIED))
+            .when(authorization).require(argThat(check -> "eln.view.download".equals(check.permissionCode())));
+        var request = json.createObjectNode().put("experiment_id", experiment.toString());
+        assertThat(service.read("get_experiment_record", request).path("candidates").size()).isEqualTo(1);
+        assertThatThrownBy(() -> service.read("get_experiment_record", request.put("include_file", true))).isInstanceOf(ApiException.class);
     }
 
     @Test void sampleHeadersUseRecordedNumbersAndPreserveCompositeIdentity() {

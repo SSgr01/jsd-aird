@@ -117,6 +117,25 @@ public class OptimizationService {
         return mergeHistoryDatasets(sources);
     }
 
+    public JsonNode selectedModelingDataset(UUID id,List<UUID> experimentIds,boolean training) {
+        var a=actor();require(a,training?"ai.training.operate":"ai.modeling.read",training?"AI_TRAINING":"AI_MODELING",id,training?"OPERATE":"READ");
+        if(experimentIds==null||experimentIds.isEmpty()||experimentIds.size()>500
+            ||new HashSet<>(experimentIds).size()!=experimentIds.size()||experimentIds.stream().anyMatch(java.util.Objects::isNull))
+            throw validation("请选择1至500份不重复的实验");
+        // Authorize before reading any experiment payload, including forged identifiers.
+        for(var experiment:experimentIds)sourceAccess.requireReadableVersion(a.organizationId(),experiment,null);
+        var records=repository.selectedHistoryRecords(a.organizationId(),id,experimentIds);
+        if(records.size()!=experimentIds.size())throw validation("所选实验已变化或不属于此数据表，请重新选择");
+        var name=repository.historyDatasetName(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND));
+        return new HistorySampleProjection(json).dataset(id,name,records,repository.historyFieldNames(a.organizationId()),repository.materialCatalog(a.organizationId()));
+    }
+
+    public JsonNode selectedModelingDatasetSet(List<UUID> ids,Map<String,List<UUID>> selected) {
+        if(selected==null||selected.size()!=ids.size()||!selected.keySet().equals(ids.stream().map(UUID::toString).collect(java.util.stream.Collectors.toSet())))
+            throw validation("所选实验和数据表不匹配");
+        return mergeHistoryDatasets(ids.stream().map(id->selectedModelingDataset(id,selected.get(id.toString()),true)).toList());
+    }
+
     private JsonNode mergeHistoryDatasets(List<JsonNode> sources) {
         if (sources.size() == 1) {
             var only = (ObjectNode) sources.getFirst().deepCopy();

@@ -93,6 +93,25 @@ public class OptimizationRepository {
                 com.jsd.aird.shared.lab.UnifiedLabTemplateCodes.TEST,com.jsd.aird.shared.lab.UnifiedLabTemplateCodes.SYNTHESIS);
     }
 
+    public List<HistoryRecordRow> selectedHistoryRecords(UUID org,UUID templateVersionId,List<UUID> ids) {
+        var args=new java.util.ArrayList<Object>(List.of(org,templateVersionId));args.addAll(ids);
+        return jdbc.query("""
+            SELECT e.id experiment_id,v.id version_id,e.experiment_no,e.title,
+                   v.edit_model_jsonb,v.created_at
+            FROM rnd.experiment e JOIN rnd.experiment_version v
+              ON v.organization_id=e.organization_id AND v.id=e.current_version_id
+            WHERE e.organization_id=? AND v.template_version_id=? AND e.deleted=false
+              AND e.status='COMPLETED' AND v.status='COMPLETED' AND e.id IN (
+            """+String.join(",",java.util.Collections.nCopies(ids.size(),"?"))+") ORDER BY e.id",
+            (r,n)->new HistoryRecordRow(r.getObject("experiment_id",UUID.class),r.getObject("version_id",UUID.class),
+                r.getString("experiment_no"),r.getString("title"),read(r,"edit_model_jsonb"),instant(r,"created_at")),args.toArray());
+    }
+
+    public Optional<String> historyDatasetName(UUID org,UUID id) {
+        return jdbc.query("SELECT t.name FROM tpl.template_version tv JOIN tpl.template t ON t.id=tv.template_id WHERE t.organization_id=? AND tv.id=? AND t.template_code IN (?,?)",
+            (r,n)->r.getString(1),org,id,com.jsd.aird.shared.lab.UnifiedLabTemplateCodes.TEST,com.jsd.aird.shared.lab.UnifiedLabTemplateCodes.SYNTHESIS).stream().findFirst();
+    }
+
     public MaterialCatalogSnapshot materialCatalog(UUID organizationId) {
         var identities=new LinkedHashMap<String,String>();
         var codesById=new LinkedHashMap<String,String>();

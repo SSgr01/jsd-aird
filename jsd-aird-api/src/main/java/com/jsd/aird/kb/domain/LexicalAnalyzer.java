@@ -5,6 +5,13 @@ import java.util.List;
 
 public interface LexicalAnalyzer {
 
+    int MAX_TERM_CODE_POINTS = 160;
+
+    static boolean indexableTerm(String value) {
+        return value != null && !value.isBlank()
+                && value.codePointCount(0, value.length()) <= MAX_TERM_CODE_POINTS;
+    }
+
     String version();
 
     Analysis analyzeDocument(String text);

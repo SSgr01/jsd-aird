@@ -98,6 +98,8 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             throw new IllegalStateException("Embedding job target does not match this Worker");
     }
     private final int embeddingDimension;
+    @org.springframework.beans.factory.annotation.Value("${app.ai.embedding.build-batch-size:16}")
+    private int embeddingBuildBatchSize = 16;
     private final Duration presignExpiry;
     private final BlockAwareChunker blockAwareChunker;
     private final LexicalAnalyzer lexicalAnalyzer;
@@ -988,7 +990,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         return publication;
     }
 
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public void rebuildPublishedIndex(UUID organizationId, UUID documentId) {
         rebuildPublishedIndex(organizationId, documentId, null, null, null);
     }
@@ -997,13 +999,13 @@ public class KnowledgeService implements KnowledgeSearchFacade {
 
     public IndexModel indexModel() { return new IndexModel(embeddingModel, embeddingDimension); }
 
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public void rebuildPublishedIndex(UUID organizationId, UUID documentId, UUID expectedPublicationId,
                                       String expectedModel, Integer expectedDimension) {
         rebuildPublishedIndex(organizationId, documentId, expectedPublicationId, expectedModel, expectedDimension, false);
     }
 
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public void rebuildPublishedIndex(UUID organizationId, UUID documentId, UUID expectedPublicationId,
                                       String expectedModel, Integer expectedDimension, boolean vectorsOnly) {
         if ((expectedModel != null && !java.util.Objects.equals(expectedModel, embeddingModel))
@@ -1021,13 +1023,20 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             buildVectors(organizationId, documentId, publication.id(), publication.reviewRevisionId());
             return;
         }
-        var snapshot = governance.publishedContent(organizationId, documentId, publication.id())
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "当前发布快照不存在"));
-        var prepared = prepareIndex(organizationId, documentId, publication.versionId(),
-                publication.reviewRevisionId(), document.title(), snapshot.confirmedDocument(),
-                snapshot.excludedReviewNodeIds(), snapshot.sourceNodes());
-        replacePreparedIndex(organizationId, documentId, publication, prepared);
-        repository.rebuildTermStats(organizationId);
+        // Keep the existing atomic full-index replacement. The vector-only path above
+        // deliberately has no enclosing transaction: each guarded vector write commits
+        // independently, so remote inference cannot expire or roll back the whole file.
+        Runnable fullRebuild = () -> {
+            var snapshot = governance.publishedContent(organizationId, documentId, publication.id())
+                    .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "当前发布快照不存在"));
+            var prepared = prepareIndex(organizationId, documentId, publication.versionId(),
+                    publication.reviewRevisionId(), document.title(), snapshot.confirmedDocument(),
+                    snapshot.excludedReviewNodeIds(), snapshot.sourceNodes());
+            replacePreparedIndex(organizationId, documentId, publication, prepared);
+            repository.rebuildTermStats(organizationId);
+        };
+        if (publicationTransaction == null) fullRebuild.run();
+        else publicationTransaction.executeWithoutResult(status -> fullRebuild.run());
     }
 
     @Transactional
@@ -1087,10 +1096,21 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "确认文本没有可检索内容");
         }
         var textHash = sha256(chunks.stream().map(BlockAwareChunker.ChunkDraft::content)
-                .reduce("", (left, right) -> left + "\n" + right));
+                .collect(java.util.stream.Collectors.joining("\n", "\n", "")));
         var aiApproved = repository.isAiApproved(organizationId, documentId);
         var embedding = aiApproved ? embeddings.getIfAvailable() : null;
         if (aiApproved && embedding == null) throw new IllegalStateException("向量服务暂不可用");
+        var childTexts = chunks.stream().filter(chunk -> "CHILD".equals(chunk.role()))
+                .map(BlockAwareChunker.ChunkDraft::content).toList();
+        var childVectors = new ArrayList<String>();
+        if (aiApproved) {
+            for (int start = 0; start < childTexts.size();) {
+                int end = embeddingBatchEnd(childTexts, start);
+                childVectors.addAll(requireEmbeddingBatch(embedding, childTexts.subList(start, end)));
+                start = end;
+            }
+        }
+        int vectorIndex = 0;
         var writes = new ArrayList<KnowledgeRepository.ChunkWrite>();
         for (var index = 0; index < chunks.size(); index++) {
             var block = chunks.get(index);
@@ -1100,8 +1120,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             var terms = analysis.frequencies().entrySet().stream()
                     .map(item -> new KnowledgeRepository.TermFrequency(item.getKey(), item.getValue())).toList();
             String vector = null;
-            if (aiApproved && child) vector = embedding.embedVector(block.content())
-                    .orElseThrow(() -> new IllegalStateException("向量服务未返回结果"));
+            if (aiApproved && child) vector = childVectors.get(vectorIndex++);
             var anchor = block.primaryAnchor();
             writes.add(new KnowledgeRepository.ChunkWrite(block.chunkKey(), block.parentKey(), block.role(), index,
                     block.firstPage(), block.headingPath().isEmpty() ? null : String.join(" > ", block.headingPath()),
@@ -1145,17 +1164,43 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         if (provider == null) throw new IllegalStateException("向量服务暂不可用");
         repository.startProcessingStep(organizationId, documentId, publication.versionId(), reviewRevisionId,
                 "VECTOR_INDEX:"+embeddingModel+":"+embeddingDimension, "pgvector", embeddingModel, null);
-        for (var chunk : repository.chunksForEmbedding(organizationId, documentId, reviewRevisionId,embeddingModel,embeddingDimension)) {
+        var chunks = repository.chunksForEmbedding(organizationId, documentId, reviewRevisionId,embeddingModel,embeddingDimension);
+        var texts = chunks.stream().map(KnowledgeRepository.ChunkEmbeddingRow::content).toList();
+        for (int start = 0; start < chunks.size();) {
             if (!repository.isAiApproved(organizationId, documentId)) {
                 repository.clearDocumentEmbeddings(organizationId, documentId);
                 return;
             }
-            var vector = provider.embedVector(chunk.content())
-                    .orElseThrow(() -> new IllegalStateException("向量服务未返回结果"));
-            repository.updateChunkEmbedding(organizationId, chunk.id(), vector, embeddingModel);
+            int end = embeddingBatchEnd(texts, start);
+            // Validate every result before persisting the batch; never misalign chunks and vectors.
+            var vectors = requireEmbeddingBatch(provider, texts.subList(start, end));
+            for (int index = start; index < end; index++) {
+                repository.updateChunkEmbedding(organizationId, chunks.get(index).id(), vectors.get(index - start), embeddingModel);
+            }
+            start = end;
         }
         repository.finishProcessingStep(organizationId, publication.versionId(), reviewRevisionId,
                 "VECTOR_INDEX:"+embeddingModel+":"+embeddingDimension, "SUCCEEDED", null, null);
+    }
+
+    private int embeddingBatchEnd(List<String> texts, int start) {
+        int limit = Math.max(1, Math.min(64, embeddingBuildBatchSize));
+        int end = start, characters = 0;
+        while (end < texts.size() && end - start < limit) {
+            int length = texts.get(end).length();
+            if (end > start && characters + length > 32000) break;
+            characters += length;
+            end++;
+        }
+        return end;
+    }
+
+    private List<String> requireEmbeddingBatch(KnowledgeEmbeddingFacade provider, List<String> texts) {
+        var vectors = provider.embedVectors(texts);
+        if (vectors == null || vectors.size() != texts.size()
+                || vectors.stream().anyMatch(value -> value == null || value.isEmpty() || value.get().isBlank()))
+            throw new IllegalStateException("批量向量服务未返回完整结果，请检查模型、维度或减小构建批次");
+        return vectors.stream().map(java.util.Optional::orElseThrow).toList();
     }
 
     public void failIndex(UUID organizationId, UUID documentId, UUID versionId, UUID reviewRevisionId, Exception exception) {

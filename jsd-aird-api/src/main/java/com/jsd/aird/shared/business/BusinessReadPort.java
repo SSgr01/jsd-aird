@@ -11,6 +11,13 @@ public interface BusinessReadPort {
     default Set<String> requiredFilters(String type) { return Set.of(); }
     Page references(String type, ObjectNode filters, int page, int size);
     BusinessRecordView read(ObjectNode reference);
+    /** Version-bound visual page; metadata alone does not imply the image was read. */
+    default BusinessRecordView imagePage(ObjectNode reference, int page) {
+        throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.BAD_REQUEST, "该业务对象不支持按页看图");
+    }
+    default FileContent imagePageFile(ObjectNode reference, int page) {
+        throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.BAD_REQUEST, "该业务对象不支持按页看图");
+    }
     default FileContent file(ObjectNode reference) {
         throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.BAD_REQUEST, "该业务对象没有可读取的原文件");
     }

@@ -14,7 +14,7 @@ public class DomainBusinessAccess implements BusinessDataAccess {
     private static final Set<String> TYPES = Set.of("CUSTOMER", "CUSTOMER_CONTACT", "CUSTOMER_COMMUNICATION", "CUSTOMER_REQUIREMENT",
         "INVENTORY_BALANCE", "INVENTORY_TRANSACTION", "SAMPLE_DISPATCH", "SHIPMENT", "PRODUCTION_ORDER", "PRODUCTION_UPLOAD",
         "QUALITY_STANDARD", "QUALITY_RECORD", "QUALITY_COA", "QUALITY_MANUAL", "QUALITY_MSDS", "QUALITY_LABEL", "QUALITY_DEFECT", "QUALITY_UPLOAD",
-        "RESEARCH_TEST", "RESEARCH_TEST_UPLOAD", "DATA_IMPORT", "STRUCTURED_RECORD", "SPECTRUM", "SPECTRUM_ANALYSIS",
+        "RESEARCH_TEST", "RESEARCH_TEST_UPLOAD", "DATA_IMPORT", "STRUCTURED_RECORD", "SPECTRUM",
         "MEETING_MINUTES", "PROJECT_DOCUMENT", "PROJECT_REFERENCE");
     private final AuthorizationService authorization;
     private final JdbcTemplate jdbc;
@@ -67,10 +67,6 @@ public class DomainBusinessAccess implements BusinessDataAccess {
             if(id==null)return check(actor,"data.view.view","DATA",null);
             var found=rows(actor,id,"SELECT import_job_id FROM data.data_record WHERE organization_id=? AND id=?");
             return !found.isEmpty() && allowed(actor,"DATA_IMPORT",(UUID)found.getFirst().get("import_job_id"),operation,context);
-        }
-        if("SPECTRUM_ANALYSIS".equals(type)) {
-            // The existing reader additionally requires the original analysis actor.
-            return check(actor,"spectrum.view.view","SPECTRUM",null) && !download && !export;
         }
         String table,resource,view,transfer;
         if(type.startsWith("QUALITY_")) {

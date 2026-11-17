@@ -28,6 +28,15 @@ public class AgentDelegation {
     }
 
     public String issue(Actor actor) {
+        return issue(actor, "control");
+    }
+
+    /** Only sent over the authenticated server-to-server workbench connection. */
+    public String issueWorkbench(Actor actor) {
+        return issue(actor, "java-tools");
+    }
+
+    private String issue(Actor actor, String audience) {
         var user = auth.delegationUser(actor.userId());
         if (user == null || !user.organizationId().equals(actor.organizationId()) || !"ACTIVE".equals(user.status()))
             throw new ApiException(ApiErrorCode.AUTH_REQUIRED);
@@ -35,7 +44,7 @@ public class AgentDelegation {
         try {
             var payload = mapper.writeValueAsBytes(Map.of("organization_id", actor.organizationId(), "actor_id", actor.userId(),
                 "auth_version", user.authVersion(), "username", user.username(), "role", user.roleCode() == null ? "USER" : user.roleCode(),
-                "iat", now, "exp", now + 3600, "aud", "control"));
+                "iat", now, "exp", now + 3600, "aud", audience));
             var body = Base64.getUrlEncoder().withoutPadding().encodeToString(payload);
             return body + "." + signature(body);
         } catch (ApiException error) { throw error; }

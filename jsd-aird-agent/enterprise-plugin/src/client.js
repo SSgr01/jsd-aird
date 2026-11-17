@@ -6,6 +6,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
   const memoryUI = /* @memory-ui */ null;
   const briefingEntry = /* @briefing-entry */ null;
   const expertsUI = /* @experts-ui */ null;
+  const spectrumUI = /* @spectrum-ui */ null;
   const base = '/agent/';
   async function api(action, body, signal) {
     const response = await fetch(base + 'business/' + action, { method: 'POST',
@@ -150,7 +151,9 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
       const privateSource = new RegExp('^/api/v1/agents/private-sources/'+id+'/content$').test(url.pathname)
         && new RegExp('^'+id+'$').test(url.searchParams.get('version_id') || '');
       const publishedSource = new RegExp('^/api/v1/knowledge/documents/'+id+'/versions/'+id+'/content$').test(url.pathname);
-      return privateSource || publishedSource ? url : null;
+      const spectrumPage = new RegExp('^/api/v1/agents/business/images/SPECTRUM/'+id+'$').test(url.pathname)
+        && url.searchParams.has('ref') && /^[1-9]\d*$/.test(url.searchParams.get('page') || '');
+      return privateSource || publishedSource || spectrumPage ? url : null;
     } catch { return null; }
   }
   function OriginalBody({useTabInfo, renderSlot}) {
@@ -159,17 +162,22 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
     const address = url?.href, page = Number(new URLSearchParams(url?.hash.slice(1)).get('page')) || 1;
     const [content, setContent] = useState(null), [error, setError] = useState('');
     useEffect(() => {
-      const controller = new AbortController(); setContent(null); setError('');
+      const controller = new AbortController(); let imageUrl; setContent(null); setError('');
       if (!address) {setError('原文地址无效。'); return;}
       fetch(address, {signal:controller.signal, cache:'no-store', credentials:'same-origin'})
         .then(async response => {
           if (!response.ok) throw new Error('无法读取原文，请检查当前权限和版本。');
           const mime = response.headers.get('content-type')?.split(';')[0];
+          if (mime === 'image/png') {
+            const blob = await response.blob();
+            if (!controller.signal.aborted) {imageUrl = URL.createObjectURL(blob); setContent({kind:'image',url:imageUrl});}
+            return;
+          }
           if (mime !== 'application/pdf') throw new Error('此原文格式请使用原文件入口打开。');
           const data = new Uint8Array(await response.arrayBuffer());
           if (!controller.signal.aborted) setContent({kind:'bytes',data});
         }).catch(e => {if (!controller.signal.aborted) setError(e.message);});
-      return () => controller.abort();
+      return () => {controller.abort(); if (imageUrl) URL.revokeObjectURL(imageUrl);};
     }, [address]);
     useEffect(() => {
       if (!content || !root.current || !tab.visible) return;
@@ -186,8 +194,9 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
     }, [content, page, tab.visible]);
     return h('section',{ref:root,className:'jsd-original'},
       h('div',{className:'jsd-original-toolbar'},h('span',null,'原文 · 第 '+page+' 页'),
-        address && h('a',{href:address,download:true},'下载原文件')),
+        address && h('a',{href:address,download:true},content?.kind === 'image' ? '下载此页图片' : '下载原文件')),
       error ? h('p',{role:'alert'},error) : !content ? h('p',{role:'status'},'读取原文…') :
+        content.kind === 'image' ? h('img',{className:'jsd-spectrum-original',src:content.url,alt:'图谱原始页面 · 第 '+page+' 页'}) :
         renderSlot(originalPdfSlot, {resourceAddress:address,content,wrap:false,
           scrollportRef:()=>{},addResource:()=>{},setResources:()=>{}},
           {entryKey:nativePdfKey,hookContext:useTabInfo}));
@@ -341,11 +350,13 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
     if (error) return h('p', {role:'alert',className:'jsd-resource'}, error);
     if (!value) return h('p',{className:'jsd-resource',role:'status'},'读取资料…');
     const ref = value.ref;
+    if (ref.kind === 'SPECTRUM') return h(spectrumUI.SpectrumResourceBody, {React,value});
     const edit = ref.kind === 'PROJECT' ? '/projects/' + ref.resource_id : ref.kind === 'EXPERIMENT' ? '/experiments/' + ref.resource_id : null;
     return h('article',{className:'jsd-resource'},h('h2',null,value.title),h('p',null,'固定版本'),
       edit && h('a',{href:edit,target:'_blank',rel:'noopener'},'打开业务页面'),
       (value.candidates || []).map((item,index) => h('section',{key:index},
-        h('small',null,item.source?.anchor?.page_no ? '第 ' + item.source.anchor.page_no + ' 页' : ''),h('pre',null,item.text))),
+        h('small',null,item.source?.anchor?.page_no ? '第 ' + item.source.anchor.page_no + ' 页' : ''),
+        h('pre',null,item.text))),
       offset > 0 && button('上一段',()=>setOffset(Math.max(0,offset-8))),
       value.next_offset != null && button('下一段',()=>setOffset(value.next_offset)));
   }
@@ -637,6 +648,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
     ctx.inject(['uiWorkspace','conversation','sessions','layout'],scope=>{
       const {Modal,Menu,MenuItemButton}=require('@deepseek-ai/dsh-client-ui-primitives');
       const {useExpert}=expertsUI.registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton});
+      spectrumUI.registerSpectrumUI(scope,{React,api,Modal,useExpert,marker});
       registerWelcomeCards(scope,useExpert);
     });
     registerSourceMarkdown(ctx);

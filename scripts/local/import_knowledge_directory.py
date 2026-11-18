@@ -82,6 +82,11 @@ class ConsoleOutput:
             if self.verbose:
                 builtins.print(f'[{now}] {message}', file=file, flush=True)
                 return
+            if (message.startswith(('进度 ', '[处理] 已发布', '等待发布：', '分类：',
+                                    '完整清点 ', '最多同时跟踪 ', '补全任务：', '预览：', '可补全 '))
+                    or any(word in message for word in ('已加入处理队列', '已建文档并加入解析队列', '已存在，继续处理'))
+                    or re.match(r'^\[\d+/\d+\]\s+(?:REBUILT|CURRENT)\b', message)):
+                return
             queued = any(word in message for word in ('已加入处理队列', '已建文档并加入解析队列', '已存在，继续处理'))
             if queued:
                 if time.monotonic() - self.last_queue < 10: return
@@ -744,8 +749,8 @@ def enrich_existing(args: argparse.Namespace) -> int:
             deadline = time.monotonic() + args.metadata_wait_seconds
             while True:
                 result = api.json("GET", f"/api/v1/knowledge/bibliography-tasks/{task['id']}?limit=1")
-                emit(json.dumps(result['counts'], ensure_ascii=False))
                 if result['finished'] or time.monotonic() >= deadline:
+                    emit('补全统计：' + json.dumps(result['counts'], ensure_ascii=False))
                     return 1 if result['counts'].get('FAILED') else 0
                 pause(api, min(3, max(0, deadline - time.monotonic())))
         finally:
@@ -770,6 +775,22 @@ def collect_files(source: Path, manifest: Path, included: list[str] | None = Non
             raise ImportErrorWithMessage("选择的文件不是来源目录内的普通文件")
         selected.add(path)
     return sorted(selected)
+
+
+def create_or_resolve_duplicate(api, record, create):
+    try:
+        return create()
+    except ApiHttpError as error:
+        if error.status != 409:
+            raise
+        latest = api.json('POST', '/api/v1/knowledge/uploads/preflight', {
+            'fileId': record['fileId'], 'categoryId': record['targetCategoryId']})
+        if latest.get('decision') != 'EXACT_DUPLICATE' or not latest.get('exactMatches'):
+            raise error
+        document = duplicate_document(api, latest['exactMatches'], record)
+        require_document_target(api, document, record)
+        record['duplicate'] = True
+        return document
 
 
 def import_directory(args: argparse.Namespace) -> int:
@@ -983,7 +1004,7 @@ def import_directory(args: argparse.Namespace) -> int:
                             finish_next()
                         continue
                     title = file_path.stem[:260]
-                    created = queue_api_call(api, lambda: api.json(
+                    created = create_or_resolve_duplicate(api, record, lambda: queue_api_call(api, lambda: api.json(
                         "POST", "/api/v1/knowledge/documents", {
                             "fileId": file_id,
                             "title": title,
@@ -995,7 +1016,7 @@ def import_directory(args: argparse.Namespace) -> int:
                             "sourceInfo": metadata["sourceInfo"],
                             "projectRelations": [],
                         }
-                    ), queue_timeout_seconds, 2)
+                    ), queue_timeout_seconds, 2))
                     document_id = created["id"]
                     version_id = created["currentVersionId"]
                     record.update(documentId=document_id, versionId=version_id)

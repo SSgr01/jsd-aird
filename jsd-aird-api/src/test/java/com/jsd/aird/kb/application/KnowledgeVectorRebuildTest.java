@@ -36,6 +36,20 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 class KnowledgeVectorRebuildTest {
+    @Test void creationConflictsDistinguishOldSchemaAndFileDuplicatesFromOtherDatabaseErrors() {
+        var service = worker();
+        var oldSchema = new org.springframework.dao.DuplicateKeyException("insert", new java.sql.SQLException(
+                "document_organization_id_title_current_version_no_key", "23505"));
+        RuntimeException oldResult = ReflectionTestUtils.invokeMethod(service, "creationConflict", oldSchema);
+        assertThat(oldResult).isInstanceOf(ApiException.class).hasMessageContaining("V119");
+        var duplicate = new org.springframework.dao.DuplicateKeyException("insert", new java.sql.SQLException(
+                "uq_kb_document_version_org_sha256", "23505"));
+        RuntimeException duplicateResult = ReflectionTestUtils.invokeMethod(service, "creationConflict", duplicate);
+        assertThat(duplicateResult).isInstanceOf(ApiException.class).hasMessageContaining("相同文件");
+        var other = new org.springframework.dao.DataIntegrityViolationException("foreign key");
+        RuntimeException otherResult = ReflectionTestUtils.invokeMethod(service, "creationConflict", other);
+        assertThat(otherResult).isSameAs(other);
+    }
     private final ObjectMapper json = new ObjectMapper();
     private final UUID org = UUID.randomUUID(), doc = UUID.randomUUID(), pub = UUID.randomUUID();
     private final UUID version = UUID.randomUUID(), revision = UUID.randomUUID(), job = UUID.randomUUID();

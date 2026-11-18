@@ -30,6 +30,8 @@ import java.util.zip.ZipFile;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jsd.aird.kb.application.SystemParsingPolicy;
+import com.jsd.aird.kb.application.port.MineruTaskStore;
+import com.jsd.aird.kb.application.port.MineruTaskStore.Task;
 import com.jsd.aird.kb.api.DocumentParser;
 import com.jsd.aird.kb.api.OcrMode;
 import com.jsd.aird.ops.application.port.FileStorageFacade;
@@ -70,6 +72,9 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
     private final MineruDocumentAdapter adapter;
     private final PdfOcrDecider ocrDecider = new PdfOcrDecider();
     private final PdfPartitioner pdfPartitioner = new PdfPartitioner();
+    private MineruTaskStore taskStore;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setTaskStore(MineruTaskStore taskStore) { this.taskStore = taskStore; }
     private final ExecutorService precisePartExecutor = Executors.newFixedThreadPool(2,
             Thread.ofPlatform().daemon().name("mineru-part-", 0).factory());
 
@@ -232,13 +237,18 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
             if (!partitioned.split()) {
                 return parsePreciseSingle(sourceFile, fileName, context, requestedMode, decision);
             }
+            // PDFBox may regenerate PDF ids when saving a part. Key parts from the immutable
+            // original bytes and page range, not from these freshly serialized part bytes.
+            var originalKey = taskKey(sourceFile, fileName, decision.useOcr());
             var futures = partitioned.parts().stream().map(part -> CompletableFuture.supplyAsync(() -> {
                 // MinerU validates the file type from the submitted name. Keep
                 // the PDF extension after adding the internal part marker;
                 // names such as "document.pdf.part-001" are rejected as an
                 // unsupported file type by the provider.
                 var partName = splitPdfFileName(fileName, part.index());
-                return parsePreciseSingle(part.path(), partName, context, requestedMode, decision);
+                var partKey = java.util.HexFormat.of().formatHex(digest((originalKey + ":partition-v1:"
+                        + part.index() + ":" + part.sourceStartPage() + ":" + part.sourceEndPage()).getBytes(StandardCharsets.UTF_8)));
+                return parsePreciseSingle(part.path(), partName, context, requestedMode, decision, partKey);
             }, precisePartExecutor)).toList();
             var parsedParts = new ArrayList<ParsedDocument>(futures.size());
             for (var future : futures) {
@@ -264,29 +274,58 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
 
     private ParsedDocument parsePreciseSingle(Path sourceFile, String fileName, ParseContext context,
                                               OcrMode requestedMode, PdfOcrDecider.Decision decision) {
-        var request = new LinkedHashMap<String, Object>();
-        request.put("files", List.of(Map.of(
-                "name", safeFileName(fileName),
-                "data_id", "jsd-aird-" + UUID.randomUUID(),
-                "is_ocr", decision.useOcr())));
-        request.put("model_version", model);
-        request.put("language", "ch");
-        request.put("enable_formula", true);
-        request.put("enable_table", true);
-        var submitted = withRetry(() -> {
-            var response = post("/api/v4/file-urls/batch", request, true, null);
-            ensureOk(response, "MinerU 精准接口提交失败", null);
-            return response;
-        });
-        var data = submitted.path("data");
-        var batchId = data.path("batch_id").asText(null);
-        var uploadUrl = data.path("file_urls").isArray() && !data.path("file_urls").isEmpty()
-                ? data.path("file_urls").get(0).asText(null) : null;
-        if (!StringUtils.hasText(batchId) || !StringUtils.hasText(uploadUrl)) {
-            throw MineruException.contract("MinerU 精准接口未返回上传地址", batchId);
+        return parsePreciseSingle(sourceFile, fileName, context, requestedMode, decision,
+                taskKey(sourceFile, fileName, decision.useOcr()));
+    }
+
+    private ParsedDocument parsePreciseSingle(Path sourceFile, String fileName, ParseContext context,
+                                              OcrMode requestedMode, PdfOcrDecider.Decision decision, String key) {
+        var durable = taskStore != null && context != null && context.documentVersionId() != null;
+        var checkpoint = durable ? taskStore.find(context.organizationId(), context.documentVersionId(), key).orElse(null) : null;
+        // Old releases saved a remote id only on timeout. A split PDF's single id cannot identify its parts.
+        if (durable && checkpoint == null && !fileName.matches(".*\\.part-\\d+\\.[^.]+$")) {
+            checkpoint = taskStore.previousTimeout(context.organizationId(), context.documentVersionId(), requestedMode.name()).orElse(null);
         }
-        withRetry(() -> { upload(uploadUrl, sourceFile, batchId); return null; });
-        var result = pollPrecise(batchId);
+        String batchId;
+        if (checkpoint != null && !Set.of("failed", "error").contains(checkpoint.state())) {
+            batchId = checkpoint.batchId();
+            if (!checkpoint.uploaded()) {
+                var resume = checkpoint;
+                withRetry(() -> { upload(resume.uploadUrl(), sourceFile, resume.batchId()); return null; });
+                checkpoint = new Task(batchId, null, true, "pending");
+            }
+            if (durable) taskStore.save(context.organizationId(), context.documentVersionId(), key, checkpoint);
+            log.info("Resuming MinerU batch: versionId={} batchId={}", context.documentVersionId(), batchId);
+        } else {
+            var request = new LinkedHashMap<String, Object>();
+            request.put("files", List.of(Map.of(
+                    "name", safeFileName(fileName),
+                    "data_id", "jsd-aird-" + UUID.randomUUID(),
+                    "is_ocr", decision.useOcr())));
+            request.put("model_version", model);
+            request.put("language", "ch");
+            request.put("enable_formula", true);
+            request.put("enable_table", true);
+            var submitted = withRetry(() -> {
+                var response = post("/api/v4/file-urls/batch", request, true, null);
+                ensureOk(response, "MinerU 精准接口提交失败", null);
+                return response;
+            });
+            var data = submitted.path("data");
+            batchId = data.path("batch_id").asText(null);
+            var uploadUrl = data.path("file_urls").isArray() && !data.path("file_urls").isEmpty()
+                    ? data.path("file_urls").get(0).asText(null) : null;
+            if (!StringUtils.hasText(batchId) || !StringUtils.hasText(uploadUrl)) {
+                throw MineruException.contract("MinerU 精准接口未返回上传地址", batchId);
+            }
+            if (durable) taskStore.save(context.organizationId(), context.documentVersionId(), key,
+                    new Task(batchId, uploadUrl, false, "waiting-file"));
+            withRetry(() -> { upload(uploadUrl, sourceFile, batchId); return null; });
+            if (durable) taskStore.save(context.organizationId(), context.documentVersionId(), key,
+                    new Task(batchId, null, true, "pending"));
+            log.info("Submitted MinerU batch: versionId={} batchId={}", context == null ? null : context.documentVersionId(), batchId);
+        }
+        var result = pollPrecise(batchId, context, key, durable);
         var zipUrl = result.path("full_zip_url").asText(null);
         if (!StringUtils.hasText(zipUrl)) throw MineruException.contract("MinerU 未返回结果 ZIP 地址", batchId);
         Path resultFile = null;
@@ -527,7 +566,7 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
         if (context == null || context.organizationId() == null || context.actorId() == null) return null;
         try (var input = Files.newInputStream(path)) {
             var staged = storage.stageDerived(context.organizationId(), context.actorId(),
-                    safeFileName(fileName) + suffix, contentType, kind, input);
+                    derivedFileName(fileName, suffix), contentType, kind, input);
             storage.activate(staged.fileId());
             return staged.fileId();
         } catch (IOException exception) {
@@ -571,7 +610,7 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
                 var lower = path.toLowerCase(Locale.ROOT);
                 if (markdownFileId == null && (lower.equals("full.md") || lower.endsWith("/full.md"))) {
                     try (var input = archive.getInputStream(entry)) {
-                        markdownFileId = persistDerivedStream(context, safeFileName(fileName) + ".mineru.full.md",
+                        markdownFileId = persistDerivedStream(context, derivedFileName(fileName, ".mineru.full.md"),
                                 "text/markdown", "KB_MINERU_MARKDOWN_RESULT", input).fileId();
                     }
                     continue;
@@ -583,7 +622,7 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
                 }
                 try (var input = archive.getInputStream(entry)) {
                     var staged = persistDerivedStream(context,
-                            safeFileName(fileName) + ".mineru." + basename(path), contentType,
+                            derivedFileName(fileName, ".mineru." + basename(path)), contentType,
                             "KB_MINERU_RESULT_ASSET", input);
                     var assetId = staged.fileId();
                     assetIds.put(path, assetId);
@@ -652,8 +691,9 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
     private record ZipArtifacts(Map<String, UUID> assetFileIds, UUID markdownFileId,
                                 List<Map<String, Object>> assets) { }
 
-    private JsonNode pollPrecise(String batchId) {
+    private JsonNode pollPrecise(String batchId, ParseContext context, String key, boolean durable) {
         var deadline = System.nanoTime() + maxWait.toNanos();
+        String previousState = null;
         while (System.nanoTime() < deadline) {
             var response = withRetry(() -> {
                 var value = get("/api/v4/extract-results/batch/" + batchId, true, batchId);
@@ -662,6 +702,12 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
             });
             for (var item : response.path("data").path("extract_result")) {
                 var state = item.path("state").asText("").toLowerCase(Locale.ROOT);
+                if (!state.equals(previousState)) {
+                    if (durable) taskStore.save(context.organizationId(), context.documentVersionId(), key,
+                            new Task(batchId, null, true, state));
+                    log.info("MinerU remote state: batchId={} state={}", batchId, state);
+                    previousState = state;
+                }
                 if ("done".equals(state)) return item;
                 if ("failed".equals(state) || "error".equals(state)) {
                     throw taskFailure("MinerU 精准任务失败：" + item.path("err_msg").asText("未知错误"), batchId);
@@ -821,6 +867,37 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
     }
 
     private static String safeFileName(String value) { return StringUtils.hasText(value) ? value : "document.pdf"; }
+
+    static String derivedFileName(String name, String suffix) {
+        var base = safeFileName(name);
+        // PostgreSQL varchar limits count Unicode characters, not UTF-16 code units.
+        if (suffix.codePointCount(0, suffix.length()) > 120) {
+            var hash = java.util.HexFormat.of().formatHex(digest(suffix.getBytes(StandardCharsets.UTF_8))).substring(0, 16);
+            var extension = suffix.lastIndexOf('.') >= 0 ? suffix.substring(suffix.lastIndexOf('.')) : "";
+            if (extension.length() > 20) extension = ".asset";
+            suffix = ".mineru." + hash + extension;
+        }
+        int allowed = 260 - suffix.codePointCount(0, suffix.length());
+        return base.substring(0, base.offsetByCodePoints(0, Math.min(allowed, base.codePointCount(0, base.length())))) + suffix;
+    }
+
+    private String taskKey(Path source, String name, boolean ocr) {
+        try {
+            var digest = java.security.MessageDigest.getInstance("SHA-256");
+            digest.update((baseUrl + "\n" + model + "\n" + ocr + "\n" + name + "\n").getBytes(StandardCharsets.UTF_8));
+            try (var input = new java.security.DigestInputStream(Files.newInputStream(source), digest)) {
+                input.transferTo(java.io.OutputStream.nullOutputStream());
+            }
+            return java.util.HexFormat.of().formatHex(digest.digest());
+        } catch (IOException | java.security.NoSuchAlgorithmException error) {
+            throw MineruException.adapter("MinerU 断点指纹计算失败", error);
+        }
+    }
+
+    private static byte[] digest(byte[] bytes) {
+        try { return java.security.MessageDigest.getInstance("SHA-256").digest(bytes); }
+        catch (java.security.NoSuchAlgorithmException error) { throw new IllegalStateException(error); }
+    }
 
     private void deleteQuietly(Path value) {
         if (value != null) try { Files.deleteIfExists(value); } catch (IOException ignored) { }

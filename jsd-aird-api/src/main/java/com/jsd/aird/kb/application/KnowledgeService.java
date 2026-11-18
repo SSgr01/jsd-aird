@@ -193,6 +193,21 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 lexicalAnalyzer, new SystemParsingPolicy("AUTO", false), retrievalExecutor, null);
     }
 
+    private RuntimeException creationConflict(DataIntegrityViolationException error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (!(cause instanceof java.sql.SQLException sql) || !"23505".equals(sql.getSQLState())) continue;
+            String message = java.util.Objects.toString(sql.getMessage(), "");
+            if (message.contains("document_organization_id_title_current_version_no_key"))
+                return new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "知识库数据库结构需要升级，请执行 V119 迁移后重试");
+            if (message.contains("uq_kb_document_version_org_sha256")
+                    || message.contains("document_version_document_id_sha256_key"))
+                return new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "相同文件已被其他上传请求创建，请重新预检");
+            if (message.contains("document_version_document_id_version_no_key"))
+                return new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "文档版本已变化，请刷新后重试");
+        }
+        return error;
+    }
+
     @Transactional
     public DocumentView create(CreateCommand command) {
         var actor = ActorContext.required();
@@ -217,16 +232,20 @@ public class KnowledgeService implements KnowledgeSearchFacade {
             var documentId = UUID.randomUUID();
             var versionId = UUID.randomUUID();
             var parsePolicy = systemParsingPolicy.forFile(file.originalName(), file.contentType());
+            try {
             repository.insertDocument(new KnowledgeRepository.NewDocument(
                     documentId, actor.organizationId(), title, actor.userId(), scope, categoryId
             ));
+            } catch (DataIntegrityViolationException exception) {
+                throw creationConflict(exception);
+            }
             try {
                 repository.insertVersion(new KnowledgeRepository.NewVersion(
                         versionId, documentId, 1, command.fileId(), file.originalName(), file.contentType(), file.size(), file.sha256()
                         , parsePolicy.ocrMode().name(), parsePolicy.allowAgentFallback()
                 ));
             } catch (DataIntegrityViolationException exception) {
-                throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "相同文件已被其他上传请求创建");
+                throw creationConflict(exception);
             }
             var payload = objectMapper.createObjectNode()
                     .put("organizationId", actor.organizationId().toString())
@@ -418,6 +437,10 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在"));
     }
 
+    private com.jsd.aird.kb.application.port.MineruTaskStore mineruTaskStore;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setMineruTaskStore(com.jsd.aird.kb.application.port.MineruTaskStore store) { this.mineruTaskStore = store; }
+
     public ProcessingView processing(UUID documentId) {
         var actor = ActorContext.required();
         var document = repository.findDocument(actor.organizationId(), documentId)
@@ -427,13 +450,15 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var job = async.findLatestJob(actor.organizationId(), "kb-reindex:" + document.currentVersionId())
                 .or(() -> async.findJob(actor.organizationId(), "kb-ingest:" + document.currentVersionId()))
                 .orElse(null);
+        var remote = mineruTaskStore == null ? null : mineruTaskStore.latest(actor.organizationId(), document.currentVersionId()).orElse(null);
         return new ProcessingView(document.id(), document.currentVersionId(), document.status(), safeUserError(document.parseError()),
                 run == null ? null : run.id(), run == null ? null : run.status(),
                 run == null ? null : safeUserError(run.errorMessage()), run == null ? null : run.createdAt(),
                 job == null ? null : job.id(), job == null ? null : job.status(), job == null ? 0 : job.progress(),
                 job == null ? null : job.currentStage(), job == null ? 0 : job.attemptCount(),
                 job == null ? 0 : job.maxAttempts(), job == null ? null : job.nextAttemptAt(),
-                job != null && job.terminal(), job == null ? null : safeUserError(job.lastError()));
+                job != null && job.terminal(), job == null ? null : safeUserError(job.lastError()),
+                remote == null ? null : remote.batchId(), remote == null ? null : remote.state());
     }
 
     public List<VersionView> versions(UUID documentId) {
@@ -465,7 +490,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                         file.size(), file.sha256(), parsePolicy.ocrMode().name(), parsePolicy.allowAgentFallback()
                 ));
             } catch (DataIntegrityViolationException exception) {
-                throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "文件内容或版本号已被其他上传请求占用，请刷新后重试");
+                throw creationConflict(exception);
             }
             repository.updateCurrentVersion(actor.organizationId(), documentId, versionNo);
             var payload = objectMapper.createObjectNode()
@@ -1595,7 +1620,8 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                                  UUID parseRunId, String parseRunStatus, String parseRunError,
                                  java.time.Instant lastAttemptAt, UUID jobId, String jobStatus, int progress,
                                  String currentStage, int attemptCount, int maxAttempts,
-                                 java.time.Instant nextAttemptAt, boolean terminal, String lastError) { }
+                                 java.time.Instant nextAttemptAt, boolean terminal, String lastError,
+                                 String providerTaskId, String providerState) { }
     public record VersionView(UUID id, UUID documentId, int versionNo, UUID fileObjectId, String originalName,
                                String contentType, long size, String sha256, String status,
                                String errorMessage, String reviewStatus, int reviewRevision,

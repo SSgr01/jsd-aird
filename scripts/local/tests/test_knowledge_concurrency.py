@@ -13,6 +13,21 @@ spec.loader.exec_module(module)
 
 
 class KnowledgeConcurrencyTest(unittest.TestCase):
+    def test_create_conflict_only_reuses_verified_content_duplicate(self):
+        api = Mock()
+        record = {'fileId': 'file', 'targetCategoryId': 'category'}
+        conflict = module.ApiHttpError(409, 'RESOURCE_CONFLICT', 'conflict')
+        api.json.return_value = {'decision': 'EXACT_DUPLICATE', 'exactMatches': [{'documentId': 'doc'}]}
+        document = {'id': 'doc', 'currentVersionId': 'version'}
+        with patch.object(module, 'duplicate_document', return_value=document), patch.object(module, 'require_document_target') as check:
+            self.assertEqual(document, module.create_or_resolve_duplicate(api, record, Mock(side_effect=conflict)))
+            check.assert_called_once_with(api, document, record)
+        self.assertTrue(record['duplicate'])
+        api.json.return_value = {'decision': 'POSSIBLE_VERSION'}
+        with self.assertRaises(module.ApiHttpError):
+            module.create_or_resolve_duplicate(api, record, Mock(side_effect=conflict))
+        self.assertEqual(2, api.json.call_count)
+
     def test_publication_can_finish_after_ten_minutes_without_resubmission(self):
         clock = [0.0]
         queued = [False]

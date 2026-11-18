@@ -47,6 +47,8 @@ description. Supplying --category-id retains the single-category workflow.
 from __future__ import annotations
 
 import argparse
+import builtins
+import re
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import copy
 import hashlib
@@ -63,6 +65,54 @@ import urllib.parse
 import uuid
 from pathlib import Path
 from typing import Any
+
+
+OUTPUT = None
+
+
+class ConsoleOutput:
+    def __init__(self, verbose=False):
+        self.verbose = verbose
+        self.lock = threading.Lock()
+        self.last_queue = 0.0
+
+    def write(self, message, file=None):
+        with self.lock:
+            now = time.strftime('%H:%M:%S')
+            if self.verbose:
+                builtins.print(f'[{now}] {message}', file=file, flush=True)
+                return
+            queued = any(word in message for word in ('已加入处理队列', '已建文档并加入解析队列', '已存在，继续处理'))
+            if queued:
+                if time.monotonic() - self.last_queue < 10: return
+                self.last_queue = time.monotonic()
+                message = message.split('：', 1)[0] + '（处理中）'
+            if message.startswith('[处理] 已发布'): return
+            if ' — ' in message:
+                subject, reason = message.split(' — ', 1)
+                # Keep the database cause rather than filling the terminal with SQL.
+                causes = re.findall(r'(?:错误[:：]|ERROR:|Caused by:)\s*([^\r\n]+)', reason)
+                if causes: reason = causes[-1]
+                reason = ' '.join(reason.split())
+                if 'PreparedStatementCallback' in reason and not causes:
+                    reason = '数据库操作失败；加 --verbose 查看完整错误'
+                prefix, separator, name = subject.partition('：')
+                if separator:
+                    subject = prefix + '：' + name.replace('\\', '/').rsplit('/', 1)[-1]
+                message = subject[:100] + ' — ' + reason[:180]
+            elif message.startswith('[') and '：' in message:
+                prefix, text = message.split('：', 1)
+                message = prefix + '：' + text.replace('\\', '/').rsplit('/', 1)[-1][:90]
+            message = ' '.join(message.split())
+            builtins.print(f'[{now}] {message}', file=file, flush=True)
+
+
+def emit(*values, sep=' ', file=None, flush=False):
+    message = sep.join(str(value) for value in values)
+    if OUTPUT is None:
+        builtins.print(message, file=file, flush=True)
+    else:
+        OUTPUT.write(message, file=file)
 
 
 DOCUMENT_STATE_FIELDS = (
@@ -352,7 +402,7 @@ class CategoryResolver:
         assert self.categories is not None
         if not any(item["id"] == category["id"] for item in self.categories):
             self.categories.append(category)
-        print(f"分类：{name} → {category['id']}", flush=True)
+        emit(f"分类：{name} → {category['id']}", flush=True)
         return category
 
 
@@ -585,7 +635,7 @@ def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_s
             if latest_revision.get("status") == "FAILED":
                 raise ImportErrorWithMessage(latest_revision.get("failureReason") or "发布任务失败")
             if time.monotonic() >= next_report:
-                print(f"等待发布：{document_id}；状态 {latest_revision.get('status', 'UNKNOWN')}；剩余约 {max(0, int(deadline-time.monotonic()))} 秒", flush=True)
+                emit(f"等待发布：{document_id}；状态 {latest_revision.get('status', 'UNKNOWN')}；剩余约 {max(0, int(deadline-time.monotonic()))} 秒", flush=True)
                 next_report = time.monotonic() + 30
             pause(api, 3)
         else:
@@ -686,15 +736,15 @@ def enrich_existing(args: argparse.Namespace) -> int:
         selection = {"categoryId": args.category_id, "requestKey": args.request_key or str(uuid.uuid4())}
         try:
             preview = api.json("POST", "/api/v1/knowledge/bibliography-tasks/preview", selection)
-            print(f"可补全 {preview['total']} 份已入库资料（预览不访问外部书目服务）。")
+            emit(f"可补全 {preview['total']} 份已入库资料（预览不访问外部书目服务）。")
             if args.dry_run:
                 return 0
             task = api.json("POST", "/api/v1/knowledge/bibliography-tasks", selection)
-            print(f"补全任务：{task['id']}；重复提交请沿用 --request-key {selection['requestKey']}")
+            emit(f"补全任务：{task['id']}；重复提交请沿用 --request-key {selection['requestKey']}")
             deadline = time.monotonic() + args.metadata_wait_seconds
             while True:
                 result = api.json("GET", f"/api/v1/knowledge/bibliography-tasks/{task['id']}?limit=1")
-                print(json.dumps(result['counts'], ensure_ascii=False))
+                emit(json.dumps(result['counts'], ensure_ascii=False))
                 if result['finished'] or time.monotonic() >= deadline:
                     return 1 if result['counts'].get('FAILED') else 0
                 pause(api, min(3, max(0, deadline - time.monotonic())))
@@ -734,7 +784,7 @@ def import_directory(args: argparse.Namespace) -> int:
         raise ImportErrorWithMessage("固定分类模式需要 --category-id")
     if args.dry_run:
         total_bytes = sum(path.stat().st_size for path in files)
-        print(f"扫描到 {len(files)} 个文件，总计 {total_bytes / (1024 ** 3):.2f} GB。"
+        emit(f"扫描到 {len(files)} 个文件，总计 {total_bytes / (1024 ** 3):.2f} GB。"
               f"dry-run 不登录，因此未执行服务端格式校验。清单：{manifest}")
         counts: dict[str, int] = {}
         errors = 0
@@ -745,13 +795,13 @@ def import_directory(args: argparse.Namespace) -> int:
                 category = metadata["categoryName"] or f"UUID {metadata['categoryId']}"
                 counts[category] = counts.get(category, 0) + 1
                 if index < 20:
-                    print(f"预览：{relative.as_posix()} → 分类：{category}；标签：{', '.join(metadata['tags']) or '无'}；"
+                    emit(f"预览：{relative.as_posix()} → 分类：{category}；标签：{', '.join(metadata['tags']) or '无'}；"
                           f"来源：{metadata['sourceInfo']['description']}")
             except ImportErrorWithMessage as error:
                 errors += 1
-                print(f"目录映射失败：{relative.as_posix()} — {error}", file=sys.stderr)
+                emit(f"目录映射失败：{relative.as_posix()} — {error}", file=sys.stderr)
         for category, count in sorted(counts.items()):
-            print(f"分类统计：{category}，{count} 个文件")
+            emit(f"分类统计：{category}，{count} 个文件")
         return 1 if errors else 0
 
     username = args.username or os.environ.get("JSD_AIRD_USERNAME")
@@ -801,7 +851,7 @@ def import_directory(args: argparse.Namespace) -> int:
                 record["documentUrl"] = f"{api.base_url}/knowledge/documents/{document_id}"
                 record["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
                 append_manifest(manifest, record)
-                print(f"[处理] {record['message']}：{relative}；"
+                emit(f"[处理] {record['message']}：{relative}；"
                       f"分类：{document.get('categoryName')}；文档：{document.get('title')}；{record['documentUrl']}")
                 return True, record
             except Exception as error:
@@ -816,7 +866,7 @@ def import_directory(args: argparse.Namespace) -> int:
                         for field in DOCUMENT_STATE_FIELDS:
                             record.pop(field, None)
                 append_manifest(manifest, record)
-                print(f"[处理] 失败：{relative} — {error}", file=sys.stderr)
+                emit(f"[处理] 失败：{relative} — {error}", file=sys.stderr)
                 return False, record
 
         def submit_record(record):
@@ -841,6 +891,7 @@ def import_directory(args: argparse.Namespace) -> int:
                     finished_records.append(record)
                 else:
                     failed += 1
+                emit(f"进度 {completed + failed}/{len(files)} | 成功 {completed} | 失败/待处理 {failed} | 在途 {len(pending)} | {Path(record['relativePath']).name[:60]}")
 
         for index, file_path in enumerate(files, start=1):
             relative = file_path.relative_to(source).as_posix()
@@ -865,14 +916,14 @@ def import_directory(args: argparse.Namespace) -> int:
                     record["importStatus"] = "FAILED"
                     record["message"] = f"文件超过 {max_file_bytes} 字节限制"
                     append_manifest(manifest, record)
-                    print(f"[{index}/{len(files)}] 超过限制：{relative}")
+                    emit(f"[{index}/{len(files)}] 超过限制：{relative}")
                     failed += 1
                     continue
                 if file_path.suffix.lower() not in supported_suffixes:
                     record["importStatus"] = "FAILED"
                     record["message"] = "文件格式不在知识库导入支持范围内"
                     append_manifest(manifest, record)
-                    print(f"[{index}/{len(files)}] 暂不支持：{relative}")
+                    emit(f"[{index}/{len(files)}] 暂不支持：{relative}")
                     failed += 1
                     continue
 
@@ -897,7 +948,7 @@ def import_directory(args: argparse.Namespace) -> int:
                     record.update(documentId=document_id, versionId=version_id, fileId=file_id)
                     append_manifest(manifest, record)
                     submit_record(record)
-                    print(f"[{index}/{len(files)}] 已加入处理队列：{relative}")
+                    emit(f"[{index}/{len(files)}] 已加入处理队列：{relative}")
                     if len(pending) >= effective_max_in_flight:
                         finish_next()
                     continue
@@ -926,7 +977,7 @@ def import_directory(args: argparse.Namespace) -> int:
                         record["message"] = "内容相同，继续核对元数据、发布和 AI 授权"
                         append_manifest(manifest, record)
                         submit_record(record)
-                        print(f"[{index}/{len(files)}] 已存在，继续处理：{relative}；"
+                        emit(f"[{index}/{len(files)}] 已存在，继续处理：{relative}；"
                               f"原文档：{document_location(api, duplicate_document_value)}")
                         if len(pending) >= effective_max_in_flight:
                             finish_next()
@@ -951,7 +1002,7 @@ def import_directory(args: argparse.Namespace) -> int:
                     refresh_document_state(api, record, document_id)
                     append_manifest(manifest, record)
                     submit_record(record)
-                    print(f"[{index}/{len(files)}] 已建文档并加入解析队列：{relative}")
+                    emit(f"[{index}/{len(files)}] 已建文档并加入解析队列：{relative}")
                     if len(pending) >= effective_max_in_flight:
                         finish_next()
             except Exception as error:  # Preserve progress for this item and continue the directory.
@@ -971,7 +1022,7 @@ def import_directory(args: argparse.Namespace) -> int:
                     for field in DOCUMENT_STATE_FIELDS:
                         record.pop(field, None)
                 append_manifest(manifest, record)
-                print(f"[{index}/{len(files)}] 失败：{relative} — {error}", file=sys.stderr)
+                emit(f"[{index}/{len(files)}] 失败：{relative} — {error}", file=sys.stderr)
 
         while pending:
             finish_next()
@@ -992,8 +1043,8 @@ def import_directory(args: argparse.Namespace) -> int:
         api.json("POST", "/api/v1/auth/logout", {})
 
     summary = summarize(finished_records)
-    print("分阶段结果：" + json.dumps(summary, ensure_ascii=False))
-    print(f"正文已发布/已关联 {completed}，正文失败或待人工处理 {failed}。补全与向量状态请查看明细：{manifest}")
+    emit("分阶段结果：" + json.dumps(summary, ensure_ascii=False))
+    emit(f"正文已发布/已关联 {completed}，正文失败或待人工处理 {failed}。补全与向量状态请查看明细：{manifest}")
     return 1 if failed else 0
 
 
@@ -1172,7 +1223,7 @@ def rebuild_document(api, document, args, previous, context, manifest):
                                 else "SUBMISSION_UNKNOWN")
         record["error"] = str(error)
         save(manifest, record)
-        print(f"未完成：{document.get('title') or document_id} — {error}")
+        emit(f"未完成：{document.get('title') or document_id} — {error}")
         return record["status"] if record["status"] in {"FAILED", "SUBMISSION_UNKNOWN"} else "WAITING"
 
 
@@ -1199,7 +1250,7 @@ def rebuild_vectors(args):
             api.login(username, password)
             try:
                 documents = inventory(api, category_id=args.category_id, scope=args.scope, page_size=args.page_size)
-                print(f"完整清点 {len(documents)} 份资料；目标 {args.model} / {args.dimension} 维")
+                emit(f"完整清点 {len(documents)} 份资料；目标 {args.model} / {args.dimension} 维")
                 def rebuild_one(client, document):
                     if not document.get("currentPublicationId") or document.get("aiStatus") != "APPROVED":
                         return "SKIPPED"
@@ -1209,29 +1260,30 @@ def rebuild_vectors(args):
                         raise
                     except ImportErrorWithMessage as error:
                         require_session(error)
-                        print(f"状态检查失败：{document['id']} — {error}")
+                        emit(f"状态检查失败：{document['id']} — {error}")
                         return "CHECK_FAILED"
 
                 concurrency = min(args.max_in_flight, 16)
-                print(f"最多同时跟踪 {concurrency} 份资料；共享一次登录，保留原断点清单")
+                emit(f"最多同时跟踪 {concurrency} 份资料；共享一次登录，保留原断点清单")
                 for index, (document, outcome) in enumerate(parallel_items(api, documents, concurrency, rebuild_one), 1):
                     counts[outcome] = counts.get(outcome, 0) + 1
-                    print(f"[{index}/{len(documents)}] {outcome}：{document.get('title') or document['id']}")
+                    emit(f"[{index}/{len(documents)}] {outcome}：{document.get('title') or document['id']}")
             finally:
                 try:
                     api.json("POST", "/api/v1/auth/logout", {})
                 except ImportErrorWithMessage:
                     pass
-        print(json.dumps(counts, ensure_ascii=False))
+        emit(json.dumps(counts, ensure_ascii=False))
         return 1 if any(counts.get(key) for key in ("FAILED", "WAITING", "SUBMISSION_UNKNOWN", "CHECK_FAILED")) else 0
     except (ImportErrorWithMessage, OSError, ValueError) as error:
-        print(f"错误：{error}")
+        emit(f"错误：{error}")
         return 2
 
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="把服务器文件夹中的资料导入正常知识库文档列表")
+    parser.add_argument("--verbose", action="store_true", help="终端显示完整路径、URL 和错误；默认显示精简进度")
     parser.add_argument("source_dir", nargs="?", help="服务器上的资料文件夹")
     parser.add_argument("--base-url", default=os.environ.get("JSD_AIRD_URL", "http://127.0.0.1:8080"),
                         help="系统 API 地址，默认读取 JSD_AIRD_URL")
@@ -1267,6 +1319,8 @@ def main() -> int:
     parser.add_argument("--request-key", help="已有资料补全任务的幂等请求标识，重跑可复用")
     parser.add_argument("--metadata-wait-seconds", type=int, default=0, help="等候异步补全的秒数，默认提交后记录状态即退出；断点续跑可重新检查")
     args = parser.parse_args()
+    global OUTPUT
+    OUTPUT = ConsoleOutput(args.verbose)
     try:
         if args.parse_timeout_minutes < 1 or args.publish_timeout_minutes < 1 or not 1 <= args.max_in_flight <= 16 or args.queue_wait_timeout_minutes < 1:
             raise ValueError("超时必须为正整数，并行文件数须为 1–16")
@@ -1285,8 +1339,10 @@ def main() -> int:
             args.scope = "INTERNAL"
         return import_directory(args)
     except (ImportErrorWithMessage, OSError, ValueError) as error:
-        print(f"错误：{error}", file=sys.stderr)
+        emit(f"错误：{error}", file=sys.stderr)
         return 2
+    finally:
+        OUTPUT = None
 
 
 if __name__ == "__main__":

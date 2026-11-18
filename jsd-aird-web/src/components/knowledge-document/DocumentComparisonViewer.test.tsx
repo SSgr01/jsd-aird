@@ -42,6 +42,15 @@ describe('DocumentComparisonViewer', () => {
     expect(screen.getByText('完整确认内容').closest('section')).toHaveAttribute('hidden');
   });
 
+  it('starts with the original on narrow screens when the result is unavailable, and allows switching', () => {
+    observedWidth = 390;
+    render(<DocumentComparisonViewer preferOriginal original={<div>原文件证据</div>} result={<div>等待处理</div>} />);
+    expect(screen.getByText('原文件证据')).toBeVisible();
+    expect(screen.getByText('等待处理')).not.toBeVisible();
+    fireEvent.click(screen.getByRole('radio', { name: /解析结果/ }));
+    expect(screen.getByText('等待处理')).toBeVisible();
+  });
+
   it('keeps both document instances and edits when resizing across the single-pane breakpoint', () => {
     render(<DocumentComparisonViewer original={<textarea aria-label="原文" defaultValue="原始记录" />} result={<textarea aria-label="校对内容" defaultValue="初始草稿" />} />);
     const source = screen.getByRole('textbox', { name: '原文' });

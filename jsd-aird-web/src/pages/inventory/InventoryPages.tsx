@@ -1,3 +1,4 @@
+import { RowActions } from '@/components/list-controls/RowActions';
 import { StatusTag } from '@/components/status/StatusTag';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { ArrowLeftOutlined, CheckOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
@@ -119,7 +120,7 @@ function SummaryCards({
   };
 }) {
   return (
-    <Row gutter={[12, 12]} className="inventory-summary">
+    <Row gutter={[12, 12]} className="inventory-summary list-summary-strip">
       <Col xs={12} md={6}>
         <Card>
           <Statistic title="库存总量" value={summary?.totalKg || 0} suffix="KG" />
@@ -174,6 +175,13 @@ export function InventoryQueryPage() {
   }, [load]);
   const columns: ColumnsType<InventoryBalance> = [
     {
+      title: '产品名称',
+      dataIndex: 'productName',
+      width: 240,
+      className: 'inventory-product-column',
+      render: (v: string) => <span className="inventory-cell-wrap">{v || '—'}</span>,
+    },
+    {
       title: '更新日期',
       dataIndex: 'updatedAt',
       render: (v) => dayjs(v).format('YYYY-MM-DD HH:mm'),
@@ -185,13 +193,6 @@ export function InventoryQueryPage() {
     },
     { title: '类别', dataIndex: 'category' },
     { title: '产品编码', dataIndex: 'productCode' },
-    {
-      title: '产品名称',
-      dataIndex: 'productName',
-      width: 240,
-      className: 'inventory-product-column',
-      render: (v: string) => <span className="inventory-cell-wrap">{v || '—'}</span>,
-    },
     {
       title: '规格（KG/桶）',
       dataIndex: 'packageKg',
@@ -222,14 +223,14 @@ export function InventoryQueryPage() {
       ),
     },
     {
-      title: '操作',
+      title: '操作', fixed: 'right' as const,
       width: 100,
       render: (_, r) => (
         <Button type="link" onClick={() => setSelected(r)}>
           查看
         </Button>
       ),
-    },
+    }
   ];
   return (
     <InventoryShell title="库存查询">
@@ -535,13 +536,12 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
       render: (v) => <span className="inventory-cell-wrap">{v || '—'}</span>,
     },
     {
-      title: '操作',
-      width: 250,
+      title: '操作', fixed: 'right' as const,
+      width: 120,
       render: (_, r) => (
-        <Space className="management-table-actions">
-          <Button type="link" onClick={() => setDetail(r)}>
+        <RowActions primary={<><Button type="link" onClick={() => setDetail(r)}>
             查看
-          </Button>
+          </Button></>}>
           {canUpdate && <Button
             type="link"
             disabled={readOnly || r.reversed || !!r.reversalOf}
@@ -576,7 +576,7 @@ export function InventoryLedgerPage({ scope }: { scope: InventoryScope }) {
               </Button>
             </Popconfirm>
           )}
-        </Space>
+        </RowActions>
       ),
     },
   ];
@@ -961,9 +961,8 @@ function ShipmentHeaders() {
       { title: '明细条数', dataIndex: 'detailCount', width: 85 },
       { title: '总数量（KG）', dataIndex: 'totalQuantityKg', width: 120 },
       { title: '备注', dataIndex: 'note', width: 200, ellipsis: true },
-      { title: '操作', width: 200, render: (_: unknown, row: ShipmentHeader) => <Space>
-        <Button type="link"
-          onClick={() => navigate(`/inventory/shipment-details?shipmentNo=${encodeURIComponent(row.shipmentNo)}`)}>查看</Button>
+      { title: '操作', fixed: 'right' as const, width: 120, render: (_: unknown, row: ShipmentHeader) => <RowActions primary={<><Button type="link"
+          onClick={() => navigate(`/inventory/shipment-details?shipmentNo=${encodeURIComponent(row.shipmentNo)}`)}>查看</Button></>}>
         {canUpdate && !inventoryIsReadOnly() && <Button type="link"
           onClick={() => { setEditingHeader(row); form.setFieldsValue({ shipmentNo: row.shipmentNo, businessDate: dayjs(row.businessDate), note: row.note ?? '' }); setOpen(true); }}>重命名</Button>}
         {canDelete && !inventoryIsReadOnly() && <Popconfirm title="确认删除出货单"
@@ -974,7 +973,7 @@ function ShipmentHeaders() {
             title={row.completedCount > 0 ? '存在已完成明细的出货单不可删除' : undefined}
             disabled={row.completedCount > 0}>删除</Button>
         </Popconfirm>}
-      </Space> },
+      </RowActions> },
     ]} pagination={{ current: page, pageSize: size, total: data?.total, showSizeChanger: true,
       onChange: (nextPage, nextSize) => { setPage(nextPage); setSize(nextSize); } }} />
     <FormModal form={form} title={editingHeader ? '编辑出货单' : '新增出货单'} open={open} confirmLoading={saving} onCancel={() => { setOpen(false); setEditingHeader(undefined); form.resetFields(); }}
@@ -1076,7 +1075,7 @@ function ShipmentSheet({ date, rows, total, page, pages, readOnly, canAdd, addDi
           <col className="shipment-sheet-operation" /></colgroup>
         <thead>
           <tr className="shipment-sheet-title"><th colSpan={10}>出货记录表</th></tr>
-          <tr className="shipment-sheet-date"><th /><th>日期</th><th>{date ?? ''}</th><th colSpan={7} /></tr>
+          <tr className="shipment-sheet-date"><th /><th>日期</th><th>{date ?? ''}</th><th className="table-action-column" colSpan={7} /></tr>
           <tr><th>
             <Checkbox aria-label="选择本页未完成明细" disabled={readOnly || pendingIds.length === 0}
               checked={pendingIds.length > 0 && selectedOnPage.length === pendingIds.length}
@@ -1085,7 +1084,7 @@ function ShipmentSheet({ date, rows, total, page, pages, readOnly, canAdd, addDi
                 ? [...new Set([...selectedIds, ...pendingIds])]
                 : selectedIds.filter((id) => !pendingIds.includes(id)))} />
           </th><th>客户名</th><th>品名</th><th>批次号</th><th>规格（KG/桶）</th><th>数量（桶）</th>
-            <th>总数量（KG）</th><th>快递公司</th><th>备注</th><th>操作</th></tr>
+            <th>总数量（KG）</th><th>快递公司</th><th>备注</th><th className="table-action-column">操作</th></tr>
         </thead>
         <tbody>
           {rows.map((row) => (
@@ -1106,14 +1105,14 @@ function ShipmentSheet({ date, rows, total, page, pages, readOnly, canAdd, addDi
               <td>{row.totalQuantityKg ?? row.quantityKg}</td>
               <td>{row.courierCompany || ''}</td>
               <td>{row.note || ''}</td>
-              <td>{!readOnly && <Tooltip title="编辑明细"><Button type="text" size="small" icon={<EditOutlined />}
+              <td className="table-action-column">{!readOnly && <Tooltip title="编辑明细"><Button type="text" size="small" icon={<EditOutlined />}
                 aria-label={`编辑 ${row.productName}`}
                 disabled={row.status !== 'PENDING' || !!row.transactionId}
                 onClick={() => onEdit(row)} /></Tooltip>}</td>
             </tr>
           ))}
           {Array.from({ length: Math.max(0, 12 - rows.length) }, (_, index) => (
-            <tr key={`empty-${index}`} className="shipment-sheet-empty"><td /><td /><td /><td /><td /><td /><td /><td /><td /><td /></tr>
+            <tr key={`empty-${index}`} className="shipment-sheet-empty"><td /><td /><td /><td /><td /><td /><td /><td /><td /><td className="table-action-column" /></tr>
           ))}
         </tbody>
       </table>
@@ -1587,13 +1586,12 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
             },
             { title: '客户名称', dataIndex: 'customerName' },
             {
-              title: '操作',
-              width: 180,
+              title: '操作', fixed: 'right' as const,
+              width: 120,
               render: (_: unknown, record: SampleDispatch | Shipment) => (
-                <Space className="management-table-actions">
-                  <Button type="link" onClick={() => openEdit(record, true)}>
+                <RowActions primary={<><Button type="link" onClick={() => openEdit(record, true)}>
                     查看
-                  </Button>
+                  </Button></>}>
                   {canEdit && <Button type="link" onClick={() => openEdit(record)}>
                     编辑
                   </Button>}
@@ -1607,7 +1605,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
                       删除
                     </Button>
                   </Popconfirm>}
-                </Space>
+                </RowActions>
               ),
             },
           ]
@@ -1650,7 +1648,7 @@ function BusinessRecords({ type, shipmentNo }: { type: 'sample' | 'shipment'; sh
                 value ? <span className="inventory-cell-wrap">{value}</span> : '—',
             },
             {
-              title: '操作',
+              title: '操作', fixed: 'right' as const,
               width: 100,
               render: (_: unknown, record: SampleDispatch | Shipment) => (
                 <Space className="management-table-actions">

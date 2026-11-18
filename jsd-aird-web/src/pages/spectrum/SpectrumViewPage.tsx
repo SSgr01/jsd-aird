@@ -1,3 +1,4 @@
+import { RowActions } from '@/components/list-controls/RowActions';
 import { DesktopListFilters } from '@/components/list-controls/DesktopListFilters';
 import { ListEmptyState } from '@/components/list-controls/ListEmptyState';
 import { FormModal } from '@/components/form-dialog/FormModal';
@@ -168,13 +169,13 @@ export function SpectrumViewPage() {
       <div><Typography.Title level={2}>图谱查看</Typography.Title><Typography.Text type="secondary">按图谱类型查看和筛选数据。</Typography.Text></div>
       {permissions.includes('spectrum.upload.create') && <Button type="primary" icon={<UploadOutlined />} onClick={() => navigate('/spectrum/upload')}>上传图谱</Button>}
     </div>
-    <CategoryCardGrid categories={cards} activeId={categoryId}
+    <CategoryCardGrid variant="compact" categories={cards} activeId={categoryId}
       onSelect={(id) => { setCategoryId(id); setPage((value) => ({ ...value, current: 1 })); }}
       onCreate={canCategory('create') ? () => setEditor({ mode: 'NEW' }) : undefined}
       onRename={canCategory('update') ? (item) => setEditor({ mode: 'EDIT', item: categories.find((candidate) => candidate.id === item.id) }) : undefined}
       onDelete={canCategory('delete') ? (item) => { const category = categories.find((candidate) => candidate.id === item.id); if (category?.allowedActions?.includes('DELETE')) { setReplacementCategoryId(undefined); setDeleteItem(category); } } : undefined} />
     <CatalogListPanel title="图谱列表" count={page.total}
-      filters={<DesktopListFilters labels={["图谱状态"]} advancedAfter={2}><Space wrap><Input allowClear prefix={<SearchOutlined />} placeholder="搜索图谱名称、样品或批号" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={[{ value: 'READY', label: '可分析' }, { value: 'DELETED', label: '已删除' }]} /><Button icon={<RedoOutlined />} onClick={resetFilters}>重置</Button>{permissions.includes('ai.use') && <Button icon={<MessageOutlined />} disabled={!selectedChartIds.length || selectedChartIds.length > 12} onClick={() => { window.location.assign(`/agent/?spectrum=${encodeURIComponent(selectedChartIds.join(','))}`); }}>分析所选 ({selectedChartIds.length})</Button>}{can('export') && <Button icon={<DownloadOutlined />} disabled={!selectedChartIds.length} onClick={() => void exportCharts(selectedChartIds)}>导出所选 ({selectedChartIds.length})</Button>}</Space></DesktopListFilters>}
+      filters={<DesktopListFilters responsive labels={["图谱状态"]} advancedAfter={2}><Space wrap><Input allowClear prefix={<SearchOutlined />} placeholder="搜索图谱名称、样品或批号" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={[{ value: 'READY', label: '可分析' }, { value: 'DELETED', label: '已删除' }]} /><Button icon={<RedoOutlined />} onClick={resetFilters}>重置</Button>{permissions.includes('ai.use') && <Button icon={<MessageOutlined />} disabled={!selectedChartIds.length || selectedChartIds.length > 12} onClick={() => { window.location.assign(`/agent/?spectrum=${encodeURIComponent(selectedChartIds.join(','))}`); }}>分析所选 ({selectedChartIds.length})</Button>}{can('export') && <Button icon={<DownloadOutlined />} disabled={!selectedChartIds.length} onClick={() => void exportCharts(selectedChartIds)}>导出所选 ({selectedChartIds.length})</Button>}</Space></DesktopListFilters>}
       loading={loading}>
       <Table<SpectrumChart> className="catalog-spectrum-table" rowKey="id" dataSource={items} rowSelection={{ selectedRowKeys: selectedChartIds, onChange: (keys) => setSelectedChartIds(keys.map(String)) }} scroll={{ x: 1580 }} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <ListEmptyState filtered={Boolean(keyword || status || (categoryId && categoryId !== 'ALL'))} onReset={resetFilters} description={keyword || status ? '没有符合筛选条件的图谱' : '当前分类暂无图谱'} /> }} columns={[
         { title: '图谱', dataIndex: 'title', width: 280, ellipsis: true, render: (value: string, record) => <Space><LineChartOutlined /><span><Typography.Text strong ellipsis={{ tooltip: value }}>{value}</Typography.Text><br /><Typography.Text type="secondary">{record.originalName}</Typography.Text></span></Space> },
@@ -183,15 +184,14 @@ export function SpectrumViewPage() {
         { title: '文件', width: 250, render: (_: unknown, record) => `${record.contentType || '图谱文件'} · ${formatSize(record.size)} · ${record.pageCount} 页` },
         { title: '状态', dataIndex: 'status', width: 110, render: (value: string) => <Tag color={value === 'READY' ? 'success' : 'default'}>{value === 'READY' ? '可分析' : value}</Tag> },
         { title: '最近更新', dataIndex: 'updatedAt', width: 180, render: (value: string) => new Date(value).toLocaleString('zh-CN') },
-        { title: '操作', width: 640, render: (_: unknown, record) => <Space wrap>
-          <Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(descriptor(record))}>预览</Button>
+        { title: '操作', fixed: 'right' as const, width: 120, render: (_: unknown, record) => <RowActions primary={<><Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(descriptor(record))}>预览</Button></>}>
           {permissions.includes('ai.use') && <Button type="link" icon={<MessageOutlined />} disabled={record.status !== 'READY'} onClick={() => { window.location.assign(`/agent/?spectrum=${record.id}`); }}>图谱分析助理</Button>}
           {can('download') && <Button type="link" onClick={() => void downloadPreviewFile(descriptor(record))}>下载源文件</Button>}
           {can('update') && <Dropdown trigger={['click']} menu={{ items: categories.filter((category) => category.id !== record.categoryId).map((category) => ({ key: category.id, label: category.name, icon: <FolderOpenOutlined />, onClick: () => void moveChart(record, category.id) })) }}><Button type="link">移动分类</Button></Dropdown>}
           {can('update') && <Button type="link" onClick={() => setEditingItem(record)}>编辑</Button>}
           {(permissions.includes('project.assign') || can('update')) && <Button type="link" onClick={() => openProjectEditor(record)}>加入参考资料</Button>}
           {canDeleteChart && record.status !== 'DELETED' ? <Button type="link" danger icon={<DeleteOutlined />} onClick={() => removeChart(record)}>删除</Button> : null}
-        </Space> },
+        </RowActions> },
       ]} />
     </CatalogListPanel>
     <CategoryEditorModal open={Boolean(editor)} title={editor?.mode === 'NEW' ? '新增图谱分类' : '编辑图谱分类'} initialValue={editor?.item ? { name: editor.item.name, description: editor.item.description } : { name: '' }} confirmLoading={saving} onCancel={() => setEditor(undefined)} onSubmit={(value) => void saveCategory(value)} />

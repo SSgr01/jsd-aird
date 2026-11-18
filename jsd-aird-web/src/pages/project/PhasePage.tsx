@@ -88,7 +88,7 @@ export function PhasePage() {
       return <Progress percent={percent} size="small" />;
     } },
     { title: '状态', dataIndex: 'status', width: 110, render: (value: StageStatus) => <StatusTag status={value} label={formatStageStatus(value)} /> },
-    { title: '操作', key: 'actions', width: 120, render: (_, row) => (
+    { title: '操作', fixed: 'right' as const, key: 'actions', width: 120, render: (_, row) => (
       <Space className="management-table-actions" size={0}>
         <Button type="link" onClick={() => navigate(`/projects/${row.projectId}?section=stages&stageId=${row.id}`)}>查看</Button>
         <Can permission="project.stage.delete"><Popconfirm

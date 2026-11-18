@@ -11,6 +11,8 @@ const { api, runtime } = vi.hoisted(() => ({
   runtime: { revision: 0, snapshot: { body: { dataStream: 'before\r\n' }, snapshotFormatVersion: 5 }, dirty: () => {}, reads: vi.fn(), mounts: 0 },
 }));
 vi.mock('@/services/templates/template-api', () => ({ templateApi: api }));
+// Saving exercises an editor with update permission; anonymous users open in preview.
+vi.mock('@/components/auth/usePermission', () => ({ usePermission: (permission: string) => permission === 'template.view.update' }));
 vi.mock('@/features/template-workspace/preload-editor', () => ({ preloadWorkspaceEditor: vi.fn() }));
 vi.mock('@/features/template-workspace/editor-runtime', async () => {
   const React = await import('react');

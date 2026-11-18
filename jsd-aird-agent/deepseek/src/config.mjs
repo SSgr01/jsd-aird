@@ -60,10 +60,9 @@ export function standardPlugins(config) {
   const excluded = new Set(['delegation', 'tool-plugin-manager', 'tool-plugin-market']);
   return blueprint[0].insert[0].config.plugins.filter(row => !excluded.has(row.id)).map(row => {
     if (row.id === 'persona') return { ...row, config: { prefix: '你是由 {{model}} 驱动的企业研发助手。' } };
-    // Use native request-zone selection and durable clock messages. Refresh on
-    // every prepared request so short followups cannot retain yesterday's clock.
+    // Keep native clock refresh scheduling (10 minutes) and request-zone selection.
     if (row.id === 'time-context') return { ...row, config: {
-      ...row.config, timeZone: 'Asia/Shanghai', refreshIntervalMs: 0,
+      ...row.config, timeZone: 'Asia/Shanghai', refreshIntervalMs: 600_000,
     } };
     // Native instruction discovery must stop at the tenant's execution root.
     if (row.id === 'agent-instructions') return { ...row, name: pathToFileURL(resolve(config.plugin, 'src/instruction-runtime.mjs')).href, config: {

@@ -1,3 +1,4 @@
+import { RowActions } from '@/components/list-controls/RowActions';
 import { DesktopListFilters } from '@/components/list-controls/DesktopListFilters';
 import { ListEmptyState } from '@/components/list-controls/ListEmptyState';
 import { StatusTag } from '@/components/status/StatusTag';
@@ -683,18 +684,17 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         ),
       },
       {
-        title: '操作',
+        title: '操作', fixed: 'right' as const,
         key: 'actions',
-        width: report ? 360 : 280,
+        width: 120,
         render: (_: unknown, r: ResearchTestSummary) => (
-          <Space className="management-table-actions" size={0}>
-            <Button
+          <RowActions primary={<><Button
               type="link"
               size="small"
               onClick={() => nav(`/research-test/${report ? 'reports' : 'standards'}/${r.id}`)}
             >
               查看
-            </Button>
+            </Button></>}>
             {can('update') && <Button type="link" size="small" onClick={() => void openRename(r)}>
               重命名
             </Button>}
@@ -732,7 +732,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
                 删除
               </Button>
             </Popconfirm>}
-          </Space>
+          </RowActions>
         ),
       },
     ],
@@ -820,7 +820,7 @@ export function ResearchTestListPage({ type }: { type: ResearchTestType }) {
         </div>
       </header>
       <Card className="research-test-filter">
-        <DesktopListFilters labels={[report ? '所属项目' : '标准类别', '记录状态', '文件格式', '记录日期']} advancedAfter={2}
+        <DesktopListFilters responsive labels={[report ? '所属项目' : '标准类别', '记录状态', '文件格式', '记录日期']} advancedAfter={2}
           activeCount={[keyword, projectId, category, status, formatFilter, date].filter(Boolean).length}
           summary={[keyword && `搜索：${keyword}`, projectId && '已选择项目', category && `类别：${category}`, status && `状态：${statusText[status] || status}`, formatFilter && `格式：${formatFilter}`, date && `日期：${date.format('YYYY/MM/DD')}`].filter(Boolean).join('；')}><Space wrap>
           <Input.Search

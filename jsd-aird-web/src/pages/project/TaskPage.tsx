@@ -255,7 +255,7 @@ export default function TaskPage() {
       align: 'right' as const,
     },
     {
-      title: '操作',
+      title: '操作', fixed: 'right' as const,
       key: 'action',
       width: 120,
       render: (_: unknown, record: ProjectTask) => (

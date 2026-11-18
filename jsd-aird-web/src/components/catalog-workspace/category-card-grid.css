@@ -1,1 +1,91 @@
-/* Category cards use the shared full-size layout in global.css. */
+/* Compact category navigation keeps the file list in reach. */
+.catalog-category-grid[data-variant="compact"] {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-block: 2px 8px;
+  margin-bottom: 16px;
+  scrollbar-width: thin;
+}
+.catalog-category-grid[data-variant="compact"] .catalog-category-card {
+  flex: 0 0 216px;
+  min-height: 72px;
+  border-radius: 6px;
+  box-shadow: none;
+}
+.catalog-category-grid[data-variant="compact"] .ant-card-body {
+  padding: 12px;
+  min-height: 72px;
+}
+.catalog-category-grid[data-variant="compact"] .catalog-category-select {
+  min-height: 46px;
+  gap: 10px;
+  padding: 0;
+}
+.catalog-category-grid[data-variant="compact"] .catalog-category-icon {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  background: transparent;
+  font-size: 18px;
+}
+.catalog-category-grid[data-variant="compact"] .catalog-category-copy { min-width: 0; }
+.catalog-category-grid[data-variant="compact"] .ant-typography h4,
+.catalog-category-grid[data-variant="compact"] h4.ant-typography {
+  margin: 0 24px 2px 0;
+  font-size: 14px;
+  line-height: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.catalog-category-grid[data-variant="compact"] .catalog-category-description { display: none; }
+.catalog-category-grid[data-variant="compact"] .catalog-category-active-mark {
+  top: 8px;
+  right: 8px;
+  width: 16px;
+  height: 16px;
+  font-size: 10px;
+  box-shadow: none;
+}
+.catalog-category-grid[data-variant="compact"] .catalog-category-add { flex-basis: 128px; }
+.catalog-category-grid[data-variant="compact"] .catalog-category-add .ant-card-body {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.catalog-category-grid[data-variant="compact"] .catalog-category-add h4 { margin: 0; }
+.catalog-category-grid[data-variant="compact"] .catalog-category-add .ant-typography-secondary { display: none; }
+.catalog-category-grid[data-variant="compact"] .catalog-category-add-icon {
+  width: auto;
+  height: auto;
+  margin: 0;
+  background: transparent;
+  font-size: 16px;
+}
+@media (max-width: 767px) {
+  .catalog-category-grid[data-variant="compact"] .catalog-category-card { flex-basis: 190px; }
+  .catalog-category-grid[data-variant="compact"] .catalog-category-add { flex-basis: 128px; }
+  .templates-catalog-page[data-has-selection="false"] .catalog-list-actions,
+  .knowledge-view-page[data-has-selection="false"] .catalog-list-actions { display: none; }
+  .templates-catalog-page .page-heading > .ant-btn,
+  .knowledge-view-page .page-heading > .ant-btn { margin-top: 0; }
+}
+
+.eln-prototype-page .catalog-category-grid[data-variant="compact"] .catalog-category-card .ant-card-body {
+  min-height: 72px;
+  padding: 12px;
+}
+
+/* Keep compact navigation compact inside the management page shell too. */
+.app-shell .pm-unified-list-page .catalog-category-grid[data-variant="compact"] .catalog-category-card {
+  min-height: 72px;
+  border-radius: 6px;
+  box-shadow: none;
+}
+.app-shell .pm-unified-list-page .catalog-category-grid[data-variant="compact"] .catalog-category-card .ant-card-body {
+  min-height: 72px;
+  padding: 12px;
+}

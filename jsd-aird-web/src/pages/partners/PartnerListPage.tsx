@@ -329,7 +329,7 @@ export function PartnerListPage() {
         </div>
       </div>
 
-      <DesktopListFilters labels={['所属行业', '客户等级', '合作状态', '负责人']} advancedAfter={2}><div className="cm-filter cm-filter-row">
+      <DesktopListFilters responsive labels={['所属行业', '客户等级', '合作状态', '负责人']} advancedAfter={2}><div className="cm-filter cm-filter-row">
         <Input
           prefix={<SearchOutlined />}
           placeholder="搜索公司名称、简称、负责人"
@@ -401,7 +401,7 @@ export function PartnerListPage() {
                       onChange={(e) => toggleAllVisible(e.target.checked)}
                     />
                   </th>
-                  <th>客户编号</th>
+                  <th className="mobile-record-code-column">客户编号</th>
                   <th>客户名称</th>
                   <th>所属行业</th>
                   <th>客户等级</th>
@@ -410,7 +410,7 @@ export function PartnerListPage() {
                   <th>客户需求</th>
                   <th>关联项目</th>
                   <th>最近跟进</th>
-                  <th>操作</th>
+                  <th className="table-action-column">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -427,10 +427,10 @@ export function PartnerListPage() {
                           disabled={x.status === 'INACTIVE'}
                         />
                       </td>
-                      <td>{x.partnerCode}</td>
+                      <td className="mobile-record-code-column">{x.partnerCode}</td>
                       <td>
                         {can('view') ? <Link className="cm-customer-link" to={`/partners/${x.id}`}>{x.name}</Link> : x.name}
-                        <div className="cm-muted">{x.address || '—'}</div>
+                        <small className="mobile-record-code">{x.partnerCode}</small><div className="cm-muted">{x.address || '—'}</div>
                       </td>
                       <td>{x.industry || '—'}</td>
                       <td>{x.customerLevel ? <Tag color={levelColorMap[x.customerLevel] ?? 'default'}>{x.customerLevel}</Tag> : '—'}</td>
@@ -441,7 +441,7 @@ export function PartnerListPage() {
                       <td>{x.requirementCount ?? 0} 条</td>
                       <td>{x.projectCount ?? 0} 个</td>
                       <td>{x.latestFollowUpAt ? dayjs(x.latestFollowUpAt).format('YYYY-MM-DD HH:mm') : '—'}</td>
-                      <td>
+                      <td className="table-action-column">
                         <div className="cm-row-actions management-table-actions">
                           {can('view') && <Link to={`/partners/${x.id}`}>查看</Link>}
                           {can('delete') && <Popconfirm

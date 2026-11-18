@@ -1,5 +1,10 @@
 import {mergeBusinessContext} from './business-context.mjs';
 
+/** Clock/memory/context messages continue the admitted task; they are not new input. */
+export function hasBindingInput(messages) {
+  return messages.some(message => ['user', 'schedule'].includes(message.source?.kind));
+}
+
 export function bindingCursor(previous,turn,hasInput=false) {
   return {binding_protocol:2,...(!hasInput && previous?.dsh_turn===turn ? {
     binding_etags:previous.binding_etags || {},known_citation_evidence_ids:previous.citation_evidence_ids || [],

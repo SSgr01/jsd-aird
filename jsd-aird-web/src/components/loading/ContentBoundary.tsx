@@ -2,6 +2,7 @@ import { Component, Suspense, useEffect, type PropsWithChildren, type ReactNode 
 import { useLocation } from 'react-router-dom';
 import { ContentLoading } from './ContentLoading';
 import { StartupSkeleton } from './StartupSkeleton';
+import { InlineNotice } from '@/components/inline-notice/InlineNotice';
 import { canRecoverRevision, checkBuildVersion, isChunkError, recoverBuild, useAvailableBuild } from '@/services/release/build-recovery';
 import { resetFailedPages } from '@/routes/route-preload';
 import { resetFailedEditors } from '@/features/template-workspace/editor-loader';
@@ -17,13 +18,14 @@ class PageErrorBoundary extends Component<PropsWithChildren<{ resetKey: string }
   render(): ReactNode {
     if (this.state.error) {
       const chunkError = isChunkError(this.state.error);
-      return <div className="content-error" role="alert">
-        <h3>当前页面加载失败</h3>
-        <p>{chunkError ? '页面资源加载失败，请重新加载。' : this.state.error.message || '页面运行时发生错误。'}</p>
-        <button type="button" onClick={() => {
+      return <div className="content-error">
+        <InlineNotice tone="error" details={this.state.error.message} detailsLabel="错误详情" action={<button type="button" onClick={() => {
           if (chunkError) { window.location.reload(); return; }
           resetFailedPages(); resetFailedEditors(); this.setState({ error: undefined });
-        }}>{chunkError ? '重新加载页面' : '重试当前页面'}</button>
+        }}>{chunkError ? '重新加载页面' : '重试当前页面'}</button>}>
+          <strong>当前页面加载失败</strong>
+          <p>{chunkError ? '页面资源加载失败，请重新加载。' : '暂时无法打开，请重试。'}</p>
+        </InlineNotice>
       </div>;
     }
     return this.props.children;

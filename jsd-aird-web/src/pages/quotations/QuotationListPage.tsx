@@ -1,3 +1,4 @@
+import { RowActions } from '@/components/list-controls/RowActions';
 import { DesktopListFilters } from '@/components/list-controls/DesktopListFilters';
 import { ListEmptyState } from '@/components/list-controls/ListEmptyState';
 import {
@@ -178,14 +179,13 @@ export function QuotationListPage() {
       render: (value: string) => (value ? dayjs(value).format('YYYY-MM-DD HH:mm') : '—'),
     },
     {
-      title: '操作',
+      title: '操作', fixed: 'right' as const,
       key: 'action',
-      width: 200,
+      width: 120,
       render: (_, row) => (
-        <Space size={0}>
-          <Button type="link" icon={<EyeOutlined />} onClick={() => void openDetail(row)}>
+        <RowActions primary={<><Button type="link" icon={<EyeOutlined />} onClick={() => void openDetail(row)}>
             查看
-          </Button>
+          </Button></>}>
           <Button
             type="link"
             icon={<DownloadOutlined />}
@@ -208,7 +208,7 @@ export function QuotationListPage() {
               </Button>
             </Popconfirm>
           )}
-        </Space>
+        </RowActions>
       ),
     },
   ];
@@ -237,7 +237,7 @@ export function QuotationListPage() {
       </header>
 
       <Card className="quotation-filter">
-        <DesktopListFilters labels={["客户","报价日期"]} advancedAfter={2}><Space wrap>
+        <DesktopListFilters responsive labels={["客户","报价日期"]} advancedAfter={2}><Space wrap>
           <Input.Search
             allowClear
             placeholder="搜索报价编号/客户/产品"

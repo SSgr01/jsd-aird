@@ -1,0 +1,72 @@
+.inline-notice {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 8px 0;
+  color: var(--app-text, #171717);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.inline-notice-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.inline-notice-icon {
+  color: var(--app-text-secondary, #525252);
+  flex: 0 0 16px;
+}
+.inline-notice--warning .inline-notice-icon {
+  color: #92671f;
+}
+.inline-notice--error .inline-notice-icon {
+  color: #b84a55;
+}
+.inline-notice-message {
+  flex: 1;
+  min-width: 160px;
+  overflow-wrap: anywhere;
+}
+.inline-notice-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.inline-notice-details {
+  margin: 4px 0 0 24px;
+  color: var(--app-text-secondary, #525252);
+  font-size: 12px;
+}
+.inline-notice-details summary {
+  width: fit-content;
+  cursor: pointer;
+  padding: 4px 0;
+  outline-offset: 3px;
+}
+.inline-notice-details > div {
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.inline-notice-details p {
+  margin: 0 0 6px;
+}
+@media (max-width: 600px) {
+  .inline-notice-action {
+    margin-left: 24px;
+    width: 100%;
+  }
+  .inline-notice-message {
+    min-width: 0;
+    flex-basis: calc(100% - 24px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .inline-notice .anticon-spin {
+    animation: none;
+  }
+}

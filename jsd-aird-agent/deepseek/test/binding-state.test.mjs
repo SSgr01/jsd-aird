@@ -1,7 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {bindingCursor,mergeBinding} from '../../enterprise-plugin/src/binding-state.mjs';
+import {bindingCursor,mergeBinding,hasBindingInput} from '../../enterprise-plugin/src/binding-state.mjs';
 import {EventProjection,StreamProjection} from '../../enterprise-plugin/src/event-projection.mjs';
+
+test('internal injections preserve binding cursors while human and scheduled inputs refresh them',()=>{
+ const previous={id:'r1',dsh_turn:1,binding_etags:{context:'unchanged'},citation_evidence_ids:['e1']};
+ const injected=['time-context','enterprise-personal-memory','enterprise-citation-correction'].map(kind=>({source:{kind}}));
+ assert.equal(hasBindingInput(injected),false);
+ assert.deepEqual(bindingCursor(previous,1,hasBindingInput(injected)),{
+  binding_protocol:2,binding_etags:previous.binding_etags,known_citation_evidence_ids:['e1'],
+ });
+ for(const kind of ['user','schedule']) {
+  assert.equal(hasBindingInput([...injected,{source:{kind}}]),true);
+  assert.deepEqual(bindingCursor(previous,1,hasBindingInput([{source:{kind}}])),{binding_protocol:2});
+ }
+});
 
 test('binding deltas retain admitted context and links but reset cursors on new input or turn',()=>{
  const first={binding_protocol:2,id:'r1',dsh_turn:1,tools:[{name:'read'}],active_tools:['read'],instructions:'policy',

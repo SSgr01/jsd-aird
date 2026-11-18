@@ -1,4 +1,6 @@
 import { DesktopListFilters } from '@/components/list-controls/DesktopListFilters';
+import { InlineNotice } from '@/components/inline-notice/InlineNotice';
+import { RowActions } from '@/components/list-controls/RowActions';
 import { ListEmptyState } from '@/components/list-controls/ListEmptyState';
 import { StatusTag } from '@/components/status/StatusTag';
 import { FormModal } from '@/components/form-dialog/FormModal';
@@ -6,7 +8,7 @@ import { ListQueryFeedback } from '@/components/loading/ListQueryFeedback';
 import { useListPageBounds } from '@/services/query/use-list-page-bounds';
 import { useBusinessQuery } from '@/services/query/use-business-query';
 import { useListKeyword, useListUrl } from '@/services/query/use-list-url';
-import { DatabaseOutlined, DownloadOutlined, EyeOutlined, LinkOutlined, RedoOutlined, ReloadOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
+import { DatabaseOutlined, DownloadOutlined, EyeOutlined, LinkOutlined, RedoOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
 import { App, Button, Dropdown, Input, Progress, Select, Space, Table, Tag, Typography } from 'antd';
 import { DataPublicationPanel } from '@/features/data-workbench/DataPublicationPanel';
 import { useMemo, useState } from 'react';
@@ -142,15 +144,15 @@ export function DataViewPage() {
       <div><Typography.Title level={2}>数据中心</Typography.Title><Typography.Text type="secondary">查看数据中心导入文件及确认状态。</Typography.Text></div>
       {canUpload && <Button type="primary" icon={<UploadOutlined />} onClick={() => navigate('/data/upload')}>数据上传</Button>}
     </div>
-    <CategoryCardGrid categories={cards} activeId={categoryId}
+    <CategoryCardGrid variant="compact" categories={cards} activeId={categoryId}
       onSelect={(id) => { setCategoryId(id); setPage((value) => ({ ...value, current: 1 })); }}
       onCreate={canCategoryCreate ? () => setEditor({ mode: 'NEW' }) : undefined}
       onRename={canCategoryUpdate ? (item) => setEditor({ mode: 'EDIT', item: categories.find((candidate) => candidate.id === item.id) }) : undefined}
       onDelete={canCategoryDelete ? (item) => { const category = categories.find((candidate) => candidate.id === item.id); if (category?.allowedActions?.includes('DELETE')) setDeleteItem(category); } : undefined} />
-    <div className="catalog-sync-note"><ReloadOutlined /> 处理完成后需确认数据、提交审核，通过后发布。可在“审核与版本记录”查看版本和审核意见。</div>
+    <InlineNotice>处理完成后需确认数据、提交审核，通过后发布。可在“审核与版本记录”查看版本和审核意见。</InlineNotice>
     <CatalogListPanel title="来源文件" count={page.total}
       feedback={listQuery.data !== undefined ? <ListQueryFeedback query={listQuery} /> : undefined}
-      filters={<DesktopListFilters labels={["所属项目","文件状态"]} advancedAfter={2}><Space wrap><Input allowClear prefix={<SearchOutlined />} placeholder="搜索来源文件名" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} /><Select allowClear showSearch optionFilterProp="label" popupMatchSelectWidth={false} classNames={{ popup: { root: 'project-relation-picker-dropdown' } }} placeholder="全部项目" value={projectId} onChange={(value) => { setProjectId(value); setPage((current) => ({ ...current, current: 1 })); }} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={[{ label: '审核发布状态', options: ['DRAFT', 'CONFIRMED', 'PENDING_REVIEW', 'RETURNED', 'APPROVED', 'PUBLISHED', 'DISABLED'].map((value) => ({ value: `PUB_${value}`, label: formalStatusLabels[value]?.[0] || value })) }, { label: '文件处理状态', options: Object.entries(statusLabels).map(([value, item]) => ({ value, label: item[0] })) }]} /><Button icon={<RedoOutlined />} onClick={resetFilters}>重置</Button></Space></DesktopListFilters>}
+      filters={<DesktopListFilters responsive labels={["所属项目","文件状态"]} advancedAfter={2}><Space wrap><Input allowClear prefix={<SearchOutlined />} placeholder="搜索来源文件名" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage((value) => ({ ...value, current: 1 })); }} /><Select allowClear showSearch optionFilterProp="label" popupMatchSelectWidth={false} classNames={{ popup: { root: 'project-relation-picker-dropdown' } }} placeholder="全部项目" value={projectId} onChange={(value) => { setProjectId(value); setPage((current) => ({ ...current, current: 1 })); }} options={projects.map((project) => ({ value: project.id, label: `${project.projectCode} · ${project.name}` }))} /><Select allowClear placeholder="全部状态" value={status} onChange={(value) => { setStatus(value); setPage((value) => ({ ...value, current: 1 })); }} options={[{ label: '审核发布状态', options: ['DRAFT', 'CONFIRMED', 'PENDING_REVIEW', 'RETURNED', 'APPROVED', 'PUBLISHED', 'DISABLED'].map((value) => ({ value: `PUB_${value}`, label: formalStatusLabels[value]?.[0] || value })) }, { label: '文件处理状态', options: Object.entries(statusLabels).map(([value, item]) => ({ value, label: item[0] })) }]} /><Button icon={<RedoOutlined />} onClick={resetFilters}>重置</Button></Space></DesktopListFilters>}
       loading={loading} error={listQuery.isError && !listQuery.data ? (listQuery.error instanceof Error ? listQuery.error.message : '请稍后重试') : undefined} onRetry={() => void load()}>
       <Table className="catalog-data-table" scroll={{ x: 1660 }} rowKey="importJobId" dataSource={items} pagination={{ current: page.current, pageSize: page.pageSize, total: page.total, showSizeChanger: true, onChange: (current, pageSize) => setPage({ current, pageSize, total: page.total }) }} locale={{ emptyText: <ListEmptyState filtered={Boolean(keyword || projectId || status || (categoryId && categoryId !== 'ALL'))} onReset={resetFilters} description={keyword || projectId || status ? '没有符合筛选条件的来源文件' : '当前分类暂无来源文件'} /> }} onRow={(record) => ({ onDoubleClick: () => navigate(sourceRoute(record)) })} columns={[
         { title: '来源文件', dataIndex: 'originalName', width: 280, ellipsis: true, render: (value: string, record: DataSourceFile) => <Space><DatabaseOutlined /><Typography.Text strong ellipsis={{ tooltip: value }}>{value}</Typography.Text><Typography.Text type="secondary">{record.sourceFormat}</Typography.Text></Space> },
@@ -161,25 +163,22 @@ export function DataViewPage() {
         { title: '导入任务', dataIndex: 'status', width: 130, render: (value: string) => <StatusTag status={value} label={statusLabels[value]?.[0]} /> },
         { title: '解析进度', dataIndex: 'progress', width: 170, render: (_: number, record: DataSourceFile) => { const percent = dataParseProgress(record); return <Progress percent={percent} size="small" status={record.status === 'FAILED' ? 'exception' : percent === 100 ? 'success' : 'active'} format={(value) => `${value ?? 0}%`} />; } },
         { title: '最近更新', dataIndex: 'updatedAt', width: 180, render: (value: string) => new Date(value).toLocaleString('zh-CN') },
-        { title: '操作', width: 500, render: (_: unknown, record: DataSourceFile) => {
+        { title: '操作', fixed: 'right' as const, width: 120, render: (_: unknown, record: DataSourceFile) => {
           const historicalFreeform = record.recognitionMode === 'FREEFORM';
-          return <Space wrap>
+          return <RowActions primary={<Button type="link" title={historicalFreeform ? '查看历史结果' : '查看导入'} onClick={() => navigate(sourceRoute(record))}>查看</Button>}>
             <DataPublicationPanel lazy readOnly={historicalFreeform} permissionPrefix="data.view" jobId={record.importJobId}
               onChanged={() => void load()} onEdit={() => navigate(sourceRoute(record))} />
             {record.fileObjectId && <>
               <Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(resolveFile(record))}>预览</Button>
               <Can permission="data.view.download"><Button type="link" icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(resolveFile(record))}>下载</Button></Can>
             </>}
-            <Button type="link" onClick={() => navigate(sourceRoute(record))}>
-              {historicalFreeform ? '查看历史结果' : '查看导入'}
-            </Button>
             {record.experimentId && <Button type="link" onClick={() => navigate(`/experiments/${record.experimentId}`)}>查看实验</Button>}
             {!historicalFreeform && <Can permission="data.view.update"><Dropdown trigger={['click']} menu={{ items: [
               { key: UNCATEGORIZED_CATEGORY_ID, label: '移到未分类', onClick: () => void moveSource(record) },
               ...categories.map((category) => ({ key: category.id, label: category.name, onClick: () => void moveSource(record, category.id) })),
             ] }}><Button type="link">移动分类</Button></Dropdown></Can>}
             {!historicalFreeform && canUpdateSource && <Button type="link" icon={<LinkOutlined />} onClick={() => setRelationEditor({ item: record, targets: (record.relatedProjects || []).map((relation) => ({ projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId })) })}>关联项目</Button>}
-          </Space>;
+          </RowActions>;
         } },
       ]} />
     </CatalogListPanel>

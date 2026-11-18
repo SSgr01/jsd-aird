@@ -131,7 +131,7 @@ export function StandardDictionaryPage() {
             { title: '字段名称', dataIndex: 'displayName' },
             { title: '类型', dataIndex: 'valueType' },
             { title: '状态', dataIndex: 'status', render: (value: string) => <Tag color="gold">{value}</Tag> },
-            ...(canApprove ? [{ title: '操作', render: (_: unknown, row: StandardFieldRequest) => <Button type="link" onClick={() => void approve(row)}>批准生效</Button> }] : []),
+            ...(canApprove ? [{ title: '操作', width: 120, fixed: 'right' as const, render: (_: unknown, row: StandardFieldRequest) => <Button type="link" onClick={() => void approve(row)}>批准生效</Button> }] : []),
           ]}
         />
       </Card>

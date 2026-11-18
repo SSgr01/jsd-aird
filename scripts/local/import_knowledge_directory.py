@@ -596,10 +596,13 @@ def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_s
         processing = api.json("GET", f"{api_path_document(document_id)}/processing")
         parsing_active = processing.get("jobStatus") in {"READY", "RUNNING"} and not processing.get("terminal")
         parse_failed = (processing.get("parseRunStatus") in {"FAILED", "REJECTED"}
-                        or processing.get("documentStatus") in {"FAILED", "REJECTED", "PENDING_PROVIDER"})
+                        or processing.get("documentStatus") in {"FAILED", "REJECTED", "PENDING_PROVIDER"}
+                        or (processing.get("terminal")
+                            and processing.get("parseRunStatus") != "SUCCEEDED"))
         if parse_failed and not parsing_active:
             if not retry_failed:
-                raise ImportErrorWithMessage(processing.get("parseRunError") or "文件解析失败；可使用 --retry-failed 重试")
+                raise ImportErrorWithMessage(processing.get("parseRunError") or processing.get("lastError")
+                                             or "文件解析失败；可使用 --retry-failed 重试")
             failed_review = api.json("GET", f"{api_path_document(document_id)}/versions/{version_id}/review")
             failed_revision = failed_review.get("reviewRevision") or {}
             queue_api_call(api, lambda: api.json(

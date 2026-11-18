@@ -1,3 +1,4 @@
+import { RowActions } from '@/components/list-controls/RowActions';
 import { DesktopListFilters } from '@/components/list-controls/DesktopListFilters';
 import { ListEmptyState } from '@/components/list-controls/ListEmptyState';
 import { StatusTag } from '@/components/status/StatusTag';
@@ -1031,7 +1032,7 @@ export function QualityDataPage() {
           </Typography.Text>
         </div>
         <div className="pm-page-actions">
-          <span className="quality-selected">已选 {selected.size} 条</span>
+          <span className="quality-selected list-bulk-actions" data-has-selection={selected.size > 0}>已选 {selected.size} 条</span>
           {selected.size > 0 && (
             <Button type="link" size="small" onClick={() => setSelected(new Set())}>
               清除已选
@@ -1057,35 +1058,37 @@ export function QualityDataPage() {
             </>
           ) : (
             <>
-              {can('copy') && <Button icon={<CopyOutlined />} disabled={!selected.size} onClick={copySelected}>
-                复制
-              </Button>}
-              {can('update') && <Button icon={<EditOutlined />} onClick={renameSelected}>
-                重命名
-              </Button>}
-              {can('update') && <Button
-                icon={<FolderOutlined />}
-                disabled={!selected.size}
-                onClick={openMove}
-              >
-                移动到
-              </Button>}
-              {can('export') && <Button
-                icon={<DownloadOutlined />}
-                disabled={!selected.size}
-                loading={exporting}
-                onClick={() => void exportSelected()}
-              >
-                导出
-              </Button>}
-              {can('delete') && <Button
-                danger
-                icon={<DeleteOutlined />}
-                disabled={!selected.size}
-                onClick={deleteSelected}
-              >
-                删除
-              </Button>}
+              <div className="list-bulk-actions" data-has-selection={selected.size > 0}>
+                {can('copy') && <Button icon={<CopyOutlined />} disabled={!selected.size} onClick={copySelected}>
+                  复制
+                </Button>}
+                {can('update') && <Button icon={<EditOutlined />} onClick={renameSelected}>
+                  重命名
+                </Button>}
+                {can('update') && <Button
+                  icon={<FolderOutlined />}
+                  disabled={!selected.size}
+                  onClick={openMove}
+                >
+                  移动到
+                </Button>}
+                {can('export') && <Button
+                  icon={<DownloadOutlined />}
+                  disabled={!selected.size}
+                  loading={exporting}
+                  onClick={() => void exportSelected()}
+                >
+                  导出
+                </Button>}
+                {can('delete') && <Button
+                  danger
+                  icon={<DeleteOutlined />}
+                  disabled={!selected.size}
+                  onClick={deleteSelected}
+                >
+                  删除
+                </Button>}
+              </div>
               {permissions.includes('quality.upload.create') && <Button icon={<UploadOutlined />} onClick={() => navigate('/quality/upload')}>
                 品管数据上传
               </Button>}
@@ -1127,7 +1130,7 @@ export function QualityDataPage() {
           </Button>
         ))}
       </div>
-      <CategoryCardGrid
+      <CategoryCardGrid variant="compact"
         categories={categoryCards}
         activeId={categoryId}
         countLabel="条数据"
@@ -1153,7 +1156,7 @@ export function QualityDataPage() {
         } : undefined}
       />
       <Card className="content-card quality-filter-card">
-        <DesktopListFilters labels={['所属项目', '文件格式']} advancedAfter={2}><Space className="quality-filter-space" wrap>
+        <DesktopListFilters responsive labels={['所属项目', '文件格式']} advancedAfter={2}><Space className="quality-filter-space" wrap>
           <Input
             value={keyword}
             prefix={<SearchOutlined />}
@@ -1252,7 +1255,7 @@ export function QualityDataPage() {
         ) : (
           <div className="quality-grid-wrap">
             {visibleRows.length ? (
-              <table className="quality-grid">
+              <table className="quality-grid" data-editing={editing}>
                 <thead>
                   <tr>
                     <th>
@@ -1267,7 +1270,7 @@ export function QualityDataPage() {
                     </th>
                     {typeId !== 'standard' && <th>名称</th>}
                     {listFields.slice(0, typeId === 'standard' ? 2 : 0).map((f) => (
-                      <th key={f.key}>{f.label}</th>
+                      <th key={f.key} className={f.key === idKey ? 'quality-record-code-column' : undefined}>{f.label}</th>
                     ))}
                     <th className="quality-project-column">项目 / 阶段 / 任务</th>
                     {listFields.slice(2, typeId === 'standard' ? 4 : 2).map((f) => (
@@ -1280,7 +1283,7 @@ export function QualityDataPage() {
                         {f.label}
                       </th>
                     ))}
-                    <th>操作</th>
+                    <th className="table-action-column">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1306,7 +1309,7 @@ export function QualityDataPage() {
                         )}
                       </td>}
                       {listFields.slice(0, typeId === 'standard' ? 2 : 0).map((f) => (
-                        <td key={f.key}>
+                        <td key={f.key} className={f.key === idKey ? 'quality-record-code-column' : undefined}>
                           {editing && !['PUBLISHED', 'SUBMITTED', 'APPROVED'].includes(r.workflowStatus || '') ? (
                             <input
                               type="text"
@@ -1315,9 +1318,12 @@ export function QualityDataPage() {
                               onChange={(e) => update(draft.findIndex((item) => item.id === r.id), f.key, e.target.value)}
                             />
                           ) : f.key === 'fileName' && !r.newRow ? (
-                            <Button type="link" className="pm-name-link quality-record-name-link" onClick={() => openRecord(r.id)}>
-                              {textValue(r.data[f.key], r.displayName || r.sourceFileName || '—')}
-                            </Button>
+                            <>
+                              <Button type="link" className="pm-name-link quality-record-name-link" onClick={() => openRecord(r.id)}>
+                                {textValue(r.data[f.key], r.displayName || r.sourceFileName || '—')}
+                              </Button>
+                              <small className="mobile-record-code">{r.businessNo}</small>
+                            </>
                           ) : textValue(r.data[f.key], '—')}
                         </td>
                       ))}
@@ -1392,11 +1398,10 @@ export function QualityDataPage() {
                           )}
                         </td>
                       ))}
-                      <td>
-                        <Space className="management-table-actions" size={0}>
-                          <Button type="link" size="small" onClick={() => openRecord(r.id)}>
+                      <td className="table-action-column">
+                        <RowActions primary={<><Button type="link" size="small" onClick={() => openRecord(r.id)}>
                             查看
-                          </Button>
+                          </Button></>}>
                           {can('update') && r.workflowStatus !== 'PUBLISHED' && <Button
                             type="link"
                             size="small"
@@ -1451,7 +1456,7 @@ export function QualityDataPage() {
                               删除
                             </Button>
                           </Popconfirm>}
-                        </Space>
+                        </RowActions>
                       </td>
                     </tr>
                   ))}

@@ -111,7 +111,7 @@ export function gateway(config) {
             if (branded !== undefined) res.end(branded); else reply.pipe(res);
           } catch {
             reply.destroy();
-            if (!res.headersSent) json(res, 502, {error:'WORKBENCH_RESOURCE_UNAVAILABLE'}); else res.destroy();
+            if (!res.headersSent) requestError(req, res, {status:502,message:'WORKBENCH_RESOURCE_UNAVAILABLE'}, config.origin); else res.destroy();
           }
         })();
         const check = setInterval(async () => {
@@ -119,7 +119,7 @@ export function gateway(config) {
           catch { reply.destroy(); res.destroy(); }
         }, 10000); check.unref(); reply.once('close', () => clearInterval(check));
       });
-      upstream.on('error', () => { if (!res.headersSent) json(res, 503, { error: 'DEEPSEEK_UNAVAILABLE' }); else res.destroy(); });
+      upstream.on('error', () => { requestError(req, res, {status:503,message:'DEEPSEEK_UNAVAILABLE'}, config.origin); });
       req.on('aborted', () => upstream.destroy());
       if (rpcBody !== undefined) upstream.end(rpcBody); else req.pipe(upstream);
     } catch (error) { requestError(req, res, error, config.origin); }

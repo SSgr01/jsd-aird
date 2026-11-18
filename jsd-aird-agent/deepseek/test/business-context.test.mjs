@@ -7,6 +7,15 @@ test('unchanged business state preserves the exact prompt bytes for caching', ()
   assert.equal(mergeBusinessContext(previous, JSON.stringify({task_state:{registered_outputs:[]},evidence:[]})),previous);
 });
 
+test('host object-key reordering does not append another context snapshot', () => {
+  const previous = '{"task_state": {"output": {"id": "r1", "revision": 2}}, "evidence": []}';
+  assert.equal(mergeBusinessContext(previous, JSON.stringify({
+    evidence: [], task_state: {output: {revision: 2, id: 'r1'}},
+  })), previous);
+  assert.notEqual(mergeBusinessContext(previous, JSON.stringify({task_state:{output:{id:'r1',revision:3}}})), previous);
+  assert.notEqual(mergeBusinessContext('{"evidence":["a","b"]}', '{"evidence":["b","a"]}'), '{"evidence":["a","b"]}');
+});
+
 test('confirmed writes refresh business state while retaining the admitted input', () => {
   const previous = JSON.stringify({authorized_context:{request:'create draft'},task_state:{registered_outputs:[]},evidence:[]});
   const state = {registered_outputs:[{kind:'experiment_draft',id:'existing-draft'}],

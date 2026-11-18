@@ -1,7 +1,9 @@
 import { ArrowLeftOutlined, FileTextOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Descriptions, Empty, Space, Spin, Tag, Typography } from 'antd';
+import { App, Button, Descriptions, Empty, Space, Spin, Tag, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+
+import { InlineNotice } from '@/components/inline-notice/InlineNotice';
 
 import { knowledgeApi, type KnowledgeUploadTask } from '@/services/knowledge';
 
@@ -35,7 +37,7 @@ export function KnowledgeUploadTaskDetailPage() {
   return <div className="knowledge-document-page">
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/knowledge/library')}>返回资料上传</Button>
-      <Card>
+      <section aria-label="上传文件详情">
         <Space align="start" size={14}>
           <FileTextOutlined style={{ fontSize: 28 }} />
           <div>
@@ -48,13 +50,13 @@ export function KnowledgeUploadTaskDetailPage() {
           <Descriptions.Item label="上传时间">{new Date(task.createdAt).toLocaleString('zh-CN')}</Descriptions.Item>
           <Descriptions.Item label="最近更新">{new Date(task.updatedAt).toLocaleString('zh-CN')}</Descriptions.Item>
           <Descriptions.Item label="处理进度">{task.progress}%</Descriptions.Item>
-          <Descriptions.Item label="处理说明">{task.message || '暂无'}</Descriptions.Item>
-          <Descriptions.Item label="保存分类">{task.uploadContext?.categoryId || '历史记录未保存分类信息'}</Descriptions.Item>
-          <Descriptions.Item label="资料范围">{task.uploadContext?.libraryScope || '历史记录未保存范围信息'}</Descriptions.Item>
+
+          <Descriptions.Item label="资料范围">{task.uploadContext?.libraryScope === 'INTERNAL' ? '内部资料' : task.uploadContext?.libraryScope === 'EXTERNAL' ? '外部资料' : '未记录'}</Descriptions.Item>
         </Descriptions>
-        {task.message && task.status === 'FAILED' && <Alert style={{ marginTop: 16 }} type="error" showIcon message="处理失败原因" description={task.message} />}
+        {task.status === 'FAILED' && <InlineNotice tone="error" details={task.message}>文件处理未完成，请返回资料上传后重试。</InlineNotice>}
+        {task.message && task.status !== 'FAILED' && <details className="inline-notice-details"><summary>处理详情</summary><div>{task.message}</div></details>}
         {task.documentId && <Button style={{ marginTop: 16 }} type="primary" onClick={() => navigate(`/knowledge/documents/${task.documentId}`)}>进入知识文档工作台</Button>}
-      </Card>
+      </section>
     </Space>
   </div>;
 }

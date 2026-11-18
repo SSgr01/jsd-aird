@@ -1,3 +1,4 @@
+import { RowActions } from '@/components/list-controls/RowActions';
 import { DesktopListFilters } from '@/components/list-controls/DesktopListFilters';
 import { ListEmptyState } from '@/components/list-controls/ListEmptyState';
 import { StatusTag } from '@/components/status/StatusTag';
@@ -665,7 +666,7 @@ export function ProductionOrderListPage() {
             </Typography.Text>
           </div>
           <div className="pm-page-actions">
-            <span className="pm-selected">已选 {selectedKeys.length} 条</span>
+            <span className="list-bulk-actions" data-has-selection={selectedKeys.length > 0}><span className="pm-selected">已选 {selectedKeys.length} 条</span>
             {selectedKeys.length > 0 && (
               <Button type="link" size="small" onClick={() => setSelectedKeys([])}>
                 清除已选
@@ -698,7 +699,7 @@ export function ProductionOrderListPage() {
             >
               删除
             </Button>}
-            {canUpload && <Button
+            </span>{canUpload && <Button
               icon={<UploadOutlined />}
               onClick={() => navigate('/production-orders/upload')}
             >
@@ -733,7 +734,7 @@ export function ProductionOrderListPage() {
         </div>
 
         <Card className="content-card filter-card production-order-filter">
-          <DesktopListFilters labels={['所属项目', '生产单状态', '文件格式']} advancedAfter={2}><Space wrap>
+          <DesktopListFilters responsive labels={['所属项目', '生产单状态', '文件格式']} advancedAfter={2}><Space wrap>
             <Input.Search
               allowClear
               placeholder="生产单名称、订单号、品名或文件名"
@@ -836,7 +837,7 @@ export function ProductionOrderListPage() {
               }}
               columns={[
                 {
-                  title: '订单号',
+                  title: '订单号', responsive: ['md'],
                   dataIndex: 'orderNo',
                   width: 170,
                   render: (value: string) => renderCellText(value),
@@ -846,7 +847,7 @@ export function ProductionOrderListPage() {
                   dataIndex: 'productionName',
                   width: 360,
                   render: (value: string, item: ProductionUpload) => (
-                    <Typography.Link
+                    <div><Typography.Link
                       className="production-order-cell-text production-order-name-link"
                       strong
                       ellipsis
@@ -854,7 +855,7 @@ export function ProductionOrderListPage() {
                       onClick={() => openWorkspace(item.id)}
                     >
                       {value || '—'}
-                    </Typography.Link>
+                    </Typography.Link><small className="mobile-record-code">{item.orderNo}</small></div>
                   ),
                 },
                 {
@@ -906,13 +907,12 @@ export function ProductionOrderListPage() {
                   render: (_: unknown, item: ProductionUpload) => reviewTag(item),
                 },
                 {
-                  title: '操作',
-                  width: 150,
+                  title: '操作', fixed: 'right' as const,
+                  width: 120,
                   render: (_: unknown, item: ProductionUpload) => (
-                    <Space className="management-table-actions" size={0}>
-                      <Button type="link" size="small" onClick={() => openWorkspace(item.id)}>
+                    <RowActions primary={<><Button type="link" size="small" onClick={() => openWorkspace(item.id)}>
                         查看
-                      </Button>
+                      </Button></>}>
                       {canUpdate && <Button
                         type="link"
                         size="small"
@@ -945,7 +945,7 @@ export function ProductionOrderListPage() {
                           删除
                         </Button>
                       </Popconfirm>}
-                    </Space>
+                    </RowActions>
                   ),
                 },
               ]}

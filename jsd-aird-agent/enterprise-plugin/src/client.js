@@ -265,7 +265,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
               if(!item&&!other) return;
               if(other) {
                 link.title=other.title+'\n'+other.url;
-                link.setAttribute('aria-label','查看'+(other.kind==='project' ? '项目：' : '网页来源：')+other.title+'，'+other.url);
+                link.setAttribute('aria-label','查看'+(other.kind==='project' ? '项目：' : other.kind==='business' ? '业务资料：' : '网页来源：')+other.title);
                 link.setAttribute('data-jsd-citation',other.kind);
                 return;
               }

@@ -41,7 +41,7 @@ export async function materializeBusinessDataset(ctx, execution, result) {
   const path = await publish(ctx, execution, dataset.name, bytes);
   const { content_base64, ...metadata } = dataset;
   return { ...result, dataset: { ...metadata, path },
-    analysis_hint: '使用原生文件读取或脚本读取此JSON。rows保留数值类型；schema给出字段及类型。' };
+    analysis_hint: '使用原生文件读取或脚本读取dataset.path中的JSON。rows保留数值类型；schema给出字段及类型。整理结论或导出Excel时复用此文件，不因更换输出格式再次查询相同数据；需要最新状态、缺少字段或来源版本变化时再查询。' };
 }
 
 function verify(file) {

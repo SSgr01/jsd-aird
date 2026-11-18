@@ -27,15 +27,16 @@ function selectedLabel(control: ReactElement<ControlProps>): string {
 }
 
 /** Recompose existing controlled inputs on desktop; retain their original layout on smaller screens. */
-export function DesktopListFilters({ children, labels = [], advancedAfter = 2, activeCount, summary: appliedSummary }: {
+export function DesktopListFilters({ children, labels = [], advancedAfter = 2, activeCount, summary: appliedSummary, responsive = false }: {
   children: ReactElement<{ children?: ReactNode }>;
+  responsive?: boolean;
   labels?: string[];
   advancedAfter?: number;
   activeCount?: number;
   summary?: string;
 }) {
   const desktop = useDesktopLayout();
-  if (!desktop) return children;
+  if (!desktop && !responsive) return children;
   const controls = Children.toArray(children.props.children).filter(isValidElement) as ReactElement<ControlProps>[];
   const search = controls[0];
   const actions = controls.slice(1).filter(control => control.type === Button);
@@ -50,7 +51,7 @@ export function DesktopListFilters({ children, labels = [], advancedAfter = 2, a
     const label = index < 0 ? '搜索' : labels[index] || control.props['aria-label'] || control.props.placeholder;
     return `${typeof label === 'string' ? label : '筛选'}：${selectedLabel(control)}`;
   }).join('；');
-  return <ListFilterBar className="desktop-list-filters" search={search} fields={fields.map((control, index) => ({
+  return <ListFilterBar className={`desktop-list-filters${responsive ? ' responsive-list-filters' : ''}`} search={search} fields={fields.map((control, index) => ({
     key: control.key?.toString() || String(index),
     label: labels[index] || control.props['aria-label'] || (typeof control.props.placeholder === 'string' ? control.props.placeholder : '筛选条件'),
     control,

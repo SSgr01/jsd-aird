@@ -13,10 +13,10 @@ const MAX_SOURCE_RATIO = 62;
 
 type Pane = 'source' | 'result';
 
-export function DocumentComparisonViewer({ original, result, originalTitle = '原文件', resultTitle = '解析结果', resultExtra }: { original: ReactNode; result: ReactNode; originalTitle?: string; resultTitle?: string; resultExtra?: ReactNode }) {
+export function DocumentComparisonViewer({ original, result, originalTitle = '原文件', resultTitle = '解析结果', resultExtra, preferOriginal = false }: { original: ReactNode; result: ReactNode; originalTitle?: string; resultTitle?: string; resultExtra?: ReactNode; preferOriginal?: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [narrow, setNarrow] = useState(false);
-  const [active, setActive] = useState<Pane>('result');
+  const [active, setActive] = useState<Pane>(preferOriginal ? 'source' : 'result');
   const [containerWidth, setContainerWidth] = useState(0);
   const [sourceRatio, setSourceRatio] = useState(DEFAULT_SOURCE_RATIO);
   const [focusedPane, setFocusedPane] = useState<Pane>();

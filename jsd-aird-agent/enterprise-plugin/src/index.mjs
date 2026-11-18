@@ -12,7 +12,7 @@ import { executionDirectory } from '../../deepseek/src/paths.mjs';
 import { installScheduling, requestText, scheduleTools } from './scheduling.mjs';
 import { businessError, deliveryError } from './business-error.mjs';
 import { recoverControlRead } from './control-recovery.mjs';
-import { bindingCursor, mergeBinding } from './binding-state.mjs';
+import { bindingCursor, mergeBinding, hasBindingInput } from './binding-state.mjs';
 import { EventProjection, StreamProjection } from './event-projection.mjs';
 import { updateNativeInbox } from './inbox-actions.mjs';
 import { citationStream } from './citation-stream.mjs';
@@ -344,7 +344,7 @@ export async function apply(ctx) {
     if (files.length && profile === 'agent') await exposeFiles(agent, files, signal);
     const previous = runs.get(agent.id);
     const grant = admission?.grants.get(agent.id);
-    const hasInput=Boolean(input.messages.length);
+    const hasInput=hasBindingInput(input.messages);
     const current = await business('register', { session_id: agent.id, turn: input.turn,
       ...bindingCursor(previous,input.turn,hasInput),
       ...(grant ? {run_id:grant.run_id,epoch:grant.epoch,input_signature:grant.inputSignature} : {}),

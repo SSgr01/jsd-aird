@@ -1,3 +1,4 @@
+import { InlineNotice } from '@/components/inline-notice/InlineNotice';
 import { StatusTag } from '@/components/status/StatusTag';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { WorkspaceFrame, WorkspaceMaximizeButton } from '@/components/workspace/WorkspaceFrame';
@@ -2254,28 +2255,17 @@ function WordDocumentStatus({
     : status === 'DEGRADED'
       ? '此 Word 文件包含需人工复核的元素；编辑结果请通过差异预览确认。'
       : editable
-        ? '当前使用 Word 文档编辑器，可直接编辑正文、段落、表格和常用样式；左侧目录可定位章节。'
+        ? '文档已加载，可直接编辑正文和表格。'
         : '当前为只读 Word 文档。';
 
-  return (
-    <Alert
-      className="word-document-status"
-      type={type}
-      showIcon
-      message={message}
-      description={
-        <Space size={[8, 4]} wrap>
-           <Tag>{controls} 个内容控件</Tag>
-           <Tag>{blocks} 个正文块</Tag>
-           <Tag>{nodes} 个结构节点</Tag>
-           <Tag>{headings} 个章节</Tag>
-          {compatibility?.imageCount ? <Tag>{compatibility.imageCount} 张图片待复核</Tag> : null}
-          {compatibility?.hasComments ? <Tag>含批注</Tag> : null}
-          {compatibility?.hasFootnotes || compatibility?.hasEndnotes ? <Tag>含脚注/尾注</Tag> : null}
-        </Space>
-      }
-    />
-  );
+  return <InlineNotice tone={type} detailsLabel="文档详情" details={<>
+    <p>{controls} 个内容控件 · {blocks} 个正文块 · {nodes} 个结构节点 · {headings} 个章节</p>
+  </>}>
+    {message}
+    {compatibility?.imageCount ? ` ${compatibility.imageCount} 张图片待复核。` : ''}
+    {compatibility?.hasComments ? ' 含批注，请复核。' : ''}
+    {compatibility?.hasFootnotes || compatibility?.hasEndnotes ? ' 含脚注或尾注，请复核。' : ''}
+  </InlineNotice>;
 }
 
 function VersionView({

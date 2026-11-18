@@ -62,3 +62,25 @@
   .list-filter-summary > .ant-btn { min-height: 44px; margin-block: -8px; color: var(--app-text-secondary); font-size: 12px; }
   .list-filter-bar[data-expanded='true'] .list-filter-summary { display: none; }
 }
+
+/* Opt-in catalog lists use the same disclosure on tablets and phones. */
+.responsive-list-filters .list-filter-search > .ant-input-affix-wrapper,
+.responsive-list-filters .list-filter-field > :is(.ant-select, .ant-picker) {
+  width: 100% !important;
+  max-width: 100%;
+}
+@media (max-width: 1023px) {
+  .responsive-list-filters { grid-template-columns: minmax(0, 1fr) auto; }
+  .responsive-list-filters > .list-filter-toggle { display: inline-flex; min-height: 44px; }
+  .responsive-list-filters .list-filter-toggle-mobile { display: inline; }
+  .responsive-list-filters .list-filter-fields { display: none; }
+  .responsive-list-filters[data-expanded='true'] .list-filter-fields {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .responsive-list-filters .list-filter-label { display: block; margin-bottom: 6px; font-size: 12px; }
+  .responsive-list-filters .list-filter-field[data-wide='true'] { grid-column: 1 / -1; }
+  .responsive-list-filters .list-filter-actions { display: flex; align-items: center; gap: 8px; }
+}

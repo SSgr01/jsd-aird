@@ -1,3 +1,4 @@
+import { RowActions } from '@/components/list-controls/RowActions';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -182,18 +183,17 @@ export default function ProjectDocumentsTab({
       render: (value: string) => (value ? dayjs(value).format('YYYY-MM-DD HH:mm') : '—'),
     },
     {
-      title: '操作',
+      title: '操作', fixed: 'right' as const,
       key: 'action',
-      width: 150,
+      width: 120,
       render: (_, doc) => (
-        <Space className="management-table-actions" size={0}>
-          <Button
+        <RowActions primary={<><Button
             size="small"
             type="link"
             onClick={() => navigate(`/projects/${projectId}/documents/${doc.id}`)}
           >
             查看
-          </Button>
+          </Button></>}>
           <Can permission="project.document.export"><Button
             size="small"
             type="link"
@@ -210,7 +210,7 @@ export default function ProjectDocumentsTab({
           >
             删除
           </Button></Can>
-        </Space>
+        </RowActions>
       ),
     },
   ];

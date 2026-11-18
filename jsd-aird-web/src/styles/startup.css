@@ -122,11 +122,11 @@ html[data-startup='login'] #root > .startup-skeleton .startup-panel {
   text-decoration: underline;
 }
 .content-error {
-  padding: 40px 24px;
-  min-height: 240px;
-  background: #fff;
-  border-radius: 8px;
+  padding: 12px 24px;
+  min-width: 0;
+  background: transparent;
 }
+.content-error p { margin: 2px 0 0; }
 .univer-editor-host[aria-busy='true']::after {
   content: attr(data-loading-label);
   position: absolute;

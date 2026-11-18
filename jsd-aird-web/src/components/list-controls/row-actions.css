@@ -1,0 +1,18 @@
+.list-row-actions { display: inline-flex; align-items: center; gap: 0; white-space: nowrap; }
+.list-row-actions > .ant-btn { flex: none; }
+.list-row-action-menu {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  min-width: 144px;
+  max-width: min(360px, calc(100vw - 48px));
+  max-height: min(420px, 60dvh);
+  overflow: auto;
+}
+.list-row-action-menu > .ant-btn,
+.list-row-action-menu > .ant-space > .ant-space-item > .ant-btn { justify-content: flex-start; text-align: left; }
+.list-row-action-menu > .ant-space { flex-direction: column; align-items: stretch; }
+@media (max-width: 767px) {
+  .list-row-actions > .ant-btn, .list-row-action-menu .ant-btn { min-height: 44px; }
+}

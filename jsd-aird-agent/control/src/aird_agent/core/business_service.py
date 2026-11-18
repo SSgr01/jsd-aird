@@ -596,7 +596,7 @@ class BusinessService:
             if any(run.get(key) != value for key, value in before.items()):
                 run = await self.store.update(principal, "run", run, conn)
         run = await self.bindings.prepare_run(principal, run)
-        await self.authorized_topic(principal, run)
+        topic = await self.authorized_topic(principal, run)
         # Native session messages retain inputs and tool results. Introduce source
         # text only with a new input; subsequent snapshots carry business state.
         # Citation URLs belong to the renderer, not every model request.
@@ -612,7 +612,10 @@ class BusinessService:
         if total_tokens and self.settings.max_total_tokens - total_tokens <= final_reserve:
             context["budget_notice"] = "本轮已接近执行预算。请用已取得的证据完成原问题的结论、适用边界和资料缺口；停止扩展全库检索或重读已有正文。未取得的事实明确标为未确认，不补造结果。"
         if body.get("request") or body.get("attachments") or not run.get("dsh_generation_started"):
-            topic = await self.host_call(principal, "runtime_context", self.context_request(run), run["id"])
+            # Pack authorization already loaded runtime_context for this request.
+            # Legacy topic authorization returns a different contract.
+            if not run.get("pack_versions"):
+                topic = await self.host_call(principal, "runtime_context", self.context_request(run), run["id"])
             context["authorized_context"] = await self.bindings.runtime_topic(principal, run, topic)
         if run.get("automation"):
             from aird_agent.hosts.jsd.briefings import coverage

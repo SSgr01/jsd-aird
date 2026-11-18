@@ -539,7 +539,7 @@ export function PartnerDetailPage() {
                 <div className="cm-table-wrap">
                   <table className="cm-table cm-requirement-list">
                     <thead>
-                      <tr><th>需求编号</th><th>需求名称</th><th>关联项目</th><th>提出日期</th><th>预计完成日期</th><th>紧急程度</th><th>状态</th><th>操作</th></tr>
+                      <tr><th>需求编号</th><th>需求名称</th><th>关联项目</th><th>提出日期</th><th>预计完成日期</th><th>紧急程度</th><th>状态</th><th className="table-action-column">操作</th></tr>
                     </thead>
                     <tbody>
                       {requirements.map((row) => (
@@ -558,7 +558,7 @@ export function PartnerDetailPage() {
                           <td>{row.deliveryDate || '—'}</td>
                           <td>{row.urgency ? <span className={`pm-tag ${requirementUrgencyTagClasses[row.urgency] ?? 'status-not_started'}`}>{row.urgency}</span> : '—'}</td>
                           <td><span className={`pm-tag ${requirementDisplayStatusTagClasses[row.customStatusName?.trim() || ''] ?? (row.customStatusName ? 'status-custom' : requirementStatusTagClasses[row.status])}`}>{row.customStatusName || requirementStateName[row.status]}</span></td>
-                          <td>
+                          <td className="table-action-column">
                             <div className="cm-row-actions management-table-actions">
                               {can('needs', 'update') && <button className="cm-link-button" onClick={() => setBusinessModal({ mode: 'requirement', edit: row })}>编辑</button>}
                               {can('needs', 'delete') && <Popconfirm title="删除该客户需求？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteRequirement(row.id, row.version); msg.success('客户需求已删除'); await load(); })()}>
@@ -589,7 +589,7 @@ export function PartnerDetailPage() {
               <div className="cm-table-wrap">
                 <table className="cm-table cm-project-list">
                   <thead>
-                    <tr><th>项目编号</th><th>项目名称</th><th>项目负责人</th><th>当前阶段</th><th>状态</th><th>进度</th><th>操作</th></tr>
+                    <tr><th>项目编号</th><th>项目名称</th><th>项目负责人</th><th>当前阶段</th><th>状态</th><th>进度</th><th className="table-action-column">操作</th></tr>
                   </thead>
                   <tbody>
                     {uniqueProjects.map((row) => (
@@ -604,7 +604,7 @@ export function PartnerDetailPage() {
                           </span>
                         </td>
                         <td>{(row.progress ?? 0).toFixed(2)}%</td>
-                        <td>
+                        <td className="table-action-column">
                           {can('projects', 'view') && <Link to={`/projects/${row.projectId}`}>
                             <Button type="link" size="small">查看</Button>
                           </Link>}
@@ -653,7 +653,7 @@ export function PartnerDetailPage() {
                 <div className="cm-table-wrap">
                   <table className="cm-table cm-followup-list">
                     <thead>
-                      <tr><th>跟进编号</th><th>跟进名称</th><th>跟进时间</th><th>跟进方式</th><th>跟进人</th><th>操作</th></tr>
+                      <tr><th>跟进编号</th><th>跟进名称</th><th>跟进时间</th><th>跟进方式</th><th>跟进人</th><th className="table-action-column">操作</th></tr>
                     </thead>
                     <tbody>
                       {communications.map((row) => (
@@ -663,7 +663,7 @@ export function PartnerDetailPage() {
                           <td>{fmtTime(row.communicatedAt)}</td>
                           <td>{row.communicationMethod || '—'}</td>
                           <td>{row.internalParticipants || '—'}</td>
-                          <td>
+                          <td className="table-action-column">
                             <div className="cm-row-actions management-table-actions">
                               {can('followup', 'update') && <button className="cm-link-button" onClick={() => setBusinessModal({ mode: 'followup', edit: row })}>编辑</button>}
                               {can('followup', 'delete') && <Popconfirm title="删除该跟进记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('跟进记录已删除'); await load(); })()}>

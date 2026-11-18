@@ -33,7 +33,7 @@ export function KnowledgeReviewQueuePage({ embedded = false, initialStatus }: { 
         { title: '解析', width: 110, dataIndex: 'processingStatus', render: (value: string) => <Tag color={value === 'READY' ? 'success' : value === 'FAILED' ? 'error' : 'processing'}>{value === 'READY' ? '解析完成' : value === 'FAILED' ? '解析失败' : '解析中'}</Tag> },
         { title: '校对', width: 100, render: (_: unknown, item: ReviewQueueItem) => { const state = reviewQueueStatus(item); return <Tag color={state.color}>{state.label}</Tag>; } },
         { title: '最近更新', width: 180, dataIndex: 'updatedAt', render: (value: string) => new Date(value).toLocaleString('zh-CN') },
-        ...(canEditDocument ? [{ title: '操作', width: 130, render: (_: unknown, item: ReviewQueueItem) => <Button type={item.reviewRevisionStatus === 'FAILED' ? 'default' : 'primary'} onClick={() => navigate(`/knowledge/review/${item.documentId}/${item.versionId}`)}>{item.reviewRevisionStatus === 'FAILED' ? '查看详情' : '开始校对'}</Button> }] : []),
+        ...(canEditDocument ? [{ title: '操作', fixed: 'right' as const, width: 130, render: (_: unknown, item: ReviewQueueItem) => <Button type={item.reviewRevisionStatus === 'FAILED' ? 'default' : 'primary'} onClick={() => navigate(`/knowledge/review/${item.documentId}/${item.versionId}`)}>{item.reviewRevisionStatus === 'FAILED' ? '查看详情' : '开始校对'}</Button> }] : []),
       ]} />
     </Card>
   </div>;

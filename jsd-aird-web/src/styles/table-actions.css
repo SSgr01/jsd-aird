@@ -1,0 +1,72 @@
+/* Native business tables declare their action cells explicitly. */
+.app-shell .table-action-column {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  width: 120px;
+  min-width: 120px;
+  white-space: nowrap;
+  background: var(--app-surface);
+  box-shadow: -1px 0 0 var(--app-border);
+}
+.app-shell thead .table-action-column { z-index: 4; }
+.app-shell tbody tr:hover > .table-action-column { background: var(--app-surface-subtle); }
+.app-shell .ant-table-cell-fix-right { white-space: nowrap; }
+@media (max-width: 1023px) {
+  .app-shell .table-action-column { padding-inline: 10px; }
+}
+
+.list-bulk-actions { display: contents; }
+.mobile-record-code { display: none; }
+@media (max-width: 767px) {
+  .mobile-record-code { display: block; margin-top: 2px; font-size: 12px; color: var(--app-text-secondary); }
+  .mobile-record-code-column, .pm-unified-list-page .pm-table .pm-code-column { display: none; }
+  .list-bulk-actions[data-has-selection="false"] { display: none; }
+}
+@media (max-width: 1023px) {
+  .app-shell .pm-unified-list-page.pm-project-list-page[data-view="list"] { height: auto; min-height: 0; }
+  .app-shell .pm-project-list-page[data-view="list"] :is(.pm-list-surface, .pm-content, .pm-table-scroll) {
+    flex: none;
+    height: auto;
+    min-height: 0;
+  }
+}
+@media (max-width: 767px) {
+  .app-shell .pm-project-list-page .pm-project-subline { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--app-text-secondary); font-size: 12px; }
+  .app-shell .pm-project-list-page .pm-name-link { white-space: normal; overflow-wrap: anywhere; }
+}
+
+/* Related totals share one quiet strip instead of competing with the records. */
+.app-shell .list-summary-strip {
+  padding-block: 8px;
+  margin-block: 0 16px;
+  row-gap: 0 !important;
+  border-block: 1px solid var(--app-border);
+}
+.app-shell .list-summary-strip > .ant-col { border-inline-end: 1px solid var(--app-border); }
+.app-shell .list-summary-strip > .ant-col:last-child { border-inline-end: 0; }
+.app-shell .list-summary-strip .ant-card {
+  border: 0;
+  border-radius: 0 !important;
+  background: transparent;
+  box-shadow: none;
+}
+.app-shell .list-summary-strip .ant-card-body { padding: 8px 12px; }
+.app-shell .list-summary-strip .ant-statistic-title { margin-bottom: 4px; font-size: 13px; }
+.app-shell .list-summary-strip .ant-statistic-content { font-size: 22px; font-weight: 500; }
+@media (max-width: 767px) {
+  .app-shell .list-summary-strip > .ant-col { flex: 0 0 50%; max-width: 50%; }
+  .app-shell .list-summary-strip > .ant-col:nth-child(2n) { border-inline-end: 0; }
+  .quality-grid[data-editing="false"] .quality-record-code-column { display: none; }
+}
+
+@media (max-width: 767px) {
+  .quality-page .quality-grid[data-editing="false"] .quality-record-name-link {
+    max-width: 150px;
+    height: auto;
+    padding: 0;
+    white-space: normal;
+    text-align: start;
+    overflow-wrap: anywhere;
+  }
+}

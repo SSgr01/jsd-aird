@@ -25,7 +25,7 @@ export function sourceLinkLabel(label, url) {
 }
 export function normalizeOriginalLinks(text, origin='http://localhost', renderLink, renderOtherLink) {
   let base=null, fence=false;
-  const address=String.raw`(?:(?:https?:\/\/|\/(?:api\/v1|projects)\/)(?:\\[^\r\n]|[^\s<>\x60\x00()\\]|\((?:[^()\s]|\([^()\s]*\))*\))+)`;
+  const address=String.raw`(?:jsd-resource:[A-Za-z0-9_-]{1,2048}|(?:https?:\/\/|\/(?:api\/v1|projects|experiments)\/)(?:\\[^\r\n]|[^\s<>\x60\x00()\\]|\((?:[^()\s]|\([^()\s]*\))*\))+)`;
   return String(text).split('\n').map(line=>{
     if(/^\s*(```|~~~)/.test(line)){fence=!fence;return line;}
     if(fence) return line;
@@ -75,6 +75,10 @@ export function normalizeOriginalLinks(text, origin='http://localhost', renderLi
 // Only known, same-origin business routes may resolve a name through our API.
 // External sites are labelled locally; displaying a citation never fetches them.
 export function describeSourceLink(label, target, origin='http://localhost', title, names=new Map()) {
+  if(/^jsd-resource:[A-Za-z0-9_-]{1,2048}$/.test(target)) {
+    return {kind:'business',url:target,title:labelText(title||label)||'业务资料',
+      label:explicitCitationLabel(label,title)};
+  }
   let url;
   try { url=new URL(String(target).replace(/\\([&()])/g,'$1'),origin); } catch { return null; }
   if(!/^https?:$/.test(url.protocol))return null;
@@ -83,6 +87,15 @@ export function describeSourceLink(label, target, origin='http://localhost', tit
   const clean=value=>labelText(String(value||'').replace(/\\([\\[\]*_`])/g,'$1').replace(/\*\*|__/g,'')).replace(/\s+/g,' ').trim();
   const authored=clean(label);
   const meaningful=authored&&!/^(?:https?:\/\/|\/|\d+$|来源$|链接$)/i.test(authored);
+  if(url.origin===new URL(origin).origin) {
+    const id='[a-f0-9-]{36}';
+    const record=new RegExp('^/api/v1/agents/business/records/[A-Z_]+/'+id+'$').test(url.pathname)&&url.searchParams.has('ref');
+    const query=url.pathname==='/api/v1/agents/business/query'&&url.searchParams.has('q')&&url.searchParams.has('snapshot_hash');
+    const compute=new RegExp('^/api/v1/agents/business/compute/[A-Za-z_-]+/'+id+'$').test(url.pathname)&&url.searchParams.has('revision');
+    const experiment=new RegExp('^/experiments/'+id+'/?$').test(url.pathname);
+    if(record||query||compute||experiment)return {kind:'business',url:url.href,
+      title:clean(title)||(meaningful?authored:'业务资料'),label:meaningful?authored:'业务资料'};
+  }
   if(project) {
     const endpoint='/api/v1/projects/'+project[1];
     const name=names.get(endpoint);
@@ -144,7 +157,7 @@ export function projectSourceBlocks(blocks, origin='http://localhost', names=new
       if(!link)return null;
       if(!links.some(item=>item.url===link.url))links.push(link);
       const token='\u0000LINK'+otherCitations.length+'\u0000';
-      otherCitations.push('['+markdownSourceLabel(link.label)+']('+target+')');
+      otherCitations.push({url:link.url,text:'['+markdownSourceLabel(explicitCitationLabel(link.label,link.title))+']('+target+')'});
       return token;
     });
     // Opaque retrieval IDs following a real citation are diagnostics, not prose.
@@ -163,7 +176,14 @@ export function projectSourceBlocks(blocks, origin='http://localhost', names=new
         seen.add(key);
         return ['['+labelText(tag)+']('+url+')'];
       }).join(' ');
-    }).replace(/\u0000LINK(\d+)\u0000/g,(_all,index)=>otherCitations[Number(index)]);
+    }).replace(/\u0000LINK\d+\u0000(?:[ \t]*\u0000LINK\d+\u0000)*/g,run=>{
+      const seen=new Set();
+      return [...run.matchAll(/\u0000LINK(\d+)\u0000/g)].flatMap(match=>{
+        const citation=otherCitations[Number(match[1])];
+        if(seen.has(citation.url))return [];
+        seen.add(citation.url);return [citation.text];
+      }).join(' ');
+    });
     return compact===block.text ? block : {...block,text:compact};
   });
   return {blocks:projected,sources,links};

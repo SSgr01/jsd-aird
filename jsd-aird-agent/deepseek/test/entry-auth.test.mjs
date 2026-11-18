@@ -67,15 +67,28 @@ test('workbench entry redirects expired browser authentication without redirecti
   const denied = await request(address, '/agent/', { accept: 'text/html', cookie: 'SESSION=denied-test' });
   assert.equal(denied.status, 403);
   assert.equal(denied.headers.location, undefined);
-  assert.deepEqual(JSON.parse(denied.body), { error: 'ENTERPRISE_ACCESS_DENIED' });
+  assert.match(denied.headers['content-type'], /text\/html/);
+  assert.match(denied.body, /当前账号已获得访问权限/);
+  assert.doesNotMatch(denied.body, /ENTERPRISE_ACCESS_DENIED/);
 
   for (const status of [404, 500, 503]) {
     identityStatus = status;
     const unavailable = await request(address, '/agent/', { accept: 'text/html', cookie: 'SESSION=valid-test' });
     assert.equal(unavailable.status, 503);
     assert.equal(unavailable.headers.location, undefined);
-    assert.deepEqual(JSON.parse(unavailable.body), { error: 'DEEPSEEK_UNAVAILABLE' });
+    assert.match(unavailable.headers['content-type'], /text\/html/);
+    assert.match(unavailable.body, /AI 工作台暂时无法打开/);
+    assert.match(unavailable.body, /href=""/);
+    assert.match(unavailable.body, /href="\/"/);
+    assert.doesNotMatch(unavailable.body, /DEEPSEEK_UNAVAILABLE|SESSION=|valid-test/);
   }
+  const unavailableRpc = await request(address, '/agent/api/session/list', { accept: 'application/json', cookie: 'SESSION=valid-test' });
+  assert.equal(unavailableRpc.status, 503);
+  assert.deepEqual(JSON.parse(unavailableRpc.body), { error: 'DEEPSEEK_UNAVAILABLE' });
+  const unavailableHead = await request(address, '/agent/', { accept: 'text/html', cookie: 'SESSION=valid-test' }, 'HEAD');
+  assert.equal(unavailableHead.status, 503);
+  assert.match(unavailableHead.headers['content-type'], /text\/html/);
+  assert.equal(unavailableHead.body, '');
   assert.ok(logs.some(line => JSON.parse(line).reason === 'ORIGIN_DENIED'));
   assert.ok(logs.some(line => JSON.parse(line).reason === 'ENTERPRISE_ACCESS_DENIED'));
   assert.ok(logs.every(line => !/SESSION=|stopped|test-runtime-secret/.test(line)));
@@ -85,7 +98,9 @@ test('authenticated entry continues to the native host with its own cookie', asy
   t.mock.method(BackgroundHosts.prototype, 'start', () => {});
   t.mock.method(BackgroundHosts.prototype, 'install', async () => {});
   const nativeCalls = [];
+  let unavailable = false;
   const nativeUrl = await listen(t, createServer((req, res) => {
+    if (unavailable) { req.socket.destroy(); return; }
     nativeCalls.push({ path: req.url, cookie: req.headers.cookie });
     res.writeHead(200, { 'content-type': 'text/html', 'set-cookie': 'native-private=hidden' });
     res.end('<!doctype html><title>Test workbench</title>');
@@ -107,4 +122,12 @@ test('authenticated entry continues to the native host with its own cookie', asy
   assert.equal(nativeCalls[0].cookie, 'NATIVE=private');
   assert.equal(result.headers.location, undefined);
   assert.equal(result.headers['set-cookie'], undefined);
+  unavailable = true;
+  const interruptedEntry = await request(address, '/agent/?session=existing', { accept: 'text/html', cookie: 'SESSION=valid-test' });
+  assert.equal(interruptedEntry.status, 503);
+  assert.match(interruptedEntry.body, /AI 工作台暂时无法打开/);
+  assert.doesNotMatch(interruptedEntry.body, /session=existing|NATIVE=|DEEPSEEK_UNAVAILABLE/);
+  const interruptedRpc = await request(address, '/agent/api/session/list', { accept: 'application/json', cookie: 'SESSION=valid-test' });
+  assert.equal(interruptedRpc.status, 503);
+  assert.deepEqual(JSON.parse(interruptedRpc.body), { error: 'DEEPSEEK_UNAVAILABLE' });
 });

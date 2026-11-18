@@ -24,7 +24,10 @@ it('retries failed chunks locally while keeping navigation',async()=>{
   const importer=vi.fn<()=>Promise<{default:()=>ReactNode}>>().mockRejectedValueOnce(new Error('network')).mockResolvedValue({default:()=> <p>重试成功</p>});
   const Page=routePage(importer);
   render(<MemoryRouter future={{v7_startTransition:true,v7_relativeSplatPath:true}}><nav>导航仍可用</nav><ContentBoundary><Page /></ContentBoundary></MemoryRouter>);
-  expect(await screen.findByText('network')).toBeInTheDocument();
+  expect(await screen.findByText('暂时无法打开，请重试。', {}, { timeout: 5000 })).toBeInTheDocument();
+  expect(screen.getByText('network')).not.toBeVisible();
+  fireEvent.click(screen.getByText('错误详情'));
+  expect(screen.getByText('network')).toBeVisible();
   fireEvent.click(await screen.findByText('重试当前页面'));
   expect(await screen.findByText('重试成功')).toBeInTheDocument();
   expect(screen.getByText('导航仍可用')).toBeInTheDocument();

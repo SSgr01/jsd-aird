@@ -290,7 +290,7 @@ export function CustomerRequirementTab({ projectId, projectName, partnerId }: Pr
         },
       },
       {
-        title: '操作',
+        title: '操作', fixed: 'right' as const,
         key: 'actions',
         width: 120,
         render: (_, record) => (

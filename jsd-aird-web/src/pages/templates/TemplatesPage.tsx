@@ -330,8 +330,8 @@ export function TemplatesPage() {
 
   const columns: TableColumnsType<TemplateListItem> = [
     {
-      title: '模板', dataIndex: 'name',
-      render: (_, record) => <Space>{record.format === 'XLSX' ? <FileExcelOutlined /> : <FileWordOutlined />}<Typography.Link strong onClick={(event) => { event.stopPropagation(); navigate(`/templates/${record.versionId}/workspace`); }}>{record.name}</Typography.Link></Space>,
+      title: '模板', dataIndex: 'name', width: 300, ellipsis: true,
+      render: (_, record) => <Space>{record.format === 'XLSX' ? <FileExcelOutlined /> : <FileWordOutlined />}<Typography.Link strong title={record.name} onClick={(event) => { event.stopPropagation(); navigate(`/templates/${record.versionId}/workspace`); }}>{record.name}</Typography.Link></Space>,
     },
     { title: '分类', dataIndex: 'category', render: (_, record) => record.category || '未分类' },
     { title: '文件格式', dataIndex: 'format', width: 105, render: (value: TemplateFormat) => value === 'XLSX' ? 'Excel' : value === 'DOCX' ? 'Word' : '—' },
@@ -340,9 +340,9 @@ export function TemplatesPage() {
     { title: '创建人', dataIndex: 'createdByName', responsive: ['md'], render: (_, record) => record.createdByName || '—' },
     { title: '最近更新', dataIndex: 'updatedAt', responsive: ['sm'], render: (_, record) => new Date(record.updatedAt).toLocaleString('zh-CN') },
     {
-      title: '操作', key: 'actions', render: (_, record) => <Space size={0} onClick={(event) => event.stopPropagation()}>
+      title: '操作', key: 'actions', fixed: 'right', width: 120, render: (_, record) => <Space size={0} onClick={(event) => event.stopPropagation()}>
         {/* 打开工作台属于查看动作，草稿能否保存由工作台内的编辑权限决定 */}
-        {can('view') && <Button type="link" onClick={() => navigate(`/templates/${record.versionId}/workspace`)}>{record.hasDraft || record.status === 'DRAFT' ? '编辑模板' : '查看模板'}</Button>}
+        {can('view') && <Button type="link" onClick={() => navigate(`/templates/${record.versionId}/workspace`)}>{record.hasDraft || record.status === 'DRAFT' ? '编辑' : '查看'}</Button>}
         <Dropdown trigger={['click']} menu={{ items: [
           ...(can('copy') ? [{ key: 'copy', icon: <CopyOutlined />, label: '复制模板' }] : []),
           ...(can('update') ? [{ key: 'rename', label: '重命名' }, { key: 'move', icon: <FolderAddOutlined />, label: '移动分类' }] : []),
@@ -358,9 +358,9 @@ export function TemplatesPage() {
     },
   ];
 
-  return <div className="business-page templates-catalog-page">
+  return <div className="business-page templates-catalog-page" data-has-selection={Object.keys(selectedRecords).length > 0}>
     <div className="page-heading"><div><Typography.Title level={2}>模板查看</Typography.Title><Typography.Text type="secondary">查看模板，管理草稿和已发布版本。</Typography.Text></div>{can('create') && <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建模板</Button>}</div>
-    <CategoryCardGrid categories={categoryCards} activeId={uncategorized ? 'UNCATEGORIZED' : categoryId ?? 'ALL'}
+    <CategoryCardGrid variant="compact" categories={categoryCards} activeId={uncategorized ? 'UNCATEGORIZED' : categoryId ?? 'ALL'}
       onSelect={(id) => changeFilter(() => { setCategoryId(id === 'ALL' || id === 'UNCATEGORIZED' ? undefined : id); setUncategorized(id === 'UNCATEGORIZED'); })}
       onCreate={canCategory('create') ? () => { categoryForm.resetFields(); setCategoryEditor('NEW'); } : undefined}
       onRename={canCategory('update') ? (item) => { const target = categoryItems.find((value) => value.id === item.id); if (target) { categoryForm.setFieldsValue(target); setCategoryEditor(target); } } : undefined}
@@ -368,7 +368,7 @@ export function TemplatesPage() {
       countLabel="个模板" />
 
     <CatalogListPanel title="模板列表" count={total} countLabel="个模板"
-      filters={<DesktopListFilters labels={["模板分类","文件格式","模板状态","创建人","更新时间"]} advancedAfter={2}><Space wrap size={10}>
+      filters={<DesktopListFilters responsive labels={["模板分类","文件格式","模板状态","创建人","更新时间"]} advancedAfter={2}><Space wrap size={10}>
         <Input allowClear prefix={<SearchOutlined />} placeholder="搜索模板名称" value={keyword}
           onChange={(event) => applySearch(event.target.value)} style={{ width: 230 }} />
         <Select allowClear placeholder="全部分类" value={uncategorized ? 'UNCATEGORIZED' : categoryId} onChange={(value) => changeFilter(() => { setUncategorized(value === 'UNCATEGORIZED'); setCategoryId(value === 'UNCATEGORIZED' ? undefined : value); })} options={[...categoryItems.map((item) => ({ value: item.id, label: item.name })), { value: 'UNCATEGORIZED', label: '未分类' }]} style={{ width: 150 }} />

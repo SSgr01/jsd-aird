@@ -5,6 +5,50 @@ const origin='http://127.0.0.1:5184';
 const id='11111111-1111-1111-1111-111111111111', version='22222222-2222-2222-2222-222222222222';
 const url=origin+'/api/v1/knowledge/documents/'+id+'/versions/'+version+'/content';
 
+test('business citations share the PDF chip projection and collapse only adjacent identical targets',()=>{
+ const target='jsd-resource:'+Buffer.from(JSON.stringify({kind:'EXPERIMENT',resource_id:id,revision:1})).toString('base64url');
+ const other='jsd-resource:'+Buffer.from(JSON.stringify({kind:'EXPERIMENT',resource_id:id,revision:2})).toString('base64url');
+ const label='水性丙烯酸树脂合成研究 10 · 结果';
+ const input='固含量为55.4%。['+label+']('+target+')[实验记录 · V1]('+target+') [实验记录 · V2]('+other+')';
+ const result=projectSourceBlocks([{kind:'text',text:input}],origin);
+ assert.equal(result.links.length,2);
+ assert.equal(result.links[0].kind,'business');
+ assert.equal(result.links[0].title,label);
+ assert.equal(result.blocks[0].text.split(target).length-1,1);
+ assert.ok(result.blocks[0].text.includes(other));
+ assert.ok(result.blocks[0].text.startsWith('固含量为55.4%。'));
+ assert.ok(result.blocks[0].text.includes('…'));
+ assert.equal(projectSourceBlocks([{kind:'text',text:'`[记录]('+target+')`'}],origin).links.length,0);
+});
+
+test('record, query, compute and experiment citations retain every immutable locator',()=>{
+ const ref=encodeURIComponent(JSON.stringify({type:'EXPERIMENT',id,revision:1}));
+ const targets=[
+  '/api/v1/agents/business/records/EXPERIMENT/'+id+'?ref='+ref+'&section=testResults&offset=20',
+  '/api/v1/agents/business/query?q='+encodeURIComponent('{"type":"EXPERIMENT"}')+'&snapshot_hash=abc',
+  '/api/v1/agents/business/compute/model/'+id+'?revision=fixed',
+  '/experiments/'+id+'?revision=1',
+ ];
+ const title='水性丙烯酸树脂合成研究完整实验记录与性能结果';
+ for(const target of targets){
+  const result=projectSourceBlocks([{kind:'text',text:'['+title+']('+target+')'}],origin);
+  assert.equal(result.links[0].kind,'business');
+  assert.equal(result.links[0].title,title);
+  assert.equal(result.links[0].url,new URL(target,origin).href);
+  assert.ok(result.blocks[0].text.includes('…]('+target+')'));
+ }
+ assert.equal(describeSourceLink('记录',origin+'/api/v1/agents/business/records/EXPERIMENT/'+id,origin),null);
+ assert.equal(describeSourceLink('记录',origin+'/api/v1/files/'+id,origin),null);
+ assert.equal(describeSourceLink('记录',origin+'/experiments/new',origin),null);
+});
+
+test('all website source chips use compact labels with full titles retained',()=>{
+ const title='A comprehensive scientific reference with a very long title';
+ const result=projectSourceBlocks([{kind:'text',text:'['+title+'](https://example.org/source)'}],origin);
+ assert.equal(result.links[0].title,title);
+ assert.ok(result.blocks[0].text.includes('…](https://example.org/source)'));
+});
+
 test('spectrum page citations keep their pinned reference and exact original page',()=>{
  const path='/api/v1/agents/business/images/SPECTRUM/'+id+'?ref='+encodeURIComponent(JSON.stringify({resource_type:'SPECTRUM',resource_id:id,revision:'pinned'}))+'&page=2#page=2';
  const target=origin+path;
@@ -161,7 +205,8 @@ test('project names resolve only for exact same-origin project routes with a rea
  assert.equal(initial.links[0].endpoint,endpoint);
  const names=new Map([[endpoint,'澄禾电子 [UV胶] *配方*']]);
  const result=projectSourceBlocks([{kind:'text',text:input}],origin,names);
- assert.ok(result.blocks[0].text.includes('[项目 · 澄禾电子 \\[UV胶\\] \\*配方\\*]('+target+')'));
+ assert.ok(result.blocks[0].text.includes(']('+target+')'));
+ assert.ok(result.blocks[0].text.includes('…'));
  assert.equal(result.links[0].title,'澄禾电子 [UV胶] *配方*');
  assert.equal(result.links[0].url,target);
  assert.equal(describeSourceLink('', 'https://untrusted.org/projects/'+id,origin).kind,'web');

@@ -648,7 +648,7 @@ export function ProjectListPage() {
                   <th>优先级</th>
                   <th>状态</th>
                   <th className="app-numeric">团队成员</th>
-                  <th>操作</th>
+                  <th className="table-action-column">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -681,7 +681,7 @@ export function ProjectListPage() {
                       <StatusTag status={row.status} label={formatProjectStatus(row.status)} />
                     </td>
                     <td className="app-numeric">{(row.teamMembers ?? []).length} 人</td>
-                    <td>
+                    <td className="table-action-column">
                       <div className="cm-row-actions management-table-actions">
                         <Link to={`/projects/${row.id}`} state={{ returnTo: `/projects/list?${searchParams.toString()}` }}>查看</Link>
                         <Can permission="project.list.delete"><Popconfirm title="确认删除该项目？" description="删除后不可恢复。" okButtonProps={{ danger: true }} onOpenChange={(open) => { if (open) pendingRowDelete.current = { id: row.id, version: row.version }; }} onConfirm={() => handleDeleteRow(row)}>

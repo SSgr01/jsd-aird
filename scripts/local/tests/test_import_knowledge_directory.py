@@ -118,6 +118,38 @@ class EnrichmentResumeTest(unittest.TestCase):
         self.assertTrue(all(call.args[0] == "GET" for call in api.json.call_args_list))
 
 
+class TerminalParseRetryTest(unittest.TestCase):
+    def test_terminal_timeout_requeues_processing_document_only_when_retry_enabled(self):
+        for retry, parse_status, terminal, job_status, expected in (
+            (True, None, True, "FAILED", True),
+            (False, None, True, "FAILED", False),
+            (True, "SUCCEEDED", True, "FAILED", False),
+            (True, None, False, "RUNNING", False),
+            (True, "FAILED", False, "READY", False),
+        ):
+            with self.subTest(retry=retry, parse_status=parse_status, job_status=job_status):
+                api = Mock()
+                def request(method, path, value=None):
+                    if path.endswith("/processing"):
+                        return {"documentStatus": "PROCESSING", "parseRunStatus": parse_status,
+                                "terminal": terminal, "jobStatus": job_status,
+                                "lastError": "异步任务超时：PT15M"}
+                    if path.endswith("/review"):
+                        return {"reviewRevision": None}
+                    return {"currentVersionId": "version", "reviewStatus": "PENDING_REVIEW"}
+                api.json.side_effect = request
+                with patch.object(module, "queue_api_call") as queue, \
+                        patch.object(module, "wait_for_parse", side_effect=RuntimeError("stop after retry decision")):
+                    with self.assertRaises((RuntimeError, module.ImportErrorWithMessage)):
+                        module.finish_document(api, "document", "version", 60, retry, 60)
+                    self.assertEqual(int(expected), queue.call_count)
+                    if expected:
+                        queue.call_args.args[1]()
+                        self.assertEqual(call("POST", "/api/v1/knowledge/documents/document/versions/version/reparse",
+                                              {"reviewRevisionId": None, "lockVersion": None}),
+                                         api.json.call_args_list[-1])
+
+
 class PublicationReviewTest(unittest.TestCase):
     path = "/api/v1/workspace-reviews/KNOWLEDGE_VERSION/version"
 

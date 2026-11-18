@@ -366,7 +366,6 @@ public class KnowledgeGovernanceService {
         if (!governance.updateLifecycle(actor.organizationId(), actor.userId(), documentId, normalized, reason)) {
             throw new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在");
         }
-        knowledgeRepository.rebuildTermStats(actor.organizationId());
         audit(actor.organizationId(), actor.userId(), "KB_DOCUMENT_" + ("ACTIVE".equals(normalized) ? "RESTORED" : "DISABLED"), documentId,
                 objectMapper.createObjectNode().put("before", before.lifecycleStatus()).put("after", normalized)
                         .put("reason", reason == null ? "" : reason));

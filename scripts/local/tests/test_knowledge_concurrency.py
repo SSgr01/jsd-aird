@@ -13,6 +13,37 @@ spec.loader.exec_module(module)
 
 
 class KnowledgeConcurrencyTest(unittest.TestCase):
+    def test_publication_can_finish_after_ten_minutes_without_resubmission(self):
+        clock = [0.0]
+        queued = [False]
+        api = Mock()
+        def request(method, path, value=None):
+            if path.endswith('/documents/doc'):
+                published = clock[0] >= 900
+                return {'currentVersionId': 'version', 'aiStatus': 'APPROVED',
+                        'currentPublicationId': 'publication' if published else None,
+                        'reviewStatus': 'PUBLISHED' if published else 'PENDING_REVIEW'}
+            if path.endswith('/processing'):
+                return {'documentStatus': 'READY', 'parseRunStatus': 'SUCCEEDED'}
+            if path.endswith('/review'):
+                return {'reviewRevision': {'id': 'revision', 'lockVersion': 1,
+                                           'status': 'BUILDING' if queued[0] else 'DRAFT'}}
+            if path.endswith('/publish'):
+                queued[0] = True
+                return {}
+            raise AssertionError(path)
+        api.json.side_effect = request
+        def pause(*args): clock[0] += 301
+        with patch.object(module.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(module, 'pause', side_effect=pause), \
+                patch.object(module, 'wait_for_parse'), patch.object(module, 'ensure_publication_review'), \
+                patch.object(module, 'queue_api_call', side_effect=lambda client, operation, *args: operation()):
+            result = module.finish_document(api, 'doc', 'version', 60, False, 60,
+                                            publish_timeout_seconds=1200)
+        self.assertEqual('publication', result['currentPublicationId'])
+        self.assertEqual(1, sum(c.args[0] == 'POST' and c.args[1].endswith('/publish')
+                                for c in api.json.call_args_list))
+
     def test_slow_first_document_does_not_block_completed_document_and_work_is_bounded(self):
         release = threading.Event()
         started = []

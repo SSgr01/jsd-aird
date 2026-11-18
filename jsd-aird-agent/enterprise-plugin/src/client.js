@@ -6,6 +6,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
   const memoryUI = /* @memory-ui */ null;
   const briefingEntry = /* @briefing-entry */ null;
   const expertsUI = /* @experts-ui */ null;
+  const tasks = /* @workbench-tasks */ null;
   const spectrumUI = /* @spectrum-ui */ null;
   const base = '/agent/';
   async function api(action, body, signal) {
@@ -102,36 +103,36 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
         h('rect',{x:27,y:13,width:8,height:21,rx:3,fill:peach,stroke}),
         h('path',{d:'M19 10v19M30 17v12M8 24v5',stroke,strokeOpacity:.6,strokeLinecap:'round'})));
   }
-  function registerWelcomeCards(scope,useExpert) {
-    const starters = [
-      {kind:'read',title:'阅读文献',description:'提炼主要结论与关键依据',prompt:'这份文献的主要结论是什么？'},
-      {kind:'compare',title:'比较方法',description:'对比实验方案与试验条件',prompt:'请比较我提供的资料或实验记录中的方法，说明条件差异与适用范围。'},
-      {kind:'data',title:'整理数据',description:'梳理关键数据与试验结果',prompt:'请整理我提供的资料或实验记录中的关键试验条件与结果。'},
-    ];
-    function WelcomeCards({sessionId,useInput,fillPrompt}) {
-      const hero = React.useContext(HeroContext), phase = useInput(value=>value.phase);
-      const {expert,loading}=useExpert(sessionId);
-      if (!hero || loading || expert) return null;
-      return h('div',{className:'jsd-starters',role:'group','aria-label':'研发任务建议'},
-        h('p',{className:'jsd-welcome-description'},'从一份资料、一个问题，开始今天的研发工作。'),
-        starters.map(item=>h('button',{key:item.kind,type:'button','aria-label':item.title,
-          title:'填入输入框，确认后发送',disabled:phase!=='plain',onClick:()=>fillPrompt(item.prompt)},
-          h('span',{className:'jsd-starter-art'},h(StarterArt,{kind:item.kind})),
-          h('strong',null,item.title),h('span',{className:'jsd-starter-description'},item.description))));
+  function registerWelcomeCards(scope,{useExpert,startTask}) {
+    function WelcomeCards({sessionId,useInput}) {
+      const hero=React.useContext(HeroContext),phase=useInput(value=>value.phase);
+      const {loading}=useExpert(sessionId);
+      const [busy,setBusy]=useState(''),[error,setError]=useState('');
+      const pending=useRef(false);
+      if(!hero || loading)return null;
+      async function start(task) {
+        if(pending.current)return;
+        pending.current=true;setBusy(task.id);setError('');
+        try {await startTask(task.id);}
+        catch(failure){setError(failure.message || '暂时无法开始任务，请稍后重试。');}
+        finally{pending.current=false;setBusy('');}
+      }
+      return h('section',{className:'jsd-starters','data-task-starts':true,'aria-label':'研发任务'},
+        h('p',{className:'jsd-welcome-description'},'先选任务，再添加资料，确认草稿后发送。'),
+        tasks.workbenchTasks.map(task=>h('button',{key:task.id,type:'button','aria-label':task.title,
+          title:'新开对应专家会话，填入可编辑草稿，不自动发送',disabled:phase!=='plain' || Boolean(busy),
+          onClick:()=>start(task),'aria-busy':busy===task.id},
+          h('strong',null,task.title),h('span',{className:'jsd-starter-description'},task.description),
+          h('span',{className:'jsd-starter-owner'},busy===task.id?'正在准备…':'由'+task.expertName+'处理'))),
+        error && h('p',{role:'alert',className:'jsd-starter-note'},error),
+        h('p',{className:'jsd-starter-note'},'自动复盘在“自动化任务”中查看；也可从侧栏“专家中心”选择专家。'));
     }
     scope.slots.inject('conversation.hero.frame',()=>scope.slots.register({
       name:'conversation.hero.frame',id:'enterprise-welcome',
     },HeroFrame));
     scope.slots.inject('conversation.input.dock',()=>scope.slots.register({
       name:'conversation.input.dock',id:'enterprise-welcome-cards',order:-20,
-      inject:sessionId=>({sessionId,fillPrompt:prompt=>{
-        const binding=scope.sessions.binding(sessionId), input=scope.conversation.input.for(scope.sessions.scope(sessionId));
-        if (!binding || scope.conversation.input.requestDraftInitialization(binding,
-          {prompt,whenDraftExists:'append'}) !== 'applied') {
-          input.notify('info','输入框正忙，请稍后再试。'); return;
-        }
-        input.focus();
-      }}),
+      inject:sessionId=>({sessionId}),
     },WelcomeCards));
   }
   const encode = value => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(value))))
@@ -647,9 +648,10 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
     ctx.inject(['contextMenus'],registerPluginMenuPolicy);
     ctx.inject(['uiWorkspace','conversation','sessions','layout'],scope=>{
       const {Modal,Menu,MenuItemButton}=require('@deepseek-ai/dsh-client-ui-primitives');
-      const {useExpert}=expertsUI.registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton});
+      const expertActions=expertsUI.registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton,tasks});
+      const {useExpert}=expertActions;
       spectrumUI.registerSpectrumUI(scope,{React,api,Modal,useExpert,marker});
-      registerWelcomeCards(scope,useExpert);
+      registerWelcomeCards(scope,expertActions);
     });
     registerSourceMarkdown(ctx);
     ctx.inject(['uiWorkspace'],registerBusinessToolViews);

@@ -7,5 +7,5 @@ export function SpectrumWorkbenchEntry() {
   const ids = (params.get('chartIds') || '').split(',').filter((id) => /^[a-f0-9-]{36}$/i.test(id)).slice(0, 12);
   const target = `/agent/?spectrum=${encodeURIComponent(ids.join(','))}`;
   useEffect(() => { window.location.replace(target); }, [target]);
-  return <p role="status">正在打开图谱分析助手…</p>;
+  return <p role="status">正在打开图谱分析助理…</p>;
 }

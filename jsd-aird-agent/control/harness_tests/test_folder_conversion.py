@@ -95,6 +95,11 @@ class MemoryStore:
         self.records[(kind, record['id'])] = copy.deepcopy(record)
         return record
 
+    async def page(self, user, kind, *, cursor=None, limit=100):
+        rows = [copy.deepcopy(value) for (stored_kind, _), value in self.records.items() if stored_kind == kind]
+        start = int(cursor or 0)
+        return {'items': rows[start:start+limit], 'next_cursor': str(start+limit) if start+limit < len(rows) else None}
+
 
 @pytest.mark.asyncio
 async def test_dispatch_limits_two_and_pause_does_not_admit_more(configured, principal):
@@ -271,3 +276,128 @@ def test_deployment_sample_uses_fixed_absolute_linux_directories():
         path = PurePosixPath(sample[key])
         assert path.is_absolute()
         assert path == PurePosixPath('/srv/jsd-aird/experiment-history')/leaf
+
+
+async def test_another_chat_reuses_the_active_directory_and_can_find_progress(configured, principal):
+    from aird_agent.hosts.jsd.folder_conversion import digest
+    bid = str(uuid4())
+    batch = {'id': bid, 'alias': 'history', 'root_hash': digest(configured), 'status': 'RUNNING',
+             'auth_version': principal.auth_version, 'count': 0}
+    store = MemoryStore({('folder-batch', bid): batch})
+    runtime = FolderConversions(SimpleNamespace(store=store))
+    async def rows(*args): return []
+    runtime.rows = rows
+    result = await runtime.handle(principal, {'id': 'another-chat-run'}, {'action': 'start', 'alias': 'history'}, 'new-call')
+    assert result['batch_id'] == bid and result['reused_active']
+    assert len(store.records) == 1
+    found = await runtime.handle(principal, {}, {'action': 'list'}, 'list')
+    assert found['batches'][0]['id'] == bid
+    status = await runtime.handle(principal, {}, {'action': 'status'}, 'status')
+    assert status['batch_id'] == bid
+    other = principal.model_copy(update={'actor_id': uuid4()})
+    assert (await runtime.handle(other, {}, {'action': 'list'}, 'list'))['batches'] == []
+
+
+async def test_continue_completed_directory_starts_a_new_incremental_scan(configured, principal):
+    from aird_agent.hosts.jsd.folder_conversion import digest
+    bid = str(uuid4())
+    batch = {'id': bid, 'alias': 'history', 'root_hash': digest(configured), 'status': 'COMPLETED'}
+    store = MemoryStore({('folder-batch', bid): batch})
+    runtime = FolderConversions(SimpleNamespace(store=store))
+    result = await runtime.handle(principal, {'id': 'new-chat-run'}, {'action': 'continue'}, 'continue')
+    assert result['batch_id'] != bid and result['status'] == 'SCANNING'
+    assert store.records[('folder-batch', bid)]['status'] == 'COMPLETED'
+
+
+def test_incremental_reuse_requires_same_path_source_and_intact_results(configured):
+    bid = str(uuid4())
+    previous = {'batch_id': bid, 'relative_path': 'old.xlsx', 'source_sha256': sha(b'old')}
+    target = FolderConversions.directory(configured, {'id': bid}, previous)
+    target.mkdir(parents=True)
+    values = {'result.xlsx': b'xlsx', 'mapping.json': b'mapping', 'verification.json': b'report'}
+    for name, value in values.items(): (target/name).write_bytes(value)
+    previous['result_hashes'] = {name: sha(value) for name, value in values.items()}
+    entries = [{'relative_path': name, 'source_sha256': sha(value), 'status': 'QUEUED'}
+               for name, value in [('old.xlsx', b'old'), ('new.xlsx', b'old'), ('old.xlsx', b'changed')]]
+    result = FolderConversions.reuse_inventory(configured, copy.deepcopy(entries), [previous])
+    assert [row['status'] for row in result] == ['SKIPPED', 'QUEUED', 'QUEUED']
+    assert result[0]['reused_batch_id'] == bid
+    (target/'result.xlsx').write_bytes(b'edited')
+    assert FolderConversions.reuse_inventory(configured, copy.deepcopy(entries), [previous])[0]['status'] == 'QUEUED'
+    (target/'result.xlsx').unlink()
+    assert FolderConversions.reuse_inventory(configured, copy.deepcopy(entries), [previous])[0]['status'] == 'QUEUED'
+
+
+async def test_multiple_directories_require_selection_and_background_cannot_list(configured, principal):
+    from aird_agent.hosts.jsd.folder_conversion import digest
+    store = MemoryStore({})
+    runtime = FolderConversions(SimpleNamespace(store=store))
+    runtime.roots = lambda user: {'first': configured, 'second': configured}
+    for alias in ('first', 'second'):
+        bid = str(uuid4())
+        store.records[('folder-batch', bid)] = {'id': bid, 'alias': alias, 'root_hash': digest(configured), 'status': 'COMPLETED'}
+    result = await runtime.handle(principal, {}, {'action': 'continue'}, 'continue')
+    assert result['selection_required']
+    assert len(result['batches']) == 2
+    with pytest.raises(HTTPException, match='INTERACTIVE_AUTHORIZATION_REQUIRED'):
+        await runtime.handle(principal.model_copy(update={'automation_grant_id': 'background'}), {}, {'action': 'list'}, 'list')
+
+
+async def test_real_store_cross_chat_start_serializes_and_incremental_scan_reuses_outputs(configured, principal, store):
+    import asyncio
+    runtime = FolderConversions(SimpleNamespace(store=store))
+    another = FolderConversions(SimpleNamespace(store=store))
+    async def start(engine, run_id, call):
+        return await asyncio.wait_for(engine.handle(principal, {'id': run_id}, {'action': 'start', 'alias': 'history'}, call), timeout=10)
+    first, simultaneous = await asyncio.gather(start(runtime, 'chat-one', 'start'), start(another, 'chat-two', 'start'))
+    assert first['batch_id'] == simultaneous['batch_id']
+    bid = first['batch_id']
+    (configured['source']/'old.xlsx').write_bytes(b'original')
+    (configured['source']/'new.docx').write_bytes(b'new')
+    batch = await store.get(principal, 'folder-batch', bid)
+    batch.update(status='COMPLETED', engine_hash='same-engine', count=1)
+    item = {'batch_id': bid, 'relative_path': 'old.xlsx', 'source_sha256': sha(b'original'), 'status': 'SUCCEEDED'}
+    target = runtime.directory(configured, batch, item)
+    target.mkdir(parents=True)
+    outputs = {'result.xlsx': b'xlsx', 'mapping.json': b'plan', 'verification.json': b'report'}
+    for name, value in outputs.items(): (target/name).write_bytes(value)
+    item['result_hashes'] = {name: sha(value) for name, value in outputs.items()}
+    async with store.transaction(principal, 'fixture') as conn:
+        await store.update(principal, 'folder-batch', batch, conn)
+        await store.create(principal, 'folder-item', item, conn)
+    assert (await another.handle(principal, {}, {'action': 'list'}, 'list'))['batches'][0]['id'] == bid
+    # Engine/template changes invalidate old successes, even if the original stayed identical.
+    assert len(await runtime.reusable_items(principal, batch)) == 1
+    assert await runtime.reusable_items(principal, {**batch, 'engine_hash': 'new-engine'}) == []
+    assert await runtime.reusable_items(principal, {**batch, 'templates': {'test': 'changed'}}) == []
+    foreign = principal.model_copy(update={'actor_id': uuid4()})
+    assert await runtime.reusable_items(foreign, batch) == []
+    next_batch = await asyncio.wait_for(another.handle(principal, {'id': 'chat-three'}, {'action': 'continue'}, 'continue'), timeout=10)
+    user = principal.model_copy(update={'scope': 'folder-conversion', 'automation_grant_id': next_batch['batch_id']})
+    await another.dispatch(user, {'engine_hash': 'same-engine'})
+    await asyncio.wait_for(asyncio.gather(*list(another.scans.values())), timeout=10)
+    rows = await another.rows(principal, next_batch['batch_id'])
+    assert {row['relative_path']: row['status'] for row in rows} == {'old.xlsx': 'SKIPPED', 'new.docx': 'QUEUED'}
+    status = await runtime.handle(principal, {}, {'action': 'status'}, 'status')
+    assert status['counts']['SKIPPED'] == 1 and status['counts']['QUEUED'] == 1
+    old = next(row for row in status['files'] if row['relative_path'] == 'old.xlsx')
+    assert old['session_id'] is None and old['result_directory'] == str(target)
+    # Only the new file is dispatched. No native/model session is created by this test.
+    dispatched = await another.dispatch(user, {'engine_hash': 'same-engine'})
+    assert len(dispatched['items']) == 1
+    assert (target/'result.xlsx').read_bytes() == outputs['result.xlsx']
+
+
+async def test_paused_batch_can_resume_or_start_a_new_scan_without_overwriting_history(configured, principal):
+    from aird_agent.hosts.jsd.folder_conversion import digest
+    bid = str(uuid4())
+    batch = {'id': bid, 'alias': 'history', 'root_hash': digest(configured), 'status': 'PAUSED'}
+    store = MemoryStore({('folder-batch', bid): batch})
+    runtime = FolderConversions(SimpleNamespace(store=store))
+    resumed = await runtime.handle(principal, {}, {'action': 'continue', 'batch_id': bid}, 'resume')
+    assert resumed['batch_id'] == bid and resumed['status'] == 'RUNNING'
+    assert len(store.records) == 1
+    await runtime.handle(principal, {}, {'action': 'pause', 'batch_id': bid}, 'pause')
+    restarted = await runtime.handle(principal, {'id': 'explicit-new-scan'}, {'action': 'start', 'alias': 'history'}, 'start')
+    assert restarted['batch_id'] != bid and restarted['status'] == 'SCANNING'
+    assert store.records[('folder-batch', bid)]['status'] == 'PAUSED'

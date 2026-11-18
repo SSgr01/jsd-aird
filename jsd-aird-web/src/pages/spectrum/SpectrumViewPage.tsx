@@ -185,7 +185,7 @@ export function SpectrumViewPage() {
         { title: '最近更新', dataIndex: 'updatedAt', width: 180, render: (value: string) => new Date(value).toLocaleString('zh-CN') },
         { title: '操作', width: 640, render: (_: unknown, record) => <Space wrap>
           <Button type="link" icon={<EyeOutlined />} onClick={() => setPreviewFile(descriptor(record))}>预览</Button>
-          {permissions.includes('ai.use') && <Button type="link" icon={<MessageOutlined />} disabled={record.status !== 'READY'} onClick={() => { window.location.assign(`/agent/?spectrum=${record.id}`); }}>图谱分析助手</Button>}
+          {permissions.includes('ai.use') && <Button type="link" icon={<MessageOutlined />} disabled={record.status !== 'READY'} onClick={() => { window.location.assign(`/agent/?spectrum=${record.id}`); }}>图谱分析助理</Button>}
           {can('download') && <Button type="link" onClick={() => void downloadPreviewFile(descriptor(record))}>下载源文件</Button>}
           {can('update') && <Dropdown trigger={['click']} menu={{ items: categories.filter((category) => category.id !== record.categoryId).map((category) => ({ key: category.id, label: category.name, icon: <FolderOpenOutlined />, onClick: () => void moveChart(record, category.id) })) }}><Button type="link">移动分类</Button></Dropdown>}
           {can('update') && <Button type="link" onClick={() => setEditingItem(record)}>编辑</Button>}

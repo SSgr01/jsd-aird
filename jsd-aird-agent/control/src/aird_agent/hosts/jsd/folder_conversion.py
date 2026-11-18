@@ -118,10 +118,67 @@ class FolderConversions:
             rows = await (await conn.execute("SELECT id,revision,created_at,updated_at,payload FROM agent_runtime.harness_records WHERE kind='folder-item' AND organization_id=%s AND actor_id=%s AND payload->>'batch_id'=%s ORDER BY created_at,id", (*user.key, batch_id))).fetchall()
         return [{**row['payload'], 'id':str(row['id']), 'revision':row['revision'], 'created_at':str(row['created_at']), 'updated_at':str(row['updated_at'])} for row in rows]
 
+    async def visible_batches(self, user):
+        """Directory-owned history is discoverable from any authorized chat."""
+        allowed = self.roots(user)
+        batches, cursor = [], None
+        while True:
+            page = await self.store.page(user, 'folder-batch', cursor=cursor, limit=100)
+            batches.extend(row for row in page['items'] if row.get('alias') in allowed
+                           and row.get('root_hash') == digest(allowed[row['alias']]))
+            cursor = page.get('next_cursor')
+            if not cursor:
+                return sorted(batches, key=lambda row: (str(row.get("created_at", "")), row["id"]), reverse=True)
+
+    async def progress(self, user, args):
+        if user.automation_grant_id:
+            raise HTTPException(403, 'INTERACTIVE_AUTHORIZATION_REQUIRED')
+        batches = await self.visible_batches(user)
+        return {'batches': [{k: row[k] for k in ('id', 'alias', 'status', 'count', 'created_at', 'updated_at', 'scan_error') if k in row}
+                            for row in batches], 'aliases': list(self.roots(user))}
+
+    async def reusable_items(self, user, batch):
+        if not batch.get('engine_hash'):
+            return []
+        # Both sides of the join are owner-bound. Never reuse another user's output.
+        async with self.store.pool.connection() as conn:
+            rows = await (await conn.execute(
+                "SELECT i.payload, b.id AS batch_id FROM agent_runtime.harness_records i "
+                "JOIN agent_runtime.harness_records b ON b.id::text=i.payload->>'batch_id' "
+                "AND b.organization_id=i.organization_id AND b.actor_id=i.actor_id AND b.kind='folder-batch' "
+                "WHERE i.kind='folder-item' AND i.organization_id=%s AND i.actor_id=%s "
+                "AND i.payload->>'status'='SUCCEEDED' AND b.payload->>'root_hash'=%s "
+                "AND b.payload->'templates'=%s::jsonb AND b.payload->>'engine_hash'=%s "
+                "ORDER BY i.updated_at DESC",
+                (*user.key, batch['root_hash'], json.dumps(batch['templates']), batch.get('engine_hash', '')))).fetchall()
+        return [{**row['payload'], 'batch_id': str(row['batch_id'])} for row in rows]
+
+    @classmethod
+    def reuse_inventory(cls, config, entries, previous):
+        candidates = {}
+        for item in previous:
+            candidates.setdefault((item.get('relative_path'), item.get('source_sha256')), []).append(item)
+        for entry in entries:
+            if entry['status'] != 'QUEUED':
+                continue
+            for item in candidates.get((entry['relative_path'], entry.get('source_sha256')), []):
+                hashes = item.get('result_hashes', {})
+                if set(hashes) != {'result.xlsx', 'mapping.json', 'verification.json'}:
+                    continue
+                try:
+                    target = cls.directory(config, {'id': item['batch_id']}, item)
+                    if not all(sha(bounded(contained(config['output'], target/name))) == value for name, value in hashes.items()):
+                        continue
+                except (HTTPException, OSError):
+                    continue
+                entry.update(status='SKIPPED', reused_batch_id=item['batch_id'], result_hashes=hashes)
+                break
+        return entries
+
     async def handle(self, user, run, args, call_id):
         action = args['action']
         if action == 'list':
-            return {'aliases': list(self.roots(user))}
+            return await self.progress(user, {})
         if action == 'start':
             if user.automation_grant_id:
                 raise HTTPException(403, 'INTERACTIVE_AUTHORIZATION_REQUIRED')
@@ -131,22 +188,35 @@ class FolderConversions:
             # Stable across lost responses to the original tool call.
             from uuid import NAMESPACE_URL, uuid5
             bid = str(uuid5(NAMESPACE_URL, digest([*user.key, run['id'], call_id])))
-            async with self.scan_lock:
+            async with self.scan_lock, self.store.transaction(user, 'folder-directory:' + args['alias']) as conn:
                 try:
                     batch, _ = await self.batch(user, bid)
                     return {'batch_id': bid, 'folder_dispatch': True, 'status': batch['status']}
                 except HTTPException as error:
                     if error.status_code != 404:
                         raise
+                for active in await self.visible_batches(user):
+                    if active['alias'] == args['alias'] and active['status'] in {'SCANNING', 'RUNNING'}:
+                        return {'batch_id': active['id'], 'folder_dispatch': True, 'status': active['status'], 'reused_active': True}
                 templates = {kind: sha(bounded(contained(config['templates'], config['templates'] / (kind + '.xlsx')))) for kind in ('test', 'synthesis')}
                 # Publish only the technical batch here; hashing thousands of
                 # Office files must not hold an interactive tool request open.
-                async with self.store.transaction(user, 'folder-start:' + bid) as conn:
-                    await self.store.create(user, 'folder-batch', {'alias': args['alias'], 'root_hash': digest(config), 'templates': templates,
-                        'principal': user.model_dump(mode='json', exclude_none=True), 'auth_version': user.auth_version,
-                        'status': 'SCANNING', 'count': 0}, conn, rid=bid)
+                await self.store.create(user, 'folder-batch', {'alias': args['alias'], 'root_hash': digest(config), 'templates': templates,
+                    'principal': user.model_dump(mode='json', exclude_none=True), 'auth_version': user.auth_version,
+                    'status': 'SCANNING', 'count': 0}, conn, rid=bid)
             return {'batch_id': bid, 'folder_dispatch': True, 'status': 'SCANNING'}
-        batch, config = await self.batch(user, args.get('batch_id') or user.automation_grant_id)
+        batch_id = args.get('batch_id') or user.automation_grant_id
+        if not batch_id:
+            candidates = [row for row in await self.visible_batches(user) if not args.get('alias') or row['alias'] == args['alias']]
+            aliases = {row['alias'] for row in candidates}
+            if len(aliases) != 1:
+                return {'selection_required': True, 'batches': [{k: row[k] for k in ('id', 'alias', 'status')} for row in candidates]}
+            active = [row for row in candidates if row['status'] in {'SCANNING', 'RUNNING', 'PAUSED'}]
+            batch_id = (active or candidates)[0]['id']
+        batch, config = await self.batch(user, batch_id)
+        if action == 'continue' and batch['status'] == 'COMPLETED':
+            return await self.handle(user, run, {'action': 'start', 'alias': batch['alias']}, call_id)
+
         if action in {'pause', 'continue'}:
             if user.automation_grant_id:
                 raise HTTPException(403, 'INTERACTIVE_AUTHORIZATION_REQUIRED')
@@ -160,10 +230,14 @@ class FolderConversions:
             return {'batch_id': batch['id'], 'status': batch['status'], 'folder_dispatch': action == 'continue'}
         if action == 'status':
             rows = await self.rows(user, batch['id'])
-            counts = {status: sum(row['status'] == status for row in rows) for status in ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED')}
+            counts = {status: sum(row['status'] == status for row in rows) for status in ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED')}
             offset = args.get('offset', 0)
             return {'batch_id': batch['id'], 'status': batch['status'], 'counts': counts, 'scan_error': batch.get('scan_error'),
-                    'files': [{k: row[k] for k in ('id', 'relative_path', 'status', 'error') if k in row} for row in rows[offset:offset+30]],
+                    'result_directory': str(config['output'] / batch['id']),
+                    'files': [{**{k: row[k] for k in ('id', 'relative_path', 'status', 'error') if k in row},
+                               'session_id': None if row['status'] == 'SKIPPED' else 'folder-' + row['id'],
+                               **({'result_directory': str(self.directory(config, {'id': row.get('reused_batch_id', batch['id'])}, row))}
+                                  if row['status'] in {'SUCCEEDED', 'SKIPPED'} else {})} for row in rows[offset:offset+30]],
                     **({'next_offset': offset+30} if offset+30 < len(rows) else {})}
         item = await self.item_for_session(user, batch['id'], run['dsh_session_id'])
         if action == 'fail':
@@ -297,6 +371,8 @@ class FolderConversions:
         try:
             batch, config = await self.batch(user, batch_id)
             entries = await asyncio.to_thread(self.inventory, config)
+            previous = await self.reusable_items(user, batch)
+            entries = await asyncio.to_thread(self.reuse_inventory, config, entries, previous)
             async with self.store.transaction(user, batch_id) as conn:
                 batch = await self.store.get(user, 'folder-batch', batch_id, conn)
                 if batch['status'] != 'SCANNING':
@@ -332,6 +408,13 @@ class FolderConversions:
         batch = await self.check(user)
         _, config = await self.batch(user, batch['id'])
         if batch['status'] == 'SCANNING':
+            if body and body.get('engine_hash'):
+                async with self.store.transaction(user, batch['id']) as conn:
+                    batch = await self.store.get(user, 'folder-batch', batch['id'], conn)
+                    if batch.get('engine_hash') and batch['engine_hash'] != body['engine_hash']:
+                        raise HTTPException(409, 'FOLDER_ENGINE_CHANGED')
+                    batch['engine_hash'] = body['engine_hash']
+                    await self.store.update(user, 'folder-batch', batch, conn)
             if batch['id'] not in self.scans:
                 self.scans[batch['id']] = asyncio.create_task(self.scan(user, batch['id']))
             return {'batch_id':batch['id'], 'status':'SCANNING', 'items':[]}

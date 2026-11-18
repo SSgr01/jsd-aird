@@ -258,6 +258,7 @@ class KnowledgeServiceIndexingTest {
         transactionOrder.verify(transactions).commit(transaction);
 
         assertThat(result).isEqualTo(publication);
+        verify(repository, never()).rebuildTermStats(any());
         @SuppressWarnings("unchecked")
         var chunks = ArgumentCaptor.forClass((Class<List<KnowledgeRepository.ChunkWrite>>) (Class<?>) List.class);
         verify(repository).replaceChunks(eq(documentId), eq(versionId), eq(reviewRevisionId), chunks.capture());

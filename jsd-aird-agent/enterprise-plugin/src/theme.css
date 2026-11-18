@@ -314,7 +314,7 @@ body[data-jsd-workbench] [data-composer-card]:focus-within {
 
 .jsd-starters {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-block: 12px;
   margin-inline: var(--dsh-composer-side-clearance, 16px);
@@ -593,3 +593,8 @@ body[data-jsd-workbench] .jsd-briefing-entry-error {
   .jsd-spectrum-picker { max-height: 75vh; }
   .jsd-spectrum-footer { flex-wrap: wrap; }
 }
+
+.jsd-starter-owner { color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }
+.jsd-starter-note { grid-column: 1 / -1; margin: 0; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 20px; text-align: center; }
+.jsd-starters[data-task-starts] button { grid-template-columns: minmax(0, 1fr); }
+.jsd-expert-summary { cursor: pointer; color: var(--dsw-alias-label-secondary); font-size: 12px; }

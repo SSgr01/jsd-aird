@@ -533,7 +533,7 @@ def ensure_publication_review(api: ApiClient, version_id: str, *, auto_approve: 
 
 def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_seconds: int,
                     retry_failed: bool, queue_timeout_seconds: int, *,
-                    auto_approve: bool = False) -> dict[str, Any]:
+                    auto_approve: bool = False, publish_timeout_seconds: int | None = None) -> dict[str, Any]:
     document = api.json("GET", api_path_document(document_id))
     if document.get("currentVersionId") != version_id:
         raise ImportErrorWithMessage("文档的当前文件版本已变化，请核对后重跑")
@@ -572,7 +572,8 @@ def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_s
                 }
             ), queue_timeout_seconds, 2)
 
-        deadline = time.monotonic() + min(timeout_seconds, 600)
+        deadline = time.monotonic() + (publish_timeout_seconds if publish_timeout_seconds is not None else timeout_seconds)
+        next_report = time.monotonic() + 30
         while time.monotonic() < deadline:
             document = api.json("GET", api_path_document(document_id))
             if document.get("currentVersionId") != version_id:
@@ -583,6 +584,9 @@ def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_s
             latest_revision = latest_review.get("reviewRevision") or {}
             if latest_revision.get("status") == "FAILED":
                 raise ImportErrorWithMessage(latest_revision.get("failureReason") or "发布任务失败")
+            if time.monotonic() >= next_report:
+                print(f"等待发布：{document_id}；状态 {latest_revision.get('status', 'UNKNOWN')}；剩余约 {max(0, int(deadline-time.monotonic()))} 秒", flush=True)
+                next_report = time.monotonic() + 30
             pause(api, 3)
         else:
             raise ImportErrorWithMessage("发布任务已提交，尚未看到发布版本；可在知识库继续查看")
@@ -788,7 +792,8 @@ def import_directory(args: argparse.Namespace) -> int:
                 sync_document_metadata(api, record)
                 document = finish_document(api, document_id, record["versionId"],
                                            args.parse_timeout_minutes * 60, args.retry_failed,
-                                           queue_timeout_seconds, auto_approve=args.auto_approve)
+                                           queue_timeout_seconds, auto_approve=args.auto_approve,
+                                           publish_timeout_seconds=getattr(args, 'publish_timeout_minutes', 120) * 60)
                 copy_document_state(record, document)
                 record["message"] = "已发布并授权 AI" + ("（关联已有文档）" if record.get("duplicate") else "")
                 record["bodyImportStatus"] = "COMPLETED"
@@ -1239,6 +1244,8 @@ def main() -> int:
     parser.add_argument("--manifest", help="断点清单 JSONL；导入默认在来源目录内，重建默认 .runtime/knowledge-vector-rebuild.jsonl")
     parser.add_argument("--include", action="append", help="只导入指定相对路径，可重复；不传时扫描全部来源文件")
     parser.add_argument("--parse-timeout-minutes", type=int, default=24 * 60)
+    parser.add_argument("--publish-timeout-minutes", type=int, default=120,
+                        help="单份资料等待发布的分钟数，默认 120；超时保留后台任务和断点，不重新上传")
     parser.add_argument("--max-in-flight", type=int, default=8,
                         help="并行跟踪解析/发布或向量重建的文件数，默认 8，最多 16；导入另受组织队列容量限制")
     parser.add_argument("--queue-wait-timeout-minutes", type=int, default=24 * 60,
@@ -1261,7 +1268,7 @@ def main() -> int:
     parser.add_argument("--metadata-wait-seconds", type=int, default=0, help="等候异步补全的秒数，默认提交后记录状态即退出；断点续跑可重新检查")
     args = parser.parse_args()
     try:
-        if args.parse_timeout_minutes < 1 or not 1 <= args.max_in_flight <= 16 or args.queue_wait_timeout_minutes < 1:
+        if args.parse_timeout_minutes < 1 or args.publish_timeout_minutes < 1 or not 1 <= args.max_in_flight <= 16 or args.queue_wait_timeout_minutes < 1:
             raise ValueError("超时必须为正整数，并行文件数须为 1–16")
         uuid.UUID(args.category_id) if args.category_id else None
         if args.metadata_wait_seconds < 0:

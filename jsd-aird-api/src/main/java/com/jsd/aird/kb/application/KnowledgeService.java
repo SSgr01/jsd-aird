@@ -983,7 +983,6 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                 enqueueVectorBuild(organizationId, documentId, publication.id(), publication.reviewRevisionId());
             }
         }
-        repository.rebuildTermStats(organizationId);
         appendIngestAudit(organizationId, actorId, "KB_DOCUMENT_PUBLISHED", documentId,
                 objectMapper.createObjectNode().put("publicationId", publication.id().toString())
                         .put("reviewRevisionId", reviewRevisionId.toString()));
@@ -1033,7 +1032,6 @@ public class KnowledgeService implements KnowledgeSearchFacade {
                     publication.reviewRevisionId(), document.title(), snapshot.confirmedDocument(),
                     snapshot.excludedReviewNodeIds(), snapshot.sourceNodes());
             replacePreparedIndex(organizationId, documentId, publication, prepared);
-            repository.rebuildTermStats(organizationId);
         };
         if (publicationTransaction == null) fullRebuild.run();
         else publicationTransaction.executeWithoutResult(status -> fullRebuild.run());
@@ -1060,7 +1058,6 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         for (var item : preparedPublications) {
             replacePreparedIndex(organizationId, item.documentId(), item.publication(), item.prepared());
         }
-        repository.rebuildTermStats(organizationId);
         return preparedPublications.size();
     }
 

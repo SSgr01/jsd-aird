@@ -96,6 +96,9 @@ export function enterprisePatch(config) {
     'ui-settings-shell', 'ui-settings-subagent', 'ui-settings-web-search', 'ui-settings-agent-loop',
     'ui-settings-session-log', 'ui-settings-plugin-inventory', 'ui-cordis', 'ui-agent-team', 'ui-subagent',
     'ui-sidebar-terminal', 'ui-open-in-app',
+    // One deployment-managed composition: keep its registry/runtime, hide the
+    // picker, header label and settings roster that duplicate company experts.
+    'ui-agent-preset',
     'ui-workflow-run', 'ui-trajectory',
     'entry-customization', 'ui-brand-official', 'tool-agent-team', 'client-hmr',
   ];

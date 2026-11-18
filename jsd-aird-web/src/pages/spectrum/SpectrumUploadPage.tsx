@@ -384,7 +384,7 @@ export function SpectrumUploadPage() {
       },
       actions: (
         attempt.chartId ? <Button type="link" icon={<MessageOutlined />}
-          onClick={() => { window.location.assign(`/agent/?spectrum=${attempt.chartId}`); }}>图谱分析助手</Button> : null
+          onClick={() => { window.location.assign(`/agent/?spectrum=${attempt.chartId}`); }}>图谱分析助理</Button> : null
       ),
     };
   });

@@ -34,6 +34,11 @@ def quantity(value, unit="g"):
 
 async def test_fixed_expert_required_fields_and_composite_identity_cannot_be_erased():
     ctx = context("experiment-assistant")
+    # Task-specific template policy is supplied explicitly for the merged role.
+    ctx.run["expert"]["work_config"]["checks"]["required_fields"] = [
+        {"key": key, "label": key} for key in
+        ["experiment_date", "operator", "formulation_revision", "raw_material_batches", "process_conditions", "sample_id"]]
+    ctx.run["expert"]["work_config"]["checks"]["identity_fields"] = ["experiment_id", "record_revision", "sample_id"]
     role_before = copy.deepcopy(ctx.run["expert"])
     base = dict(experiment_date="2026-11-11", operator="A", formulation_revision="f1", raw_material_batches=["b1"],
                 process_conditions="25℃", sample_id="s1", experiment_id="e1", record_revision="1", temperature=0)
@@ -51,6 +56,15 @@ async def test_fixed_expert_required_fields_and_composite_identity_cannot_be_era
     assert result["expert"] == {"id": ctx.run["expert"]["id"]}
     instructions = role_instructions(ctx.run["expert"])
     assert '"formulation_revision"' in instructions and "record_validate" in instructions
+
+
+async def test_merged_data_role_does_not_apply_experiment_fields_to_plain_tables():
+    ctx = context("experiment-assistant")
+    result = await check("record_validate", {"records": [
+        {"source": "table:1", "values": {"code": "001", "value": 0}}],
+        "required_fields": ["code", "value"], "identity_fields": ["code"]}, ctx)
+    assert not result["missing"]
+    assert not result["incomplete_identity"]
 
 
 async def test_record_types_zero_and_unconfigured_identity_are_preserved():

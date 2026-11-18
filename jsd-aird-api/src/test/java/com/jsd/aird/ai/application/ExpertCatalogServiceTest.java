@@ -9,6 +9,21 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class ExpertCatalogServiceTest {
+    @Test void mergedDataExpertKeepsBothIdentitiesAndTaskSpecificChecks() throws Exception {
+        var service = new ExpertCatalogService(new ObjectMapper(), mock(AgentArtifactService.class));
+        var current = service.resolve("experiment-assistant", true);
+        assertEquals("数据整理助理", current.path("name").asText());
+        assertEquals(current, service.resolve("data-assistant", true));
+        assertEquals(current, service.resolve("data-assistant", false));
+        var skills = new java.util.HashSet<String>();
+        current.path("skills").forEach(skill -> skills.add(skill.asText()));
+        assertEquals(java.util.Set.of("record-validation", "experiment-comparison",
+                "jsd-experiment-converter", "table-preparation"), skills);
+        assertTrue(current.path("work_config").path("checks").path("required_fields").isEmpty());
+        assertTrue(current.path("work_config").path("checks").path("identity_fields").isEmpty());
+        for (var expert : service.list().path("experts"))
+            assertNotEquals("data-assistant", expert.path("id").asText());
+    }
     @Test void everyReadUsesExistingBusinessAuthorization() throws Exception {
         var authority = mock(AgentArtifactService.class);
         var service = new ExpertCatalogService(new ObjectMapper(), authority);
@@ -22,7 +37,7 @@ class ExpertCatalogServiceTest {
     @Test void everyExpertHasOneCurrentDefinitionWithoutVersionHistory() throws Exception {
         var service = new ExpertCatalogService(new ObjectMapper(), mock(AgentArtifactService.class));
         var rows = service.list().path("experts");
-        assertEquals(8, rows.size());
+        assertEquals(7, rows.size());
         var ids = new java.util.HashSet<String>();
         for (var row : rows) {
             assertTrue(ids.add(row.path("id").asText()));
@@ -36,7 +51,7 @@ class ExpertCatalogServiceTest {
         assertTrue(experiment.path("skills").toString().contains("jsd-experiment-converter"));
         assertTrue(experiment.path("instructions").asText().contains("folder_conversion"));
         var spectrum = service.resolve("spectrum-assistant", true);
-        assertEquals("图谱分析助手", spectrum.path("name").asText());
+        assertEquals("图谱分析助理", spectrum.path("name").asText());
         assertTrue(spectrum.path("skills").toString().contains("spectrum-analysis"));
         assertThrows(ApiException.class, () -> service.resolve("unknown", true));
     }
@@ -48,7 +63,7 @@ class ExpertCatalogServiceTest {
         assertNotEquals("changed by caller", service.resolve("project-assistant", true).path("instructions").asText());
         var current = service.resolve("experiment-assistant", true);
         ((ObjectNode) current.path("work_config").path("checks").path("unit_targets")).put("mass", "kg");
-        assertEquals("g", service.resolve("experiment-assistant", true).path("work_config").path("checks").path("unit_targets").path("mass").asText());
+        assertFalse(service.resolve("experiment-assistant", true).path("work_config").path("checks").path("unit_targets").has("mass"));
     }
 
     @Test void oldLocalRequestsStillResolveTheCurrentExpert() throws Exception {

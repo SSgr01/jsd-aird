@@ -1,5 +1,5 @@
 /** WorkBuddy-style discovery on native main/menu/modal seats; execution stays native. */
-export function registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton}) {
+export function registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton,tasks}) {
   const h=React.createElement,{useState,useEffect,useSyncExternalStore}=React;
   const PANEL='enterprise-experts',listeners=new Set();
   let dialog=null;
@@ -201,8 +201,9 @@ export function registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton}) {
   function ExpertWelcome({sessionId,useSession,fillPrompt}) {
     const blank=useSession(value=>value.blank),{expert}=useExpert(sessionId),[notice,setNotice]=useState('');
     if(!blank || !expert)return null;
-    return h('section',{className:'jsd-expert-welcome','aria-label':expert.name+' 的任务示例'},
-      h('div',{className:'jsd-expert-identity'},h(Avatar,{expert}),h('div',null,h('strong',null,expert.name),h('p',null,expert.summary))),
+    return h('details',{className:'jsd-expert-welcome','aria-label':expert.name+' 的任务示例'},
+      h('summary',{className:'jsd-expert-summary'},'当前专家：'+expert.name+' · 查看任务示例'),
+      h('p',null,expert.summary),
       h('div',{className:'jsd-expert-examples'},expert.examples.map(text=>action(h(React.Fragment,null,h('span',null,text),h('span',{'aria-hidden':true},'↗')),
         ()=>setNotice(fillPrompt(text)?'已填入草稿，确认后发送。':'输入框正忙，请稍后再试。'),
         {key:text,disabled:expert.enabled===false,title:'填入可编辑草稿'}))),
@@ -221,5 +222,5 @@ export function registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton}) {
       scope.conversation.input.for(scope.sessions.scope(sessionId)).focus();return true;
     }}),
   },ExpertWelcome));
-  return {useExpert};
+  return {useExpert,startTask:id=>tasks.startWorkbenchTask(id,summon)};
 }

@@ -456,7 +456,11 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
+    @Transactional
     public void rebuildTermStats(UUID organizationId) {
+        // Explicit maintenance only. Live BM25 queries calculate their own scoped statistics.
+        // Serialize maintenance for one organization and commit DELETE/INSERT atomically.
+        jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended(CAST(? AS text), 192837))", organizationId.toString());
         jdbc.update("DELETE FROM kb.term_stat WHERE organization_id = ?", organizationId);
         jdbc.update("""
                 WITH corpus AS (

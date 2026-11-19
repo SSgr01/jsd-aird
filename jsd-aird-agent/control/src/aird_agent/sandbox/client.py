@@ -182,8 +182,13 @@ class Sandbox:
             paths.add(item["path"])
         for path, content in decoded:
             workspace.write_bytes(path, content)
+        # PostgreSQL JSONB cannot store U+0000. Keep the broker's byte streams
+        # and exported files intact; escape NUL only in the persisted text view.
+        summary = {k: v for k, v in result.items() if k != "files"}
+        if isinstance(summary.get("output"), str):
+            summary["output"] = summary["output"].replace("\x00", "\\u0000")
         return (
-            {k: v for k, v in result.items() if k != "files"}
+            summary
             | ({"error": "SANDBOX_SCRIPT_FAILED"} if result.get("exit_code") != 0 else {})
             | {"receipt": {k: record[k] for k in ("execution_id", "request_hash", "status", "finished_at")}}
         )

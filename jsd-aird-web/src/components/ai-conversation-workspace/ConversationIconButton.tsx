@@ -1,6 +1,7 @@
 import { Button, Tooltip, type ButtonProps } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { cleanConversationText } from './conversation-text';
+import { copyText } from '@/utils/clipboard';
 
 type IconName =
   | 'copy'
@@ -128,8 +129,7 @@ export function CopyAnswerButton({ text }: { text: string }) {
         name="copy"
         tooltip={notice || '复制回答'}
         onClick={() => {
-          void navigator.clipboard
-            .writeText(cleanConversationText(text, true))
+          void copyText(cleanConversationText(text, true))
             .then(() => {
               setNotice('已复制');
               clearTimeout(timer.current);

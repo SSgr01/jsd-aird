@@ -286,34 +286,39 @@ export function ProductionOrderUploadPage() {
     }
     const relation = projectRelations.find((item) => item.projectId) ?? {};
     setUploading(true);
-    let failed = 0;
-    for (const file of sourceFiles) {
-      try {
-        const staged = await stageFile(file, 'PRODUCTION_SOURCE');
-        const metadata = await readProductionMetadata(file);
-        await productionUploadApi.create({
-          fileId: staged.fileId,
-          sourceType: /\.xlsx?$/i.test(file.name) ? 'XLSX' : 'PHOTO',
-          templateVersionId,
-          ...metadata,
-          ...relation,
-          visibility,
-        });
-      } catch (error) {
-        failed += 1;
-        void message.error(
-          error instanceof Error ? `${file.name}：${error.message}` : `${file.name} 上传失败`,
-        );
+    try {
+      let failed = 0;
+      for (const file of sourceFiles) {
+        try {
+          const staged = await stageFile(file, 'PRODUCTION_SOURCE');
+          const metadata = await readProductionMetadata(file);
+          await productionUploadApi.create({
+            fileId: staged.fileId,
+            sourceType: /\.xlsx?$/i.test(file.name) ? 'XLSX' : 'PHOTO',
+            templateVersionId,
+            ...metadata,
+            ...relation,
+            visibility,
+          });
+        } catch (error) {
+          failed += 1;
+          void message.error(
+            error instanceof Error ? `${file.name}：${error.message}` : `${file.name} 上传失败`,
+          );
+        }
       }
-    }
-    setUploading(false);
-    setFiles([]);
-    setPage((current) => ({ ...current, current: 1 }));
-    await loadUploads();
-    if (failed) {
-      void message.warning(`${sourceFiles.length - failed} 个文件已上传，${failed} 个文件上传失败`);
-    } else {
-      void message.success(`已上传 ${sourceFiles.length} 个生产单文件`);
+      setFiles([]);
+      setPage((current) => ({ ...current, current: 1 }));
+      await loadUploads();
+      if (failed) {
+        void message.warning(`${sourceFiles.length - failed} 个文件已上传，${failed} 个文件上传失败`);
+      } else {
+        void message.success(`已上传 ${sourceFiles.length} 个生产单文件`);
+      }
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '生产单上传失败');
+    } finally {
+      setUploading(false);
     }
   };
 

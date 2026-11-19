@@ -193,7 +193,64 @@ function projectSourceBlocks(blocks, origin='http://localhost', names=new Map())
   return {blocks:projected,sources,links};
 }
 ;return {normalizeOriginalLinks,sourceLinkLabel,shortSourceTitle,projectSourceBlocks};})();
-  const memoryUI = (()=>{/** Browser settings and session controls. All authority is checked by Control. */
+  const browserCrypto = (()=>{/** Verify image bytes even on LAN HTTP, where SubtleCrypto is unavailable. */
+function sha256Hex(buffer, cryptoApi = globalThis.crypto) {
+  const hex = bytes => Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+  if (typeof cryptoApi?.subtle?.digest === 'function') {
+    return cryptoApi.subtle.digest('SHA-256', buffer).then(value => hex(new Uint8Array(value)));
+  }
+  // FIPS 180-4 SHA-256. This fallback is only for content integrity, not keys or signatures.
+  const input = new Uint8Array(buffer);
+  const padded = new Uint8Array(Math.ceil((input.length + 9) / 64) * 64);
+  padded.set(input); padded[input.length] = 0x80;
+  const view = new DataView(padded.buffer);
+  view.setUint32(padded.length - 8, Math.floor(input.length / 0x20000000));
+  view.setUint32(padded.length - 4, (input.length * 8) >>> 0);
+  const k = [
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
+  ];
+  const state = new Uint32Array([0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19]);
+  const words = new Uint32Array(64);
+  const rotate = (value, count) => (value >>> count) | (value << (32 - count));
+  for (let offset = 0; offset < padded.length; offset += 64) {
+    for (let i = 0; i < 16; i++) words[i] = view.getUint32(offset + i * 4);
+    for (let i = 16; i < 64; i++) {
+      const x = words[i - 15], y = words[i - 2];
+      words[i] = words[i - 16] + (rotate(x,7) ^ rotate(x,18) ^ (x >>> 3))
+        + words[i - 7] + (rotate(y,17) ^ rotate(y,19) ^ (y >>> 10));
+    }
+    let [a,b,c,d,e,f,g,h] = state;
+    for (let i = 0; i < 64; i++) {
+      const t1 = (h + (rotate(e,6) ^ rotate(e,11) ^ rotate(e,25)) + ((e & f) ^ (~e & g)) + k[i] + words[i]) >>> 0;
+      const t2 = ((rotate(a,2) ^ rotate(a,13) ^ rotate(a,22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+      h=g; g=f; f=e; e=(d+t1)>>>0; d=c; c=b; b=a; a=(t1+t2)>>>0;
+    }
+    [a,b,c,d,e,f,g,h].forEach((value, i) => {state[i] += value;});
+  }
+  return Array.from(state, value => value.toString(16).padStart(8, '0')).join('');
+}
+
+/** RFC 4122 v4 using secure random bytes, available on ordinary LAN HTTP. */
+function generateBrowserUUID(cryptoApi = globalThis.crypto) {
+  if (typeof cryptoApi?.randomUUID === 'function') return cryptoApi.randomUUID();
+  if (typeof cryptoApi?.getRandomValues !== 'function') throw new Error('当前浏览器不支持安全随机数生成，请升级浏览器后重试。');
+  const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
+;return {sha256Hex,generateBrowserUUID};})();
+  const memoryUI = (()=>{const {generateBrowserUUID}=browserCrypto;
+
+/** Browser settings and session controls. All authority is checked by Control. */
 function registerMemoryUI(scope,{React,api,Switch,Modal,Toast}) {
   const h=React.createElement, {useState,useEffect,useRef,useSyncExternalStore}=React;
   const settingsListeners=new Set(), sessionListeners=new Set();
@@ -269,6 +326,10 @@ function registerMemoryUI(scope,{React,api,Switch,Modal,Toast}) {
     async function mutate(body) {
       setBusy(true);setError('');
       try {
+        if (body.action === 'remember') {
+          key.current ||= generateBrowserUUID();
+          body = {...body,idempotency_key:key.current};
+        }
         const result=await call(body);setReceipt(result);setEditing(undefined);setAdding(false);setText('');key.current=undefined;
         await load();
       } catch(e){setError(errorMessage(e));}finally{setBusy(false);}
@@ -277,9 +338,8 @@ function registerMemoryUI(scope,{React,api,Switch,Modal,Toast}) {
     function edit(entry) {setAdding(false);setEditing(entry);setText(entry.text);setError('');}
     function save(event) {
       event.preventDefault();
-      key.current ||= crypto.randomUUID();
       return mutate(editing ? {action:'correct',entry_id:editing.id,revision:editing.revision,text}
-        :{action:'remember',category:'preference',text,idempotency_key:key.current});
+        :{action:'remember',category:'preference',text});
     }
     function editor() {
       return h('form',{className:'jsd-memory-editor',onSubmit:save},
@@ -651,7 +711,9 @@ function startWorkbenchTask(id,summon) {
   return summon({id:task.expertId},task.prompt);
 }
 ;return {workbenchTasks,startWorkbenchTask};})();
-  const spectrumUI = (()=>{/** Recover selections from the live semantic draft, including after session navigation. */
+  const spectrumUI = (()=>{const {sha256Hex}=browserCrypto;
+
+/** Recover selections from the live semantic draft, including after session navigation. */
 function spectrumDraftSelection(draft, attachments = []) {
   const selected = new Map(), owned = new Set();
   for (const occurrence of draft.references || draft.occurrences || []) {
@@ -837,7 +899,7 @@ function registerSpectrumUI(scope, {React, api, Modal, useExpert, marker}) {
             const response = await fetch(url, {credentials:'same-origin', cache:'no-store'});
             if (!response.ok || !response.headers.get('content-type')?.startsWith('image/png')) throw new Error('图谱页面读取失败，请重新选择后重试。');
             const bytes = await response.arrayBuffer();
-            const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(value => value.toString(16).padStart(2,'0')).join('');
+            const hash = await sha256Hex(bytes);
             if (hash !== response.headers.get('X-Content-SHA256')) throw new Error('图谱图片校验失败，请重试。');
             const title = chart.title.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(0, 80);
             files.push(new File([bytes], title + '-' + chart.id.slice(0,8) + '-第' + candidate.source.anchor.page_no + '页.png', {type:'image/png'}));

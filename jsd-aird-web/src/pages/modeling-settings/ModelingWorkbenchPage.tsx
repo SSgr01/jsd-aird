@@ -4,6 +4,7 @@ import { Alert, App, Button, Card, Checkbox, Empty, Input, Progress, Space, Tabl
 import type { ColumnsType } from 'antd/es/table'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Key } from 'react'
+import { generateUUID } from '@/utils/uuid'
 
 import { modelingWorkbenchApi, type ModelingWorkbenchRun } from '@/services/ai-rnd/modeling-workbench-api'
 import type { HistoryDataset, HistoryDatasetOption, HistoryDatasetRow } from '@/services/ai-rnd/optimization-api'
@@ -344,7 +345,7 @@ function ModelingWorkbenchPageInner({ canManageCatalog = false, canRegister = fa
     // transition. Only navigation after this submission starts should take priority.
     userNavigated.current = false
     try {
-      const key = globalThis.crypto?.randomUUID?.() ?? `modeling-${Date.now()}-${Math.random().toString(16).slice(2)}`
+      const key = generateUUID()
       const request = {
         datasetIds: selectedDatasetIds,
         selectedExperimentIdsByDataset: Object.fromEntries(selectedDatasetIds.map(id => [id, [...new Set(dataset.rows.filter(row => (row.sourceDatasetId ?? dataset.id) === id).map(row => row.sourceExperimentId).filter((value): value is string => Boolean(value)))]])),

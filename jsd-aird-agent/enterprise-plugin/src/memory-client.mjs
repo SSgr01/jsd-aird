@@ -1,3 +1,5 @@
+import {generateBrowserUUID} from './browser-crypto.mjs';
+
 /** Browser settings and session controls. All authority is checked by Control. */
 export function registerMemoryUI(scope,{React,api,Switch,Modal,Toast}) {
   const h=React.createElement, {useState,useEffect,useRef,useSyncExternalStore}=React;
@@ -74,6 +76,10 @@ export function registerMemoryUI(scope,{React,api,Switch,Modal,Toast}) {
     async function mutate(body) {
       setBusy(true);setError('');
       try {
+        if (body.action === 'remember') {
+          key.current ||= generateBrowserUUID();
+          body = {...body,idempotency_key:key.current};
+        }
         const result=await call(body);setReceipt(result);setEditing(undefined);setAdding(false);setText('');key.current=undefined;
         await load();
       } catch(e){setError(errorMessage(e));}finally{setBusy(false);}
@@ -82,9 +88,8 @@ export function registerMemoryUI(scope,{React,api,Switch,Modal,Toast}) {
     function edit(entry) {setAdding(false);setEditing(entry);setText(entry.text);setError('');}
     function save(event) {
       event.preventDefault();
-      key.current ||= crypto.randomUUID();
       return mutate(editing ? {action:'correct',entry_id:editing.id,revision:editing.revision,text}
-        :{action:'remember',category:'preference',text,idempotency_key:key.current});
+        :{action:'remember',category:'preference',text});
     }
     function editor() {
       return h('form',{className:'jsd-memory-editor',onSubmit:save},

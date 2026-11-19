@@ -1,3 +1,5 @@
+import {sha256Hex} from './browser-crypto.mjs';
+
 /** Recover selections from the live semantic draft, including after session navigation. */
 export function spectrumDraftSelection(draft, attachments = []) {
   const selected = new Map(), owned = new Set();
@@ -184,7 +186,7 @@ export function registerSpectrumUI(scope, {React, api, Modal, useExpert, marker}
             const response = await fetch(url, {credentials:'same-origin', cache:'no-store'});
             if (!response.ok || !response.headers.get('content-type')?.startsWith('image/png')) throw new Error('图谱页面读取失败，请重新选择后重试。');
             const bytes = await response.arrayBuffer();
-            const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(value => value.toString(16).padStart(2,'0')).join('');
+            const hash = await sha256Hex(bytes);
             if (hash !== response.headers.get('X-Content-SHA256')) throw new Error('图谱图片校验失败，请重试。');
             const title = chart.title.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(0, 80);
             files.push(new File([bytes], title + '-' + chart.id.slice(0,8) + '-第' + candidate.source.anchor.page_no + '页.png', {type:'image/png'}));

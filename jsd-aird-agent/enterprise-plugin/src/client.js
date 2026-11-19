@@ -3,6 +3,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
   const { useEffect, useState, useRef } = React;
   const enterpriseTheme = /* @enterprise-theme */ null;
   const sourceLinks = /* @source-links */ null;
+  const browserCrypto = /* @browser-crypto */ null;
   const memoryUI = /* @memory-ui */ null;
   const briefingEntry = /* @briefing-entry */ null;
   const expertsUI = /* @experts-ui */ null;

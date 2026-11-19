@@ -2,7 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {SlotCore} from '../../../vendor/deepseek-harness/packages/client/ui-slots/src/index.ts';
 import {createRequire} from 'node:module';
+import {createHash, webcrypto} from 'node:crypto';
 import {registerSpectrumUI, spectrumDraftSelection, replaceSpectrumReferences, SpectrumResourceBody} from '../../enterprise-plugin/src/spectrum-client.mjs';
+
+test('image SHA-256 matches native hashing with and without SubtleCrypto', async () => {
+  for (const length of [0,1,3,55,56,63,64,65,127,128,1024,1024*1024]) {
+    const bytes = Uint8Array.from({length}, (_, i) => (i * 137 + 29) & 255);
+    const expected = createHash('sha256').update(bytes).digest('hex');
+    assert.equal(await spectrumImageHash(bytes.buffer, {}), expected);
+    assert.equal(await spectrumImageHash(bytes.buffer, null), expected);
+    assert.equal(await spectrumImageHash(bytes.buffer, webcrypto), expected);
+  }
+  assert.equal(await spectrumImageHash(new TextEncoder().encode('abc').buffer, {}),
+    'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+});
+
+import {sha256Hex as spectrumImageHash} from '../../enterprise-plugin/src/browser-crypto.mjs';
 
 const id = '5a045345-db60-47f6-9a77-fd5629bc6b0c';
 const ref = {kind:'SPECTRUM',resource_id:id,version_id:'a'.repeat(64),pages:[2,4]};
@@ -79,9 +94,9 @@ test('spectrum extension coexists with the native header and expert overlay', ()
 
 test('picker reopens with the draft selection, updates images without duplicates, and can clear just the spectra', {timeout:60000}, async () => {
   const require = createRequire(new URL('../../../jsd-aird-web/package.json',import.meta.url));
-  const {JSDOM} = require('jsdom'), dom = new JSDOM('<html><body></body></html>',{url:'http://localhost/agent/'});
+  const {JSDOM} = require('jsdom'), dom = new JSDOM('<html><body></body></html>',{url:'http://192.168.1.119:82/agent/'});
   const saved = new Map();
-  for (const [key,value] of Object.entries({window:dom.window,document:dom.window.document,navigator:dom.window.navigator,location:dom.window.location,IS_REACT_ACT_ENVIRONMENT:true})) {
+  for (const [key,value] of Object.entries({window:dom.window,document:dom.window.document,navigator:dom.window.navigator,location:dom.window.location,crypto:dom.window.crypto,IS_REACT_ACT_ENVIRONMENT:true})) {
     saved.set(key,Object.getOwnPropertyDescriptor(globalThis,key)); Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});
   }
   const originalFetch = globalThis.fetch;
@@ -106,9 +121,11 @@ test('picker reopens with the draft selection, updates images without duplicates
         createDrafts(_session,images){return images.map(file => {const value={id:'new-'+(++created),file};files.set(value.id,value);return value;});},
         releaseDraftAttachment:id => files.delete(id)}};
     const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a/KkAAAAASUVORK5CYII=','base64');
-    const hash = Buffer.from(await crypto.subtle.digest('SHA-256',bytes)).toString('hex');
+    assert.equal(globalThis.crypto.subtle, undefined);
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    let corrupt = true;
     globalThis.fetch = async path => {
-      if (path === '/image') return new Response(bytes,{headers:{'content-type':'image/png','X-Content-SHA256':hash}});
+      if (path === '/image') return new Response(bytes,{headers:{'content-type':'image/png','X-Content-SHA256':corrupt ? '0'.repeat(64) : hash}});
       const value = path.includes('categories') ? [] : path.includes('charts/') ? chart : {items:[chart],total:1};
       return Response.json({success:true,data:value});
     };
@@ -123,6 +140,10 @@ test('picker reopens with the draft selection, updates images without duplicates
     assert.deepEqual(state.attachmentIds,['page-two','personal-file']); assert.equal(created,0);
     await open();
     fireEvent.click(view.getByLabelText('第 2 页')); fireEvent.click(view.getByLabelText('第 4 页'));
+    fireEvent.click(view.getByRole('button',{name:'确认选择'}));
+    await waitFor(() => assert.ok(view.getByRole('alert').textContent.includes('图谱图片校验失败')));
+    assert.equal(created,0); assert.deepEqual(state.attachmentIds,['page-two','personal-file']);
+    corrupt = false;
     fireEvent.click(view.getByRole('button',{name:'确认选择'}));
     await waitFor(() => assert.equal(Boolean(view.queryByLabelText('选择图谱与页面')),false));
     assert.equal(created,1); assert.deepEqual(state.attachmentIds,['personal-file','new-1']);

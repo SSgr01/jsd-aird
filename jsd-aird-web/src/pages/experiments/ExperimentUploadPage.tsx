@@ -9,6 +9,7 @@ import { App, Button, Col, Form, Popconfirm, Radio, Row, Select, Space, Upload }
 import type { UploadFile, UploadProps } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { generateUUID } from '@/utils/uuid';
 
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
@@ -152,8 +153,8 @@ export function ExperimentUploadPage() {
     const failedNames = new Set<string>();
     let failed = 0;
     let templateJobCount = 0;
-    const batchId = crypto.randomUUID();
     try {
+      const batchId = generateUUID();
       for (const file of sourceFiles) {
         try {
           const staged = await stageExperimentFile(file);
@@ -196,6 +197,8 @@ export function ExperimentUploadPage() {
         if (templateJobCount) parts.push(`${templateJobCount} 个${mode === 'CONTENT_ONLY' ? '无模板导入' : '按模板导入'}任务`);
         void message.success(`已提交 ${parts.join('、') || '0 个文件'}`);
       } else void message.warning(`${sourceFiles.length - failed} 个文件已提交，${failed} 个失败`);
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '实验上传失败，请重试');
     } finally {
       setUploading(false);
     }

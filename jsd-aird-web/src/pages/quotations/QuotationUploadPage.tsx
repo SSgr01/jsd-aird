@@ -168,35 +168,40 @@ export function QuotationUploadPage() {
       return;
     }
     setUploading(true);
-    const relation = projectRelations.find((item) => item.projectId) ?? {};
-    let failed = 0;
-    for (const file of sourceFiles) {
-      try {
-        const staged = await stageFile(file, 'QUOTATION_SOURCE');
-        await createQuotationImport({
-          fileId: staged.fileId,
-          fileName: staged.originalName || file.name,
-          sha256: staged.sha256,
-          format: formatOf(file.name),
-          templateVersionId,
-          ...relation,
-          visibility,
-        });
-      } catch (error) {
-        failed += 1;
-        void message.error(
-          error instanceof Error ? `${file.name}：${error.message}` : `${file.name} 上传失败`,
-        );
+    try {
+      const relation = projectRelations.find((item) => item.projectId) ?? {};
+      let failed = 0;
+      for (const file of sourceFiles) {
+        try {
+          const staged = await stageFile(file, 'QUOTATION_SOURCE');
+          await createQuotationImport({
+            fileId: staged.fileId,
+            fileName: staged.originalName || file.name,
+            sha256: staged.sha256,
+            format: formatOf(file.name),
+            templateVersionId,
+            ...relation,
+            visibility,
+          });
+        } catch (error) {
+          failed += 1;
+          void message.error(
+            error instanceof Error ? `${file.name}：${error.message}` : `${file.name} 上传失败`,
+          );
+        }
       }
-    }
-    setUploading(false);
-    setFiles([]);
-    setPage((current) => ({ ...current, current: 1 }));
-    await loadJobs();
-    if (failed) {
-      void message.warning(`${sourceFiles.length - failed} 个文件已上传，${failed} 个文件上传失败`);
-    } else {
-      void message.success(`已上传 ${sourceFiles.length} 个报价文件，正在后台解析`);
+      setFiles([]);
+      setPage((current) => ({ ...current, current: 1 }));
+      await loadJobs();
+      if (failed) {
+        void message.warning(`${sourceFiles.length - failed} 个文件已上传，${failed} 个文件上传失败`);
+      } else {
+        void message.success(`已上传 ${sourceFiles.length} 个报价文件，正在后台解析`);
+      }
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : '报价文件上传失败');
+    } finally {
+      setUploading(false);
     }
   };
 

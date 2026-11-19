@@ -9,7 +9,7 @@
 }
 
 :root {
-  /* Monochrome UI: neutral surfaces, crisp ink and inverse primary actions. */
+  /* White workspace: neutral surfaces, readable ink and colored task cards. */
   --color-neutral-600: #262626;
   --color-neutral-700: #404040;
   --color-neutral-50: #f0f0f0;
@@ -18,9 +18,9 @@
   --color-grey-200: #e5e5e5;
   --color-grey-500: #525252;
   --color-grey-900: #262626;
-  --color-green-600: #347552;
-  --color-amber-600: #92671f;
-  --color-red-600: #b84a55;
+  --color-green-600: #47795f;
+  --color-amber-600: #95652b;
+  --color-red-600: #a54450;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -32,47 +32,49 @@
   --radius-lg: 16px;
 
   /* Semantic tokens */
-  --app-primary: var(--color-neutral-600);
-  --app-primary-hover: var(--color-neutral-700);
-  --app-primary-soft: var(--color-neutral-50);
-  --app-action: #171717;
-  --app-action-hover: #303030;
-  --app-action-active: #0a0a0a;
+  --app-primary: #74669a;
+  --app-primary-hover: #655789;
+  --app-primary-soft: #f0edf7;
+  --app-action: var(--app-primary);
+  --app-action-hover: var(--app-primary-hover);
+  --app-action-active: #574a77;
   --app-on-action: #ffffff;
-  --app-accent-start: #f0f0f0;
-  --app-accent-end: #d4d4d4;
-  --app-accent: var(--color-neutral-600);
-  --app-background: var(--color-grey-50);
+  --app-accent-start: var(--app-primary-soft);
+  --app-accent-end: #e5e5e5;
+  --app-accent: var(--app-primary);
+  --app-background: #ffffff;
   --app-surface: #ffffff;
   --app-surface-elevated: #ffffff;
   --app-surface-inverse: #202020;
   --app-text-inverse: #f5f5f5;
   --app-border-inverse: #404040;
-  --app-surface-subtle: var(--color-grey-100);
+  --app-surface-subtle: #fafafa;
   --app-surface-active: var(--app-primary-soft);
-  --app-surface-hover: #f5f5f5;
-  --app-navigation: #ffffff;
+  --app-surface-hover: #f7f7f7;
+  --app-navigation: #fafafa;
   --app-workspace-wash: none;
   --app-composer-surface: #ffffff;
-  --app-composer-border: #d4d4d4;
-  --app-text: #171717;
-  --app-text-secondary: #525252;
+  --app-composer-border: var(--app-border-strong);
+  --app-text: #292929;
+  --app-text-secondary: #595959;
   --app-border: #e5e5e5;
-  --app-border-strong: #d4d4d4;
-  --app-row-rule: #ededed;
-  --app-scrollbar: #c4c4c4;
-  --app-focus-border: #262626;
-  --app-focus-ring: 0 0 0 3px rgb(38 38 38 / 14%);
+  --app-border-strong: #cccccc;
+  --app-row-rule: #eeeeee;
+  --app-scrollbar: #cccccc;
+  --app-focus-border: var(--app-primary);
+  --app-focus-ring: 0 0 0 3px rgb(116 102 154 / 18%);
+  --app-info: #476f93;
+  --app-info-soft: #edf4fb;
   --app-danger: var(--color-red-600);
   --app-warning: var(--color-amber-600);
   --app-success: var(--color-green-600);
-  --app-success-soft: #f0f8f3;
-  --app-warning-soft: #fcf7ec;
-  --app-danger-soft: #fdf1f2;
+  --app-success-soft: #edf7f0;
+  --app-warning-soft: #fff5e8;
+  --app-danger-soft: #faecee;
   /* Compatibility aliases for older category/tag styles. */
   --app-violet: var(--app-primary);
   --app-violet-soft: var(--app-primary-soft);
-  --app-focus: var(--color-neutral-600);
+  --app-focus: var(--app-primary);
   --app-font-family:
     'Noto Sans SC Variable', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif;
   --app-font-size-base: 14px;
@@ -91,7 +93,7 @@
   --app-shadow-shell: 0 18px 60px rgb(0 0 0 / 6.5%), 0 2px 8px rgb(0 0 0 / 2.5%);
   --app-shadow-card: 0 6px 24px rgb(0 0 0 / 5.5%);
   --app-shadow-overlay: 0 24px 70px rgb(0 0 0 / 14%);
-  --app-text-muted: #666666;
+  --app-text-muted: #696969;
   --app-motion-duration: 160ms;
 
   /* Component tokens */

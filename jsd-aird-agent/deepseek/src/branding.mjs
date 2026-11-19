@@ -111,11 +111,11 @@ export async function brandStaticResponse(target, upstream, headers) {
   } else if (path === '/manifest.webmanifest') {
     const manifest = JSON.parse(bytes.toString('utf8'));
     body = JSON.stringify({...manifest, name:productName, short_name:'AI工作台',
-      background_color:'#fafafa', theme_color:'#fafafa',
+      background_color:'#ffffff', theme_color:'#ffffff',
       icons:[{src:'favicon.svg', sizes:'any', type:'image/svg+xml', purpose:'any maskable'}]});
   } else if (html) {
     body = bytes.toString('utf8').replace(/<title>[^<]*<\/title>/i, '<title>'+productName+'</title>')
-      .replace(/(<meta\b[^>]*name="theme-color"[^>]*content=")[^"]*(")/i, '$1#fafafa$2')
+      .replace(/(<meta\b[^>]*name="theme-color"[^>]*content=")[^"]*(")/i, '$1#ffffff$2')
       .replace(/(<meta\b[^>]*name="apple-mobile-web-app-title"[^>]*content=")[^"]*(")/i, '$1'+productName+'$2')
       .replace(/(rel="apple-touch-icon"[^>]*href=")[^"]*(")/i, '$1favicon.svg$2');
   } else if (bootScriptTarget(path)) {

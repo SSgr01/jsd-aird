@@ -1,4 +1,4 @@
-/* 工作台原型样式 */
+/* Workspace surfaces and accents follow the shared semantic palette. */
 .dashboard-page {
   position: relative;
   min-height: calc(100dvh - 64px);
@@ -49,6 +49,8 @@
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0;
   padding: 17px 0;
+  background: var(--app-surface);
+  border-radius: var(--app-radius-card);
   border-top: 1px solid var(--app-row-rule);
   border-bottom: 1px solid var(--app-row-rule);
   margin-bottom: 22px;
@@ -67,13 +69,43 @@
 }
 
 .dashboard-stat:hover {
-  background: var(--app-surface-subtle);
+  background: var(--module-soft, var(--app-primary-soft));
 }
 
-.dashboard-stat:first-child { padding-left: 0; }
 .dashboard-stat:last-child { border-right: 0; }
 .dashboard-stat:focus-visible { outline: 2px solid var(--app-primary); outline-offset: 3px; }
 .dashboard-page-date { font-size: 12px; color: var(--app-text-secondary); white-space: nowrap; }
+
+/* Business identities keep their accents when permissions hide neighbouring modules. */
+:is(.dashboard-stat, .dashboard-module) {
+  --module-ink: var(--app-primary-hover);
+  --module-soft: var(--app-primary-soft);
+}
+:is([data-metric='experiments'], [data-module='recent-experiments']) {
+  --module-ink: var(--app-info);
+  --module-soft: var(--app-info-soft);
+}
+:is([data-metric='pending-review'], [data-module='pending-review']) {
+  --module-ink: var(--app-warning);
+  --module-soft: var(--app-warning-soft);
+}
+:is([data-metric='to-be-filled'], [data-module='to-be-filled']) {
+  --module-ink: var(--app-danger);
+  --module-soft: var(--app-danger-soft);
+}
+:is([data-metric='inventory'], [data-module='inventory']) {
+  --module-ink: var(--app-success);
+  --module-soft: var(--app-success-soft);
+}
+.dashboard-module-item-badge[data-status='待审核'],
+.dashboard-module-item-badge[data-status='库存提醒'] {
+  color: var(--app-warning);
+  background: var(--app-warning-soft);
+}
+.dashboard-module-item-badge[data-status='待完善'] {
+  color: var(--app-danger);
+  background: var(--app-danger-soft);
+}
 
 .dashboard-stat-icon {
   display: inline-flex;
@@ -98,7 +130,7 @@
   margin-top: 8px;
   font-size: 24px;
   font-weight: 500;
-  color: var(--app-text);
+  color: var(--module-ink, var(--app-primary));
   font-variant-numeric: tabular-nums;
 }
 
@@ -142,6 +174,7 @@
 }
 
 .dashboard-module-head {
+  background: var(--module-soft, var(--app-primary-soft));
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -158,7 +191,7 @@
 
 .dashboard-module-more {
   font-size: 12px;
-  color: var(--app-text);
+  color: var(--module-ink, var(--app-primary-hover));
 }
 
 .dashboard-module-more:hover {
@@ -234,8 +267,8 @@ a.dashboard-module-item-main:hover .dashboard-module-item-title {
   margin-left: 10px;
   padding: 2px 8px;
   font-size: 12px;
-  color: var(--app-text);
-  background: var(--app-primary-soft);
+  color: var(--module-ink, var(--app-primary-hover));
+  background: var(--module-soft, var(--app-primary-soft));
   border-radius: 999px;
 }
 
@@ -261,11 +294,11 @@ a.dashboard-module-item-main:hover .dashboard-module-item-title {
 
 .dashboard-module-empty-cta {
   font-size: 13px;
-  color: var(--app-text);
+  color: var(--module-ink, var(--app-primary-hover));
 }
 
 .dashboard-module-empty-cta:hover {
-  color: var(--app-text);
+  color: var(--app-primary-hover);
   text-decoration: underline;
 }
 
@@ -304,7 +337,6 @@ a.dashboard-module-item-main:hover .dashboard-module-item-title {
     row-gap: 18px;
   }
   .dashboard-stat:nth-child(3n) { border-right: 0; }
-  .dashboard-stat:nth-child(4) { padding-left: 0; }
   .dashboard-modules-row-secondary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

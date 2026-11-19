@@ -136,7 +136,7 @@ function SummaryCards({
           <Statistic
             title="低库存"
             value={summary?.lowStockCount || 0}
-            valueStyle={{ color: '#d97706' }}
+            valueStyle={{ color: 'var(--app-warning)' }}
           />
         </Card>
       </Col>
@@ -145,7 +145,7 @@ function SummaryCards({
           <Statistic
             title="无库存"
             value={summary?.outOfStockCount || 0}
-            valueStyle={{ color: '#dc2626' }}
+            valueStyle={{ color: 'var(--app-danger)' }}
           />
         </Card>
       </Col>

@@ -20,11 +20,11 @@
    or the mobile drawer. All sidebar-specific values live in this scope. */
 @media (min-width: 1024px) {
   .app-shell .ant-pro-sider {
-    --sidebar-ground: #f7f7f7;
-    --sidebar-hover: #ededed;
+    --sidebar-ground: var(--app-navigation);
+    --sidebar-hover: var(--app-primary-soft);
     --sidebar-ink: var(--app-text);
-    --sidebar-meta: #666666;
-    --sidebar-line: #d4d4d4;
+    --sidebar-meta: var(--app-text-muted);
+    --sidebar-line: var(--app-border-strong);
     background: var(--sidebar-ground) !important;
   }
 
@@ -112,8 +112,8 @@
   }
   .app-shell .ant-pro-sider .ant-menu-item-selected,
   .app-shell .ant-pro-sider .ant-menu-item-selected:hover {
-    color: var(--sidebar-ink);
-    background: var(--app-surface);
+    color: var(--app-primary-hover);
+    background: var(--app-primary-soft);
     font-weight: 600;
     box-shadow: none; /* taste-skill-ignore: clears the old inset selection outline; no shadow is added. */
   }
@@ -214,7 +214,7 @@
     justify-content: center;
   }
   .app-shell .ant-pro-sider-collapsed .ant-menu-submenu-selected > .ant-menu-submenu-title {
-    background: var(--app-surface);
+    background: var(--app-primary-soft);
   }
   .app-shell .ant-pro-sider-collapsed .ant-menu-item,
   .app-shell .ant-pro-sider-collapsed .ant-menu-submenu-title {

@@ -18,10 +18,10 @@
   flex: 0 0 16px;
 }
 .inline-notice--warning .inline-notice-icon {
-  color: #92671f;
+  color: var(--app-warning);
 }
 .inline-notice--error .inline-notice-icon {
-  color: #b84a55;
+  color: var(--app-danger);
 }
 .inline-notice-message {
   flex: 1;

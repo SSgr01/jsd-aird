@@ -8,7 +8,7 @@ body,
 .startup-skeleton {
   min-height: 100vh;
   min-height: 100dvh;
-  background: #fafafa;
+  background: var(--app-background, #ffffff);
   color: var(--app-text);
   font:
     14px/22px 'Microsoft YaHei UI',
@@ -19,7 +19,7 @@ body,
 }
 .startup-skeleton i {
   display: block;
-  background: #e5e5e5;
+  background: var(--app-border, #e5e5e5);
   border-radius: 6px;
   height: 16px;
   width: 65%;
@@ -30,7 +30,7 @@ body,
   inset: 0 auto 0 0;
   width: 256px;
   padding: 20px 24px;
-  background: #ffffff;
+  background: var(--app-navigation, #fafafa);
   box-sizing: border-box;
 }
 .startup-sidebar i:first-child {
@@ -42,7 +42,7 @@ body,
   height: 64px;
   margin-left: 256px;
   padding: 5px 32px;
-  background: #fafafa;
+  background: var(--app-background, #ffffff);
   box-sizing: border-box;
 }
 .startup-header i {
@@ -60,7 +60,7 @@ body,
 .startup-panel {
   margin-top: 24px;
   min-height: 340px;
-  border: 1px solid #e5e5e5;
+  border: 1px solid var(--app-border, #e5e5e5);
   border-radius: 20px;
   padding: 24px;
   background: #fff;
@@ -96,7 +96,7 @@ html[data-startup='login'] #root > .startup-skeleton .startup-panel {
 }
 .content-loading i {
   display: block;
-  background: #e5e5e5;
+  background: var(--app-border, #e5e5e5);
   height: 16px;
   margin-top: 24px;
   border-radius: 6px;
@@ -108,7 +108,7 @@ html[data-startup='login'] #root > .startup-skeleton .startup-panel {
   color: var(--app-text);
 }
 .query-feedback[role='alert'] {
-  color: #92671f;
+  color: var(--app-warning, #95652b);
 }
 .query-feedback button,
 .content-error button,
@@ -133,7 +133,7 @@ html[data-startup='login'] #root > .startup-skeleton .startup-panel {
   inset: 0;
   display: grid;
   place-content: center;
-  background: #fafafa;
+  background: var(--app-background, #ffffff);
   z-index: 4;
   color: var(--app-text);
   font-size: 14px;

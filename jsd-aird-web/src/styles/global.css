@@ -767,8 +767,8 @@ a:active,
 }
 
 .data-validation-summary.has-issues {
-  color: #ad6800;
-  background: #fff8e6;
+  color: var(--app-warning);
+  background: var(--app-warning-soft);
 }
 
 .data-validation-summary > .anticon {
@@ -1150,7 +1150,7 @@ a:active,
   overflow: hidden;
   border: 1px solid #f0d58b;
   border-radius: 8px;
-  background: #fffdf5;
+  background: var(--app-warning-soft);
 }
 
 .data-field-definition-review-head {
@@ -1611,7 +1611,7 @@ a:active,
 }
 
 .excel-icon {
-  color: #07834b;
+  color: var(--app-success);
 }
 .word-icon {
   color: var(--app-text);
@@ -2218,7 +2218,7 @@ a:active,
 .word-native-error {
   color: var(--app-danger);
   border-color: #fda29b;
-  background: #fff6f5;
+  background: var(--app-danger-soft);
 }
 .word-native-style-host {
   display: none;
@@ -2795,11 +2795,11 @@ a:active,
 }
 
 .recognition-status-bar[data-tone='pending'] {
-  background: #fffaf0;
+  background: var(--app-warning-soft);
   border-color: #f5d79a;
 }
 .recognition-status-bar[data-tone='complete'] {
-  background: #f2fbf5;
+  background: var(--app-success-soft);
   border-color: #b9dfc5;
 }
 .recognition-status-bar[data-tone='conflict'] {
@@ -3657,7 +3657,7 @@ a:active,
   align-items: center;
   gap: 10px;
   padding: 8px 14px;
-  background: #fffaf0;
+  background: var(--app-warning-soft);
   border-bottom: 1px solid #f1dfb5;
 }
 
@@ -4315,7 +4315,7 @@ a:active,
   margin-right: 6px;
 }
 .recognition-conflict-reason {
-  color: #9f2d23 !important;
+  color: var(--app-danger) !important;
 }
 .recognition-review-details {
   display: grid;
@@ -4532,7 +4532,7 @@ a:active,
   flex: 0 0 auto;
 }
 .field-review-notice[data-tone='conflict'] {
-  color: #9f2d23;
+  color: var(--app-danger);
   background: var(--app-danger-soft);
   border-color: #efc0bc;
 }
@@ -4739,7 +4739,7 @@ a:active,
   border-radius: 7px;
 }
 .recognition-sync-stale {
-  color: #a15c00 !important;
+  color: var(--app-warning) !important;
   font-weight: 600;
 }
 
@@ -5498,7 +5498,7 @@ a:active,
 
 .ai-scope-group-label > b {
   flex: 0 0 auto;
-  color: #0ca981;
+  color: var(--app-success);
   font-size: var(--app-font-size-caption);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -7110,7 +7110,7 @@ a:active,
 }
 .parse-block-low-confidence {
   border-color: #ffccc7;
-  background: #fffafa;
+  background: var(--app-danger-soft);
 }
 .search-hit-snippet {
   padding: 10px 12px;

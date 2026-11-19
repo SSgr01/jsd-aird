@@ -239,17 +239,17 @@ body[data-jsd-workbench] {
   --dsh-font-family-text-default: 'Noto Sans SC Variable', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI', sans-serif;
   --dsw-font-family-brand: var(--dsw-font-family);
   --dsw-radius-panel: 20px;
-  --jsd-focus: #262626;
-  --jsd-action: #171717;
-  --jsd-action-hover: #303030;
-  --jsd-action-active: #0a0a0a;
+  --jsd-focus: #74669a;
+  --jsd-action: #74669a;
+  --jsd-action-hover: #655789;
+  --jsd-action-active: #574a77;
   --jsd-on-action: #ffffff;
   --jsd-composer-shadow: rgb(0 0 0 / 4%);
   --jsd-workspace-wash: none;
 }
 
 body[data-jsd-workbench][data-ds-dark-theme] {
-  --jsd-focus: #e5e5e5;
+  --jsd-focus: #d4a4b6;
   --jsd-action: #f5f5f5;
   --jsd-action-hover: #dedede;
   --jsd-action-active: #d4d4d4;
@@ -676,3 +676,26 @@ body[data-jsd-workbench] .jsd-hero-mark { padding: 0; border-radius: 0; box-shad
 body[data-jsd-workbench] .jsd-starters[data-task-starts] button { align-content: start; gap: 6px; min-height: 100px; }
 body[data-jsd-workbench] .jsd-starters[data-task-starts] button strong { font-size: 14px; line-height: 20px; }
 body[data-jsd-workbench] .jsd-starters[data-task-starts] .jsd-starter-description { line-height: 20px; }
+
+/* One four-card presentation for both general and expert-specific suggestions. */
+body[data-jsd-workbench] .jsd-starters button[data-task] {
+  --jsd-task-ink: #a15b7a;
+  --jsd-task-tint: #e98db8;
+  background: color-mix(in srgb, var(--jsd-task-tint) 24%, var(--dsw-alias-bg-layer-1));
+  border-color: color-mix(in srgb, var(--jsd-task-ink) 18%, var(--dsw-alias-border-l1));
+}
+body[data-jsd-workbench] .jsd-starters button[data-card-tone='1'] { --jsd-task-ink: #476f93; --jsd-task-tint: #87b9ef; }
+body[data-jsd-workbench] .jsd-starters button[data-card-tone='2'] { --jsd-task-ink: var(--dsw-alias-state-success-primary); --jsd-task-tint: #80c8a2; }
+body[data-jsd-workbench] .jsd-starters button[data-card-tone='3'] { --jsd-task-ink: var(--dsw-alias-state-warn-primary); --jsd-task-tint: #edb875; }
+body[data-jsd-workbench][data-ds-dark-theme] .jsd-starters button[data-card-tone='1'] { --jsd-task-ink: #a3bed2; }
+body[data-jsd-workbench][data-ds-dark-theme] .jsd-starters button[data-card-tone='0'] { --jsd-task-ink: #d4a4b6; }
+body[data-jsd-workbench] .jsd-starters button[data-task]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--jsd-task-tint) 32%, var(--dsw-alias-bg-layer-1));
+  border-color: var(--jsd-task-ink);
+}
+body[data-jsd-workbench] .jsd-starters button[data-task]:disabled {
+  opacity: 1;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-layer-2);
+  border-color: var(--dsw-alias-border-l1);
+}

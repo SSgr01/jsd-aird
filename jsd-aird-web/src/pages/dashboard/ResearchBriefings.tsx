@@ -51,7 +51,7 @@ function Briefing({ definition, card }: { definition: typeof definitions[number]
   const morning = definition.kind === 'project-morning';
   const message = stateMessage(card);
   return (
-    <article className={`research-briefing${morning ? ' research-briefing-main' : ''}`} aria-label={definition.title}>
+    <article className={`research-briefing${morning ? ' research-briefing-main' : ''}`} aria-label={definition.title} data-kind={definition.kind}>
       <div className="research-briefing-meta">
         <span>{definition.title}</span>
         {card && result ? <span>{period(card)}</span> : null}

@@ -18,7 +18,7 @@ for (const mode of ['light', 'dark']) {
       const ratio = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
       assert.ok(ratio >= 4.5, `${mode}: ${foreground} on ${background}: ${ratio.toFixed(2)}`);
     };
-    for (const surface of ['alias-bg-base', 'alias-bg-layer-1', 'alias-bg-layer-2', 'specific-bubble']) {
+    for (const surface of ['alias-bg-base', 'alias-bg-layer-1', 'alias-bg-layer-2', 'alias-bg-layer-3', 'specific-bubble', 'specific-sidebar-fill', 'specific-sidebar-nav-item-active', 'alias-state-success-tertiary', 'alias-state-warn-tertiary']) {
       for (const label of ['alias-label-primary', 'alias-label-secondary', 'alias-label-caption', 'alias-link']) {
         readable(label, surface);
       }

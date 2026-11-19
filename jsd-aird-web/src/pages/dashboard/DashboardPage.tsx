@@ -144,7 +144,7 @@ function experimentItem(item: ExperimentSummary): DashboardModuleItem {
 
 function MetricCard({ metric }: { metric: StatMetric }) {
   return (
-    <Link to={metric.to} className="dashboard-stat">
+    <Link to={metric.to} className="dashboard-stat" data-metric={metric.key}>
       <div className="dashboard-stat-body">
         <div className="dashboard-stat-label">{metric.label}</div>
         <div className="dashboard-stat-value">{fmtNumber(metric.value)}</div>
@@ -166,7 +166,7 @@ function EmptyModule({ label, entryName, to }: { label: string; entryName?: stri
 function ModuleCard({ module }: { module: DashboardModule }) {
   const hasItems = module.items.length > 0;
   return (
-    <section className="dashboard-module">
+    <section className="dashboard-module" data-module={module.key}>
       <header className="dashboard-module-head">
         <h4 className="dashboard-module-title">{module.title}</h4>
         <Link to={module.to} className="dashboard-module-more">查看全部</Link>
@@ -188,7 +188,7 @@ function ModuleCard({ module }: { module: DashboardModule }) {
                   </span>
                 )}
                 {item.badge ? (
-                  <span className="dashboard-module-item-badge">{item.badge}</span>
+                  <span className="dashboard-module-item-badge" data-status={item.badge}>{item.badge}</span>
                 ) : null}
               </li>
             ))}

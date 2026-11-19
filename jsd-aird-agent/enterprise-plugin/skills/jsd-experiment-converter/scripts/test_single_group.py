@@ -65,6 +65,50 @@ class SingleGroupTests(unittest.TestCase):
             self.run_plan()
         self.assert_no_output()
 
+    def test_percentage_points_fit_percent_formatted_template_without_changing_source(self):
+        self.make_source([97.8])
+        original = digest(self.source)
+        self.plan['source_sha256'] = original
+        self.spec['writes'] = [{'src': 'B1', 'dst': 'C22', 'transform': 'percent_points_to_fraction'}]
+        result = self.run_plan()
+        book = load_workbook(self.root / result['output'])
+        try:
+            self.assertAlmostEqual(book.active['C22'].value, .978)
+            self.assertIn('%', book.active['C22'].number_format)
+            self.assertIsNone(book.active['D22'].value)
+        finally:
+            book.close()
+        self.assertEqual(digest(self.source), original)
+
+    def test_reports_remain_bound_to_each_output_after_second_mapping(self):
+        first = self.run_plan()
+        first_report = (self.root / first['verification']).read_bytes()
+        self.spec['writes'][0]['dst'] = 'C30'
+        write_json(self.plan_path, self.plan)
+        second = execute(self.root, self.plan_path, self.root / '转换结果/测试实验/second.xlsx')
+        self.assertNotEqual(first['verification'], second['verification'])
+        self.assertEqual((self.root / first['verification']).read_bytes(), first_report)
+        for result in (first, second):
+            report = json.loads((self.root / result['verification']).read_text('utf8'))
+            self.assertEqual(report['output_sha256'], digest(self.root / result['output']))
+            self.assertEqual(report['plan_sha256'], result['plan_sha256'])
+
+    def test_docx_paragraph_mode_reads_and_accounts_for_all_source_text(self):
+        self.source = self.source.with_suffix('.docx')
+        xml = ('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+               '<w:body><w:p><w:r><w:t>样品A</w:t></w:r></w:p>'
+               '<w:p><w:r><w:t>观测10</w:t></w:r></w:p></w:body></w:document>')
+        with zipfile.ZipFile(self.source, 'w') as archive:
+            archive.writestr('word/document.xml', xml)
+        self.plan.update(source=self.source.relative_to(self.root).as_posix(),source_sha256=digest(self.source),
+            docx_paragraphs=[{'text': '样品A', 'handling': '样品标识'}, {'text': '观测10', 'handling': '观测'}])
+        self.spec.update(source_sheet='paragraphs', writes=[{'src':'A1','dst':'C7'},{'src':'A2','dst':'C24'}],structural=[])
+        result = self.run_plan()
+        book = load_workbook(self.root / result['output'])
+        self.assertEqual(book.active['C7'].value, '样品A')
+        self.assertEqual(book.active['C24'].value, '观测10')
+        book.close()
+
     def test_write_cannot_override_source_with_a_literal(self):
         self.spec['writes'][0]['value'] = 999
         with self.assertRaisesRegex(ValueError, '不接受直接填写的值'):

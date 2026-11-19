@@ -6,7 +6,7 @@ spring:
 
 logging:
   level:
-    com.jsd.aird: DEBUG
+    com.jsd.aird: INFO
     org.springframework.modulith: INFO
 
 management:

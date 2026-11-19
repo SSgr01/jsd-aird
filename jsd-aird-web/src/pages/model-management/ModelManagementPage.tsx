@@ -144,7 +144,7 @@ export function ModelManagementPage({ embedded = false, focusTargetId, focusMode
     { title: '模型状态', dataIndex: 'status', width: 135, render: (_: string, row: ModelVersion) => { const state = modelStatus[row.status]; return <div className="model-state-cell"><Tag color={state?.color}>{state?.text ?? row.status}</Tag><span>{modelStateHint(row)}</span></div> } },
     { title: '验证结果', key: 'metrics', width: 165, render: (_: unknown, row: ModelVersion) => { const metric = primaryMetric(row); return <div className="model-metric"><strong>{metric.value}</strong><span>{metric.detail}</span></div> } },
     { title: '训练记录', key: 'samples-version', width: 125, render: (_: unknown, row: ModelVersion) => <div className="model-training-meta"><span>{row.trainableSamples} 条 · 第{row.version}版</span><small>{new Date(row.updatedAt).toLocaleDateString('zh-CN')}</small></div> },
-    { title: '操作', key: 'action', width: 110, render: (_: unknown, row: ModelVersion) => <Button type="link" onClick={() => void openModel(row)}>{modelActionLabel(row.status)}</Button> },
+    { title: '操作', fixed: 'right' as const, key: 'action', width: 110, render: (_: unknown, row: ModelVersion) => <Button type="link" onClick={() => void openModel(row)}>{modelActionLabel(row.status)}</Button> },
   ]
 
   return <main className={`model-management-page${embedded ? ' model-management-panel' : ''}`}>

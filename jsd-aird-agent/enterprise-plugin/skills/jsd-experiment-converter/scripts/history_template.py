@@ -25,6 +25,11 @@ class NotSuitable(ValueError):
 # Deliberately small semantic registry. Unknown items remain historical facts;
 # do not select a neighbouring template row using substring similarity.
 TEST_FIELDS = {
+    'ph': ('pH', {''}, ('pH','PH')),
+    'resin_viscosity_verbatim': ('黏度\ncP（mPa·s）/ KU / s', {''}, ('粘度','黏度')),
+    'particle_size_verbatim': ('粒径（nm/μm）\nD10 / D50 / D90 / 平均', {''}, ('粒径',)),
+    'particle_size': ('粒径（nm/μm）\nD10 / D50 / D90 / 平均', {'nm','μm'}, ('粒径','粒径（nm）','粒径（μm）')),
+    'resin_viscosity': ('黏度\ncP（mPa·s）/ KU / s', {'cps','cP','mPa·s','KU','s'}, ('粘度','黏度','树脂粘度','树脂黏度')),
     'water_contact_angle': ('水接触角（°）', {'°'}, ('水接触角','水接触角（°）','水接触角(°)','水滴角/°')),
     'hexadecane_contact_angle': ('正十六烷接触角（°）', {'°'}, ('正十六烷接触角','正十六烷接触角（°）')),
     'diiodomethane_contact_angle': ('二碘甲烷接触角（°）', {'°'}, ('二碘甲烷接触角','二碘甲烷接触角（°）')),
@@ -33,7 +38,8 @@ TEST_FIELDS = {
     'measured_solids': ('固含（%）', {'%'}, ('固含','固含（%）','实测固含','测量固含')),
     'resin_appearance': ('外观', {''}, ('外观','树脂外观')),
     'coating_appearance': ('涂料外观', {''}, ('涂料外观',)),
-    'film_appearance': ('板面外观', {''}, ('板面外观','漆膜外观')),
+    'film_appearance': ('板面外观', {''}, ('板面外观','漆膜外观','喷板')),
+    'quv_delta_e': ('QUV后：ΔE', {''}, ('QUV/20次△E',)),
 }
 SYNTHESIS_FIELDS = {
     'measured_solids': ('固含（%）', {'%'}, ('固含','固含（%）','实测固含','测量固含')),
@@ -116,7 +122,7 @@ def verify_input(root, history):
 
 def build_sheet(workbook, blank, record, kind, sheet_name):
     from openpyxl.utils import get_column_letter
-    from template_ops import pristine_sheet, expand_recipe, expand_groups, find_label, total_formula_and_value
+    from template_ops import pristine_sheet, expand_recipe, expand_groups, find_label, total_formula_and_value, fit_written_text
     from execute_plan import check_inline_lists
     ws=pristine_sheet(workbook,blank,sheet_name)
     groups=record['sourceGroups']
@@ -218,6 +224,8 @@ def build_sheet(workbook, blank, record, kind, sheet_name):
             rule=(TEST_FIELDS if kind=='test' else SYNTHESIS_FIELDS).get(observation['semanticKey'])
             if rule is None:raise NotSuitable('检测项目尚无安全的模板对应：'+observation['semanticKey'])
             label,units,aliases=rule
+            if observation['semanticKey'].endswith('_verbatim') and observation['normalized']['kind'] not in {'TEXT','QUALITATIVE'}:
+                raise NotSuitable('原文保留字段仅接受文字，不推定数字的单位或方法')
             if norm(observation['testItem']) not in {norm(v) for v in aliases}:
                 raise NotSuitable('原始检测标签与语义字段不能明确对应：'+str(observation['testItem']))
             if observation.get('testMethod') or observation.get('testStage'):
@@ -228,6 +236,11 @@ def build_sheet(workbook, blank, record, kind, sheet_name):
                 else:raise NotSuitable('模板无法完整表达逐项条件：'+condition)
             destination=(key,label)
             if destination in observations:raise NotSuitable('同一组同一项目有多项观测，不能折叠平行样或时间点')
+            if observation['semanticKey']=='quv_delta_e':
+                # The original item itself specifies the cycle count. Keep it
+                # with the raw interval/placeholder, never reduce to a midpoint.
+                observation={**observation,'value':observation['testItem']+'：'+str(observation['rawValue']),
+                             'normalized':{'kind':'TEXT'}}
             observations.add(destination);at_label(label,col,observation,units)
     # Empty formulation stays empty. For actual g formulations, reuse the
     # existing checked SUM/cache implementation and preserve source totals.
@@ -239,12 +252,13 @@ def build_sheet(workbook, blank, record, kind, sheet_name):
         else:ws[coordinate]=None;writes[coordinate]=None
     for total in record.get('sourceTotals',[]):
         if total['comparison']!='MATCH' or total['unit']!='g':raise NotSuitable('源配方合计未按g计量核对一致')
+    fit_written_text(ws,writes)
     check_inline_lists(ws)
     return {'sheet':sheet_name,'recordKey':record['recordKey'],'writes':writes,
             'protected':protected,'caches':caches,'evidence':evidence,'groups':len(groups)}
 
 
-def project(root, history, output=None):
+def project(root, history, output=None, allow_partial=False):
     root=Path(root).resolve()
     history,data,source_report,plan,reasons=verify_input(root,history)
     types={r['experimentType'] for r in data['experiments']}
@@ -261,12 +275,13 @@ def project(root, history, output=None):
     if not template.is_file():reasons.append('当前工作区没有对应空白标准模板')
     fingerprint={'historySha256':digest(history),'mappingSha256':digest(history.parent/'mapping.json'),
         'templateSha256':digest(template) if template.is_file() else None,
-        'engineSha256':digest(Path(__file__))+digest(Path(__file__).with_name('template_ops.py'))}
+        'engineSha256':digest(Path(__file__))+digest(Path(__file__).with_name('template_ops.py')),
+        'allowPartial':bool(allow_partial)}
     if report_path.exists():
         old=read_json(report_path)
         if (all(old.get(k)==v for k,v in fingerprint.items()) and
             ((old['status']=='SKIPPED' and not target.exists()) or
-             (old['status']=='PROJECTED' and target.is_file() and digest(target)==old['outputSha256']))):
+             (old['status'] in ('PROJECTED','PARTIAL') and target.is_file() and digest(target)==old['outputSha256']))):
             return {'cache_hit':True,**old}
         raise ValueError('投影结果或输入指纹已变；不覆盖旧文件，请指定新的输出位置')
     if target.exists():raise ValueError('目标文件已存在，不能覆盖')
@@ -284,13 +299,20 @@ def project(root, history, output=None):
             if len(workbook.worksheets)!=1:raise ValueError('空模板必须仅有一张底稿')
             blank=workbook.active;blank.title='_pristine'
             details=[]
+            build_ok=True
             try:
                 for n,record in enumerate(data['experiments'],1):
                     name=category if n==1 else category+'-'+str(n)
                     details.append(build_sheet(workbook,blank,record,kind,name))
             except NotSuitable as error:
                 report['reasons'].append(str(error))
-            if not report['reasons']:
+                build_ok=False
+            # Partial projection is explicit: every omitted fact remains in the
+            # verified historical facts and report. Never emit a blank template,
+            # a summary as a new experiment, or a failed/half-written sheet.
+            partial_allowed=(allow_partial and build_ok and bool(details)
+                and all(r.get('recordRole')!='SUMMARY' and any(r[d] for d in ('formulaItems','processSteps','testResults')) for r in data['experiments']))
+            if build_ok and (not report['reasons'] or partial_allowed):
                 workbook.remove(blank)
                 target.parent.mkdir(parents=True,exist_ok=True)
                 with tempfile.TemporaryDirectory(prefix='.projection-',dir=target.parent) as temporary:
@@ -327,7 +349,7 @@ def project(root, history, output=None):
                     if original and digest(contained(root,original['path']))!=original['sha256']:
                         raise ValueError('投影执行过程中历史原件已变化')
                     candidate.rename(target)
-                report.update(status='PROJECTED',outputSha256=digest(target),sheets=len(details),
+                report.update(status='PARTIAL' if report['reasons'] else 'PROJECTED',outputSha256=digest(target),sheets=len(details),
                     groups=sum(d['groups'] for d in details),
                     placements=[{'sheet':d['sheet'],'recordKey':d['recordKey'],'fields':d['evidence']} for d in details])
         report['limitations']='本地模板投影草稿；重新读取了原件工作副本，写入和样式检查不代表人工语义审核；未入库或训练'
@@ -355,12 +377,13 @@ def main():
     inputs=parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument('--history');inputs.add_argument('--manifest')
     parser.add_argument('--output')
+    parser.add_argument('--allow-partial',action='store_true',help='输出已明确对应的事实，保留未落位原因并标记PARTIAL；不放宽字段、单位或条件核验')
     args=parser.parse_args()
     try:
         if args.manifest:
             result=project_batch(args.root,args.manifest)
             if args.output:write_json(contained(args.root,args.output),result)
-        else:result=project(args.root,args.history,args.output)
+        else:result=project(args.root,args.history,args.output,args.allow_partial)
         print(json.dumps({k:v for k,v in result.items() if k!='placements'},ensure_ascii=False));return 0
     except Exception as error:
         print(json.dumps({'status':'BLOCKED','reason':str(error)},ensure_ascii=False));return 2

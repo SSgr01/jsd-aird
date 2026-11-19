@@ -123,14 +123,29 @@ def expand_recipe(ws, count, kind):
     return info, lambda row: row+extra if row >= at else row
 
 
+def effective_column_dimension(ws, column):
+    """Resolve grouped dimensions without creating a misleading default entry."""
+    from openpyxl.utils import column_index_from_string
+    matches=[]
+    for key,dim in ws.column_dimensions.items():
+        start=dim.min or column_index_from_string(key)
+        end=dim.max or start
+        if start<=column<=end:matches.append((end-start,dim))
+    return min(matches,key=lambda x:x[0])[1] if matches else None
+
+
 def expand_groups(ws, info, count):
     end = info["first_col"] + count - 1
     old = info["last_col"]
     if end > old:
+        prototype=effective_column_dimension(ws,old)
         for c in range(old+1, end+1):
             letter = get_column_letter(c)
-            ws.column_dimensions[letter] = copy(ws.column_dimensions[get_column_letter(old)])
-            ws.column_dimensions[letter].index = letter
+            if prototype is not None:
+                dimension=copy(prototype)
+                dimension.index=letter
+                dimension.min=dimension.max=c
+                ws.column_dimensions[letter]=dimension
             for r in range(1, ws.max_row+1):
                 ws.cell(r, c)._style = copy(ws.cell(r, old)._style)
         merges = [CellRange(str(r)) for r in ws.merged_cells.ranges]
@@ -307,3 +322,28 @@ def cache_totals(path, caches):
         os.replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
+def fit_written_text(ws, coordinates):
+    """Increase row space for written wrapped text without shrinking template type."""
+    import math
+    import unicodedata
+    from copy import copy
+    from openpyxl.utils import get_column_letter
+    for coord in coordinates:
+        cell = ws[coord]
+        if not isinstance(cell.value, str) or not cell.value or cell.data_type == 'f':
+            continue
+        merged = next((a for a in ws.merged_cells.ranges if coord in a), None)
+        min_col, max_col = (merged.min_col, merged.max_col) if merged else (cell.column, cell.column)
+        min_row, max_row = (merged.min_row, merged.max_row) if merged else (cell.row, cell.row)
+        width = sum((effective_column_dimension(ws,c).width if effective_column_dimension(ws,c) is not None else ws.sheet_format.defaultColWidth or 8.43) for c in range(min_col,max_col+1))
+        capacity = max(1, width-2)
+        lines = sum(max(1, math.ceil(sum(2 if unicodedata.east_asian_width(c) in ('W','F') else 1 for c in line)/capacity)) for line in cell.value.split('\n'))
+        size = cell.font.sz or 11
+        required = lines*(size*1.4)+5
+        existing = sum(ws.row_dimensions[r].height or ws.sheet_format.defaultRowHeight or 15 for r in range(min_row,max_row+1))
+        if required > existing:
+            height=(ws.row_dimensions[min_row].height or ws.sheet_format.defaultRowHeight or 15)+required-existing
+            if height>409:
+                raise ValueError(f'原文过长，单行不能完整显示，需专门排版适配：{ws.title}!{coord}')
+            ws.row_dimensions[min_row].height=height
+        alignment=copy(cell.alignment);alignment.wrap_text=True;cell.alignment=alignment

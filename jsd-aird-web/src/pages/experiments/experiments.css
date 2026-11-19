@@ -723,3 +723,9 @@
 .experiment-data-issue-list li + li {
   margin-top: 4px;
 }
+
+/* Keep record identity and actions visible together on narrow lists. */
+.eln-bulk-actions { display: contents; }
+@media (max-width: 767px) {
+  .eln-bulk-actions[data-has-selection="false"] { display: none; }
+}

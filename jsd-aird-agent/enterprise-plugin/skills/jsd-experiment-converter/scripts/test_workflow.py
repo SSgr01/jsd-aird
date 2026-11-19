@@ -75,6 +75,40 @@ class WorkflowTests(unittest.TestCase):
             convert_value('-1', 'customer_charge_g')
         self.assertIsNone(convert_value(None, None))
 
+    def test_separate_observation_sources_preserve_same_sample_and_condition(self):
+        source=self.root/'原始实验/测试实验/observations.xlsx'
+        wb=Workbook();ws=wb.active
+        for row in (1,2):
+            ws.cell(row,1,'sample-A');ws.cell(row,2,'1%');ws.cell(row,3,110)
+        wb.save(source);wb.close()
+        spec=dict(source_sheet='Sheet',groups=['A1','A2'],group_identity_role='PLAN',
+            group_condition_refs=[['B1'],['B2']],recipe=dict(names=[],amounts=[]),
+            writes=[dict(src='B1',dst='C49'),dict(src='B2',dst='D49'),
+                    dict(src='C1',dst='C104'),dict(src='C2',dst='D104')])
+        plan=dict(version=1,source=source.relative_to(self.root).as_posix(),kind='test',
+            source_sha256=digest(source),template_sha256=digest(self.root/'标准模板/test.xlsx'),
+            sheets=[spec],skipped=[])
+        write_json(self.plan_path,plan)
+        with self.assertRaisesRegex(ValueError,'逐次观测'):
+            execute(self.root,self.plan_path)
+        spec['group_observation_refs']=[['C1'],['C2']]
+        write_json(self.plan_path,plan)
+        result=execute(self.root,self.plan_path)
+        out=load_workbook(self.root/result['output'],data_only=True)
+        try:
+            self.assertEqual([out.active[c].value for c in ('C7','D7')],['sample-A','sample-A'])
+            self.assertEqual([out.active[c].value for c in ('C49','D49')],['1%','1%'])
+            self.assertEqual([out.active[c].value for c in ('C104','D104')],[110,110])
+        finally:out.close()
+        for refs in ([['C1'],['C1']],[['C1'],['B2']],[['C1'],['D3']]):
+            spec['group_observation_refs']=refs;write_json(self.plan_path,plan)
+            with self.assertRaisesRegex(ValueError,'检测来源'):
+                execute(self.root,self.plan_path,self.root/'_work/rejected.xlsx')
+        spec['group_observation_refs']=[['C1'],['C2']]
+        spec['writes'][-1]['dst']='C105';write_json(self.plan_path,plan)
+        with self.assertRaisesRegex(ValueError,'本组标准检测结果'):
+            execute(self.root,self.plan_path,self.root/'_work/rejected.xlsx')
+
     def test_repeated_charges_keep_original_names_order_and_path_inference(self):
         source=self.root/'原始实验/合成实验/林志华实验记录/fixture.xlsx'
         source.parent.mkdir()

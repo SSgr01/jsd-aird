@@ -144,5 +144,37 @@ class ProjectionTests(unittest.TestCase):
         result=project_batch(self.root,path)
         self.assertEqual(result['counts'],{'PROJECTED':1,'SKIPPED':0,'BLOCKED':1})
 
+    def test_explicit_partial_keeps_sample_identity_and_no_invented_recipe(self):
+        record=self.fixture(materials=0)
+        for g in record['groups']:g['identityType']='SAMPLE'
+        self.edit_source({'A30':'extra aging condition','B30':'20 cycles'})
+        self.plan['unplaced']=[{'ref':'raw!A30','reason':'source-only condition'},
+                               {'ref':'raw!B30','reason':'source-only condition'}]
+        result=project(self.root,self.extract(),allow_partial=True)
+        self.assertEqual(result['status'],'PARTIAL');self.assertTrue(result['reasons'])
+        self.assertIn('history',result)
+        w=load_workbook(self.root/result['output'],data_only=True)
+        self.assertEqual(w.active['C7'].value,'G1')
+        self.assertIsNone(w.active['C51'].value);self.assertIsNone(w.active['C60'].value)
+        self.assertEqual(w.active['C104'].value,100);w.close()
+
+    def test_partial_flag_does_not_allow_condition_loss(self):
+        record=self.fixture();self.edit_source({'A30':'time h','B30':20})
+        record['testResults'][0]['conditions']['time']={'ref':'raw!B30','parse':'number','unit':'h','unitRef':'raw!A30'}
+        result=project(self.root,self.extract(),allow_partial=True)
+        self.assertEqual(result['status'],'SKIPPED')
+        self.assertFalse((self.root/result['output']).exists())
+
+    def test_viscosity_verbatim_preserves_method_notation_without_inventing_unit(self):
+        record=self.fixture(materials=0)
+        self.plan['structural'].append({'ref':'raw!A8','reason':'empty recipe section label'})
+        self.edit_source({'A5':'粘度','B5':'8S/2#','C5':'3040cps'})
+        for observation in record['testResults'][::2]:
+            observation['semanticKey']='resin_viscosity_verbatim'
+            observation['value']={'ref':observation['value']['ref']}
+        result=project(self.root,self.extract());self.assertEqual(result['status'],'PROJECTED')
+        w=load_workbook(self.root/result['output']);self.assertEqual(w.active['C24'].value,'8S/2#')
+        self.assertEqual(w.active['D24'].value,'3040cps');w.close()
+
 
 if __name__=='__main__':unittest.main()

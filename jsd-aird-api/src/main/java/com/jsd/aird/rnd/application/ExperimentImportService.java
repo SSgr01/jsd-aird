@@ -403,6 +403,9 @@ public class ExperimentImportService implements com.jsd.aird.rnd.api.ExperimentS
                     recognitionSnapshot.set("recognizedRegions", recognizedRegions.deepCopy());
                     if (recognitionResult != null) recognitionSnapshot.set("recognitionSummary", recognitionResult.deepCopy());
                 }
+                // Progress uses REQUIRES_NEW; write it before the commit transaction locks
+                // the async job lease row, otherwise the worker waits on its own lock.
+                updateProgress(actor.organizationId(), asyncIdempotencyKey, 95, "PERSISTING_RESULT");
                 final var preparedSnapshot=editorSnapshot;
                 java.util.function.Supplier<Summary> commit=()->{
                     asyncJobs.requireExecution(com.jsd.aird.ops.application.port.AsyncExecutionScope.current(),false);
@@ -421,7 +424,6 @@ public class ExperimentImportService implements com.jsd.aird.rnd.api.ExperimentS
                         "experiment-1", "sample-1", "EXPERIMENT:" + jobId + ":sample-1",
                         List.of("file:" + command.sha256()), sourceCoordinates, recognitionSnapshot,
                         command.sha256(), actor.userId());
-                updateProgress(actor.organizationId(), asyncIdempotencyKey, 95, "PERSISTING_RESULT");
                 imports.complete(jobId, summary.id(), preparedSnapshot);
                 return summary;
                 };

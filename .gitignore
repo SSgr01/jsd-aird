@@ -77,3 +77,6 @@ Thumbs.db
 
 # Source-bound plans contain local business data; runtime uses per-task plans.
 /jsd-aird-agent/enterprise-plugin/skills/jsd-experiment-converter/recipes/
+
+# Generated Spring Modulith metadata
+/build/generated-spring-modulith/

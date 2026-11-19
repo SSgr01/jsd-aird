@@ -1,0 +1,13 @@
+# Install outside /etc/logrotate.d; invoke hourly with a dedicated state file.
+# Console logs are held open by shell redirection, so use copytruncate.
+/opt/jsd-aird/worker.log /opt/jsd-aird/api.log {
+    daily
+    maxsize 50M
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su root root
+}

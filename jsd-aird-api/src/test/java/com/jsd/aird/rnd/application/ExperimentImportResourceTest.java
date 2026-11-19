@@ -23,6 +23,7 @@ class ExperimentImportResourceTest {
     private final AtomicBoolean committing=new AtomicBoolean();
     private final ExperimentImportRepository imports=mock(ExperimentImportRepository.class);
     private final ExperimentService experiments=mock(ExperimentService.class);
+    private final OpsAsyncFacade asyncJobs=mock(OpsAsyncFacade.class);
     private ExperimentImportService service;
     private final Actor actor=new Actor(org,user,"capacity-test");
     @BeforeEach void setup(){
@@ -35,7 +36,9 @@ class ExperimentImportResourceTest {
         var summary=mock(Summary.class);when(summary.id()).thenReturn(UUID.randomUUID());
         when(experiments.create(any())).thenAnswer(call->{assertThat(committing.get()).isTrue();return summary;});
         var detail=mock(Detail.class);when(detail.currentVersionId()).thenReturn(UUID.randomUUID());when(experiments.detail(summary.id())).thenReturn(detail);
-        service=new ExperimentImportService(imports,experiments,files,List.of(parser),List.of(),mock(com.jsd.aird.kb.api.DocumentParser.class),json,mock(OpsAsyncFacade.class),mock(TemplateOfficeNormalizationFacade.class),mock(com.jsd.aird.tpl.api.TemplateOfficeFacade.class));
+        doAnswer(call->{assertThat(committing.get()).as("progress must not compete with the commit lease lock").isFalse();return null;})
+                .when(asyncJobs).updateProgress(any(),any(),anyInt(),any());
+        service=new ExperimentImportService(imports,experiments,files,List.of(parser),List.of(),mock(com.jsd.aird.kb.api.DocumentParser.class),json,asyncJobs,mock(TemplateOfficeNormalizationFacade.class),mock(com.jsd.aird.tpl.api.TemplateOfficeFacade.class));
         var manager=mock(PlatformTransactionManager.class);
         when(manager.getTransaction(any())).thenAnswer(call->{committing.set(true);return new SimpleTransactionStatus();});
         doAnswer(call->{committing.set(false);return null;}).when(manager).commit(any());
@@ -47,7 +50,8 @@ class ExperimentImportResourceTest {
     @AfterEach void clear(){ActorContext.clear();}
     private ExperimentImportService.Command command(){return new ExperimentImportService.Command(file,"fixture.docx","hash",TemplateFormat.DOCX,null,null,null,null,null,LocalDate.now(),"ALL");}
     @Test void preparationDoesNotOwnTheCommitTransaction(){
-        assertThat(service.processQueued(job,command(),actor)).isNotNull();assertThat(committing.get()).isFalse();
+        assertThat(service.processQueued(job,command(),actor,"import-key")).isNotNull();assertThat(committing.get()).isFalse();
+        verify(asyncJobs).updateProgress(org,"import-key",95,"PERSISTING_RESULT");
         verify(imports).complete(eq(job),any(),any());
     }
     @Test void cancellationImmediatelyBeforeCommitDoesNotCreateAnExperiment(){

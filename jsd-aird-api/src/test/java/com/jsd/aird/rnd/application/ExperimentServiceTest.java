@@ -53,6 +53,26 @@ class ExperimentServiceTest {
     }
 
     @Test
+    void keepsCompactResultLayoutForContentOnlyImport() throws Exception {
+        when(repository.create(any())).thenAnswer(invocation -> summary(invocation.getArgument(0)));
+        var snapshot = mapper.readTree("""
+                {"sheets":{"source":{"name":"合成实验","custom":{"labTemplate":{
+                  "version":1,"templateCode":"SYNTHESIS","presentation":"RESULT","fields":{}}},
+                  "cellData":{"3":{"1":{"v":23.0}}}}}}
+                """);
+        var model = mapper.createObjectNode().put("importProcessingMode", "CONTENT_ONLY");
+        model.set("documentSnapshot", snapshot.deepCopy());
+        service.create(new ExperimentService.CreateCommand(
+                null, "水性丙烯酸乳液固含量记录", null, null, "EXCEL_IMPORT",
+                null, null, null, "creator", LocalDate.of(2026, 11, 18),
+                null, null, null, snapshot, model));
+        var captor = ArgumentCaptor.forClass(ExperimentRepository.Create.class);
+        verify(repository).create(captor.capture());
+        assertThat(captor.getValue().editModel().path("documentSnapshot")).isEqualTo(snapshot);
+        assertThat(captor.getValue().editModel().path("importProcessingMode").asText()).isEqualTo("CONTENT_ONLY");
+    }
+
+    @Test
     void createsACompleteManualDraftContractByDefault() {
         when(repository.create(any())).thenAnswer(invocation -> summary(invocation.getArgument(0)));
 

@@ -151,7 +151,8 @@ public class ExperimentService {
             editModel.put("documentFormat", "excel");
             editModel.putObject("templateDataReview").put("required", true).put("confirmed", false);
         }
-        if(com.jsd.aird.shared.lab.LabWorkbook.supported(templateSnapshot)) {
+        if(!"CONTENT_ONLY".equals(editModel.path("importProcessingMode").asText())
+                && com.jsd.aird.shared.lab.LabWorkbook.supported(templateSnapshot)) {
             if(ExperimentSourceType.TEMPLATE.name().equals(sourceType)) {
                 var fresh=com.jsd.aird.shared.lab.LabWorkbook.sheet(editModel.path("documentSnapshot"));
                 for(var col:fresh.path("columnData"))if(col.path("custom").path("lab") instanceof ObjectNode meta)meta.remove("sampleKey");
@@ -279,7 +280,11 @@ public class ExperimentService {
         }
 
         var model = editModels.normalize(object(command.editModel(), "editModel"), id);
-        if(com.jsd.aird.shared.lab.LabWorkbook.supported(current.templateSnapshot())) {
+        // Content-only imports retain the source layout, including compact result exports.
+        // They have no full template baseline from which to expand a laboratory workbook.
+        var contentOnly = imported && "CONTENT_ONLY".equals(current.editModel().path("importProcessingMode").asText());
+        if (contentOnly) model.put("importProcessingMode", "CONTENT_ONLY");
+        if(!contentOnly && com.jsd.aird.shared.lab.LabWorkbook.supported(current.templateSnapshot())) {
             var working=com.jsd.aird.shared.lab.LabWorkbook.prepare(json,model.path("documentSnapshot"),current.templateSnapshot(),id.toString());
             if(current.templateVersionId()!=null && templates!=null) {
                 var structureDefinition=templates.getVersion(actor.organizationId(),current.templateVersionId());

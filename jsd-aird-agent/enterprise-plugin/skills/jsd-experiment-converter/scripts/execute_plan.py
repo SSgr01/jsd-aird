@@ -61,6 +61,17 @@ def convert_value(value, transform):
         if not isinstance(value, (int, float)):
             raise ValueError("percent_to_points 只接受源数值")
         return value * 100
+    if transform == 'percent_points_to_fraction':
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError('百分数点转比例只接受有限源数值')
+        return value / 100
+    if transform == 'percent_to_text':
+        from decimal import Decimal
+        if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value):
+            raise ValueError('百分比文本转换只接受有限源数值')
+        text=format(Decimal(str(value))*100,'f')
+        if '.' in text:text=text.rstrip('0').rstrip('.')
+        return text+'%'
     if transform == "numeric_text":
         if value is None or value == "/":
             return value
@@ -215,7 +226,11 @@ def execute(root, plan_path, output=None):
     if (status.get("stage") in ("validated", "review_required") and status.get("plan_sha256") == plan_sha
         and status.get("engine_sha256") == engine_sha and status.get("template_sha256") == template_sha
         and output.is_file() and status.get("output") == relposix(output, root)
-        and status.get("output_sha256") == digest(output)):
+        and status.get("output_sha256") == digest(output)
+        and status.get("verification")
+        and (root / status["verification"]).is_file()
+        and read_json(root / status["verification"]).get("output_sha256") == status["output_sha256"]
+        and read_json(root / status["verification"]).get("plan_sha256") == plan_sha):
         return {"cache_hit": True, **status}
     if output.exists():
         raise ValueError("目标已存在且不是可验证的本计划产物；指定新的 --output，不自动覆盖")
@@ -224,7 +239,7 @@ def execute(root, plan_path, output=None):
     from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter
     from openpyxl.workbook.properties import CalcProperties
     from template_ops import (pristine_sheet, expand_recipe, expand_groups, insert_client_test_rows,
-                              append_single_group_test, total_formula_and_value, cache_totals, layout)
+                              append_single_group_test, total_formula_and_value, cache_totals, layout, fit_written_text)
     wf = None if docx else load_workbook(source, data_only=False)
     wv = None if docx else load_workbook(source, data_only=True)
     wb = load_workbook(template)
@@ -242,6 +257,10 @@ def execute(root, plan_path, output=None):
         prefix = category
         blank.title = "_pristine"
         selected = [p["source_sheet"] for p in plan["sheets"]]
+        contexts = plan.get('context_sheets', [])
+        context_names = [p['source_sheet'] for p in contexts]
+        if len(context_names) != len(set(context_names)) or metadata_sheets and contexts:
+            raise ValueError('上下文表须唯一且仅用于本地无绑定模板')
         if metadata_sheets and len(selected) != 1:
             raise ValueError("系统发布模板的隐藏绑定仅支持一张业务表；多实验请分别输出文件")
         skipped = {s["source_sheet"]: s["reason"] for s in plan.get("skipped", [])}
@@ -249,12 +268,41 @@ def execute(root, plan_path, output=None):
             raise ValueError("跳过的源表必须说明原因")
         if docx:
             tables, paragraphs = _docx_table_views(source)
+            if 'paragraphs' in selected:
+                # Explicit paragraph mode retains Word text and its original order;
+                # no synthetic workbook or model-supplied values are introduced.
+                tables['paragraphs'] = docx_sheet_view({'table': 'paragraphs'},
+                    {'A'+str(i): text if text.strip() else None for i, text in enumerate(paragraphs, 1)})
             meaningful = [k for k, s in tables.items() if any(c.value is not None for row in s for c in row)]
         else:
             meaningful = [s.title for s in wf if any(c.value is not None for row in s for c in row)]
-        if len(set(selected)) != len(selected) or set(selected) & set(skipped):
-            raise ValueError("工作表重复或同时出现在转换/跳过清单")
-        if set(selected) | set(skipped) != set(meaningful):
+        partitions = {}
+        partition_keys = set()
+        for spec in plan['sheets']:
+            name = spec['source_sheet']
+            part = spec.get('source_partition')
+            if part is not None:
+                if docx or metadata_sheets or kind != 'synthesis':
+                    raise ValueError('源表分区仅支持本地无绑定合成XLSX模板')
+                if (not isinstance(part, dict) or set(part) not in ({'id', 'cells'}, {'id', 'cells', 'mode'})
+                    or part.get('mode', 'SINGLE_EXPERIMENT') not in ('SINGLE_EXPERIMENT','EXPERIMENT_BLOCK')
+                    or not isinstance(part['id'], str) or not part['id'].strip()
+                    or not isinstance(part['cells'], list) or not part['cells']
+                    or any(not isinstance(c, str) or not re.fullmatch(r'[A-Z]+[1-9][0-9]*', c) for c in part['cells'])
+                    or len(set(part['cells'])) != len(part['cells']) or not spec.get('groups')
+                    or part.get('mode','SINGLE_EXPERIMENT')=='SINGLE_EXPERIMENT' and len(spec['groups']) != 1):
+                    raise ValueError('源表分区须有唯一id、显式单元格集合；多组实验区块须声明EXPERIMENT_BLOCK')
+            key = (name, part['id'] if part else None)
+            if key in partition_keys:
+                raise ValueError('源工作表/分区标识重复')
+            partition_keys.add(key)
+            partitions.setdefault(name, []).append(part)
+        if (any(len(parts) > 1 and any(p is None for p in parts) for parts in partitions.values())
+            or set(selected) & set(skipped)):
+            raise ValueError("工作表重复时必须逐组显式分区，且不能同时转换/跳过")
+        if set(context_names) & (set(selected) | set(skipped)):
+            raise ValueError('上下文表不能同时转换或跳过')
+        if set(selected) | set(skipped) | set(context_names) != set(meaningful):
             raise ValueError("每张非空源表必须在 sheets 或 skipped 中明确处置")
         if not selected:
             raise ValueError("没有选择任何待转换工作表")
@@ -266,7 +314,8 @@ def execute(root, plan_path, output=None):
                 if item.get("text") != text or not item.get("handling"):
                     raise ValueError("docx 段落处置与原文不一致：" + text[:30])
         expected, protected, caches, details, unplaced, coverage = {}, {}, {}, [], [], []
-        source_conflicts, recipe_conversions, derived_fields = [], [], []
+        source_accounted = {name: set() for name in set(selected) | set(context_names)}
+        source_conflicts, recipe_conversions, recipe_name_conversions, derived_fields = [], [], [], []
         for index, spec in enumerate(plan["sheets"]):
             name = spec["source_sheet"]
             src = tables[name] if docx else wf[name]
@@ -274,17 +323,48 @@ def execute(root, plan_path, output=None):
             title = prefix if index == 0 else prefix + "-" + str(index+1)
             ws = pristine_sheet(wb, blank, title)
             used, destinations = set(), set()
+            part = spec.get('source_partition')
+            scope = set(part['cells']) if part else None
+            populated = {c.coordinate for row in src for c in row if c.value is not None}
 
             def get(coord):
                 if coord == '@source.parent':
                     derived_fields.append({'source': '@source.parent', 'rawValue': source.parent.name,
                         'sourcePath': relposix(source, root), 'status': 'PATH_DERIVED_NOT_SOURCE_SIGNATURE'})
                     return source.parent.name
+                if '!' in coord:
+                    context_name, context_coord = coord.rsplit('!',1)
+                    if context_name not in context_names or scope is not None:
+                        raise ValueError('跨表引用须来自显式context_sheets，且不能跨出源分区')
+                    if not re.fullmatch(r'[A-Z]+[1-9][0-9]*', context_coord):
+                        raise ValueError('无效上下文来源坐标：'+coord)
+                    context_sheet = tables[context_name] if docx else wf[context_name]
+                    context_cell = context_sheet[context_coord]
+                    if context_cell.value is None:
+                        raise ValueError('上下文引用没有原始非空值：'+coord)
+                    source_accounted[context_name].add(context_coord)
+                    if context_cell.data_type == 'f':
+                        context_value = wv[context_name][context_coord].value
+                        if context_value is None:raise ValueError('上下文公式缺缓存：'+coord)
+                        return context_value
+                    return context_cell.value
+                if scope is not None and coord not in scope:
+                    raise ValueError(f'引用超出显式源分区：{name}!{coord}')
                 used.add(coord)
                 cell = src[coord]
                 if cell.data_type == "f" and cached[coord].value is None:
                     raise ValueError(f"源公式缺缓存：{name}!{coord}，需要一次重算")
                 return cached[coord].value if cell.data_type == "f" else cell.value
+
+            def converted(coord,transform):
+                value=get(coord)
+                if transform=='percent_to_text':
+                    if docx or coord.startswith('@'):
+                        raise ValueError('百分比文本转换须有Excel源百分比格式证明')
+                    sn,cc=coord.rsplit('!',1) if '!' in coord else (name,coord)
+                    if '%' not in wf[sn][cc].number_format:
+                        raise ValueError('百分比文本转换须有Excel源百分比格式证明：'+coord)
+                return convert_value(value,transform)
 
             single = spec.get("single_group_test")
             recipe = spec["recipe"]
@@ -309,7 +389,7 @@ def execute(root, plan_path, output=None):
                     coord = f"{get_column_letter(col)}{row}"
                     if coord in values:
                         raise ValueError("重复写目标：" + coord)
-                    values[coord] = convert_value(get(item["src"]), item.get("transform"))
+                    values[coord] = converted(item['src'],item.get('transform'))
                 placed = append_single_group_test(ws, values)
                 expected[title] = dict(placed)
                 protected[title] = {c.coordinate: c.value for row in blank for c in row
@@ -322,16 +402,21 @@ def execute(root, plan_path, output=None):
                     if not item.get("reason"):
                         raise ValueError("未落位字段需要 reason")
                     unplaced.append({"sheet": name, **item, "value": get(item["src"])})
-                populated = {c.coordinate for row in src for c in row if c.value is not None}
                 missing = sorted(populated-used)
                 if missing:
                     raise ValueError(f"{name} 尚有 {len(missing)} 个非空源单元格未处置：{missing[:20]}")
                 coverage.append({"sheet": name, "nonempty": len(populated), "accounted": len(populated & used)})
+                source_accounted[name].update(populated & used)
                 details.append({**layout(ws, kind), "sheet": title, "source_sheet": name, "groups": 1,
                                 "materials": 0, "added_test_items": [], "mode": "single_group_test",
                                 "output_last_col": ws.max_column})
                 continue
             groups = spec["groups"]
+            identity_role=spec.get('group_identity_role','EXPERIMENT')
+            if (identity_role not in ('EXPERIMENT','SAMPLE','PLAN')
+                or identity_role=='SAMPLE' and kind!='test'
+                or metadata_sheets and identity_role!='EXPERIMENT'):
+                raise ValueError('分组身份须为对应本地模板的EXPERIMENT、SAMPLE或PLAN；不改变系统隐藏绑定')
             total_policy = recipe.get('source_total_policy', 'strict')
             if total_policy not in ('strict', 'report_conflicts'):
                 raise ValueError('源合计策略只能是strict或report_conflicts')
@@ -339,6 +424,21 @@ def execute(root, plan_path, output=None):
                 raise ValueError('源合计冲突的审阅模式只能输出到工作区_work，不能作为正式validated结果')
             # Entries explicitly describe each group's material/value pairs. A
             # missing material stays blank; it is never read from a fake cell.
+            name_transforms = recipe.get('name_transforms', {})
+            name_refs = ({entry['name'] for entries in recipe.get('entries', []) for entry in entries}
+                         if 'entries' in recipe else set(recipe.get('names', [])))
+            if not isinstance(name_transforms, dict) or set(name_transforms) - name_refs:
+                raise ValueError('物料名提取只能引用本配方的真实物料来源坐标')
+            converted_names = {}
+            def get_name(ref):
+                if ref not in converted_names:
+                    raw = get(ref)
+                    value = convert_value(raw, name_transforms.get(ref))
+                    converted_names[ref] = value
+                    if value != raw or type(value) is not type(raw):
+                        recipe_name_conversions.append({'sheet':name,'src':ref,'raw_value':raw,
+                            'value':value,'transform':name_transforms[ref]})
+                return converted_names[ref]
             if 'entries' in recipe:
                 if recipe.get('names') or recipe.get('amounts') or len(recipe['entries']) != len(groups):
                     raise ValueError('逐组entries须对应全部组，不能与names/amounts混用')
@@ -346,9 +446,11 @@ def execute(root, plan_path, output=None):
                 for entries in recipe['entries']:
                     mapping = {}
                     for entry in entries:
-                        label = get(entry['name'])
-                        if not isinstance(label, str) or not label.strip() or label in mapping:
-                            raise ValueError('逐组物料名缺失或重复；分阶段重复投料应保留在历史结构化数据中')
+                        label = get_name(entry['name'])
+                        if (isinstance(label, bool) or not isinstance(label, (str, int, float))
+                            or not str(label).strip() or label in mapping
+                            or isinstance(label, float) and not math.isfinite(label)):
+                            raise ValueError('逐组物料名缺失、无效或重复；须保留原始物料编码和逐次投料来源')
                         mapping[label] = entry['amount']
                         if label not in labels:
                             labels.append(label)
@@ -368,6 +470,15 @@ def execute(root, plan_path, output=None):
                     raise ValueError("系统发布模板超出固定绑定区域；不能扩容后沿用旧隐藏映射")
             info, map_row = expand_recipe(ws, len(names), kind)
             expand_groups(ws, info, len(groups))
+            if 'group_column_width' in spec:
+                width = spec['group_column_width']
+                if (metadata_sheets or not isinstance(width, (int, float)) or isinstance(width, bool)
+                    or not 20 <= width <= 60):
+                    raise ValueError('长文列宽仅支持本地无绑定模板，须明确20至60的宽度')
+                from openpyxl.worksheet.dimensions import ColumnDimension
+                for col in range(info['first_col'], info['first_col'] + len(groups)):
+                    letter = get_column_letter(col)
+                    ws.column_dimensions[letter] = ColumnDimension(ws,index=letter,min=col,max=col,width=width)
             additions = spec.get('client_template_additions', [])
             if additions and kind != 'test':
                 raise ValueError('客户新增测试项仅支持测试模板')
@@ -388,8 +499,44 @@ def execute(root, plan_path, output=None):
                     ws[coord].data_type = "s"
                 expected[title][coord] = value
 
-            group_values = [get(c) for c in groups]
-            if any(v is None for v in group_values) or len(set(map(str, group_values))) != len(group_values):
+            group_values = [converted(c,spec.get('group_transform')) for c in groups]
+            repeated_ids = len(set(map(str, group_values))) != len(group_values)
+            condition_refs = spec.get('group_condition_refs')
+            if repeated_ids and identity_role in ('SAMPLE','PLAN') and not metadata_sheets and condition_refs is not None:
+                if (not isinstance(condition_refs, list) or len(condition_refs) != len(groups)
+                    or any(not isinstance(refs, list) or not refs or any(not isinstance(r, str) for r in refs) for refs in condition_refs)):
+                    raise ValueError('同一样品不同条件须逐组给出真实条件来源')
+                identities = [(str(value), tuple(str(get(ref)) for ref in refs)) for value, refs in zip(group_values, condition_refs)]
+                observation_refs = spec.get('group_observation_refs')
+                if observation_refs is not None:
+                    if (kind != 'test' or not isinstance(observation_refs, list)
+                        or len(observation_refs) != len(groups)
+                        or any(not isinstance(refs, list) or not refs for refs in observation_refs)):
+                        raise ValueError('重复观测须逐组声明真实检测来源，仅支持本地测试模板')
+                    excluded = set(groups) | {r for refs in condition_refs for r in refs}
+                    seen_observations = set()
+                    for i, refs in enumerate(observation_refs):
+                        column = info['first_col'] + i
+                        for ref in refs:
+                            if (not isinstance(ref, str) or not re.fullmatch(r'[A-Z]+[1-9][0-9]*', ref)
+                                or ref in excluded or ref in seen_observations or get(ref) is None):
+                                raise ValueError('重复观测检测来源须非空、彼此独立，不能复用身份或条件来源')
+                            if not any(write.get('src') == ref
+                                and coordinate_to_tuple(write['dst'])[1] == column
+                                and 62 <= coordinate_to_tuple(write['dst'])[0] <= 135
+                                for write in spec.get('writes', [])):
+                                raise ValueError('重复观测来源必须分别写入本组标准检测结果，不能仅用于去重')
+                            seen_observations.add(ref)
+                    # The original observation coordinates distinguish occurrences;
+                    # neither measured values nor invented IDs distinguish samples.
+                elif len(set(identities)) != len(groups):
+                    raise ValueError('相同样品和条件仍重复，须核对是否逐次观测')
+                if any(ref not in [r for write in spec.get('writes',[]) for r in write.get('srcs',[write.get('src')])] for refs in condition_refs for ref in refs):
+                    raise ValueError('区分重复样品的条件必须同时写入标准页，不能只用于内部去重')
+                repeated_ids = False
+            elif spec.get('group_observation_refs') is not None:
+                raise ValueError('重复观测声明须配合本地SAMPLE/PLAN的逐组条件来源')
+            if any(v is None for v in group_values) or repeated_ids:
                 raise ValueError("组编号缺失或重复；需要一次人工判断")
             sample_refs = spec.get('sample_groups', groups)
             if len(sample_refs) != len(groups):
@@ -399,8 +546,13 @@ def execute(root, plan_path, output=None):
                 raise ValueError('样品/方案编号缺失，需要明确分组')
             for i, value in enumerate(group_values):
                 col = get_column_letter(info["first_col"]+i)
+                if identity_role=='PLAN':
+                    put(f'{col}{map_row(8) if kind=="synthesis" else info["id_row"]}',value)
+                    continue
                 put(f"{col}{info['id_row']}", sample_values[i])
-                if info["recipe_id_row"] != info["id_row"]:
+                if identity_role=='SAMPLE':
+                    put(f'{col}{map_row(19)}',value)
+                elif info["recipe_id_row"] != info["id_row"]:
                     put(f"{col}{info['recipe_id_row']}", value)
                 elif sample_values[i] != value:
                     raise ValueError('此模板只有一个编号区，无法表示不同的样品与实验编号')
@@ -413,32 +565,50 @@ def execute(root, plan_path, output=None):
                 put(f"B{item['target_row']}", label)
                 for i, ref in enumerate(item['values']):
                     put(f"{get_column_letter(info['first_col']+i)}{item['target_row']}", get(ref))
-            material_names = [get(c) for c in names]
+            material_names = [get_name(c) for c in names]
             if any(v is None for v in material_names):
                 raise ValueError("物料名称缺失，需要明确来源")
             if len(set(map(str, material_names))) != len(material_names):
-                if not recipe.get('preserve_repeated_lines') or len(groups) != 1 or 'entries' in recipe:
-                    raise ValueError("物料名称重复，需单组显式preserve_repeated_lines保留源行，不能自动合并")
-                pairs = [(coordinate_to_tuple(n), coordinate_to_tuple(a[0])) for n, a in zip(names, amount_refs)]
-                if (any(nr != ar or nc >= ac for (nr, nc), (ar, ac) in pairs)
-                    or len({a[1] for _, a in pairs}) != 1
-                    or [n[0] for n, _ in pairs] != sorted({n[0] for n, _ in pairs})):
-                    raise ValueError('重复投料必须来自同一源列、同一行名称/用量，并保持严格源行顺序')
+                if not recipe.get('preserve_repeated_lines') or 'entries' in recipe:
+                    raise ValueError("物料名称重复，需显式preserve_repeated_lines的源行矩阵保留逐次投料，不能自动合并")
+                amount_columns = []
+                for j in range(len(groups)):
+                    pairs = [(coordinate_to_tuple(n), coordinate_to_tuple(a[j])) for n, a in zip(names, amount_refs)]
+                    if (any(nr != ar or nc >= ac for (nr, nc), (ar, ac) in pairs)
+                        or len({a[1] for _, a in pairs}) != 1
+                        or [n[0] for n, _ in pairs] != sorted({n[0] for n, _ in pairs})):
+                        raise ValueError('重复投料必须来自同一源列、同一行名称/用量，并保持严格源行顺序')
+                    amount_columns.append(pairs[0][1][1])
+                if len(groups)>1 and (len({coordinate_to_tuple(n)[1] for n in names})!=1
+                                      or len(set(amount_columns))!=len(groups)):
+                    raise ValueError('多组重复投料矩阵须共享原物料列，各组用量列须彼此独立')
+            amount_transforms = recipe.get('amount_transforms', {})
+            if (not isinstance(amount_transforms, dict)
+                or set(amount_transforms) - {ref for row in amount_refs for ref in row if ref is not None}):
+                raise ValueError('逐格用量转换只能引用本配方矩阵的真实来源坐标')
             for i, label in enumerate(material_names):
                 row = info["first"]+i
                 put(f"B{row}", label)
                 for j, coord in enumerate(amount_refs[i]):
                     raw_value = get(coord) if coord is not None else None
-                    value = convert_value(raw_value, recipe.get('amount_transform'))
+                    transform = amount_transforms.get(coord, recipe.get('amount_transform'))
+                    value = convert_value(raw_value, transform) if coord is not None else None
                     target = f"{get_column_letter(info['first_col']+j)}{row}"
                     put(target, value)
                     if value != raw_value or type(value) is not type(raw_value):
                         recipe_conversions.append({'sheet':name,'src':coord,'raw_value':raw_value,
-                            'value':value,'target':target,'transform':recipe.get('amount_transform')})
+                            'value':value,'target':target,'transform':transform})
             for item in spec.get("writes", []):
                 r, c = coordinate_to_tuple(item["dst"])
                 dst = f"{get_column_letter(c)}{map_row(r)}"
-                value = convert_value(get(item["src"]), item.get("transform"))
+                if 'srcs' in item:
+                    if ('src' in item or 'transform' in item or not isinstance(item['srcs'],list)
+                        or not item['srcs'] or not isinstance(item.get('join'),str)):
+                        raise ValueError('多源文字须明确srcs列表及join分隔符，不与src或transform混用')
+                    values=[get(ref) for ref in item['srcs']]
+                    if any(not isinstance(v,str) for v in values):raise ValueError('多源合并仅用于原文文字，不能折叠数值或检测观测')
+                    value=item['join'].join(values)
+                else:value = converted(item['src'],item.get('transform'))
                 put(dst, value)
             for item in spec.get("structural", []):
                 if not item.get("reason"):
@@ -450,6 +620,9 @@ def execute(root, plan_path, output=None):
                 unplaced.append({"sheet": name, **item, "value": get(item["src"])})
             total_cache = {}
             for col in range(info["first_col"], info["output_last_col"]+1):
+                if identity_role in ('SAMPLE','PLAN') and not names:
+                    coord=f"{get_column_letter(col)}{info['total']}";ws[coord]=None;expected[title][coord]=None
+                    continue
                 formula, value = total_formula_and_value(ws, col, info["first"], info["last"])
                 coord = f"{get_column_letter(col)}{info['total']}"
                 ws[coord] = formula
@@ -470,20 +643,44 @@ def execute(root, plan_path, output=None):
                         unplaced.append({'sheet': name, 'src': ref, 'value': raw_source_total,
                             'reason': message+'；原值不覆盖真实用量合计，需核对原始记录',
                             'suggested_field': '源报告合计-待核对'})
-            populated = {c.coordinate for row in src for c in row if c.value is not None}
-            missing = sorted(populated-used)
+            relevant = populated & scope if scope is not None else populated
+            missing = sorted(relevant-used)
             if missing:
                 raise ValueError(f"{name} 尚有 {len(missing)} 个非空源单元格未处置：{missing[:20]}")
             caches[f"xl/worksheets/sheet{index+1}.xml"] = total_cache
-            coverage.append({"sheet": name, "nonempty": len(populated), "accounted": len(populated & used)})
+            source_accounted[name].update(populated & used)
+            coverage.append({"sheet": name, "source_partition": part['id'] if part else None,
+                             "nonempty": len(relevant), "accounted": len(relevant & used)})
             details.append({"sheet": title, "source_sheet": name, "groups": len(groups), "materials": len(names),
-                            'added_test_items': added_rows, **info})
+                            'source_partition': part['id'] if part else None, 'added_test_items': added_rows, **info})
+        for context in contexts:
+            name=context['source_sheet'];src=tables[name] if docx else wf[name]
+            for role in ('structural','unplaced'):
+                for item in context.get(role,[]):
+                    if not item.get('reason') or not re.fullmatch(r'[A-Z]+[1-9][0-9]*',item['src']):
+                        raise ValueError('上下文处置须有真实坐标及原因')
+                    value=src[item['src']].value
+                    if value is None:raise ValueError('上下文处置引用空白：'+name+'!'+item['src'])
+                    if role=='structural' and not isinstance(value,str):
+                        raise ValueError('上下文数值不能当作结构标签')
+                    source_accounted[name].add(item['src'])
+                    if role=='unplaced':unplaced.append({'sheet':name,**item,'value':value})
+            populated={c.coordinate for row in src for c in row if c.value is not None}
+            coverage.append({'sheet':name,'mode':'context','nonempty':len(populated),'accounted':len(populated & source_accounted[name])})
+        for name, accounted in source_accounted.items():
+            src = tables[name] if docx else wf[name]
+            populated = {c.coordinate for row in src for c in row if c.value is not None}
+            missing = sorted(populated-accounted)
+            if missing:
+                raise ValueError(f'{name} 所有分区合并后仍有 {len(missing)} 个非空单元格未处置：{missing[:20]}')
         wb.remove(blank)
         # Keep business sheets first: total-cache XML addresses are positional.
         # Published template identity sheets remain unchanged and hidden.
         for metadata_sheet in metadata_sheets:
             wb.move_sheet(metadata_sheet, offset=len(wb.worksheets)-1-wb.index(metadata_sheet))
         wb.active = 0
+        for title, cells in expected.items():
+            fit_written_text(wb[title], cells)
         wb.calculation = CalcProperties(calcId=0, fullCalcOnLoad=True)
         output.parent.mkdir(parents=True, exist_ok=True)
         candidate = job / "candidate.xlsx"
@@ -538,8 +735,16 @@ def execute(root, plan_path, output=None):
                   "plan_sha256": plan_sha, "output_sha256": digest(candidate),
                   "human_review": "pending",
                   'source_conflicts': source_conflicts, 'recipe_conversions': recipe_conversions,
+                  'recipe_name_conversions': recipe_name_conversions,
                   'derived_fields': derived_fields,
                   "limitations": "逐格核对验证计划的执行，不证明人工语义映射正确；仅对生成的数字 SUM 合计构建缓存，不是通用公式引擎。"}
+        # Each receipt must retain its own report when the same source is mapped again.
+        verification_path = job / "verifications" / (plan_sha + "-" + report["output_sha256"] + ".json")
+        if verification_path.exists():
+            if read_json(verification_path) != report:
+                raise ValueError("相同产物指纹的既有核验报告不一致，停止覆盖")
+        else:
+            write_json(verification_path, report)
         write_json(job / "verification.json", report)
         os.replace(candidate, output)
         result = {"stage": "review_required" if source_conflicts else "validated", "source": relposix(source, root),
@@ -547,7 +752,7 @@ def execute(root, plan_path, output=None):
                   "engine_sha256": engine_sha, "output": relposix(output, root),
                   "output_sha256": digest(output), "sheets": len(details), "unplaced_cells": len(unplaced),
                   'source_conflicts': len(source_conflicts),
-                  "verification": relposix(job / "verification.json", root)}
+                  "verification": relposix(verification_path, root)}
         write_json(status_path, result)
         clear_failure(root, plan["source"], "execute")
         return {"cache_hit": False, **result}

@@ -150,6 +150,8 @@ task明确`targetSemanticKey`、`targetUnit`、`requiredConditions`、`condition
 
 ## 标准模板输出
 
+明确原标签的本地测试投影另支持`ph`、`resin_viscosity_verbatim`及`particle_size_verbatim`。pH保持无量纲；原文保留字段只接收TEXT/QUALITATIVE，保留8S/2#、3040cps或“已胶化/无法测量”等完整记法，不猜方法、单位或把状态造为数值。它们仍受来源标签、条件、多项观测及未落位检查约束。
+
 需要从统一数据生成标准Excel时，使用本地`history_template.py`：
 
 ```text
@@ -161,7 +163,7 @@ python -X utf8 scripts/history_template.py --root ROOT --manifest PROJECTION-BAT
 
 批量清单使用`{"items":[{"history":"结构化结果/结果目录/history.json"}]}`，可逐项指定`output`。单份BLOCKED或SKIPPED不会阻断其他项；每份保留自己的来源核验与适用性说明。
 
-仅在提取判断POSSIBLE、无未落位/类型/合计问题、单位和条件能完整对应时输出PROJECTED草稿及`.projection.json`来源清单。其余输出SKIPPED及原因，不生成空白标准Excel。每组同一测试项存在多项观测、重复投料、多步骤工艺、无法表达的条件或未知项目，均不硬塞进模板。
+默认仅在提取判断POSSIBLE、无未落位/类型/合计问题、单位和条件能完整对应时输出PROJECTED草稿及`.projection.json`来源清单。显式使用`--allow-partial`（API `allow_partial=True`）可输出PARTIAL草稿：已支持的事实落位，未落位事实继续保留于已验证的history及外部清单，不能称为整份完成。该选项不放宽类型、单位、条件、来源或合计校验；无实际配方、工艺或检测事实不生成空表，构建失败也不输出半张表。每组同一测试项的多项观测、无法表达的条件及未知项目不硬塞模板，不把SUMMARY当新实验。只有样品身份的测试不补造实验编号或0g配方。
 
 当前自动语义表仅覆盖明确标签及单位的接触角、摩擦系数、部分外观/固含/折光率等字段；任意陌生项目不会通过子串相似自动选行。部分工艺参数可在单步骤且口径明确时对应；合成温度需明确油温或料温，保留原文角色。未覆盖内容继续保留在统一数据里，不宣称支持所有历史版式。本客户已授权：原单位缺失且指标对应明确时可在有效层采用模板默认单位并注明依据；原单位明确、模板有多个候选单位或指标对应不清时不得覆盖或猜选。
 

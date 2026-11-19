@@ -1,6 +1,7 @@
 window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: require => {
   const React = require('react'), h = React.createElement;
   const { useEffect, useState, useRef } = React;
+  const onboardingUI = /* @onboarding-ui */ null;
   const enterpriseTheme = /* @enterprise-theme */ null;
   const sourceLinks = /* @source-links */ null;
   const browserCrypto = /* @browser-crypto */ null;
@@ -104,24 +105,24 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
         h('rect',{x:27,y:13,width:8,height:21,rx:3,fill:peach,stroke}),
         h('path',{d:'M19 10v19M30 17v12M8 24v5',stroke,strokeOpacity:.6,strokeLinecap:'round'})));
   }
-  function registerWelcomeCards(scope,{useExpert,startTask}) {
+  function registerWelcomeCards(scope,{useExpert,startTask,fillTask}) {
     function WelcomeCards({sessionId,useInput}) {
       const hero=React.useContext(HeroContext),phase=useInput(value=>value.phase);
-      const {loading}=useExpert(sessionId);
+      const {expert,loading}=useExpert(sessionId);
       const [busy,setBusy]=useState(''),[error,setError]=useState('');
       const pending=useRef(false);
       if(!hero || loading)return null;
       async function start(task) {
         if(pending.current)return;
         pending.current=true;setBusy(task.id);setError('');
-        try {await startTask(task.id);}
+        try {if(expert) {if(!fillTask(sessionId,task.prompt))throw new Error('输入框正忙，请稍后再试。');} else await startTask(task.id);}
         catch(failure){setError(failure.message || '暂时无法开始任务，请稍后重试。');}
         finally{pending.current=false;setBusy('');}
       }
       return h('section',{className:'jsd-starters','data-task-starts':true,'aria-label':'研发任务'},
-        h('p',{className:'jsd-welcome-description'},'先选任务，再添加资料，确认草稿后发送。'),
-        tasks.workbenchTasks.map(task=>h('button',{key:task.id,type:'button','aria-label':task.title,
-          title:'新开对应专家会话，填入可编辑草稿，不自动发送',disabled:phase!=='plain' || Boolean(busy),
+        h('p',{className:'jsd-welcome-description'},expert?'当前专家：'+expert.name+' · 选择任务填入草稿，确认后发送。':'先选任务，再添加资料，确认草稿后发送。'),
+        tasks.tasksForExpert(expert).map((task,index)=>h('button',{key:task.id,type:'button','data-task':task.id,'data-card-tone':index,'aria-label':task.title,
+          title:expert?'填入可编辑草稿，确认后发送':'打开对应专家并填入可编辑草稿，确认后发送',disabled:phase!=='plain' || Boolean(busy) || expert?.enabled===false,
           onClick:()=>start(task),'aria-busy':busy===task.id},
           h('strong',null,task.title),h('span',{className:'jsd-starter-description'},task.description),
           h('span',{className:'jsd-starter-owner'},busy===task.id?'正在准备…':'由'+task.expertName+'处理'))),
@@ -611,6 +612,7 @@ window.__ModuleLoader__.load({ id: '@jsd-aird/enterprise-plugin', factory: requi
     },AdmissionLabel));
   }
   return { inject: ['slots','theme'], apply(ctx) {
+    onboardingUI.registerEnterpriseOnboarding(ctx,{React});
     ctx.effect(() => ctx.theme.overrideTokens('@jsd-aird/enterprise-plugin',enterpriseTheme.tokens));
     ctx.effect(() => {
       // The workbench is a separate document; it must load the same self-hosted

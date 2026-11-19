@@ -54,7 +54,7 @@ def service_for_merge():
 async def test_legacy_preferences_and_recent_sessions_show_one_merged_expert(principal):
     service = service_for_merge()
     result = await expert_action(service, principal, {"action": "list"})
-    assert len(result["experts"]) == 8
+    assert len(result["experts"]) == 7
     assert result["pinned"] == ["materials-advisor", "project-assistant"]
     assert result["recent"] == ["materials-advisor", "project-assistant"]
     service.store.update.assert_not_called()  # Listing only projects old preferences.

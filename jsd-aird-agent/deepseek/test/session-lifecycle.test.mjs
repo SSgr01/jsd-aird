@@ -28,7 +28,7 @@ test('a removed conversation leaves through native navigation once; live convers
   const effects=[], handled={current:false};
   const React={createElement:()=>null,createContext:()=>({}),useRef:()=>handled,
     useEffect:fn=>effects.push(fn)};
-  runInNewContext(readFileSync(new URL('../../enterprise-plugin/src/client.js',import.meta.url),'utf8'),{
+  runInNewContext(readFileSync(new URL('../../enterprise-plugin/src/client.js',import.meta.url),'utf8').replace('/* @onboarding-ui */ null','({registerEnterpriseOnboarding(){}})'),{
     window:{__ModuleLoader__:{load:definition=>{plugin=definition.factory(name=>name==='react'?React:{});}}},
   });
   const scope={slots:{inject:(_name,fn)=>fn(),register:(spec,view)=>{options=spec;component=view;}},

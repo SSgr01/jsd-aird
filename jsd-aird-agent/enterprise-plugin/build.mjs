@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { themeTokens } from './src/theme.mjs';
 import './prepare-chemistry-renderer.mjs';
 
-const [client, css, sourceLinks, memoryUI, briefingEntry, expertsUI, spectrumUI, workbenchTasks, browserCrypto] = await Promise.all([
+const [client, css, sourceLinks, memoryUI, briefingEntry, expertsUI, spectrumUI, workbenchTasks, browserCrypto, onboardingUI] = await Promise.all([
   readFile(new URL('./src/client.js', import.meta.url), 'utf8'),
   readFile(new URL('./src/theme.css', import.meta.url), 'utf8'),
   readFile(new URL('./src/source-links.mjs', import.meta.url), 'utf8'),
@@ -12,18 +12,20 @@ const [client, css, sourceLinks, memoryUI, briefingEntry, expertsUI, spectrumUI,
   readFile(new URL('./src/spectrum-client.mjs', import.meta.url), 'utf8'),
   readFile(new URL('./src/workbench-tasks.mjs', import.meta.url), 'utf8'),
   readFile(new URL('./src/browser-crypto.mjs', import.meta.url), 'utf8'),
-]);
+  readFile(new URL('./src/onboarding-client.mjs', import.meta.url), 'utf8'),
+]).then(sources=>sources.map(source=>source.replace(/\r\n/g,'\n')));
 const marker = '/* @enterprise-theme */ null';
 if (client.split(marker).length !== 2) throw new Error('Expected one enterprise theme insertion point');
 await mkdir(new URL('./lib/', import.meta.url), {recursive:true});
 await writeFile(new URL('./lib/client.js', import.meta.url),
   client.replace(marker, () => JSON.stringify({tokens:themeTokens, css}))
+    .replace('/* @onboarding-ui */ null', () => '(()=>{'+onboardingUI.replace('export function ','function ')+';return {registerEnterpriseOnboarding};})()')
     .replace('/* @source-links */ null', () => '(()=>{'+sourceLinks.replaceAll('export function ', 'function ')+';return {normalizeOriginalLinks,sourceLinkLabel,shortSourceTitle,projectSourceBlocks};})()')
     .replace('/* @browser-crypto */ null', () => '(()=>{'+browserCrypto.replaceAll('export function ','function ')+';return {sha256Hex,generateBrowserUUID};})()')
     .replace('/* @memory-ui */ null', () => '(()=>{'+memoryUI.replace("import {generateBrowserUUID} from './browser-crypto.mjs';", 'const {generateBrowserUUID}=browserCrypto;').replace('export function ','function ')+';return {registerMemoryUI};})()')
     .replace('/* @briefing-entry */ null', () => '(()=>{'+briefingEntry.replace('export function ','function ')+';return {readBriefingEntry};})()')
     .replace('/* @experts-ui */ null', () => '(()=>{'+expertsUI.replace('export function ','function ')+';return {registerExpertsUI};})()')
-    .replace('/* @workbench-tasks */ null', () => '(()=>{'+workbenchTasks.replace('export const ','const ').replaceAll('export function ','function ')+';return {workbenchTasks,startWorkbenchTask};})()')
+    .replace('/* @workbench-tasks */ null', () => '(()=>{'+workbenchTasks.replace('export const ','const ').replaceAll('export function ','function ')+';return {workbenchTasks,startWorkbenchTask,tasksForExpert};})()')
     .replace('/* @spectrum-ui */ null', () => '(()=>{'+spectrumUI.replace("import {sha256Hex} from './browser-crypto.mjs';", 'const {sha256Hex}=browserCrypto;').replaceAll('export function ','function ')+';return {registerSpectrumUI,SpectrumResourceBody};})()'));
 
 await import('../../jsd-aird-web/scripts/prepare-chemistry.mjs');

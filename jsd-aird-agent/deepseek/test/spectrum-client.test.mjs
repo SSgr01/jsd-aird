@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {SlotCore} from '../../../vendor/deepseek-harness/packages/client/ui-slots/src/index.ts';
 import {createRequire} from 'node:module';
 import {createHash, webcrypto} from 'node:crypto';
-import {registerSpectrumUI, spectrumDraftSelection, replaceSpectrumReferences, SpectrumResourceBody} from '../../enterprise-plugin/src/spectrum-client.mjs';
+import {registerSpectrumUI, registerSpectrumAttachments, spectrumAttachmentPresentation, spectrumDraftSelection, replaceSpectrumReferences, SpectrumResourceBody} from '../../enterprise-plugin/src/spectrum-client.mjs';
 
 test('image SHA-256 matches native hashing with and without SubtleCrypto', async () => {
   for (const length of [0,1,3,55,56,63,64,65,127,128,1024,1024*1024]) {
@@ -160,4 +160,63 @@ test('picker reopens with the draft selection, updates images without duplicates
     cleanup?.(); globalThis.fetch = originalFetch; dom.window.close();
     for (const [key,descriptor] of saved) {if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}
   }
+});
+
+test('spectrum model images are hidden only when their live source reference is present', () => {
+  const images=[{id:'page-two',file:{name:'original.png'}},{id:'personal',file:{name:'photo.png'}}];
+  const shown=spectrumAttachmentPresentation({references:[chip()]},images);
+  assert.deepEqual(shown.visible,[images[1]]);
+  assert.deepEqual([...shown.owned],['page-two']);
+  assert.deepEqual(spectrumAttachmentPresentation({references:[]},images).visible,images);
+  assert.equal(images.length,2,'presentation never removes model payloads');
+});
+
+test('native attachment seat preserves image payloads and removes owned images when their reference is deleted', async () => {
+  const require=createRequire(new URL('../../../jsd-aird-web/package.json',import.meta.url));
+  const {JSDOM}=require('jsdom'),dom=new JSDOM('<html><body></body></html>');
+  const saved=new Map();
+  for(const [key,value] of Object.entries({window:dom.window,document:dom.window.document,navigator:dom.window.navigator,IS_REACT_ACT_ENVIRONMENT:true})) {
+    saved.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});
+  }
+  let cleanup;
+  try {
+    const React=require('react'),testing=require('@testing-library/react');cleanup=testing.cleanup;
+    let draft={references:[chip()]},snapshot={phase:'plain',draftRev:0};
+    const listeners=new Set(),released=[];
+    const files=[{id:'page-two',file:{name:'spectrum.png'}},{id:'personal',file:{name:'notes.txt'}}];
+    const shell={state:{getSnapshot:()=>snapshot,subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn);}},
+      get draftSnapshot(){return draft;},removeAttachment:id=>released.push('remove:'+id)};
+    let lastProps,wrapped;
+    const native={options:{},locale:'conversation',inject:()=>({readFileDrag:'native-drag'}),component:props=>{
+      lastProps=props;return React.createElement('div',null,props.attachments.map(a=>React.createElement('span',{key:a.id},a.file.name)));
+    }};
+    const scope={sessions:{binding:()=>({})},conversation:{input:{shellFor:()=>shell},releaseDraftAttachment:id=>released.push('release:'+id)},slots:{
+      inject:(_name,fn)=>fn(),entries:()=>[native],subscribe:()=>()=>{},register:(options,component)=>{wrapped={options,component};return()=>{};}
+    }};
+    registerSpectrumAttachments(scope,{React});
+    const onAddFiles=()=>{},onRemoveAttachment=()=>{};
+    const view=testing.render(React.createElement(wrapped.component,{...wrapped.options.inject('session'),attachments:files,onAddFiles,onRemoveAttachment}));
+    assert.equal(view.queryByText('spectrum.png'),null);
+    assert.ok(view.getByText('notes.txt'));
+    assert.equal(files.length,2);assert.deepEqual(released,[]);
+    assert.equal(lastProps.onAddFiles,onAddFiles);assert.equal(lastProps.onRemoveAttachment,onRemoveAttachment);
+    assert.equal(lastProps.readFileDrag,'native-drag');assert.equal(wrapped.options.locale,native.locale);
+    await testing.act(async()=>{draft={references:[]};snapshot={phase:'plain',draftRev:1};listeners.forEach(fn=>fn());});
+    assert.deepEqual(released,['remove:page-two','release:page-two']);
+  } finally {
+    cleanup?.();dom.window.close();for(const [key,value] of saved){if(value)Object.defineProperty(globalThis,key,value);else delete globalThis[key];}
+  }
+});
+
+test('attachment wrapper keeps the native seat through real single-slot shadowing', async () => {
+  const slots=new SlotCore();slots.register({name:'root',children:{'conversation.input.attachments':{kind:'single',scope:'session-maybe'}}},()=>null);
+  const Native=()=>null;const nativeOff=slots.register({name:'conversation.input.attachments'},Native);
+  let teardown;
+  const scope={slots:{entries:name=>slots.entries(name),subscribe:(...args)=>slots.subscribe(...args),
+    register:(...args)=>slots.register(...args),inject:(_name,callback)=>{teardown=callback();}}};
+  registerSpectrumAttachments(scope,{React:{}});
+  assert.equal(slots.entries('conversation.input.attachments').length,2);
+  assert.equal(slots.entriesOfSlot('conversation.input.attachments')[0].options.id,'enterprise-spectrum-attachments');
+  nativeOff();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(slots.entries('conversation.input.attachments').length,0);
+  teardown();
 });

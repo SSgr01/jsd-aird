@@ -11,9 +11,9 @@ function setup({deny=false,expert={id:'project-assistant',name:'项目助理'}}=
   const calls=[], effects=[];
   const executionRoot=mkdtempSync(join(tmpdir(),'jsd-experts-'));roots.push(executionRoot);
   mkdirSync(join(executionRoot,'default'));
-  const workspaceRegistry={async create(path){calls.push(['workspace',path]);return {id:'workspace-default'};}};
+  const workspaceRegistry={get(){return {sessionIds:['existing-blank']};},async create(path){calls.push(['workspace',path]);return {id:'workspace-default'};}};
   const controller={
-    async create(request) {calls.push(['native-create',request]);return {sessionId:request.sessionId};},
+    async create(request) {calls.push(['native-create',request]);return {sessionId:request.sessionId || 'new-ordinary'};},
     async fork(request) {calls.push(['native-fork',request]);return {sessionId:'session-child'};},
     prompt() {throw new Error('Expert selection must not send a message');},
   };
@@ -67,4 +67,26 @@ test('general assistant forks remain general',async()=>{
   const {controller,calls}=setup({expert:null});
   await controller.fork({sessionId:'session-parent'});
   assert.deepEqual(calls.map(([name])=>name),['session','native-fork']);
+});
+
+test('canceling an expert creates an ordinary default-workspace session without binding or sending',async()=>{
+  const {handle,calls}=setup();
+  const value=await handle({action:'general',expert_id:'project-assistant',instructions:'ignored'});
+  assert.equal(value.expert,null);
+  assert.deepEqual(calls.map(([name])=>name),['workspace','native-create']);
+  assert.match(calls[0][1],/[\\/]default$/);
+  assert.equal(calls[1][1].workspaceId,'workspace-default');
+  assert.equal(calls[1][1].agentPreset,'enterprise');
+  assert.equal(calls[1][1].sessionId,value.session_id);
+});
+
+test('native New Session skips a bound expert blank but reuses an ordinary blank',async()=>{
+  for(const expert of [{id:'project-assistant'},null]) {
+    const {controller,calls}=setup({expert});
+    const value=await controller.create({workspaceId:'workspace-default',sessionId:'existing-blank',agentPreset:'enterprise'});
+    assert.deepEqual(calls.map(([name])=>name),['session','native-create']);
+    assert.equal(value.sessionId,expert?'new-ordinary':'existing-blank');
+    assert.equal(calls[1][1].workspaceId,'workspace-default');
+    assert.equal(calls[1][1].agentPreset,'enterprise');
+  }
 });

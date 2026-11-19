@@ -151,6 +151,30 @@
 .jsd-expert-selector { display: flex; align-items: center; min-width: 0; }
 .jsd-expert-selector > span { font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .jsd-expert-selector .jsd-expert-button { white-space: nowrap; font-size: 12px; padding: 4px 6px; }
+.jsd-expert-selector .jsd-expert-clear, .jsd-expert-picker-row .jsd-expert-clear {
+  width: 18px; height: 18px; min-height: 18px; padding: 0; margin: 0;
+  flex: 0 0 18px; gap: 0; border: 0; border-radius: 50%;
+  color: var(--dsw-alias-label-secondary); background: transparent; box-shadow: none; opacity: 0; pointer-events: none;
+  transition: opacity .12s ease;
+}
+.jsd-expert-selector .jsd-expert-clear svg, .jsd-expert-picker-row .jsd-expert-clear svg { width: 12px; height: 12px; flex: none; }
+.jsd-expert-selector[data-selected='true'] { gap: 2px; padding-inline-end: 2px; }
+.jsd-expert-selector > .jsd-expert-clear { position: static; margin-inline-start: -2px; }
+body[data-jsd-workbench] [data-composer-card] .jsd-expert-selector > .jsd-expert-clear {
+  background: transparent; color: var(--dsw-alias-label-secondary); box-shadow: none;
+}
+.jsd-expert-selector:hover > .jsd-expert-clear,
+.jsd-expert-selector:focus-within > .jsd-expert-clear,
+.jsd-expert-picker-row:hover > .jsd-expert-clear,
+.jsd-expert-picker-row:focus-within > .jsd-expert-clear { opacity: .65; pointer-events: auto; }
+.jsd-expert-selector .jsd-expert-clear:hover:not(:disabled), .jsd-expert-picker-row .jsd-expert-clear:hover:not(:disabled),
+.jsd-expert-clear:focus-visible { opacity: 1; background: transparent; }
+.jsd-expert-picker-row { position: relative; }
+.jsd-expert-picker-row[data-current='true'] > div > button { padding-inline-end: 32px; }
+.jsd-expert-picker-row > .jsd-expert-row-clear { position: absolute; inset-inline-end: 8px; top: 50%; transform: translateY(-50%); }
+@media (pointer: coarse) {
+  .jsd-expert-selector .jsd-expert-clear, .jsd-expert-picker-row .jsd-expert-clear { opacity: .65; pointer-events: auto; }
+}
 .jsd-expert-quick-menu { width: 300px; max-width: calc(100vw - 32px); }
 .jsd-expert-quick { padding: 4px; font: 13px/1.6 var(--dsw-font-family); }
 .jsd-expert-quick input { width: 100%; margin-bottom: 8px; }
@@ -253,17 +277,17 @@ body[data-jsd-workbench] span[data-state='done'][aria-hidden='true']:has(> svg) 
 
 /* Native send/stop controls have fixed white glyphs upstream. Match only their
    public composer/ARIA contract, never generated CSS-module class names. */
-body[data-jsd-workbench] [data-composer-card] button:not([aria-expanded]):is([aria-busy], :has(> svg > rect[width='10'][height='10'])),
+body[data-jsd-workbench] [data-composer-card] button:not([aria-expanded]):not(.jsd-expert-clear):is([aria-busy], :has(> svg > rect[width='10'][height='10'])),
 body[data-jsd-workbench] .jsd-continue-action {
   color: var(--jsd-on-action);
   background: var(--jsd-action);
   box-shadow: none;
 }
-body[data-jsd-workbench] [data-composer-card] button:not([aria-expanded]):is([aria-busy], :has(> svg > rect[width='10'][height='10'])):hover:not(:disabled),
+body[data-jsd-workbench] [data-composer-card] button:not([aria-expanded]):not(.jsd-expert-clear):is([aria-busy], :has(> svg > rect[width='10'][height='10'])):hover:not(:disabled),
 body[data-jsd-workbench] .jsd-continue-action:hover:not(:disabled) {
   background: var(--jsd-action-hover);
 }
-body[data-jsd-workbench] [data-composer-card] button:not([aria-expanded]):is([aria-busy], :has(> svg > rect[width='10'][height='10'])):active:not(:disabled),
+body[data-jsd-workbench] [data-composer-card] button:not([aria-expanded]):not(.jsd-expert-clear):is([aria-busy], :has(> svg > rect[width='10'][height='10'])):active:not(:disabled),
 body[data-jsd-workbench] .jsd-continue-action:active:not(:disabled) {
   background: var(--jsd-action-active);
 }
@@ -647,3 +671,8 @@ body[data-jsd-workbench] .jsd-hero-mark { padding: 0; border-radius: 0; box-shad
   body[data-jsd-workbench] .jsd-starters button { min-height: 60px; }
   .jsd-expert-card-bottom > .jsd-expert-button { min-height: 44px; }
 }
+
+/* Keep all expert and general starter cards structurally consistent. */
+body[data-jsd-workbench] .jsd-starters[data-task-starts] button { align-content: start; gap: 6px; min-height: 100px; }
+body[data-jsd-workbench] .jsd-starters[data-task-starts] button strong { font-size: 14px; line-height: 20px; }
+body[data-jsd-workbench] .jsd-starters[data-task-starts] .jsd-starter-description { line-height: 20px; }

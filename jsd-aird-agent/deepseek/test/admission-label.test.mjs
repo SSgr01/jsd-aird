@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 
-const client=readFileSync(new URL('../../enterprise-plugin/src/client.js',import.meta.url),'utf8');
+const client=readFileSync(new URL('../../enterprise-plugin/src/client.js',import.meta.url),'utf8').replace('/* @onboarding-ui */ null','({registerEnterpriseOnboarding(){}})');
 
 function fixture(fetch) {
   let plugin,provider,component,registration;

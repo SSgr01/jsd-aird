@@ -60,7 +60,7 @@ test('native tool resolution binds the claimed batch before the first prompt and
     plugin:()=>{},web:{registerSearchProvider:()=>{}},fs:{hostPath:path=>path,exposeAttachment:async(...args)=>exposed.push(args)},agents:{get:()=>undefined},sessions:{},systemPrompt:{section:value=>{if(value.name==='enterprise-policy')section=value;return ()=>{};},
       context:value=>{context=value;return ()=>{};}},llm:{},
     agentPresets:{presetForSession:()=> 'enterprise'},
-    workingDirectory:{get:()=>tmpdir(),ensure:async()=>tmpdir()},workspaceRegistry:{},sessionController:{},
+    workingDirectory:{get:()=>tmpdir(),ensure:async()=>tmpdir()},workspaceRegistry:{create:async()=>({id:'default'})},sessionController:{},
     attachments,
     schedule:{catalog:async()=>[]},
     webServer:{register:route=>{if(route.path==='/enterprise')enterpriseRoute=route.handler;return ()=>{};}},connection:{},logger:{warn:()=>{}},

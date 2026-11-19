@@ -21,6 +21,55 @@ export function spectrumDraftSelection(draft, attachments = []) {
   return {selection:[...selected.values()], attachmentIds:[...owned]};
 }
 
+/** Keep model images attached, but present their source once through the reference. */
+export function spectrumAttachmentPresentation(draft, attachments) {
+  const owned = new Set(spectrumDraftSelection(draft, attachments).attachmentIds);
+  return {owned, visible:attachments.filter(item => !owned.has(item.id))};
+}
+
+/** Wrap the native attachment seat without changing uploads, drag/drop or submission. */
+export function registerSpectrumAttachments(scope, {React}) {
+  if (!scope.slots.entries || !scope.slots.subscribe) return;
+  const id = 'enterprise-spectrum-attachments';
+  scope.slots.inject('conversation.input.attachments', () => {
+    let current, dispose;
+    function sync() {
+      const entry = scope.slots.entries('conversation.input.attachments').find(item => item.options.id !== id);
+      if (entry === current) return;
+      current = entry;
+      dispose?.(); dispose = undefined;
+      if (!entry) return;
+      function Attachments(props) {
+        const binding = scope.sessions.binding(props.spectrumSessionId);
+        const shell = binding && scope.conversation.input.shellFor(binding);
+        const snapshot = React.useSyncExternalStore(
+          listener => shell ? shell.state.subscribe(listener) : () => {},
+          () => shell ? shell.state.getSnapshot() : null);
+        const {owned, visible} = spectrumAttachmentPresentation(shell?.draftSnapshot || {}, props.attachments);
+        const previous = React.useRef(new Set());
+        React.useEffect(() => {
+          if (snapshot?.phase !== 'plain') return;
+          const live = new Set(props.attachments.map(item => item.id));
+          for (const attachmentId of previous.current) {
+            if (!owned.has(attachmentId) && live.has(attachmentId)) {
+              shell.removeAttachment(attachmentId);
+              scope.conversation.releaseDraftAttachment(attachmentId);
+            }
+          }
+          previous.current = owned;
+        }, [snapshot, props.attachments, shell]);
+        return React.createElement(entry.component, {...props, attachments:visible});
+      }
+      dispose = scope.slots.register({name:'conversation.input.attachments', id, priority:-1000,
+        store:entry.store, locale:entry.locale,
+        inject:sessionId => ({...(entry.inject?.(sessionId) || {}), spectrumSessionId:sessionId})}, Attachments);
+    }
+    const unsubscribe = scope.slots.subscribe('conversation.input.attachments', sync);
+    sync();
+    return () => {unsubscribe(); dispose?.();};
+  });
+}
+
 /** Replace only spectrum chips; keep typed questions, other sources, quotes and commands. */
 export function replaceSpectrumReferences(draft, references) {
   const removed = draft.references.filter(item => {
@@ -71,6 +120,7 @@ export function SpectrumResourceBody({React, value}) {
 /** Spectrum selection enriches the native composer; submission and history stay native. */
 export function registerSpectrumUI(scope, {React, api, Modal, useExpert, marker}) {
   const h = React.createElement, {useEffect, useState} = React;
+  registerSpectrumAttachments(scope, {React});
   const limit = 20;
   let entry = null;
   try {

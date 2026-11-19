@@ -14,6 +14,11 @@ export function registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton,tas
       h('rect',{x:3,y:5,width:14,height:11,rx:3}),h('path',{d:'M10 2v3M6 16v2m8-2v2M1 9v3m18-3v3M7 12h6'}),
       h('circle',{cx:7,cy:9,r:.6}),h('circle',{cx:13,cy:9,r:.6}));
   }
+  function ClearIcon() {
+    return h('svg',{viewBox:'0 0 12 12',width:12,height:12,'aria-hidden':true},
+      h('circle',{cx:6,cy:6,r:5,fill:'currentColor'}),
+      h('path',{d:'m4.4 4.4 3.2 3.2m0-3.2-3.2 3.2',fill:'none',stroke:'var(--dsw-alias-bg-layer-1)',strokeWidth:1.1,strokeLinecap:'round'}));
+  }
   function Avatar({expert,small=false}) {
     const paths={
       'spectrum-assistant':[['path',{d:'M3 3v18h18M5 17l3-2 2 1 3-11 3 13 2-6 3-1'}]],
@@ -58,7 +63,7 @@ export function registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton,tas
     return {catalog,setCatalog,error,setError,retry:()=>retry(n=>n+1)};
   }
   async function summon(expert,prompt) {
-    const value=await api('experts',{action:'summon',expert_id:expert.id});
+    const value=await api('experts',expert?{action:'summon',expert_id:expert.id}:{action:'general'});
     const reference=scope.sessions.retain(value.session_id,{source:'enterprise-expert'});
     try {
       const binding=await reference.ready;
@@ -104,7 +109,7 @@ export function registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton,tas
     return h(Modal,{open:true,title:'专家详情',closeLabel:'关闭专家详情',className:'jsd-expert-dialog',
       contentClassName:'jsd-expert-content',backdropBlur:false,onClose:()=>{if(!busy)show(null);}},
       h('article',{className:'jsd-expert-detail','data-expert-detail':true},
-        h('div',{className:'jsd-expert-identity'},h(Avatar,{expert}),h('div',null,h('h3',null,expert.name),h('p',null,'杰事达 · 公司专家')),
+        h('div',{className:'jsd-expert-identity'},h(Avatar,{expert}),h('div',null,h('h3',null,expert.name),h('p',null,'公司专家')),
           action(busy?'正在准备…':expert.enabled?'召唤专家':'已停用',()=>start(),{disabled:busy || !expert.enabled,className:'jsd-expert-primary'})),
         h('p',{className:'jsd-expert-summary'},expert.summary),
         h('div',{className:'jsd-expert-tags'},expert.capabilities.map(text=>h('span',{key:text},text))),
@@ -168,13 +173,17 @@ export function registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton,tas
   function QuickPicker({expert,sessionId,onClose}) {
     const {catalog,error,retry}=useCatalog(),[query,setQuery]=useState(''),[busy,setBusy]=useState(false),[failure,setFailure]=useState('');
     const all=catalog?.experts || [],term=query.trim().toLowerCase();
-    const ids=catalog?[...new Set([...catalog.pinned,...catalog.recent])]:[];
-    const rows=term?all.filter(row=>[row.name,row.summary,...row.capabilities].join(' ').toLowerCase().includes(term)):
-      (ids.length?ids.map(id=>all.find(row=>row.id===id)).filter(Boolean):all).slice(0,6);
+    const ids=[...new Set([expert?.id,...(catalog?.pinned || []),...(catalog?.recent || []),...all.map(row=>row.id)].filter(Boolean))];
+    const suggested=term?all.filter(row=>[row.name,row.summary,...row.capabilities].join(' ').toLowerCase().includes(term)):
+      ids.map(id=>all.find(row=>row.id===id)).filter(Boolean);
+    const rows=expert && !suggested.some(row=>row.id===expert.id) && !term?[expert,...suggested]:suggested;
+    const pending=React.useRef(false);
     async function start(row) {
-      if(row.id===expert?.id){onClose();return;}
+      if(row?.id===expert?.id){onClose();return;}
+      if(pending.current)return;
+      pending.current=true;
       setBusy(true);setFailure('');
-      try {await summon(row);onClose();}catch(error){setFailure(feedback(error));}finally{setBusy(false);}
+      try {await summon(row);onClose();}catch(error){setFailure(feedback(error));}finally{pending.current=false;setBusy(false);}
     }
     return h('div',{className:'jsd-expert-quick'},
       h('input',{type:'search',value:query,onChange:e=>setQuery(e.target.value),placeholder:'搜索专家','aria-label':'快速搜索专家',
@@ -182,32 +191,37 @@ export function registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton,tas
       h(ErrorNotice,{error:error || failure,retry:()=>{setFailure('');retry();},busy}),
       !catalog && !error && h('p',{role:'status'},'正在加载专家…'),
       catalog && !rows.length && h('p',{role:'status'},'没有匹配的专家'),
-      rows.map(row=>h(MenuItemButton,{key:row.id,icon:h(Avatar,{expert:row,small:true}),current:row.id===expert?.id,
-        disabled:busy || !row.enabled,onSelect:()=>start(row)},row.name,catalog.pinned.includes(row.id)?' · 常用':'')),
+      rows.map(row=>h('div',{key:row.id,className:'jsd-expert-picker-row','data-current':row.id===expert?.id},
+        h(MenuItemButton,{icon:h(Avatar,{expert:row,small:true}),current:row.id===expert?.id,
+          disabled:busy || !row.enabled,onSelect:()=>start(row)},row.name,catalog?.pinned.includes(row.id)?' · 常用':''),
+        row.id===expert?.id && action(h(ClearIcon),()=>start(null),{className:'jsd-expert-clear jsd-expert-row-clear',
+          role:'menuitem',disabled:busy,'aria-label':'取消选择'+row.name,title:'取消选择'}))),
       expert && h(MenuItemButton,{onSelect:()=>{onClose();show({expert,sessionId});}},'查看当前专家详情'),
       h(MenuItemButton,{separatorBefore:true,onSelect:()=>{onClose();scope.layout.selectPanel(PANEL);}},'↗ 召唤更多专家'),
       sessionId && h('p',{className:'jsd-expert-note'},'切换专家会新开会话'));
   }
   function Selector({sessionId}) {
     const {expert,error,retry,loading}=useExpert(sessionId),[open,setOpen]=useState(false);
-    return h('div',{className:'jsd-expert-selector'},
+    const [clearing,setClearing]=useState(false),[clearError,setClearError]=useState('');
+    const pending=React.useRef(false);
+    async function clear() {
+      if(pending.current)return;
+      pending.current=true;setClearing(true);setClearError('');setOpen(false);
+      try {await summon(null);}catch(error){setClearError(feedback(error));}
+      finally{pending.current=false;setClearing(false);}
+    }
+    return h('div',{className:'jsd-expert-selector','data-selected':Boolean(expert)},
       h(Menu,{open,onClose:()=>setOpen(false),side:'top',portal:true,autoFocus:false,listClassName:'jsd-expert-quick-menu',
-        anchor:action(h(React.Fragment,null,expert?h(Avatar,{expert,small:true}):h(ExpertIcon),h('span',null,expert?.name || '专家'),h('span',{'aria-hidden':true},'⌄')),
-          ()=>setOpen(!open),{disabled:loading,'aria-label':expert?'当前专家：'+expert.name+'，选择专家':'选择专家','aria-expanded':open})},
+        anchor:action(h(React.Fragment,null,expert?h(Avatar,{expert,small:true}):h(ExpertIcon),h('span',null,expert?.name || '专家'),
+          h('svg',{width:10,height:10,viewBox:'0 0 12 12',fill:'none',stroke:'currentColor',strokeWidth:1.2,'aria-hidden':true},
+            h('path',{d:'m3 4.5 3 3 3-3',strokeLinecap:'round',strokeLinejoin:'round'}))),
+          ()=>setOpen(!open),{disabled:loading || clearing,'aria-label':expert?'当前专家：'+expert.name+'，选择专家':'选择专家','aria-expanded':open})},
         open && h(QuickPicker,{expert,sessionId,onClose:()=>setOpen(false)})),
+      expert && action(h(ClearIcon),clear,
+        {disabled:loading || clearing,'aria-label':'取消专家选择',title:'取消专家选择',className:'jsd-expert-clear','data-pending':clearing}),
       expert?.enabled===false && h('span',{role:'status'},'已停用'),
+      clearError && action('重试',clear,{title:clearError}),
       error && action('重试',retry,{title:error}));
-  }
-  function ExpertWelcome({sessionId,useSession,fillPrompt}) {
-    const blank=useSession(value=>value.blank),{expert}=useExpert(sessionId),[notice,setNotice]=useState('');
-    if(!blank || !expert)return null;
-    return h('details',{className:'jsd-expert-welcome','aria-label':expert.name+' 的任务示例'},
-      h('summary',{className:'jsd-expert-summary'},'当前专家：'+expert.name+' · 查看任务示例'),
-      h('p',null,expert.summary),
-      h('div',{className:'jsd-expert-examples'},expert.examples.map(text=>action(h(React.Fragment,null,h('span',null,text),h('span',{'aria-hidden':true},'↗')),
-        ()=>setNotice(fillPrompt(text)?'已填入草稿，确认后发送。':'输入框正忙，请稍后再试。'),
-        {key:text,disabled:expert.enabled===false,title:'填入可编辑草稿'}))),
-      notice && h('p',{role:'status'},notice));
   }
   scope.slots.inject('main',()=>scope.slots.register({name:'main',key:PANEL},ExpertCenter));
   scope.slots.inject('sidebar.panellist',()=>scope.slots.register({name:'sidebar.panellist',id:PANEL,order:-20,label:()=> '专家中心'},ExpertIcon));
@@ -215,12 +229,9 @@ export function registerExpertsUI(scope,{React,api,Modal,Menu,MenuItemButton,tas
   scope.slots.inject('conversation.input.left',()=>scope.slots.register({name:'conversation.input.left',id:'enterprise-expert-selector',order:-20,
     inject:sessionId=>({sessionId}),
   },Selector));
-  scope.slots.inject('conversation.input.dock',()=>scope.slots.register({name:'conversation.input.dock',id:'enterprise-expert-welcome',order:-30,
-    inject:sessionId=>({sessionId,fillPrompt:prompt=>{
-      const binding=scope.sessions.binding(sessionId);
-      if(!binding || scope.conversation.input.requestDraftInitialization(binding,{prompt,whenDraftExists:'append'})!=='applied')return false;
-      scope.conversation.input.for(scope.sessions.scope(sessionId)).focus();return true;
-    }}),
-  },ExpertWelcome));
-  return {useExpert,startTask:id=>tasks.startWorkbenchTask(id,summon)};
+  return {useExpert,startTask:id=>tasks.startWorkbenchTask(id,summon),fillTask:(sessionId,prompt)=>{
+    const binding=scope.sessions.binding(sessionId);
+    if(!binding || scope.conversation.input.requestDraftInitialization(binding,{prompt,whenDraftExists:'append'})!=='applied')return false;
+    scope.conversation.input.for(scope.sessions.scope(sessionId)).focus();return true;
+  }};
 }

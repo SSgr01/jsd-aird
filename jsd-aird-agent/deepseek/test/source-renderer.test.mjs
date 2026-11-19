@@ -62,6 +62,6 @@ test('source projection keeps native reasoning and image renderers with authoriz
  web.props.ref({querySelectorAll:()=>[webLink]});
  assert.equal(webAttrs['data-jsd-citation'],'web');
  assert.equal(webLink.title,'time.is\nhttps://time.is/');
- assert.equal(webAttrs['aria-label'],'查看网页来源：time.is，https://time.is/');
+ assert.equal(webAttrs['aria-label'],'查看网页来源：time.is');
  assert.equal(web.props.onClickCapture,undefined);
 });

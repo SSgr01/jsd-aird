@@ -18,22 +18,27 @@ test('enterprise gates read each logged native preset, never a Host mode, header
   t.after(()=>{for(const key of Object.keys(process.env)) if(!Object.hasOwn(previous,key)) delete process.env[key]; Object.assign(process.env,previous);});
   const presets = new Map([['a','enterprise'],['q','enterprise']]);
   let guard;
+  const workspaceCreations=[];
   const ctx = {
     tools:{register:()=>()=>{},guard:fn=>{guard=fn;return ()=>{};}},
     plugin:()=>{},web:{registerSearchProvider:()=>{}},fs:{hostPath:path=>path},
     agents:{get:()=>null},sessions:{},systemPrompt:{section:()=>()=>{},context:()=>()=>{}},llm:{},
     agentPresets:{presetForSession:session=>presets.get(session.id)},
     workingDirectory:{get:()=>tmpdir(),ensure:async()=>tmpdir()},
-    workspaceRegistry:{create:()=>{throw new Error('Modes must not create Workspaces');}},
+    workspaceRegistry:{create:async(path,title)=>{workspaceCreations.push({path,title});return {id:'default'};}},
     sessionController:{projections:async({sessionId})=>({values:{agentPreset:presets.get(sessionId)}})},
     webServer:{register:route=>{routes.set(route.path,route.handler);return ()=>{};}},
     connection:{requestRejection:()=>undefined},logger:{warn:()=>{}},
     effect:fn=>fn(),on:(name,fn)=>events.set(name,fn),
   };
   await apply(ctx);
+  assert.equal(workspaceCreations.length,1);
+  assert.match(workspaceCreations[0].path,/[\\/]default$/);
+  assert.equal(workspaceCreations[0].title,'默认工作区');
   const agent = id=>({id,session:{id,header:{agentPreset:'enterprise-fast-qa',cwd:'/mode-is-not-a-directory'}},options:{}});
   for (const id of ['a','q']) await events.get('agent/pre-step')({agent:agent(id),turn:1,step:1,messages:[],signal:new AbortController().signal},async()=>({kind:'continue',messages:[]}));
   assert.deepEqual(calls.filter(call=>call.action==='register').map(call=>call.body.profile),['agent','agent']);
+  assert.equal(workspaceCreations.length,1,'agent modes do not create additional Workspaces');
   assert.equal(guard({agent:agent('a'),name:'get_project_snapshot'}),undefined);
   assert.equal(guard({agent:agent('q'),name:'get_project_snapshot'}),undefined);
   assert.equal(guard({agent:agent('q'),name:'todo_write'}),'ENTERPRISE_TOOL_DENIED');

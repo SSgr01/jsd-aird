@@ -28,6 +28,7 @@ import { conversionLauncher } from './conversion-launch.mjs';
 import { installSessionLifecycle } from './session-lifecycle.mjs';
 import { installTaskDirectories, ensureTaskDirectory } from './task-directories.mjs';
 import { installExperts } from './experts.mjs';
+import { ensureDefaultWorkspace } from './default-workspace.mjs';
 import { installAdmission, inputSignature, previewTurnInput } from './admission.mjs';
 import { createUserMessage, createAssistantMessage, BlockAssembler } from '../../../vendor/deepseek-harness/packages/llm/llm/lib/index.js';
 
@@ -146,6 +147,7 @@ export async function apply(ctx) {
     }
   }
   installTaskDirectories(ctx);
+  await ensureDefaultWorkspace(ctx.workspaceRegistry,executionRoot);
   const expertActions = installExperts(ctx,{business,executionRoot});
   const startConversions = conversionLauncher(ctx,{business,executionRoot});
   const folders=new FolderConversionRuntime(ctx,{business,executionRoot,

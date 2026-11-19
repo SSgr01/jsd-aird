@@ -23,5 +23,9 @@ if (-not (Test-Path -LiteralPath $python)) {
     } finally { Pop-Location }
 }
 $env:PYTHONPATH = Join-Path $aiRoot "src"
+$env:JSD_AIRD_AI_INTERNAL_TOKEN = $env:JSD_AIRD_FORMULA_MODEL_TOKEN
+if ($env:JSD_AIRD_STORAGE_PROVIDER -eq 'local') {
+    $env:JSD_AIRD_AI_LOCAL_ARTIFACT_ROOT = if ($env:JSD_AIRD_LOCAL_STORAGE_ROOT) { $env:JSD_AIRD_LOCAL_STORAGE_ROOT } else { Join-Path ([IO.Path]::GetTempPath()) 'jsd-aird-storage' }
+}
 Push-Location $aiRoot
 try { & $python -m jsd_aird_ai.main } finally { Pop-Location }

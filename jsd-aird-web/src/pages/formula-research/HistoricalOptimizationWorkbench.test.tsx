@@ -89,6 +89,41 @@ describe('HistoricalOptimizationWorkbench', () => {
     api.loop.mockResolvedValue({runs: []})
   })
 
+  it('keeps a failed selection visible and retries only the unread table', async () => {
+    const second = { ...dataset, id: 'second-table', name: '耐水性记录' }
+    api.historyDatasets.mockResolvedValue({ items: [dataset, second] })
+    api.historyDataset.mockImplementation(async (id: string) => {
+      if (id === second.id) throw new Error('读取失败')
+      return dataset
+    })
+    render(<App><MemoryRouter><HistoricalOptimizationWorkbench /></MemoryRouter></App>)
+    fireEvent.click(await screen.findByText(dataset.name))
+    await waitFor(() => expect(chooseXYButton()).toBeEnabled())
+    fireEvent.click(screen.getByText(second.name))
+    expect(await screen.findByText('所选数据暂时无法读取，已保留选择。')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: new RegExp(second.name) })).toBeChecked()
+    expect(api.historyDataset).toHaveBeenCalledTimes(2)
+    api.historyDataset.mockResolvedValue(second)
+    fireEvent.click(screen.getByRole('button', { name: /重新读取/ }))
+    await waitFor(() => expect(chooseXYButton()).toBeEnabled())
+    expect(api.historyDataset).toHaveBeenCalledTimes(3)
+    expect(api.historyDataset.mock.calls[2]?.[0]).toBe(second.id)
+    expect(screen.queryByText('所选数据暂时无法读取，已保留选择。')).not.toBeInTheDocument()
+  })
+
+  it('shows loading and ignores a late failure after the table is deselected', async () => {
+    let reject!: (reason: Error) => void
+    api.historyDataset.mockReturnValue(new Promise((_, fail) => { reject = fail }))
+    render(<App><MemoryRouter><HistoricalOptimizationWorkbench /></MemoryRouter></App>)
+    fireEvent.click(await screen.findByText(dataset.name))
+    expect(await screen.findByText('正在读取所选实验数据…')).toBeInTheDocument()
+    fireEvent.click(screen.getByText(dataset.name))
+    reject(new Error('读取失败'))
+    await waitFor(() => expect(screen.queryByText('正在读取所选实验数据…')).not.toBeInTheDocument())
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByText('勾选左侧一张或多张数据表后查看记录')).toBeInTheDocument()
+  })
+
   it('selects arbitrary measured X/Y columns and submits a direct historical GP optimization', async () => {
     render(<App><MemoryRouter><HistoricalOptimizationWorkbench /></MemoryRouter></App>)
     await screen.findByText('涂层历史数据')
@@ -226,7 +261,7 @@ describe('HistoricalOptimizationWorkbench', () => {
     expect(api.submit).not.toHaveBeenCalled()
   })
 
-  it('allows gram-based material ranges without a 100 percent total', async () => {
+  it('requires a feasible gram total and submits it with the material ranges', async () => {
     const source = { ...compositionDataset, columns: compositionDataset.columns.map(column => column.materialId
       ? { ...column, unit: 'g', compositionBasis: 'MASS_AMOUNT', semanticType: 'MATERIAL_AMOUNT' } : column) }
     api.historyDataset.mockResolvedValue(source)
@@ -240,8 +275,18 @@ describe('HistoricalOptimizationWorkbench', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /设置范围/ }).find(element => element.tagName === 'BUTTON')!)
     fireEvent.change(screen.getByRole('spinbutton', { name: '助剂比例最小值' }), { target: { value: '110' } })
     fireEvent.change(screen.getByRole('spinbutton', { name: '助剂比例最大值' }), { target: { value: '150' } })
-    expect(screen.getByRole('button', { name: '开始优化' })).toBeEnabled()
+    const start = screen.getByRole('button', { name: '开始优化' })
+    expect(start).toBeDisabled()
+    const total = screen.getByRole('spinbutton', { name: '本轮配方总量（g）' })
+    fireEvent.change(total, { target: { value: '100' } })
+    expect(start).toBeDisabled()
+    expect(screen.getByText(/材料上下限无法合计/)).toBeInTheDocument()
+    fireEvent.change(total, { target: { value: '180' } })
+    expect(start).toBeEnabled()
     expect(screen.queryByText(/合计为 100%/)).not.toBeInTheDocument()
+    fireEvent.click(start)
+    await waitFor(() => expect(api.submit).toHaveBeenCalledOnce())
+    expect(api.submit.mock.calls[0]?.[0]).toMatchObject({ formulaTotal: 180 })
   })
 
   it('saves measured results, starts the next round, and restores it after a refresh', async () => {

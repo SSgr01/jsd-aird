@@ -3,6 +3,7 @@ import { ReloadOutlined, RightOutlined } from '@ant-design/icons'
 import { Alert, App, Button, Card, Checkbox, Empty, Form, Input, InputNumber, Modal, Progress, Select, Space, Steps, Table, Tag, Typography } from 'antd'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Key } from 'react'
+import { InlineNotice } from '@/components/inline-notice/InlineNotice'
 import { aiActionFeedback } from '@/services/ai-rnd/action-feedback'
 import { optimizationApi, type HistoryDataset, type HistoryDatasetColumn, type HistoryDatasetOption, type OptimizationObservation, type OptimizationRun, type ResearchLoop } from '@/services/ai-rnd/optimization-api'
 import { mergeHistoryDatasets, selectedRowIdsByDataset, fixedMaterial, isMappedFormulaColumn } from '@/services/ai-rnd/history-dataset-utils'
@@ -73,6 +74,7 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
   const [selectedRowIds, setSelectedRowIds] = useState<Record<string, string[]>>({})
   const [xColumns, setXColumns] = useState<string[]>([])
   const [yColumn, setYColumn] = useState<string>()
+  const [formulaTotal, setFormulaTotal] = useState<number>()
   const [direction, setDirection] = useState<'MAXIMIZE'|'MINIMIZE'>('MAXIMIZE')
   const [bounds, setBounds] = useState<Record<string, {minimum?: number; maximum?: number}>>({})
   const [activeStep, setActiveStep] = useState(0)
@@ -82,6 +84,8 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
   const [runLoadError, setRunLoadError] = useState('')
   const [loadingDatasets, setLoadingDatasets] = useState(false)
   const [loadingDataset, setLoadingDataset] = useState(false)
+  const [datasetErrors, setDatasetErrors] = useState<string[]>([])
+  const [datasetRetry, setDatasetRetry] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [saving, setSaving] = useState(false)
   const [continuing, setContinuing] = useState(false)
@@ -89,7 +93,7 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
   const [savedObservations, setSavedObservations] = useState<OptimizationObservation[]>([])
   const restoreStarted = useRef(false)
   const manualBounds = useRef(new Set<string>())
-  const loadingDatasetIds = useRef(new Set<string>())
+  const datasetCacheRef = useRef<Record<string, HistoryDataset>>({})
   const [setupReady, setSetupReady] = useState(false)
 
   const loadDatasets = async (search = keyword) => {
@@ -120,24 +124,26 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
   }
 
   useEffect(() => {
-    const missing = selectedDatasetIds.filter(id => !datasetCache[id] && !loadingDatasetIds.current.has(id))
-    if (!missing.length) {
-      if (!selectedDatasetIds.some(id => loadingDatasetIds.current.has(id))) setLoadingDataset(false)
-      return
-    }
-    missing.forEach(id => loadingDatasetIds.current.add(id))
-    setLoadingDataset(true)
+    const missing = selectedDatasetIds.filter(id => !datasetCacheRef.current[id])
+    setDatasetErrors([])
+    setLoadingDataset(missing.length > 0)
+    if (!missing.length) return
     let cancelled = false
-    void Promise.all(missing.map(id => optimizationApi.historyDataset(id))).then(values => {
-      if (!cancelled) setDatasetCache(current => ({ ...current, ...Object.fromEntries(values.map(value => [value.id, value])) }))
-    }).catch(error => { message.error(aiActionFeedback(error, '无法读取所选数据表')) }).finally(() => {
-      if (!cancelled) {
-        missing.forEach(id => loadingDatasetIds.current.delete(id))
-        setLoadingDataset(selectedDatasetIds.some(id => loadingDatasetIds.current.has(id)))
-      }
+    void Promise.allSettled(missing.map(id => optimizationApi.historyDataset(id))).then(results => {
+      if (cancelled) return
+      const loaded: Record<string, HistoryDataset> = {}
+      const errors: string[] = []
+      results.forEach(result => {
+        if (result.status === 'fulfilled') loaded[result.value.id] = result.value
+        else errors.push(aiActionFeedback(result.reason, '无法读取所选数据表'))
+      })
+      datasetCacheRef.current = { ...datasetCacheRef.current, ...loaded }
+      setDatasetCache(datasetCacheRef.current)
+      setDatasetErrors([...new Set(errors)])
+      setLoadingDataset(false)
     })
-    return () => { cancelled = true; missing.forEach(id => loadingDatasetIds.current.delete(id)) }
-  }, [datasetCache, message, selectedDatasetIds])
+    return () => { cancelled = true }
+  }, [datasetRetry, selectedDatasetIds])
 
   useEffect(() => {
     if (!dataset || runId) return
@@ -170,15 +176,15 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
   useEffect(() => {
     void loadDatasets('')
     try {
-      const saved = JSON.parse(localStorage.getItem(setupStorageKey) ?? '{}') as { datasetIds?: string[]; selectedRowIdsByDataset?: Record<string, string[]>; xColumns?: string[]; yColumn?: string; activeStep?: number; direction?: 'MAXIMIZE'|'MINIMIZE'; bounds?: typeof bounds; manualBounds?: string[] }
-      if (saved.datasetIds?.length) { setSelectedDatasetIds(saved.datasetIds); setSelectedRowIds(saved.selectedRowIdsByDataset ?? {}); setXColumns(saved.xColumns ?? []); setYColumn(saved.yColumn); setActiveStep(saved.activeStep ?? 0); setDirection(saved.direction ?? 'MAXIMIZE'); setBounds(saved.bounds ?? {}); manualBounds.current = new Set(saved.manualBounds ?? []) }
+      const saved = JSON.parse(localStorage.getItem(setupStorageKey) ?? '{}') as { datasetIds?: string[]; selectedRowIdsByDataset?: Record<string, string[]>; xColumns?: string[]; yColumn?: string; activeStep?: number; direction?: 'MAXIMIZE'|'MINIMIZE'; formulaTotal?: number; bounds?: typeof bounds; manualBounds?: string[] }
+      if (saved.datasetIds?.length) { setSelectedDatasetIds(saved.datasetIds); setSelectedRowIds(saved.selectedRowIdsByDataset ?? {}); setXColumns(saved.xColumns ?? []); setYColumn(saved.yColumn); setActiveStep(saved.activeStep ?? 0); setDirection(saved.direction ?? 'MAXIMIZE'); setFormulaTotal(saved.formulaTotal); setBounds(saved.bounds ?? {}); manualBounds.current = new Set(saved.manualBounds ?? []) }
     } catch { /* ignore an incomplete local setup draft */ }
     setSetupReady(true)
   }, [])
   useEffect(() => {
     if (!setupReady) return
-    localStorage.setItem(setupStorageKey, JSON.stringify({ datasetIds: selectedDatasetIds, selectedRowIdsByDataset: selectedRowIds, xColumns, yColumn, activeStep, direction, bounds, manualBounds: [...manualBounds.current] }))
-  }, [activeStep, selectedDatasetIds, selectedRowIds, setupReady, xColumns, yColumn, direction, bounds])
+    localStorage.setItem(setupStorageKey, JSON.stringify({ datasetIds: selectedDatasetIds, selectedRowIdsByDataset: selectedRowIds, xColumns, yColumn, activeStep, direction, formulaTotal, bounds, manualBounds: [...manualBounds.current] }))
+  }, [activeStep, selectedDatasetIds, selectedRowIds, setupReady, xColumns, yColumn, direction, formulaTotal, bounds])
   useEffect(() => {
     const remembered = optimizationRunFromUrl(new URLSearchParams(window.location.search)) ?? localStorage.getItem(runStorageKey) ?? undefined
     if (remembered) { setRunId(remembered); setActiveStep(3) }
@@ -208,6 +214,7 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
           setXColumns(features.map((feature: any) => String(feature.code)))
           setYColumn(String(request.target ?? ''))
           setDirection(request.direction === 'MINIMIZE' ? 'MINIMIZE' : 'MAXIMIZE')
+          setFormulaTotal(typeof request.formulaTotal === 'number' ? request.formulaTotal : undefined)
           setBounds(Object.fromEntries(features.filter((feature: any) => feature.kind === 'NUMERIC').map((feature: any) => [feature.code, { minimum: feature.minimum, maximum: feature.maximum }])))
         }
         if (['QUEUED', 'RUNNING'].includes(current.executionStatus)) timer = window.setTimeout(() => { void poll() }, 1200)
@@ -270,12 +277,14 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
   const mixedFormula = massFormula && recipeFeatures.some(column => column.compositionBasis === 'MASS_PERCENT')
   const compositionProblem = unsupportedMaterial ? `材料“${unsupportedMaterial.name}”的计量基准不是质量百分比或克数，请先确认原始记录的单位和计量基准。`
     : mixedFormula ? '同一配方的材料用量需要使用一致的计量基准。'
+    : massFormula && (formulaTotal == null || !Number.isFinite(formulaTotal) || formulaTotal <= 0) ? '请填写本轮配方总量，单位为 g。'
+    : massFormula && (recipeMin > formulaTotal! + 1e-9 || recipeMax < formulaTotal! - 1e-9) ? '材料上下限无法合计为本轮配方总量，请调整总量或材料范围。'
     : !massFormula && formulaSelected && !partialFormulaSelection && (recipeMin > 100 + (recipeVariable ? 1e-9 : 0.001) || recipeMax < 100 - (recipeVariable ? 1e-9 : 0.001))
     ? '当前材料比例范围无法合计为 100%，请调整对应材料的上下限或固定值。' : ''
   const hasAdjustment = selectedFeatureColumns.some(column => !formulaCodes.includes(column.code) && adjustable(column))
     || recipeFeatures.some(column => {
       const range = bounds[column.code]
-      return range?.minimum != null && range.maximum != null && (massFormula ? range.maximum - range.minimum > 1e-9 : Math.min(range.maximum, 100 - recipeMin + range.minimum) - Math.max(range.minimum, 100 - recipeMax + range.maximum) > 1e-9)
+      return range?.minimum != null && range.maximum != null && Math.min(range.maximum, (massFormula ? formulaTotal ?? 0 : 100) - recipeMin + range.minimum) - Math.max(range.minimum, (massFormula ? formulaTotal ?? 0 : 100) - recipeMax + range.maximum) > 1e-9
     })
   const rangeError = (column: HistoryDatasetColumn) => {
     if (column.kind !== 'NUMERIC') return ''
@@ -344,6 +353,7 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
         mode: 'HISTORICAL_GP_BO', datasetId: selectedDatasetIds[0], datasetIds: selectedDatasetIds,
         selectedRowIdsByDataset: rowIdsByDataset, xColumns, yColumn, direction, bounds,
         candidateCount: 4,
+        ...(massFormula ? { formulaTotal } : {}),
       }
     const operation: PendingOptimizationOperation = { kind: 'SUBMIT', key: generateUUID(), request }
     try { localStorage.setItem(operationStorageKey, JSON.stringify(operation)) }
@@ -456,7 +466,11 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
             }} />,
  }} pagination={{ pageSize: 8, showSizeChanger: false }} scroll={{ x: 'max-content' }} columns={previewColumns} dataSource={dataset.rows} />
           <div className="history-step-footer"><Text type="secondary">{selectedRows.length < 4 ? `至少勾选 4 条记录后继续；可合并多张表（还差 ${4 - selectedRows.length} 条）。` : '只有勾选且 Y 和所有 X 都有值的记录才会参与计算。'}</Text><Button type="primary" disabled={loadingDataset || selectedRows.length < 4 || !dataset.columns.length} onClick={() => setActiveStep(1)}>选择 X 和 Y<RightOutlined /></Button></div></>
-          : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={loadingDatasets ? '正在读取数据' : '勾选上方一张或多张数据表后查看记录'} />}
+          : loadingDataset ? <InlineNotice busy>正在读取所选实验数据…</InlineNotice>
+          : datasetErrors.length ? <InlineNotice tone="error" action={<Button size="small" icon={<ReloadOutlined />} onClick={() => setDatasetRetry(value => value + 1)}>重新读取</Button>}>
+            <div>所选数据暂时无法读取，已保留选择。</div>{datasetErrors.map(error => <div key={error}>{error}</div>)}
+          </InlineNotice>
+          : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="勾选左侧一张或多张数据表后查看记录" />}
       </Card></div>
     </div>}
 
@@ -475,11 +489,14 @@ function HistoricalOptimizationWorkbenchInner({ storageKey }: { storageKey: stri
     {activeStep === 2 && <div className="history-step-panel">
       {!selectedDatasetView || !yColumn || !xColumns.length ? <Card className="history-card"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="先选择数据记录、X 因素和 Y 指标"><Button onClick={() => setActiveStep(1)}>返回选择</Button></Empty></Card> : <>
         <Card className="history-card" title="X 因素可搜索范围" extra={<Text type="secondary">默认取历史数据中的最小值和最大值</Text>}>
+          {massFormula && <Form layout="vertical"><Form.Item label="本轮配方总量（g）" required extra="各材料用量将合计为该总量；历史配方总量不同时，请按本轮计划填写。">
+            <InputNumber aria-label="本轮配方总量（g）" disabled={configurationLocked} value={formulaTotal} onChange={value => setFormulaTotal(value ?? undefined)} placeholder="填写配方总量" />
+          </Form.Item></Form>}
           <Table size="small" pagination={false} rowKey="code" dataSource={selectedFeatureColumns} columns={[
             { title: 'X 因素', dataIndex: 'name', render: (name: string, column: HistoryDatasetColumn) => <Space direction="vertical" size={0}><Text strong>{name}</Text><Text type="secondary">{column.kind === 'NUMERIC' ? '数值因素' : '分类因素'}{column.unit ? ` · ${column.unit}` : ''}</Text>{rangeError(column) && <Text type="danger">{rangeError(column)}</Text>}</Space> },
             { title: '历史取值', render: (_: unknown, column: HistoryDatasetColumn) => column.kind === 'NUMERIC' ? fixedMaterial(selectedDatasetView, column) ? <Text>固定 {numericValues(selectedDatasetView,column.code)[0]}{column.unit ?? ''}</Text> : <Space><InputNumber aria-label={`${column.name}最小值`} disabled={configurationLocked} value={bounds[column.code]?.minimum} onChange={value => { manualBounds.current.add(column.code); setBounds(current => ({ ...current, [column.code]: { ...current[column.code], minimum: value ?? undefined } })) }} /><Text type="secondary">至</Text><InputNumber aria-label={`${column.name}最大值`} disabled={configurationLocked} value={bounds[column.code]?.maximum} onChange={value => { manualBounds.current.add(column.code); setBounds(current => ({ ...current, [column.code]: { ...current[column.code], maximum: value ?? undefined } })) }} /></Space> : <Text>{[...new Set(selectedDatasetView.rows.map(row => row.values[column.code]).filter(value => value !== undefined && value !== null && value !== ''))].join('、')}</Text> },
           ]} />
-          <Alert className="history-range-note" type="info" showIcon message={`将用 ${completeRowCount} 条完整实验记录学习 ${yMeta?.name ?? 'Y'}，再生成满足范围${massFormula ? '' : '和配方总量'}的新实验组合。`} />
+          <Alert className="history-range-note" type="info" showIcon message={`将用 ${completeRowCount} 条完整实验记录学习 ${yMeta?.name ?? 'Y'}，再生成满足范围和配方总量的新实验组合。`} />
         </Card>
         {compositionProblem ? <Text type="warning">{compositionProblem}</Text> : !hasAdjustment && <Text type="warning">当前范围与配方总量约束没有留下可调整空间，请调整因素范围。</Text>}
         <div className="history-step-footer"><Button onClick={() => setActiveStep(1)}>上一步</Button><Button type="primary" loading={submitting} disabled={!canSubmit || Boolean(runId) || Boolean(pendingOperation)} onClick={() => void submit()}>开始优化</Button></div>

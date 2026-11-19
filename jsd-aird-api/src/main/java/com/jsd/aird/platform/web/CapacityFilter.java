@@ -42,7 +42,13 @@ public class CapacityFilter extends OncePerRequestFilter {
             boolean upload=Objects.toString(request.getContentType(),"").toLowerCase(Locale.ROOT).startsWith("multipart/");
             boolean read=request.getMethod().equals("GET") || request.getMethod().equals("HEAD");
             boolean workspaceCommand=path.contains("workspace") || path.endsWith("/workbook-draft") || path.endsWith("/workbook-snapshot") || path.endsWith("/draft") || path.endsWith("/edit-model") || path.endsWith("/word-preview") || path.equals("/api/v1/quality/records/batch");
-            boolean expensive=upload || workspaceCommand || path.endsWith("/re-extract") || path.endsWith("/publish") || path.endsWith("/export") || path.endsWith("/rollback");
+            // Full sample projection reads and parses many source documents. Limit its concurrency
+            // and use the heavy-operation budget, including for GET preview requests.
+            boolean datasetProjection=path.matches("/api/v1/ai/rnd/optimization-datasets/[0-9a-fA-F-]+")
+                    || path.matches("/api/v1/ai/rnd/modeling-workbench/datasets/[0-9a-fA-F-]+(?:/selection)?");
+            boolean researchSubmission=path.equals("/api/v1/ai/rnd/experiment-optimizations") && !read
+                    || path.equals("/api/v1/ai/rnd/modeling-workbench/runs") && !read;
+            boolean expensive=upload || workspaceCommand || datasetProjection || researchSubmission || path.endsWith("/re-extract") || path.endsWith("/publish") || path.endsWith("/export") || path.endsWith("/rollback");
             leases.add((stream?streams:requests).enter(limits.admissionMillis()));
             if(!read || upload || expensive)leases.add((expensive?heavy:writes).enter(limits.admissionMillis()));
             if(upload)leases.add(temporary.reserve(545259520L));
@@ -67,7 +73,7 @@ public class CapacityFilter extends OncePerRequestFilter {
     }
     private void writeError(HttpServletRequest request,HttpServletResponse response,ApiErrorCode code)throws IOException{
         if(cors!=null && !new org.springframework.web.cors.DefaultCorsProcessor().processRequest(cors.getCorsConfiguration(request),request,response))return;
-        if(response.isCommitted())return;response.setStatus(code.httpStatus());response.setContentType("application/json;charset=UTF-8");
+        if(response.isCommitted())return;response.resetBuffer();response.setStatus(code.httpStatus());response.setContentType("application/json;charset=UTF-8");
         if(code==ApiErrorCode.SERVER_BUSY || code==ApiErrorCode.DATABASE_BUSY)response.setHeader("Retry-After","2");
         String incoming=Objects.toString(request.getHeader("X-Request-Id"),"");
         String id=Objects.toString(response.getHeader("X-Request-Id"),incoming.matches("[a-zA-Z0-9_-]{8,128}")?incoming:UUID.randomUUID().toString());response.setHeader("X-Request-Id",id);

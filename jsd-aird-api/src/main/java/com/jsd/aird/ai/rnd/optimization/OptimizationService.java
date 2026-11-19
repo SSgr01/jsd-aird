@@ -90,18 +90,21 @@ public class OptimizationService {
         return root;
     }
 
+    @Transactional(readOnly = true)
     public JsonNode historyDataset(UUID templateVersionId) {
         var a=actor();require(a,"ai.experiment.optimize","AI_EXPERIMENT_OPTIMIZATION",templateVersionId,"READ");
         require(a,"experiment.view","EXPERIMENT",null,"READ");
         return historyDatasetData(a.organizationId(),templateVersionId);
     }
 
+    @Transactional(readOnly = true)
     public JsonNode modelingHistoryDataset(UUID templateVersionId) {
         var a=actor();require(a,"ai.modeling.read","AI_MODELING",templateVersionId,"READ");
         require(a,"experiment.view","EXPERIMENT",null,"READ");
         return historyDatasetData(a.organizationId(),templateVersionId);
     }
 
+    @Transactional(readOnly = true)
     public JsonNode modelingHistoryDatasetForTraining(UUID templateVersionId) {
         var a=actor();require(a,"ai.training.operate","AI_TRAINING",templateVersionId,"OPERATE");
         require(a,"experiment.view","EXPERIMENT",null,"READ");
@@ -117,6 +120,7 @@ public class OptimizationService {
         return mergeHistoryDatasets(sources);
     }
 
+    @Transactional(readOnly = true)
     public JsonNode selectedModelingDataset(UUID id,List<UUID> experimentIds,boolean training) {
         var a=actor();require(a,training?"ai.training.operate":"ai.modeling.read",training?"AI_TRAINING":"AI_MODELING",id,training?"OPERATE":"READ");
         if(experimentIds==null||experimentIds.isEmpty()||experimentIds.size()>500
@@ -199,12 +203,11 @@ public class OptimizationService {
     }
 
     private JsonNode historyDatasetData(UUID organizationId,UUID templateVersionId) {
-        var dataset=repository.historyDatasets(organizationId,"").stream()
-                .filter(item->item.id().equals(templateVersionId)).findFirst()
+        var name=repository.historyDatasetName(organizationId,templateVersionId)
                 .orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"历史实验数据不存在或无权查看"));
         var records=repository.historyRecords(organizationId,templateVersionId);
         var fieldNames=repository.historyFieldNames(organizationId);
-        return new HistorySampleProjection(json).dataset(dataset.id(),dataset.name(),records,fieldNames,repository.materialCatalog(organizationId));
+        return new HistorySampleProjection(json).dataset(templateVersionId,name,records,fieldNames,repository.materialCatalog(organizationId));
     }
 
     private CommonHistoryColumns commonHistoryColumns(List<JsonNode> sources) {
@@ -371,7 +374,7 @@ public class OptimizationService {
         if(sourceAccess!=null) {
             var checked=new HashSet<String>();
             for(var row:dataset.path("rows"))if(checked.add(row.path("sourceExperimentId").asText()+":"+row.path("versionId").asText()))
-                sourceAccess.record(actor.organizationId(),UUID.fromString(row.path("sourceExperimentId").asText()),UUID.fromString(row.path("versionId").asText()));
+                sourceAccess.requireReadableVersion(actor.organizationId(),UUID.fromString(row.path("sourceExperimentId").asText()),UUID.fromString(row.path("versionId").asText()));
         }
         if(!dataset.path("rows").isArray())throw validation("本任务没有保存样品数据，请重新选择数据开始优化");
         var selectedRows=selectedHistoryRows(dataset,body);

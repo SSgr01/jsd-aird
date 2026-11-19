@@ -79,7 +79,8 @@ public class OptimizationRepository {
 
     public List<HistoryRecordRow> historyRecords(UUID org, UUID templateVersionId) {
         return jdbc.query("""
-            SELECT e.id experiment_id,v.id version_id,e.experiment_no,e.title,v.edit_model_jsonb,v.created_at
+            SELECT e.id experiment_id,v.id version_id,e.experiment_no,e.title,
+                   (v.edit_model_jsonb - ARRAY['blankDocument','templateInstance']) AS edit_model_jsonb,v.created_at
             FROM rnd.experiment e
             JOIN rnd.experiment_version v ON v.organization_id=e.organization_id AND v.id=e.current_version_id
             JOIN tpl.template_version tv ON tv.id=v.template_version_id
@@ -97,7 +98,7 @@ public class OptimizationRepository {
         var args=new java.util.ArrayList<Object>(List.of(org,templateVersionId));args.addAll(ids);
         return jdbc.query("""
             SELECT e.id experiment_id,v.id version_id,e.experiment_no,e.title,
-                   v.edit_model_jsonb,v.created_at
+                   (v.edit_model_jsonb - ARRAY['blankDocument','templateInstance']) AS edit_model_jsonb,v.created_at
             FROM rnd.experiment e JOIN rnd.experiment_version v
               ON v.organization_id=e.organization_id AND v.id=e.current_version_id
             WHERE e.organization_id=? AND v.template_version_id=? AND e.deleted=false

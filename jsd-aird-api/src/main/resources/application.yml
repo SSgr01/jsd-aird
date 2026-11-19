@@ -7,8 +7,8 @@ spring:
     password: ${JSD_AIRD_DATASOURCE_PASSWORD:jsd_aird_dev}
     hikari:
       maximum-pool-size: 10
-      minimum-idle: 1
-      connection-timeout: ${JSD_AIRD_DB_CONNECTION_TIMEOUT:1000}
+      minimum-idle: ${JSD_AIRD_DB_MINIMUM_IDLE:3}
+      connection-timeout: ${JSD_AIRD_DB_CONNECTION_TIMEOUT:3000}
   flyway:
     enabled: false
     locations: classpath:db/migration

@@ -23,6 +23,42 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class HistoricalOptimizationFrozenDataTest {
+    @Test void previewLooksUpOnlyTheChosenDatasetAndRetainsTheProjectedSamples() {
+        var json=new ObjectMapper();var repository=mock(OptimizationRepository.class);
+        var org=UUID.randomUUID();var dataset=UUID.randomUUID();var experiment=UUID.randomUUID();var version=UUID.randomUUID();
+        when(repository.historyDatasetName(org,dataset)).thenReturn(Optional.of("水性丙烯酸记录"));
+        var model=json.createObjectNode();model.putObject("dynamicValues").put("固含量",45);
+        when(repository.historyRecords(org,dataset)).thenReturn(List.of(new OptimizationRepository.HistoryRecordRow(experiment,version,"B-3616","水性丙烯酸",model,Instant.EPOCH)));
+        when(repository.historyFieldNames(org)).thenReturn(Map.of());
+        when(repository.materialCatalog(org)).thenReturn(MaterialCatalogSnapshot.empty());
+        var service=new OptimizationService(repository,null,null,null,null,mock(AuthorizationService.class),null,json,false,null);
+        ActorContext.set(new Actor(org,UUID.randomUUID(),"researcher"));
+        try {
+            var result=service.historyDataset(dataset);
+            assertThat(result.path("rowCount").asInt()).isEqualTo(1);
+            assertThat(result.path("rows").get(0).path("sourceExperimentId").asText()).isEqualTo(experiment.toString());
+            assertThat(result.path("rows").get(0).path("values").elements().next().asInt()).isEqualTo(45);
+            verify(repository,never()).historyDatasets(any(),any());
+        } finally {ActorContext.clear();}
+    }
+    @Test void submissionRechecksAccessWithoutReloadingEveryFullSourceReport() {
+        var json=new ObjectMapper();var repository=mock(OptimizationRepository.class);
+        when(repository.jdbc()).thenReturn(mock(JdbcTemplate.class));
+        var org=UUID.randomUUID();var datasetId=UUID.randomUUID();var experiment=UUID.randomUUID();var version=UUID.randomUUID();
+        when(repository.materialCatalog(org)).thenReturn(MaterialCatalogSnapshot.empty());
+        var source=mock(com.jsd.aird.rnd.api.ResearchExperimentFacade.class);
+        var service=spy(new OptimizationService(repository,null,new ConfigurationHashing(json),null,null,mock(AuthorizationService.class),null,json,false,source));
+        var dataset=json.createObjectNode().put("id",datasetId.toString()).put("name","水性丙烯酸");
+        dataset.putArray("rows").addObject().put("id","sample-1").put("sourceExperimentId",experiment.toString()).put("versionId",version.toString());
+        doReturn(dataset).when(service).historyDataset(datasetId);
+        var request=json.createObjectNode().put("mode","HISTORICAL_GP_BO").put("datasetId",datasetId.toString());
+        ActorContext.set(new Actor(org,UUID.randomUUID(),"researcher"));
+        try {
+            assertThatThrownBy(()->service.submit(request,"sample-access-check")).isInstanceOf(ApiException.class);
+            verify(source).requireReadableVersion(org,experiment,version);
+            verify(source,never()).record(any(),any(),any());
+        } finally {ActorContext.clear();}
+    }
     @Test void reopeningAnOptimizationRechecksCurrentExperimentAccess() {
         var json=new ObjectMapper();var repository=mock(OptimizationRepository.class);
         var org=UUID.randomUUID();var user=UUID.randomUUID();var run=UUID.randomUUID();var experiment=UUID.randomUUID();var version=UUID.randomUUID();

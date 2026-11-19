@@ -40,7 +40,7 @@ type OptimizationSubmissionResponse = (OptimizationSubmission | ApiResponse<Opti
 
 async function submitOptimization(path: string, request: unknown, key: string, failureMessage: string) {
   const response = await httpClient.post<OptimizationSubmissionResponse>(`${root}${path}`, request, {
-    headers: { 'Idempotency-Key': key }, validateStatus: (status) => [200, 202, 409, 422, 503].includes(status),
+    headers: { 'Idempotency-Key': key }, timeout: 125_000, validateStatus: (status) => [200, 202, 409, 422, 503].includes(status),
   })
   if (response.status >= 400) {
     throw new HttpError(response.data.message || failureMessage, response.data.code || 'OPTIMIZATION_REJECTED', response.status)
@@ -54,7 +54,7 @@ export const optimizationApi = {
   async createDraft(request: unknown, key: string) { return unwrap(await httpClient.post<ApiResponse<{id: string; path: string}>>(`${root}/research-loop/drafts`, request, {headers:{'Idempotency-Key':key}})) },
   async draftReceipt(key: string) { return unwrap(await httpClient.get<ApiResponse<{status: string; result?: {id:string; path:string}}>>(`${root}/research-loop/draft-receipts/${encodeURIComponent(key)}`)) },
   async historyDatasets(keyword?: string) { return unwrap(await httpClient.get<ApiResponse<{ items: HistoryDatasetOption[] }>>(`${root}/optimization-datasets`, { params: { keyword } })) },
-  async historyDataset(id: string) { return unwrap(await httpClient.get<ApiResponse<HistoryDataset>>(`${root}/optimization-datasets/${id}`)) },
+  async historyDataset(id: string) { return unwrap(await httpClient.get<ApiResponse<HistoryDataset>>(`${root}/optimization-datasets/${id}`, { timeout: 125_000 })) },
   submit(request: unknown, key: string) { return submitOptimization('/experiment-optimizations', request, key, '实验优化条件不满足') },
   nextRound(id: string, key: string) { return submitOptimization(`/research-runs/${id}/next-round`, {}, key, '下一轮优化启动失败') },
   async run(id: string) { return unwrap(await httpClient.get<ApiResponse<OptimizationRun>>(`${root}/experiment-optimizations/${id}`)) },

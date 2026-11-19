@@ -37,7 +37,7 @@ export const modelingWorkbenchApi = {
     return unwrap(await httpClient.get<ApiResponse<{ items: HistoryDatasetOption[] }>>(`${root}/datasets`, { params: { keyword } }))
   },
   async dataset(id: string) {
-    return unwrap(await httpClient.get<ApiResponse<HistoryDataset>>(`${root}/datasets/${encodeURIComponent(id)}`))
+    return unwrap(await httpClient.get<ApiResponse<HistoryDataset>>(`${root}/datasets/${encodeURIComponent(id)}`, { timeout: 125_000 }))
   },
   async batches(id: string) {
     return unwrap(await httpClient.get<ApiResponse<{ items: Array<{ id: string; count: number }> }>>(`${root}/datasets/${encodeURIComponent(id)}/batches`))
@@ -46,11 +46,11 @@ export const modelingWorkbenchApi = {
     return unwrap(await httpClient.get<ApiResponse<{ items: ModelingExperiment[]; total: number }>>(`${root}/datasets/${encodeURIComponent(id)}/experiments`, { params, signal }))
   },
   async selection(id: string, experimentIds: string[]) {
-    return unwrap(await httpClient.post<ApiResponse<HistoryDataset>>(`${root}/datasets/${encodeURIComponent(id)}/selection`, { experimentIds }))
+    return unwrap(await httpClient.post<ApiResponse<HistoryDataset>>(`${root}/datasets/${encodeURIComponent(id)}/selection`, { experimentIds }, { timeout: 125_000 }))
   },
   async train(command: { datasetIds: string[]; selectedRowIdsByDataset: Record<string, string[]>; selectedExperimentIdsByDataset?: Record<string, string[]>; xColumns: string[]; yColumn: string }, idempotencyKey: string) {
     return unwrap(await httpClient.post<ApiResponse<{ runId: string; status: string; pollAfterMs: number }>>(
-      `${root}/runs`, command, { headers: { 'Idempotency-Key': idempotencyKey } },
+      `${root}/runs`, command, { headers: { 'Idempotency-Key': idempotencyKey }, timeout: 125_000 },
     ))
   },
   async register(id: string, idempotencyKey: string) {

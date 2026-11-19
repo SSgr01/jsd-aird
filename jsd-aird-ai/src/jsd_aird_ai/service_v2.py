@@ -1198,18 +1198,27 @@ class FormulaModelV2Service:
                 "maximum": np.nanmax(features, axis=0).tolist(), "features": names}
 
 
+    def _local_artifact_path(self, parsed) -> Path:
+        raw = unquote(parsed.path)
+        if parsed.netloc:
+            raw = f"//{parsed.netloc}{raw}"
+        if len(raw) >= 3 and raw[0] == "/" and raw[2] == ":":
+            raw = raw[1:]
+        path = Path(raw).resolve()
+        root = self.settings.local_artifact_root
+        if root is not None:
+            if parsed.netloc or not path.is_relative_to(root.resolve()):
+                raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "artifact is outside the local storage root")
+        elif not self.settings.allow_file_urls:
+            raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "file URLs are disabled")
+        return path
+
     def _read(self, url: Any, expected_sha: str) -> bytes:
         parsed = urlparse(str(url))
         if parsed.scheme == "file":
-            if not self.settings.allow_file_urls:
-                raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "file URLs are disabled")
-            raw = unquote(parsed.path)
-            if parsed.netloc:
-                raw = f"//{parsed.netloc}{raw}"
-            if len(raw) >= 3 and raw[0] == "/" and raw[2] == ":":
-                raw = raw[1:]
+            path = self._local_artifact_path(parsed)
             try:
-                with Path(raw).open("rb") as source:
+                with path.open("rb") as source:
                     data = self._bounded_artifact(source, expected_sha)
             except OSError as exc:
                 raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "unable to read artifact", retryable=True) from exc
@@ -1245,14 +1254,7 @@ class FormulaModelV2Service:
             raise FormulaModelError(ErrorCode.INTERNAL_COMPUTE_ERROR, "model bundle is too large")
         parsed = urlparse(str(url))
         if parsed.scheme == "file":
-            if not self.settings.allow_file_urls:
-                raise FormulaModelError(ErrorCode.INVALID_SNAPSHOT, "file URLs are disabled")
-            raw = unquote(parsed.path)
-            if parsed.netloc:
-                raw = f"//{parsed.netloc}{raw}"
-            if len(raw) >= 3 and raw[0] == "/" and raw[2] == ":":
-                raw = raw[1:]
-            path = Path(raw)
+            path = self._local_artifact_path(parsed)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
             return

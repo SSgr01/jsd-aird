@@ -17,6 +17,10 @@ class Settings:
     host: str = os.getenv("JSD_AIRD_AI_HOST", "127.0.0.1")
     port: int = int(os.getenv("JSD_AIRD_AI_PORT", "8090"))
     allow_file_urls: bool = _boolean("JSD_AIRD_AI_ALLOW_FILE_URLS")
+    local_artifact_root: Path | None = (
+        Path(os.environ["JSD_AIRD_AI_LOCAL_ARTIFACT_ROOT"])
+        if os.getenv("JSD_AIRD_AI_LOCAL_ARTIFACT_ROOT") else None
+    )
     artifact_timeout_seconds: float = float(
         os.getenv("JSD_AIRD_AI_ARTIFACT_TIMEOUT_SECONDS", "60")
     )

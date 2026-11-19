@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('api', 'web', 'gateway', 'control', 'migrate-control', 'worker')][string]$Service,
+    [Parameter(Mandatory)][ValidateSet('api', 'web', 'gateway', 'control', 'migrate-control', 'worker', 'compute')][string]$Service,
     [Parameter(Mandatory)][string]$EnvFile
 )
 $ErrorActionPreference = 'Stop'
@@ -61,6 +61,20 @@ if (-not (Test-Path Env:APP_AI_HARNESS_QA_ENABLED)) { $env:APP_AI_HARNESS_QA_ENA
 $env:PYTHONUTF8 = '1'
 
 switch ($Service) {
+    'compute' {
+        $computeRoot = Join-Path $repoRoot 'jsd-aird-ai'
+        $pythonCommand = Join-Path $computeRoot '.venv/Scripts/python.exe'
+        if (-not (Test-Path -LiteralPath $pythonCommand -PathType Leaf)) { throw 'Create jsd-aird-ai/.venv and install its dependencies before starting compute.' }
+        $env:PYTHONPATH = Join-Path $computeRoot 'src'
+        # Java and the calculation service must use the same internal credential.
+        $env:JSD_AIRD_AI_INTERNAL_TOKEN = $env:JSD_AIRD_FORMULA_MODEL_TOKEN
+        if ($env:JSD_AIRD_STORAGE_PROVIDER -eq 'local') {
+            $env:JSD_AIRD_AI_LOCAL_ARTIFACT_ROOT = if ($env:JSD_AIRD_LOCAL_STORAGE_ROOT) { $env:JSD_AIRD_LOCAL_STORAGE_ROOT } else { Join-Path ([IO.Path]::GetTempPath()) 'jsd-aird-storage' }
+        }
+        Push-Location $computeRoot
+        try { & $pythonCommand -m jsd_aird_ai.main }
+        finally { Pop-Location }
+    }
     'gateway' {
         $taskNode = $env:JSD_AIRD_DSH_NODE
         if (-not $taskNode) { $taskNode = Join-Path $repoRoot '.runtime/deepseek-migration/toolchain/node_modules/node-win-x64/bin/node.exe' }

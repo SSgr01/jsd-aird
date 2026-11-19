@@ -14,6 +14,36 @@ import java.util.concurrent.*;
 import static org.assertj.core.api.Assertions.*;
 
 class CapacityFilterTest {
+    @Test void datasetProjectionUsesHeavyAdmissionButCatalogAndExperimentPagesRemainReads()throws Exception {
+        var filter=filter(Map.of());
+        var id=UUID.randomUUID();
+        for(var path:List.of("/api/v1/ai/rnd/optimization-datasets/"+id,
+                "/api/v1/ai/rnd/modeling-workbench/datasets/"+id,
+                "/api/v1/ai/rnd/modeling-workbench/datasets/"+id+"/selection",
+                "/api/v1/ai/rnd/experiment-optimizations",
+                "/api/v1/ai/rnd/modeling-workbench/runs")) {
+            var method=path.endsWith("selection") || path.endsWith("optimizations") || path.endsWith("runs")?"POST":"GET";
+            var response=new MockHttpServletResponse();
+            filter.doFilter(new MockHttpServletRequest(method,path),response,(req,res)->
+                    assertThat(OperationBudget.kind()).isEqualTo(OperationBudget.Kind.HEAVY));
+            assertThat(response.getStatus()).isEqualTo(200);
+        }
+        for(var path:List.of("/api/v1/ai/rnd/optimization-datasets",
+                "/api/v1/ai/rnd/modeling-workbench/datasets/"+id+"/experiments")) {
+            filter.doFilter(new MockHttpServletRequest("GET",path),new MockHttpServletResponse(),(req,res)->
+                    assertThat(OperationBudget.kind()).isEqualTo(OperationBudget.Kind.READ));
+        }
+    }
+    @Test void deadlineReplacesUncommittedPartialJsonWithOneValidError()throws Exception {
+        var filter=filter(Map.of("app.capacity.read-millis",40));var response=new MockHttpServletResponse();
+        filter.doFilter(new MockHttpServletRequest("GET","/api/v1/ai/rnd/optimization-datasets"),response,(req,res)->{
+            res.getOutputStream().write("{\"data\":".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            try {Thread.sleep(5000);}catch(InterruptedException error){Thread.currentThread().interrupt();}
+        });
+        assertThat(response.getStatus()).isEqualTo(504);
+        assertThat(new ObjectMapper().readTree(response.getContentAsString()).path("code").asText()).isEqualTo("OPERATION_TIMEOUT");
+        assertThat(Thread.currentThread().isInterrupted()).isFalse();
+    }
     @Test void workbookDraftUsesTheExistingWorkspacePayloadAndHeavyBudget()throws Exception {
         var filter=filter(Map.of("app.capacity.json-bytes",16,"app.capacity.workspace-json-bytes",64));
         for(var owner:List.of("import-jobs","experiment-import-jobs")) {

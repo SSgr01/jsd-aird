@@ -12,6 +12,43 @@ from aird_agent.core.workspace import Workspace
 from aird_agent.sandbox.client import Sandbox
 
 
+@pytest.mark.parametrize('mode', ['execute', 'reconcile'])
+async def test_binary_stdout_can_be_persisted_without_changing_artifact_bytes(tmp_path, principal, monkeypatch, mode):
+    import base64
+    import hashlib
+
+    execution_id = 'b' * 32
+    content = b'PDF-stream\x00bytes'
+    record = {'execution_id': execution_id, 'request_hash': 'request', 'status': 'SUCCEEDED',
+        'finished_at': 1, 'result': {'exit_code': 0, 'output': '中文\x00text\n', 'files': [{
+            'path': 'output/stream.bin', 'base64': base64.b64encode(content).decode(),
+            'sha256': hashlib.sha256(content).hexdigest(),
+        }]}}
+    methods = []
+
+    def handle(request):
+        methods.append(request.method)
+        return httpx.Response(200, json=record)
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original(transport=httpx.MockTransport(handle), **kwargs))
+    settings = SimpleNamespace(sandbox_enabled=True, sandbox_timeout_seconds=1,
+        sandbox_url='https://sandbox.test', sandbox_secret=SecretStr('x' * 32))
+    workspace = Workspace(tmp_path, str(principal.organization_id), str(principal.actor_id))
+    workspace.prepare()
+    sandbox = Sandbox(settings)
+    if mode == 'execute':
+        result = await sandbox.execute(workspace, 'read PDF stream', 'shell', execution_id, [])
+        assert methods == ['POST']
+    else:
+        result = (await sandbox.reconcile(workspace, execution_id))['result']
+        assert methods == ['GET']
+    assert result['output'] == '中文\\u0000text\n'
+    assert '\\u0000' not in json.dumps(result, ensure_ascii=False).replace('\\\\u0000', '')
+    assert workspace.resolve('output/stream.bin').read_bytes() == content
+    assert record['result']['output'] == '中文\x00text\n'
+
+
 @pytest.mark.parametrize('lost', ['submission', 'receipt', 'receipt-503', 'unknown'])
 async def test_lost_responses_query_the_same_receipt_without_resubmitting(tmp_path, principal, monkeypatch, lost):
     execution_id = 'f' * 32

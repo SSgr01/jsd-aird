@@ -701,6 +701,7 @@ public class ExperimentImportService implements com.jsd.aird.rnd.api.ExperimentS
         if (command.format() != TemplateFormat.PDF && command.format() != TemplateFormat.IMAGE) {
             return genericParse(command.format(), command.fileName(), bytes);
         }
+        Exception mineruFailure = null;
         if (command.format() == TemplateFormat.IMAGE && mineruParser.isConfigured()) {
             try {
                 var pdf = ExperimentImagePdfConverter.convert(bytes);
@@ -711,7 +712,8 @@ public class ExperimentImportService implements com.jsd.aird.rnd.api.ExperimentS
                 if (extracted.blocks().isEmpty()) throw new IllegalStateException("MinerU 未识别到实验图片内容");
                 return ocrWorkbookResult(command.fileName(), contentType(command.format(), command.fileName()),
                         bytes, extracted);
-            } catch (RuntimeException | java.io.IOException ignored) {
+            } catch (RuntimeException | java.io.IOException exception) {
+                mineruFailure = exception;
                 // Keep the existing image OCR provider available when MinerU cannot process this image.
             }
         }
@@ -720,6 +722,15 @@ public class ExperimentImportService implements com.jsd.aird.rnd.api.ExperimentS
                 .findFirst()
                 .orElse(null);
         if (provider == null) {
+            if (command.contentOnly() && mineruFailure != null) {
+                var reason = mineruFailure.getMessage();
+                var error = new ApiException(ApiErrorCode.VALIDATION_ERROR,
+                        "图片 OCR 读取失败（MinerU）：" + (reason == null || reason.isBlank()
+                                ? mineruFailure.getClass().getSimpleName()
+                                : reason.replaceAll("(?i)bearer\\s+\\S+", "Bearer [redacted]")));
+                error.initCause(mineruFailure);
+                throw error;
+            }
             if (command.contentOnly()) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "正文读取或 OCR 服务未配置，无法读取该文件内容");
             return genericParse(command.format(), command.fileName(), bytes);
         }

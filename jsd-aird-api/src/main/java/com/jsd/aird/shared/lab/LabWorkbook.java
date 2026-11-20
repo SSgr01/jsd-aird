@@ -96,14 +96,20 @@ public final class LabWorkbook {
             }
             if(label.isBlank())continue;
             boolean matched=false;
-            var iterator=fields.fields();
-            while(iterator.hasNext()) {
-                var e=iterator.next();var f=e.getValue();
+            var candidates=new ArrayList<String>();var scoped=new ArrayList<String>();
+            for(var entry:iterable(fields.fields())) {
+                var f=entry.getValue();
                 if(!"SAMPLE".equals(f.path("scope").asText())||!normalized(f.path("label").asText()).equals(label))continue;
-                if(!f.path("groupId").asText().equals(sectionByRow.get(r))&&!f.path("semantic").asText().equals("SOURCE_IDENTITY")&&!e.getKey().equals("formula.total"))continue;
-                mark(cell(target,r,1)).put("role","LABEL").put("fieldCode",e.getKey());
+                candidates.add(entry.getKey());
+                if(f.path("groupId").asText().equals(sectionByRow.get(r)))scoped.add(entry.getKey());
+            }
+            // Reduced customer forms can omit a section title or place a known
+            // field under a different section. A unique exact label is sufficient
+            // evidence; ambiguous labels still require their section context.
+            var matches=scoped.isEmpty()?candidates:scoped;
+            if(matches.size()==1) {
+                mark(cell(target,r,1)).put("role","LABEL").put("fieldCode",matches.getFirst());
                 matched=true;
-                break;
             }
             var group=sectionByRow.get(r);
             if(!matched&&Set.of("resin","coating","film","appearance","results").contains(group)&&!value(target,r,1).isBlank()) {
@@ -357,8 +363,15 @@ public final class LabWorkbook {
         instance.set("definition",def.deepCopy());instance.set("issues",issues);
         var generic=com.jsd.aird.shared.excel.WorkbookStructure.instance(snapshot);
         if(generic.isObject()) {
-            var merged=(ObjectNode)generic.deepCopy();
-            var allIssues=(ArrayNode)merged.path("issues").deepCopy();allIssues.addAll(issues);merged.set("issues",allIssues);
+            var merged=com.jsd.aird.shared.excel.WorkbookStructure.validate(json,snapshot,generic);
+            var allIssues=(ArrayNode)merged.path("issues").deepCopy();
+            var unbound=new HashSet<String>();
+            for(var issue:allIssues)if(issue.path("code").asText().equals("UNBOUND_VALUE"))unbound.add(issue.path("sheetId").asText(sid)+":"+issue.path("address").asText());
+            for(var issue:issues) {
+                if(issue.path("code").asText().equals("UNBOUND_VALUE")&&!unbound.add(sid+":"+issue.path("address").asText()))continue;
+                allIssues.add(issue);
+            }
+            merged.set("issues",allIssues);
             merged.set("definition",def.deepCopy());merged.set("sampleOrder",order);merged.set("materialLines",lines);merged.set("businessBindings",bindings);
             instance=merged;
         }

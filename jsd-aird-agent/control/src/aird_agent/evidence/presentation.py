@@ -16,10 +16,12 @@ def source_label(source):
 def model_candidate(candidate, links=None):
     return {key: value for key, value in {
         "evidence_id": candidate.get("evidence_id"),
+        "citation": "[E:" + candidate["evidence_id"] + "]" if candidate.get("evidence_id") else None,
         **source_label(candidate.get("source") or {}),
         "offset": candidate.get("node_offset"),
         "text": candidate.get("model_text") if candidate.get("model_text") is not None else candidate.get("text"),
         "ref": candidate.get("ref"), "relation": candidate.get("relation"),
+        "available_relations": candidate.get("available_relations"),
         "quote_id": candidate.get("quote_id"),
         **({"url": links[candidate["evidence_id"]]["url"]}
            if links and candidate.get("evidence_id") in links
@@ -37,7 +39,9 @@ def model_hit(hit):
     quotes = sorted([*hit.get("context_quotes", []), *([hit["quote"]] if hit.get("quote") else [])],
                     key=lambda quote: quote.get("start", 0))
     return {
-        "evidence_id": hit.get("evidence_id"), **source_label(hit["source"]),
+        "evidence_id": hit.get("evidence_id"),
+        **({"citation": "[E:" + hit["evidence_id"] + "]"} if hit.get("evidence_id") else {}),
+        **source_label(hit["source"]),
         **{key: hit[key] for key in (
             "node_offset", "quote_offset", "quote_count", "table_context", "requires_read", "already_retrieved",
         ) if key in hit},

@@ -136,11 +136,20 @@ class BusinessDataServiceTest {
         add(3, "INVENTORY_BALANCE", "同名材料", object("{\"quantityKg\":1000}")); visible.remove(id(3));
         records.put(id(1), new BusinessRecordView(parent.ref(), parent.title(), parent.facts(), List.of(
             BusinessViews.link("明确关联", "INVENTORY_BALANCE", id(2)), BusinessViews.link("明确关联", "INVENTORY_BALANCE", id(3))), parent.path()));
+        var read = service.invoke("business_read", json.createObjectNode().set("ref", parent.ref()));
+        assertThat(read.path("candidates").path(0).path("available_relations").toString()).isEqualTo("[\"明确关联\"]");
+        assertThat(read.toString()).doesNotContain(id(3).toString(), "1000");
         var args = json.createObjectNode().put("relation", "明确关联"); args.set("ref", parent.ref());
         var linked = service.invoke("business_links", args);
         assertThat(linked.path("candidates").size()).isEqualTo(2);
         assertThat(linked.toString()).doesNotContain(id(3).toString(), "1000");
         assertThat(linked.path("candidates").path(1).path("ref").path("id").asText()).isEqualTo(id(2).toString());
+        args.put("relation","猜测关系");
+        assertThatThrownBy(()->service.invoke("business_links",args)).isInstanceOfSatisfying(ApiException.class,error->{
+            var repair=json.valueToTree(error.detail());
+            assertThat(repair.path("rule").asText()).isEqualTo("enum");
+            assertThat(repair.path("allowed_values").toString()).isEqualTo("[\"明确关联\"]");
+        });
     }
     @Test void unknownFiltersAndFieldsFailInsteadOfReturningAnUnrestrictedAnswer() throws Exception {
         add(1, "CUSTOMER", "客户", object("{\"value\":1}"));

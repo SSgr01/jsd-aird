@@ -29,7 +29,7 @@ class RuntimeBindings:
     def scope_digest(self, scope):
         return digest(scope.get("scope", {}))
 
-    async def authorized_topic(self, principal, run, *, execution=True):
+    async def authorized_topic(self, principal, run, *, execution=True, history_checked=False):
         try:
             self.packs.verify(run["pack_ids"], run["pack_versions"])
         except ValueError:

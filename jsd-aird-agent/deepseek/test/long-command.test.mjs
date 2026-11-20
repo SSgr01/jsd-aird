@@ -105,6 +105,15 @@ test('known script failure keeps stderr and does not delete files without an exp
   assert.equal(calls.filter(value=>value.action==='native-cancel').length,0);
 });
 
+test('quiet commands back off output polling and still wait for their actual terminal receipt',async t=>{
+  const {start,calls}=await harness(t,{elapsed:1250,stdout:'',stderr:''});
+  const result=await (await start({command:'work'})).result();
+  assert.equal(result.exitCode,0);
+  assert.equal(calls.filter(c=>c.action==='native-tool').length,1);
+  assert.ok(calls.filter(c=>c.action==='native-output').length<=5);
+  assert.equal(calls.filter(c=>c.action==='native-cancel').length,0);
+});
+
 test('UNKNOWN execution recovers the original receipt and bytes without command replay',async t=>{
   const {start,fs,calls}=await harness(t,{reconcileAfter:25,exitCode:1,stderr:'ValueError: repair this cell\n'});
   await fs.publish('/workspaces/input.csv',Buffer.from('unaltered source'));

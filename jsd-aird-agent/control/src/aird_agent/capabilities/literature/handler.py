@@ -76,21 +76,9 @@ class LiteratureTools:
                 if fixed and any(ref not in fixed for ref in requested):
                     raise HTTPException(403, "RETRIEVAL_FILTER_CANNOT_EXPAND")
                 context["retrieval_scope"] = {**(run.get("retrieval_scope") or {}), "knowledge_documents": requested}
-            result = await (
-                self.java(
-                    principal,
-                    name,
-                    {**args, **context, "topic_id": run.get("topic_id")},
-                    run["id"],
-                )
-                if name == "table_read"
-                else cached_host(
-                    self.runtime,
-                    principal,
-                    run,
-                    name,
-                    {**args, **context, "topic_id": run.get("topic_id")},
-                )
+            result = await cached_host(
+                self.runtime, principal, run, name,
+                {**args, **context, "topic_id": run.get("topic_id")},
             )
             if name == "document_read":
                 for candidate in result.get("candidates", []):

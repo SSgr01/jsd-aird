@@ -8,7 +8,7 @@ import time
 import httpx
 from fastapi import HTTPException
 
-from aird_agent.core.stage_timing import measure
+from aird_agent.core.stage_timing import measure, observe
 from aird_agent.server.security import issue
 
 logger = logging.getLogger(__name__)
@@ -38,8 +38,13 @@ def repair_fields(detail):
         ):
             output[key] = value
     rule = detail.get("rule")
-    if isinstance(rule, str) and rule in {"required", "unsupported_filter", "type", "maxLength", "searchable_terms"}:
+    if isinstance(rule, str) and rule in {"required", "unsupported_filter", "type", "maxLength", "searchable_terms", "enum"}:
         output["rule"] = rule
+    allowed = detail.get("allowed_values")
+    if (detail.get("path") == ["relation"] and isinstance(allowed, list) and len(allowed) <= 60
+            and all(isinstance(value, str) and 0 < len(value) <= 64
+                    and all(character.isalnum() or character in "_ -" for character in value) for value in allowed)):
+        output["allowed_values"] = allowed
     if type(detail.get("max_length")) is int and 0 < detail["max_length"] <= 1000:
         output["max_length"] = detail["max_length"]
     return output or None
@@ -61,15 +66,19 @@ class JsdHostGateway:
         ticket = issue(self.settings.shared_secret.get_secret_value(), principal, "java-tools", run_id=run_id)
         read_only = action in self.READ_ACTIONS
         seconds = 35 if action in self.RETRIEVAL_ACTIONS else self.http.timeout.read
-        deadline = time.monotonic() + seconds if seconds is not None else None
+        deadline = time.perf_counter() + seconds if seconds is not None else None
         attempts = 0
         try:
             async with asyncio.timeout(seconds):
                 for attempt in range(2 if read_only else 1):
                     attempts = attempt + 1
-                    remaining = max(0.001, deadline - time.monotonic()) if deadline is not None else None
+                    remaining = max(0.001, deadline - time.perf_counter()) if deadline is not None else None
                     try:
-                        with measure("host_http_ms"):
+                        category = ("knowledge_retrieval_ms" if action in self.RETRIEVAL_ACTIONS
+                            else "authorization_ms" if action in {"authorize", "authorize_sources", "runtime_context", "expert_catalog"}
+                            else "business_data_ms" if action in {"business_search", "business_read", "business_links", "business_query"}
+                            else "host_other_ms")
+                        with measure("host_http_ms"), measure(category):
                             response = await self.http.post(
                                 self.settings.java_url + "/internal/v1/agent-tools",
                                 headers={"X-Jsd-Agent-Ticket": ticket},
@@ -83,6 +92,11 @@ class JsdHostGateway:
                             raise
                         raise HostToolError(503, "BUSINESS_UNAVAILABLE", "业务服务连接失败。", attempts=attempts) from None
                     if response.status_code < 400:
+                        for name, value in re.findall(r"(?:^|,\s*)(db_query|agent_tool);dur=([0-9.]+)", response.headers.get("server-timing", "")):
+                            try:
+                                observe("java_" + name + "_ms", float(value))
+                            except ValueError:
+                                pass
                         return response.json()
                     try:
                         envelope = response.json()

@@ -15,11 +15,12 @@ public final class ResearchDocumentOutline {
         int end = nodes.size();
         for (int i = offset; i < nodes.size(); i++) {
             var node = nodes.get(i);
-            var text = node.path("text").asText().strip();
+            var text = node.path("text").asText().replaceAll("[\\p{Z}\\s]+", " ").strip();
             var page = node.path("anchor").path("page").asText("");
             boolean pageStart = !page.isBlank() && !page.equals(previousPage);
             previousPage = page;
-            boolean heading = text.length() <= 180 && text.matches("(?s)^(#{1,6}\\s+.+|\\d+(?:\\.\\d+)*\\.?\\s+\\p{L}.+|Abstract|References|摘要|参考文献)$");
+            boolean heading = text.length() <= 180 && (text.matches("(?s)^(#{1,6}\\s+.+|\\d+(?:\\.\\d+)*\\.?\\s+\\p{L}.+)$")
+                || text.matches("(?i)^(Abstract|Introduction|Experimental(?: Section| Methods| Details)?|Materials and Methods|Methods|Results(?: and Discussion)?|Discussion|Conclusions?|References|摘要|引言|实验部分|材料与方法|结果与讨论|结果|讨论|结论|参考文献)$"));
             if (!pageStart && !heading) continue;
             int next = i + 1;
             while (next < nodes.size() && nodes.get(next).path("anchor").path("page").asText("").equals(page)) next++;

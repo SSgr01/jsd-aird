@@ -156,6 +156,14 @@ async def test_unexpected_server_failure_is_a_service_failure_not_an_empty_searc
     assert "SQL" not in caught.value.detail
 
 
+def test_relation_repair_exposes_only_bounded_public_names():
+    from aird_agent.hosts.jsd.host import repair_fields
+    detail = {"code": "INVALID_TOOL_ARGUMENTS", "path": ["relation"], "rule": "enum",
+              "allowed_values": ["阶段", "任务", "所属项目"], "submitted": "私有内容"}
+    assert repair_fields(detail) == {"path": ["relation"], "rule": "enum", "allowed_values": ["阶段", "任务", "所属项目"]}
+    assert "allowed_values" not in repair_fields({**detail, "allowed_values": ["<script>"]})
+
+
 @pytest.mark.parametrize(("status", "envelope", "expected"), [
     (502, {"code": ["private malformed error"]}, "BUSINESS_UNAVAILABLE"),
     (400, {"code": "SYS_BAD_REQUEST", "data": {"code": "INVALID_TOOL_ARGUMENTS", "rule": ["private malformed rule"]}},

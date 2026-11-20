@@ -46,6 +46,8 @@ export const workbookWorkflow = String.raw`
 
 ## Reliable workbook generation in this deployment
 
+系统内已有实验记录导出优先用business_export_records(refs=搜索返回的固定版本ref)，收到workbook.path后present。已有business-records数据文件时也可直接用随文件返回的export_script。以下手工source_rows示例只适用于没有平台原值数据文件的其他表格任务；不得用它转抄已经存在的业务正文。
+
 本环境的 Excel 执行要求：先调用 working_directory；脚本使用当前目录下的相对路径。
 生成时完整复用下方示例的 imports、临时保存、重新打开和逐行原值比对代码，
 再增加业务分析和样式。不要只摘取保存代码而遗漏 import tempfile；
@@ -67,6 +69,13 @@ the source once instead of retyping it during a repair. Preserve text IDs,
 leading zeros, zero values, empty cells and date meaning. Keep source columns
 separate from derived columns. Use descriptive function and variable names;
 never reuse a function name for a header, row, column or cell variable.
+Keep numeric measurements as numbers with units in a separate column or number
+format; do not concatenate units into numeric cells. Preserve a missing source
+value as null/None (a genuinely empty Excel cell), with any explanation in a
+separate notes column. Keep full business record numbers. Registration dates
+are available in current_registration and must be labelled as registration
+dates; never infer a measurement timestamp from them. Do not query invented
+date/created_at field codes when the full record already contains registration.
 Reuse the complete generic save/reopen/comparison block below for raw source
 rows. Do not replace it with individually hardcoded Excel row assertions:
 the header occupies row 1, and source record numbers are not Excel row numbers.

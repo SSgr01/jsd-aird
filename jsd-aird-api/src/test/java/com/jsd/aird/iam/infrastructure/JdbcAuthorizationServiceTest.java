@@ -22,6 +22,20 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class JdbcAuthorizationServiceTest {
+    @Test void agentRequestReusesRoleSnapshotButNextRequestObservesRevocation() {
+        var check = new PermissionCheck(organizationId, userId, "project.view", "PROJECT", UUID.randomUUID(), "READ");
+        when(store.roleBindings(organizationId, roleId)).thenReturn(List.of(new Binding("project.view", "ALLOW", "ALL", List.of())));
+        try (var scope = com.jsd.aird.shared.security.AuthorizationReadScope.open()) {
+            assertThat(authorization.check(check).allowed()).isTrue();
+            assertThat(authorization.check(new PermissionCheck(organizationId, userId, "project.view", "PROJECT", UUID.randomUUID(), "READ")).allowed()).isTrue();
+            org.mockito.Mockito.verify(store, org.mockito.Mockito.times(1)).user(userId);
+            org.mockito.Mockito.verify(store, org.mockito.Mockito.times(1)).permissionDefinitions();
+        }
+        when(store.user(userId)).thenReturn(Optional.empty());
+        try (var scope = com.jsd.aird.shared.security.AuthorizationReadScope.open()) {
+            assertThat(authorization.check(check).allowed()).isFalse();
+        }
+    }
 
     private final JdbcIamStore store = mock(JdbcIamStore.class);
     private final UUID organizationId = UUID.randomUUID();

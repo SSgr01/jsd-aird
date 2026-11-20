@@ -66,6 +66,51 @@ async def test_material_version_conflict_requires_explicit_source_reselection():
 
 
 @pytest.mark.asyncio
+async def test_history_reuses_source_checks_only_within_the_same_request_and_purpose():
+    source = {"kind": "BUSINESS_RECORD", "resource_id": "record", "revision": "revision"}
+    class Bindings:
+        source_authorization = AsyncMock(return_value={"sources": [source]})
+        java = AsyncMock(return_value={"allowed": True})
+    bindings, checked = Bindings(), set()
+    for rid in ("run-one", "run-two"):
+        run = {"id": rid, "source_refs": [source]}
+        assert await authorize_history_snapshot(bindings, None, run, authorized=checked) is run
+    assert bindings.java.await_count == 1
+    bindings.source_authorization.return_value = {"sources": [source], "purpose": "briefing-history"}
+    await authorize_history_snapshot(bindings, None, run, authorized=checked)
+    assert bindings.java.await_count == 2
+    await authorize_history_snapshot(bindings, None, run, authorized=set())
+    assert bindings.java.await_count == 3
+    bindings.java.side_effect = HostToolError(403, "DATA_SCOPE_DENIED", "denied")
+    with pytest.raises(HTTPException):
+        await authorize_history_snapshot(bindings, None, run, authorized=set())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("purpose,checks", [("briefing-history", 1), (None, 2), ("export", 2)])
+async def test_history_pages_share_only_the_same_historical_permission_target(purpose, checks):
+    source={"kind":"BUSINESS_RECORD", "resource_type":"EXPERIMENT", "resource_id":"record",
+            "project_id":"project", "version_id":"fixed", "content_sha256":"page-one",
+            "anchor":{"page":{"section":"summary"}}}
+    class Bindings:
+        source_authorization=AsyncMock()
+        java=AsyncMock(return_value={"allowed":True})
+    bindings,checked=Bindings(),set()
+    for item in (source,{**source,"content_sha256":"page-two","anchor":{"page":{"section":"record"}}}):
+        bindings.source_authorization.return_value={"sources":[item],**({"purpose":purpose} if purpose else {})}
+        await authorize_history_snapshot(bindings,None,{"id":"run"},authorized=checked)
+    assert bindings.java.await_count == checks
+    for change in ({"version_id":"other"},{"project_id":"other"}):
+        bindings.source_authorization.return_value={"sources":[{**source,**change}],**({"purpose":purpose} if purpose else {})}
+        await authorize_history_snapshot(bindings,None,{"id":"run"},authorized=checked)
+    assert bindings.java.await_count == checks+2
+    bindings.java.side_effect=HostToolError(403,"DATA_SCOPE_DENIED","denied")
+    bindings.source_authorization.return_value={"sources":[source],**({"purpose":purpose} if purpose else {})}
+    with pytest.raises(HTTPException):
+        await authorize_history_snapshot(bindings,None,{"id":"run"},authorized=set())
+
+
+@pytest.mark.asyncio
 async def test_discovery_prioritizes_the_explicit_tool_name_over_description_words():
     class Catalog:
         def tools_for(self, run):

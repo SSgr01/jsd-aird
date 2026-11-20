@@ -20,7 +20,7 @@ test('enterprise gates read each logged native preset, never a Host mode, header
   let guard;
   const workspaceCreations=[];
   const ctx = {
-    tools:{register:()=>()=>{},guard:fn=>{guard=fn;return ()=>{};}},
+    tools:{register:()=>()=>{},definitions:()=>[],guard:fn=>{guard=fn;return ()=>{};}},
     plugin:()=>{},web:{registerSearchProvider:()=>{}},fs:{hostPath:path=>path},
     agents:{get:()=>null},sessions:{},systemPrompt:{section:()=>()=>{},context:()=>()=>{}},llm:{},
     agentPresets:{presetForSession:session=>presets.get(session.id)},

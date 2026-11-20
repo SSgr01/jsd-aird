@@ -2,7 +2,7 @@ import {FolderConversionRuntime,isFolderSession,folderNativeTools} from './folde
 import { readFile as readChemistryAsset } from 'node:fs/promises';
 import { serveFontAsset } from './font-assets.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { NativeBriefings, installBriefingPeriods } from './briefings.mjs';
+import { NativeBriefings, installBriefingPeriods, beginBriefingPeriod, pendingSessionEvents, briefingCoverageContinuation } from './briefings.mjs';
 import { NativeMemory } from './memory.mjs';
 import { installNativeRuntime, installNativeToolGuard, nativeTools } from './native-runtime.mjs';
 import { randomUUID, createHash } from 'node:crypto';
@@ -20,8 +20,10 @@ import { researchWordingStream } from './research-wording.mjs';
 import { approveLiterature } from './literature-approval.mjs';
 import { modelResult, renderModelResult, presentation } from './model-view.mjs';
 import { repairInstruction } from './citation-repair.mjs';
+import { nativeArgumentsStream } from './native-arguments.mjs';
 import { StageTiming } from './stage-timing.mjs';
 import { readExecutionPolicy } from './read-policy.mjs';
+import { prepareCompactionRequest } from './compaction-request.mjs';
 import { materializeBusinessDataset } from './business-dataset.mjs';
 import { prepareConversionResources } from './conversion-resources.mjs';
 import { conversionLauncher } from './conversion-launch.mjs';
@@ -204,15 +206,8 @@ export async function apply(ctx) {
     if(run.automation)sessionAuthorities.set(sessionId,{background:true,turn:run.dsh_turn});
     const bound = runs.get(sessionId);
     if (!bound || bound.id !== run.id || bound.epoch !== run.epoch) runs.set(sessionId,run);
-    const signal=new AbortController().signal, records=[];
-    let beforeSeq;
-    do {
-      const page=await ctx.sessionController.events({address:{kind:'session',sessionId},beforeSeq,maxMessages:100},signal);
-      records.push(...page.records);
-      if(!page.hasMore || page.records.some(event=>event.seq<=(run.dsh_seq ?? -1)) || !page.records.length)break;
-      beforeSeq=Math.min(...page.records.map(event=>event.seq));
-    } while(true);
-    await replayEvents(sessionId,records.filter(event=>event.seq>(run.dsh_seq ?? -1)).sort((a,b)=>a.seq-b.seq));
+    const records=await pendingSessionEvents(ctx.sessionController,sessionId,run.dsh_seq ?? -1,new AbortController().signal);
+    await replayEvents(sessionId,records);
     const end=records.find(event=>event.type==='turn/end' && event.data.turn===run.dsh_turn);
     if(end?.data.reason.kind==='completed')
       await business('complete',{run_id:run.id,epoch:run.epoch,session_id:sessionId,turn:run.dsh_turn});
@@ -224,7 +219,11 @@ export async function apply(ctx) {
   let initialized;
   const ready = new Promise(resolve => { initialized = resolve; });
   const memory = new NativeMemory(ctx,{business,ready,runs});
-  ctx.on('agent/created', ({agent}) => { if(!isFolderSession(agent.id))void memory.recover(agent); });
+  ctx.on('agent/created', ({agent,source}) => {
+    // Resume already restores and authorizes this snapshot below. A second
+    // concurrent restore doubles all historical source checks.
+    if(source!=='resume' && !isFolderSession(agent.id) && !briefings.owns(agent.id))void memory.recover(agent);
+  });
   let scheduleSync;
   ctx.on('schedule/changed', () => {
     clearTimeout(scheduleSync);
@@ -257,6 +256,7 @@ export async function apply(ctx) {
       output: {
         schema: { type: 'object', additionalProperties: true },
         render: (_args, value) => renderModelResult(value,
+          ['business_search','business_read','business_read_many','get_research_briefing_context'].includes(spec.name) ? 45000 :
           ['knowledge_search','document_read','document_outline','table_read','private_document_search',
             'private_document_read','private_document_outline','evidence_read','evidence_context'].includes(spec.name)
             ? catalog.max_tool_characters : undefined),
@@ -279,7 +279,10 @@ export async function apply(ctx) {
           result=await folders.materialize(execution,result);
           if(result.folder_dispatch)void folders.sync(result.batch_id).catch(error=>ctx.logger.warn('Folder dispatch pending: %s',error.message));
         }
-        result = await materializeBusinessDataset(ctx, execution, result);
+        if (!bound.automation || result.dataset || result.business_file)
+          result = await materializeBusinessDataset(ctx, execution, result);
+        if (spec.name === 'business_export_records' && !result.error)
+          result = {...result, workbook:await native.exportRecords(execution,result.dataset,result.business_export?.name)};
         if (spec.name === 'experiment_conversion') result = await prepareConversionResources(ctx, execution, result);
         if (result.activate_tools) bound.active_tools = [...new Set([...(bound.active_tools || []),
           ...result.activate_tools.filter(name => bound.tools.some(tool => tool.name === name))])];
@@ -291,7 +294,7 @@ export async function apply(ctx) {
       return Boolean(bound?.tools.some(tool => tool.name === spec.name) && bound.active_tools?.includes(spec.name));
     } }));
   }
-  installNativeToolGuard(ctx,{runs});
+  const alignNativeTools=installNativeToolGuard(ctx,{runs});
   ctx.effect(() => ctx.systemPrompt.section({ name: 'enterprise-policy', order: 0,
     interpolate: false, text: ({ agent }) => (runs.get(agent?.id)?.instructions || catalog.instructions) + '\n化学式和反应式使用 $ 或 $$ 内的 \\ce{...}。已知且有依据的分子结构使用 smiles 代码块，反应结构使用 reaction-smiles 代码块（反应物>试剂>产物）。不得猜测文献结构对应的 SMILES；不确定时展示原图并说明。绘图成功仅表示语法可解析，不代表原文结构核验。' }));
   ctx.effect(() => ctx.systemPrompt.context({ name: 'enterprise-business', order: 0, required: true,
@@ -304,7 +307,8 @@ export async function apply(ctx) {
       const profile = profileOf(agent);
       const restored = await business('restore', { session_id: agent.id, profile }, signal);
       if(restored.run?.automation)sessionAuthorities.set(agent.id,{background:true,turn:restored.run.dsh_turn});
-      if (restored.run) runs.set(agent.id, restored.run);
+      if (restored.run) {runs.set(agent.id, restored.run);alignNativeTools(agent,restored.run);}
+      if(restored.run?.status==='SUCCEEDED' && !restored.run.automation)await memory.capture(agent,restored.run);
       if (profile === 'agent' && restored.run?.pack_ids.includes('files')) {
         const messages = agent.session.snapshotEvents().filter(event=>event.type==='user/message').map(event=>event.data.message||event.data);
         await exposeFiles(agent, (await inputFiles(messages, signal)).files, signal);
@@ -353,6 +357,12 @@ export async function apply(ctx) {
       profile, request: text, attachments, ...(automation ? {automation} : {}) }, signal);
     const bound=mergeBinding(previous,current,hasInput);
     runs.set(agent.id, bound);
+    alignNativeTools(agent,bound);
+    // Tool resolution precedes native compaction. Archive the completed
+    // background period here, before compaction can summarize its old bodies
+    // into new high-sequence checkpoints. Fresh sessions still commit their
+    // initial period message at pre-step, after the system head exists.
+    if(bound.automation)beginBriefingPeriod({agent,turn:input.turn,signal},{kind:'enter',messages:[]});
     const waiting = pendingEvents.get(agent.id) || [];
     pendingEvents.delete(agent.id);
     for (const event of waiting)projection.push(agent.id,event);
@@ -399,6 +409,10 @@ export async function apply(ctx) {
   // jobs use Java's separate authorization, queue and result/usage persistence.
   // Title requests can precede the first Run and use their own session-bound budget.
   ctx.on('llm/stream', async function* (options, next) {
+    // An auxiliary checkpoint must summarize, never resume tool execution.
+    // Some compatible routes otherwise return a tool call with no summary,
+    // repeatedly charging the same history while leaving it uncompressed.
+    prepareCompactionRequest(options);
     const callId = randomUUID();
     const title = options.purpose === 'session-title';
     const bound = runs.get(options.sessionId);
@@ -410,15 +424,30 @@ export async function apply(ctx) {
     await business(title ? 'auxiliary-admit' : 'gate', request, options.signal);
     if(!title && !isFolderSession(options.sessionId)) await memory.guardRequest(options);
     const assembler = new BlockAssembler();
+    let contextTokens;
+    if(timing.enabled) {
+      try {
+        const session=ctx.agents.get(options.sessionId)?.session;
+        if(session)contextTokens=ctx.tokenMeter.measure(session).totalTokens;
+      } catch {} // Diagnostics must not change admission or model execution.
+    }
+    const modelStarted=performance.now(), modelStartedAt=Date.now();
+    let firstChunkMs;
     let completed = false;
     try {
       const agent=ctx.agents.get(options.sessionId);
       const downstream=agent ? ctx.fs.scopedAttachments(ctx.workingDirectory.get(agent.session),next()) : next();
-      const stream = ['report-review', 'evidence-score'].includes(options.purpose) || title
-        ? downstream : citationStream(researchWordingStream(downstream), bound.citation_links || {});
-      for await (const chunk of stream) { assembler.push(chunk); yield chunk; }
+      const stream = ['report-review', 'evidence-score', 'compaction'].includes(options.purpose) || title
+        ? downstream : nativeArgumentsStream(citationStream(researchWordingStream(downstream), bound.citation_links || {}));
+      for await (const chunk of stream) {
+        firstChunkMs ??= performance.now()-modelStarted;
+        assembler.push(chunk); yield chunk;
+      }
       completed = true;
     } finally {
+      timing.emit('model_request',{run_id:bound?.id,session_id:options.sessionId,call_id:callId,
+        purpose:request.purpose,started_at_ms:modelStartedAt,elapsed_ms:performance.now()-modelStarted,
+        first_chunk_ms:firstChunkMs,context_tokens:contextTokens,completed});
       // Cancellation may abort the inference signal; persist already observed
       // usage independently and let a metering outage leave the request pending.
       try { await business(title ? 'auxiliary-result' : 'model-result', {
@@ -459,11 +488,11 @@ export async function apply(ctx) {
       if (outputLimited.has(agent.id)) { await business('complete', input, signal); return; }
       const checked = await business('complete', {...input, check_only:true}, signal);
       if(checked.status==='FAILED' && checked.coverage && !checked.coverage.complete) {
-        const source='enterprise-briefing-coverage';
-        const corrected=agent.session.snapshotEvents().some(event=>event.type==='user/message' && event.data.source?.kind===source && event.data.source.turn===turn);
-        if(!corrected) {
-          agent.steer(createUserMessage({source:{kind:source,turn},content:[{type:'text',text:
-            '本期业务读取尚未完整。missing中带ref的条目请用business_read逐条读取该ref（overview可省略section）；重新调用get_research_briefing_context只会取得目录，不能补齐这些正文。带unread_index_count的条目沿next_request读取剩余索引页。同一实验缺少多个分区时，优先用business_read的section=record完整读取固定版本，仅记录过大时按next_offset分页。补齐后再整理完整正文；仍不可读取时说明具体错误，不补造结果。'+JSON.stringify(checked.coverage)}]}));
+        const source=briefingCoverageContinuation(checked.coverage,agent.session.snapshotEvents(),turn,bound.id);
+        if(source) {
+          agent.steer(createUserMessage({source,content:[{type:'text',text:
+            '本期业务读取尚未完整。连续调用business_read_many({})由服务端选取下一批未读固定记录及分页，无须复制ID。目录不能补齐正文。RELATED_ACTIVITY等剩余目录按pending_index_requests读取。逐项拒绝不能原样重试；按具体错误修正或说明阻断。补齐后再整理完整正文，不补造结果。'+JSON.stringify({...checked.coverage,
+              missing:checked.coverage.missing.slice(0,8),missing_count:checked.coverage.missing.length})}]}));
           return;
         }
       }
@@ -482,6 +511,7 @@ export async function apply(ctx) {
         }
       }
       const result = await business('complete', input, signal);
+      bound.status = result.status;
       if (result.status === 'FAILED') throw deliveryError(result);
       if (result.status === 'SUCCEEDED' && !isFolderSession(agent.id)) await memory.capture(agent,bound);
     }
@@ -489,7 +519,9 @@ export async function apply(ctx) {
   ctx.on('agent/error', ({ agent, error }) => {
     projection.flush(agent.id);streams.flush(agent.id);
     const bound = runs.get(agent.id);
-    if (bound) enqueue(agent.id, () => business('failure', { run_id: bound.id, session_id: agent.id,
+    // An activation error for a later Inbox delivery cannot fail an earlier
+    // terminal Run. Admission owns failures before the new binding exists.
+    if (bound?.status === 'RUNNING') enqueue(agent.id, () => business('failure', { run_id: bound.id, session_id: agent.id,
       epoch:bound.epoch,diagnostic:{code:error?.code,phase:'native-turn',message:error?.message},
       cancelled: cancelled.has(agent.id), error_code: error?.code }));
   });

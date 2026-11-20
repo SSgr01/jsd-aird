@@ -6,7 +6,8 @@ export function citationText(text, links) {
       return handles.map(id=>'[E:'+id+']').join('');
     const annotated=/^([eq][0-9a-f]{24})\s+(所在段落)$/.exec(body.trim());
     if(annotated && links[annotated[1]])return '[E:'+annotated[1]+'] '+annotated[2];
-    const id=body.trim();
+    const raw=body.trim();
+    const id=/^[0-9a-f]{24}$/.test(raw) && links['e'+raw] ? 'e'+raw : raw;
     return /^[eq][0-9a-f]{24}$/.test(id) && links[id] ? '[E:'+id+']' : original;
   });
   return text.replace(/\[E:([eq][0-9a-f]{24})\]|〔E:([eq][0-9a-f]{24})〕/g,(original,ascii,localized)=> {

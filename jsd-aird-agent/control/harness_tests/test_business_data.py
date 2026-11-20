@@ -34,6 +34,26 @@ async def test_background_material_reads_receive_only_server_frozen_project_scop
     assert calls[0]['report_project_ids'] == [project]
 
 
+async def test_record_export_batches_pinned_reads_and_never_submits_partial_sources():
+    calls = []
+    async def host(principal, action, args, run_id):
+        calls.append((action, args))
+        if args['ref']['id'] == 'denied':
+            raise HTTPException(403, 'ACCESS_DENIED')
+        return {'candidates': [{'text': '{}', 'ref': args['ref']}], 'reading': {'complete': True}}
+    context = ExecutionContext(SimpleNamespace(), {'id': 'run', 'pack_ids': ['business-data', 'files']}, {}, host)
+    refs = [{'type': 'EXPERIMENT', 'id': 'one', 'version_id': 'frozen'}, {'type': 'EXPERIMENT', 'id': 'two', 'revision': 'v2'}]
+    result = await business_pack().handlers['business_export_records'](context, {'refs': refs})
+    assert result['complete'] and len(result['candidates']) == 2 and result['business_export']['name'].endswith('.xlsx')
+    assert all(args['section'] == 'record' for _, args in calls)
+    assert [args['ref'] for _, args in calls] == refs
+    result = await business_pack().handlers['business_export_records'](context, {'refs': [refs[0], {'type': 'EXPERIMENT', 'id': 'denied'}]})
+    assert result['error'] == 'EXPORT_SOURCE_INCOMPLETE' and 'business_export' not in result
+    context.run['automation'] = {'builtin_id': 'experiment-review'}
+    with pytest.raises(HTTPException, match='CAPABILITY_NOT_AUTHORIZED'):
+        await business_pack().handlers['business_export_records'](context, {'refs': refs})
+
+
 async def test_compute_identity_is_server_owned_and_missing_identity_does_not_submit():
     calls = []
 
@@ -136,7 +156,7 @@ def test_discovered_business_material_keeps_files_and_page_coordinates_for_model
 
 def test_mutating_business_tools_are_discoverable_and_not_initially_activated():
     pack = business_pack()
-    assert pack.initial_tools == ("business_search",)
+    assert set(pack.initial_tools) == {"business_search", "business_read", "business_read_many", "business_export_records", "business_links", "business_query"}
     assert pack.mutations == {"run_prediction", "run_formula_design", "run_experiment_optimization",
                               "run_model_training", "activate_trained_model", "continue_experiment_optimization",
                               "experiment_conversion"}

@@ -19,9 +19,10 @@ final class AgentExperimentProjection {
     AgentExperimentProjection(ObjectMapper json) { this.json = json; }
 
     ObjectNode page(UUID id, ExperimentModels.Version version, JsonNode query) {
+        hasSelection(query); // Validate optional selectors consistently for every section.
         String section = query.path("section").asText("overview");
         if ("record".equals(section)) {
-            if (query.path("offset").asInt() != 0 || query.hasNonNull("sample_key") || query.hasNonNull("field_codes"))
+            if (query.path("offset").asInt() != 0 || hasSelection(query))
                 throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "完整实验读取不接受局部筛选，请使用分区分页");
             var full = json.createObjectNode().put("section", "record").put("complete", true);
             var overview = page(id, version, json.createObjectNode().put("section", "overview"));
@@ -58,7 +59,7 @@ final class AgentExperimentProjection {
         // columns belong to the explicit versioned read, not every search hit.
         if ("summary".equals(section)) return result.put("sample_count", model.path("sampleGroups").size());
         if ("content".equals(section)) {
-            if (query.hasNonNull("sample_key") || query.hasNonNull("field_codes"))
+            if (hasSelection(query))
                 throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "保存正文不接受样品或字段筛选，请按 offset/limit 分页");
             var document = savedDocument(version);
             var units = contentUnits(document);
@@ -132,9 +133,9 @@ final class AgentExperimentProjection {
             var issues = model.path("templateInstance").path("issues");
             if (issues.isArray()) result.set("data_issues", issues);
         } else {
-            String sample = query.path("sample_key").asText("");
+            String sample = query.path("sample_key").asText("").strip();
             var codes = new HashSet<String>();
-            if (query.has("field_codes") && (!query.path("field_codes").isArray() || query.path("field_codes").size() > 8))
+            if (query.hasNonNull("field_codes") && (!query.path("field_codes").isArray() || query.path("field_codes").size() > 8))
                 throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "field_codes 必须为不超过8个指标的数组");
             for (var code : query.path("field_codes")) codes.add(code.asText());
             var rows = rows(model, section, sample, codes);
@@ -191,7 +192,7 @@ final class AgentExperimentProjection {
             if (!codes.isEmpty() && !codes.contains(item.path("fieldCode").asText())) continue;
             if (!VALUE_SECTIONS.contains(section)) { rows.add(item); continue; }
             var header = json.createObjectNode();
-            for (var name : List.of("fieldCode", "materialCode", "materialName", "feedSequence", "testItem", "operation", "testStage", "unit", "testMethod", "testCondition", "baseMetric", "duplicateOf", "supplemental", "compositionBasis"))
+            for (var name : List.of("fieldCode", "name", "description", "materialCode", "materialName", "feedSequence", "testItem", "operation", "testStage", "unit", "testMethod", "testCondition", "baseMetric", "duplicateOf", "supplemental", "compositionBasis"))
                 if (item.has(name)) header.set(name, item.get(name));
             var field = definition.path("fields").path(item.path("fieldCode").asText());
             for (var name : List.of("label", "scope", "groupId", "semantic", "resultKind", "valueSource"))
@@ -214,6 +215,15 @@ final class AgentExperimentProjection {
         }
         rows.addAll(grouped.values());
         return rows;
+    }
+
+    private boolean hasSelection(JsonNode query) {
+        var sample = query.path("sample_key");
+        var fields = query.path("field_codes");
+        if (!sample.isMissingNode() && !sample.isNull() && !sample.isTextual()
+                || !fields.isMissingNode() && !fields.isNull() && !fields.isArray())
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "sample_key 必须为文本，field_codes 必须为数组");
+        return !sample.asText("").isBlank() || fields.isArray() && !fields.isEmpty();
     }
 
     private String sampleLabel(JsonNode model, JsonNode sample, int index) {

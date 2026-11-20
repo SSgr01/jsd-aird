@@ -49,13 +49,32 @@ class BusinessExistingDataTest {
                     var detail = json.valueToTree(error.detail());
                     assertThat(detail.path("code").asText()).isEqualTo("INVALID_TOOL_ARGUMENTS");
                     assertThat(detail.path("required_filters").toString()).isEqualTo("[\"project_id\"]");
-                    assertThat(detail.path("allowed_filters").toString()).isEqualTo("[\"project_id\"]");
+                    assertThat(detail.path("allowed_filters").toString()).isEqualTo("[\"project_id\",\"query\"]");
                     assertThat(detail.path("path").path(0).asText()).isEqualTo("filters");
                     assertThat(detail.path("rule").asText()).isIn("required", "unsupported_filter");
                     assertThat(detail.toString()).doesNotContain("UA-1117");
                 });
         }
         verifyNoInteractions(projects, experiments, retrieval);
+    }
+    @Test void projectRecordQueriesFilterAuthorizedPagesBeforeApplyingTheRequestedOffset() throws Exception {
+        when(projects.read(eq("list_project_tasks"),any())).thenAnswer(call->{
+            ObjectNode request=call.getArgument(1);
+            assertThat(request.has("query")).isFalse();
+            int cursor=request.path("offset").asInt();var page=json.createObjectNode();var rows=page.putArray("candidates");
+            for(int i=cursor;i<Math.min(25,cursor+20);i++) {
+                var row=candidate(i+1).put("text",i%2==0?"FR-318 交样":"其他任务");rows.add(row);
+            }
+            if(cursor==0)page.put("next_offset",20);return page;
+        });
+        var args=object("{\"type\":\"TASK\",\"offset\":9,\"limit\":3,\"filters\":{\"project_id\":\""+id(40)+"\",\"query\":\"FR-318\"}}");
+        var result=service.invoke("business_search",args);
+        assertThat(result.path("total").asInt()).isEqualTo(13);
+        assertThat(result.path("candidates").size()).isEqualTo(3);
+        assertThat(result.path("candidates").path(0).path("ref").path("id").asText()).isEqualTo(id(19).toString());
+        assertThat(result.path("candidates").path(2).path("ref").path("id").asText()).isEqualTo(id(23).toString());
+        assertThat(result.path("next_offset").asInt()).isEqualTo(12);
+        assertThat(args.path("filters").has("query")).isTrue();
     }
     @Test void structuredSearchUsesActualQueryTermsAndRechecksTheExactSourceOnRead()throws Exception{
         when(retrieval.structured(any())).thenAnswer(call->{

@@ -76,7 +76,7 @@ async def cached_host(runtime, principal, run, action, args):
     known_ids = set(current.get("evidence", {}))
     # Library reuse always goes through the host to verify the authorized window revision, without re-ranking.
     if (
-        entry
+        entry and not args.get("refresh")
         and ("outline" not in action or entry["metadata"].get("document_metadata"))
         and entry["metadata"].get("trace", {}).get("scope") != "AUTHORIZED_LIBRARY"
         and all(eid in current["evidence"] for group in entry["groups"].values() for eid in group["ids"])

@@ -74,6 +74,22 @@ export function standardPlugins(config) {
     if (row.id === 'skill-filesystem') return { ...row, name: pathToFileURL(resolve(config.plugin, 'src/skill-runtime.mjs')).href, config: {
       includeDefaultRoots: false, bundledSkillDir: resolve(config.plugin, 'skills'), watch: false,
     } };
+    if (row.id === 'compaction' && config.model?.provider && config.model?.id) return {...row,
+      config:row.config.map(child=>child.id==='compaction-basic' ? {...child,config:{...child.config,
+        modelPolicies:[{provider:config.model.provider,model:config.model.id,
+          // Leave room for the fixed system/tool header and one whole fresh
+          // business batch. A smaller threshold with a large retained tail
+          // repeatedly summarizes only the old summary without freeing space.
+          // The fixed header and a whole fresh receipt may themselves exceed
+          // the early threshold. Do not immediately summarize the new tiny
+          // checkpoint again; reconsider after the next real step advances.
+          thresholdRatio:0.06,retainTokens:1000,maxTokens:4096,compactionRetries:0}],
+      }} : child.id==='tool-result-pruner' ? {...child,config:{...child.config,
+        // Business bodies are bounded to 45k characters before delivery. The
+        // coding preset's 8k pruner would cut a newly returned body before its
+        // first model request, leaving invalid JSON and false read coverage.
+        thresholdChars:45000,
+      }} : child)};
     return row;
   });
 }
@@ -83,7 +99,7 @@ export function enterprisePatch(config) {
   const disabled = [
     'session-log-deepseek', 'session-telemetry-otel', 'desktop-product-telemetry', 'product-analytics',
     'plugin-manager', 'tool-plugin-manager', 'hmr',
-    'directory-picker', 'working-directory', 'fs-sandbox', 'bash-sandbox', 'pwsh-sandbox', 'terminal-controller', 'subprocess',
+    'directory-picker', 'working-directory', 'spill-local', 'fs-sandbox', 'bash-sandbox', 'pwsh-sandbox', 'terminal-controller', 'subprocess',
     'account-controller', 'mcp-manager', 'cordis-host-runner',
     'cordis-client-runner', 'cordis-inspect-providers', 'open-in-app',
     'session-log-download', 'subagent', 'agent-team', 'subagent-spawn-in-process',
@@ -95,6 +111,7 @@ export function enterprisePatch(config) {
     'ui-settings-shell', 'ui-settings-subagent', 'ui-settings-web-search', 'ui-settings-agent-loop',
     'ui-settings-session-log', 'ui-settings-plugin-inventory', 'ui-cordis', 'ui-agent-team', 'ui-subagent',
     'ui-sidebar-terminal', 'ui-open-in-app',
+    'repeat-tool-reminder',
     // One deployment-managed composition: keep its registry/runtime, hide the
     // picker, header label and settings roster that duplicate company experts.
     'ui-agent-preset',
@@ -103,7 +120,6 @@ export function enterprisePatch(config) {
   ];
   return [
     ...disabled.map(id => ({ id, disabled: true })),
-    { id: 'spill-local', name: resolve(config.plugin, 'src/spill-store.mjs') },
     { id: 'web', config: { searchProvider: 'enterprise-search', fetchProvider: 'http' } },
     { id: 'agent-default-model', config: { provider: config.model.provider || 'deepseek-official', model: config.model.id,
       ...(config.model.reasoning ? { reasoningEffort: config.model.reasoning } : {}) } },
@@ -139,6 +155,8 @@ export function enterprisePatch(config) {
       // Patch `name` qualifies the existing module; it cannot replace it.
       // Disable the original service and insert the enterprise implementation.
       { id: 'enterprise-working-directory', name: resolve(config.plugin, 'src/working-directory.mjs') },
+      { id: 'enterprise-read-progress-reminder', name: resolve(config.plugin, 'src/read-progress-reminder.mjs') },
+      { id: 'enterprise-spill-store', name: resolve(config.plugin, 'src/spill-store.mjs') },
       { id: 'preset-enterprise', name: '@deepseek-ai/dsh-agent-preset', config: {
         id: 'enterprise', name: '研发助手', description: '阅读资料、分析问题，联动授权研发数据完成任务', order: 1,
         plugins: standardPlugins(config),

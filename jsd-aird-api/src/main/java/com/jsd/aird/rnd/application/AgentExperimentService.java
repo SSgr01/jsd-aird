@@ -53,6 +53,11 @@ public class AgentExperimentService implements AgentExperimentFacade {
 
     private ExperimentModels.Version version(UUID id, UUID versionId) {
         detail(id);
+        return authorizedVersion(id, versionId);
+    }
+
+    /** The caller has already loaded and authorized this experiment in this operation. */
+    private ExperimentModels.Version authorizedVersion(UUID id, UUID versionId) {
         return repository.version(ActorContext.required().organizationId(), id, versionId)
             .orElseThrow(() -> new ApiException(ApiErrorCode.VERSION_CONFLICT, "实验版本不属于该实验或已不可用"));
     }
@@ -93,7 +98,7 @@ public class AgentExperimentService implements AgentExperimentFacade {
                 .skip(offset).limit(21).toList();
             for (var id : allowed.stream().limit(20).toList()) {
                 var item = detail(id);
-                candidates.add(candidate(id, version(id, item.currentVersionId()), item.summary().title(),
+                candidates.add(candidate(id, version(id, item.currentVersionId()), item.summary(),
                     json.createObjectNode().put("section", "summary")));
             }
             if (allowed.size() > 20) result.put("next_offset", offset + 20);
@@ -117,20 +122,25 @@ public class AgentExperimentService implements AgentExperimentFacade {
                 authorization.require(new PermissionCheck(actor.organizationId(), actor.userId(), "eln.view.download", "EXPERIMENT", id, "READ"));
             }
             var vid = uuid(args, "version_id");
-            candidates.add(candidate(id, version(id, vid == null ? item.currentVersionId() : vid), item.summary().title(), args));
+            var selectedVersion = authorizedVersion(id, vid == null ? item.currentVersionId() : vid);
+            candidates.add(candidate(id, selectedVersion, item.summary(), args));
             result.put("path", "/experiments/" + id);
             result.set("reading", candidates.get(0).path("reading"));
-            var batchSources=version(id,vid==null?item.currentVersionId():vid).editModel().path("batchSources");
+            var batchSources=selectedVersion.editModel().path("batchSources");
             if(batchSources.isArray())result.set("batch_sources",batchSources.deepCopy());
         } else throw new ApiException(ApiErrorCode.BAD_REQUEST);
         result.putObject("trace").put("kind", "AUTHORIZED_EXPERIMENT_RECORDS").put("read_at", Instant.now().toString());
         return result;
     }
 
-    private ObjectNode candidate(UUID id, ExperimentModels.Version version, String title, JsonNode query) {
+    private ObjectNode candidate(UUID id, ExperimentModels.Version version, ExperimentModels.Summary summary, JsonNode query) {
         var projection = new AgentExperimentProjection(json);
         var content = projection.page(id, version, query);
-        var summary = detail(id).summary();
+        var registration = json.createObjectNode().put("experiment_no", summary.experimentNo())
+            .put("title", summary.title()).put("owner_name", summary.ownerName());
+        if (summary.experimentDate() == null) registration.putNull("experiment_date");
+        else registration.put("experiment_date", summary.experimentDate().toString());
+        content.set("current_registration", registration);
         var relations = json.createObjectNode();
         var relationText = new StringBuilder("当前业务归属（当前记录关系，不代表历史版本归属；关联正文需另行授权读取）：\n");
         if (summary.projectId() == null) relationText.append("当前无所属项目。\n");
@@ -153,12 +163,14 @@ public class AgentExperimentService implements AgentExperimentFacade {
         for (var name : List.of("sample_key", "field_codes")) if (query.hasNonNull(name)) page.set(name, query.get(name));
         var source = json.createObjectNode().put("kind", "BUSINESS_RECORD").put("resource_type", "EXPERIMENT")
             .put("resource_id", id.toString()).put("document_id", id.toString()).put("version_id", version.id().toString())
-            .put("source_node_key", "EXPERIMENT:" + id + ":" + version.id() + ":" + canonical.hash(page)).put("title", title)
+            .put("source_node_key", "EXPERIMENT:" + id + ":" + version.id() + ":" + canonical.hash(page)).put("title", summary.title())
             .put("content_sha256", canonical.hashText(text));
         if (summary.projectId() != null) source.put("project_id", summary.projectId().toString());
         source.putObject("anchor").put("experimentId", id.toString()).put("versionId", version.id().toString())
             .put("versionNo", version.versionNo()).put("version_hash", canonical.hash(version.editModel())).set("page", page);
-        var result = json.createObjectNode().put("text", text).put("model_text", relationText + projection.modelText(content));
+        var result = json.createObjectNode().put("text", text).put("model_text", relationText
+            + com.jsd.aird.shared.business.BusinessViews.modelMarkdown("当前实验登记（日期为登记日期，不代替具体测定日期）", registration)
+            + "\n" + projection.modelText(content));
         var reading = result.putObject("reading").put("section", content.path("section").asText()).put("offset", content.path("offset").asInt());
         for (var key : List.of("section_counts", "next_offset", "total", "returned", "complete", "content_notice")) if (content.has(key)) reading.set(key, content.get(key));
         result.set("source", source); return result;
@@ -169,8 +181,9 @@ public class AgentExperimentService implements AgentExperimentFacade {
                 || !"EXPERIMENT".equals(source.path("resource_type").asText())) throw new ApiException(ApiErrorCode.BAD_REQUEST);
         var id = UUID.fromString(source.path("resource_id").asText());
         var vid = UUID.fromString(source.path("version_id").asText());
-        var record = version(id, vid);
-        var authoritative = candidate(id, record, detail(id).summary().title(), source.path("anchor").path("page"));
+        var item = detail(id);
+        var record = authorizedVersion(id, vid);
+        var authoritative = candidate(id, record, item.summary(), source.path("anchor").path("page"));
         var expected = authoritative.path("source");
         // Original native evidence still checks its exact page body and excerpt.
         if (!source.path("anchor").has("version_hash")) ((ObjectNode)expected.path("anchor")).remove("version_hash");

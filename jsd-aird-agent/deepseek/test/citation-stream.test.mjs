@@ -5,7 +5,7 @@ const id='e'+'a'.repeat(24), links={[id]:{label:'原文·第3页',url:'https://e
 const original='事实 [E:'+id+']。';
 
 test('every citation split produces the same native Markdown and settled block',async()=>{
- for(const text of [original,original.replace('[E:','〔E:').replace(']','〕')]) {
+ for(const text of [original,original.replace('[E:','〔E:').replace(']','〕'),original.replace(id,id.slice(1))]) {
  for(let offset=0;offset<=text.length;offset++){
   async function* input(){
    yield {type:'text-delta',index:0,text:text.slice(0,offset)};
@@ -27,6 +27,7 @@ test('unknown handles and raw tool arguments remain unchanged',async()=>{
  assert.deepEqual(await Array.fromAsync(citationStream(input(),links)),[chunk]);
  assert.equal(citationText('[E:e'+'b'.repeat(24)+']',links),'[E:e'+'b'.repeat(24)+']');
  assert.equal(citationText('〔E:e'+'b'.repeat(24)+'〕',links),'〔E:e'+'b'.repeat(24)+'〕');
+ assert.equal(citationText('[E:'+'b'.repeat(24)+']',links),'[E:'+'b'.repeat(24)+']');
 });
 
 test('exact quote aliases use their authoritative evidence link across every stream split',async()=>{

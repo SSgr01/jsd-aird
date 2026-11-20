@@ -46,7 +46,7 @@ def diagnostics(run, text, reason):
     for item in available[:12]:
         source = item.get("source", {})
         anchor = source.get("anchor") or {}
-        shortlist.append({"evidence_id": item["evidence_id"], "title": source.get("title"),
+        shortlist.append({"evidence_id": item["evidence_id"], "citation": "[E:" + item["evidence_id"] + "]", "title": source.get("title"),
                           "page": anchor.get("page_no") or anchor.get("page") or
                           (anchor.get("original") or {}).get("page"),
                           "excerpt": (item.get("model_text") or item.get("text") or "")[:160]})

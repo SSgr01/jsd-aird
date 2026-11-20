@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {briefingDefaults,reconcileBriefings,NativeBriefings,beginBriefingPeriod,installBriefingPeriods} from '../../enterprise-plugin/src/briefings.mjs';
+import {briefingDefaults,reconcileBriefings,NativeBriefings,beginBriefingPeriod,installBriefingPeriods,pendingSessionEvents,briefingCoverageContinuation} from '../../enterprise-plugin/src/briefings.mjs';
 import {Session} from '../../../vendor/deepseek-harness/packages/core/session/lib/index.js';
 import {sessionFormatCatalog} from '../../../vendor/deepseek-harness/packages/session/session-format-catalog/lib/index.js';
 import {createUserMessage,createSystemMessage,LlmAdapter} from '../../../vendor/deepseek-harness/packages/llm/llm/lib/index.js';
@@ -14,6 +14,46 @@ function restore(session) {
   const artifact=reader.finish();
   return Session.create(session.id,artifact.events,artifact.header);
 }
+
+test('coverage continuation advances across batches but stops unchanged refusals after restore',()=>{
+  const events=[];
+  const pending=n=>({complete:false,missing:Array.from({length:n},(_,i)=>({ref:{type:'EXPERIMENT',id:String(i)},section:'overview'}))});
+  for(const count of [30,22,14,6]) {
+    const source=briefingCoverageContinuation(pending(count),events,7,'run');
+    assert.ok(source);
+    events.push({type:'user/message',data:{source}});
+    assert.equal(briefingCoverageContinuation(pending(count),structuredClone(events),7,'run'),undefined);
+  }
+  assert.equal(briefingCoverageContinuation({complete:true,missing:[]},events,7,'run'),undefined);
+  assert.ok(briefingCoverageContinuation(pending(6),events,8,'next-run'));
+  // A large section can take many pages without changing the missing count.
+  for(const offset of [0,8,16,24]) {
+    const page={complete:false,missing:[{ref:{type:'EXPERIMENT',id:'large'},section:'content',offset}]};
+    const source=briefingCoverageContinuation(page,events,7,'run');
+    assert.ok(source);
+    events.push({type:'user/message',data:{source}});
+    assert.equal(briefingCoverageContinuation(page,events,7,'run'),undefined);
+  }
+});
+
+test('recovery unwraps projected events and stops at the durable cursor',async()=>{
+  const requests=[],pages=[
+    {hasMore:true,records:[{event:{seq:8,type:'turn/end'}},{event:{seq:7,type:'assistant/message'}}]},
+    {hasMore:true,records:[{event:{seq:6,type:'tool/result'}},{event:{seq:5,type:'tool/call'}}]},
+  ];
+  const controller={events:async request=>{requests.push(request);return pages.shift();}};
+  const events=await pendingSessionEvents(controller,'session',5,new AbortController().signal);
+  assert.deepEqual(events.map(event=>event.seq),[6,7,8]);
+  assert.deepEqual(requests.map(request=>request.beforeSeq),[undefined,7]);
+  assert.equal(events.at(-1).type,'turn/end');
+});
+
+test('recovery rejects invalid or stalled event pages before sending a bad cursor',async()=>{
+  let calls=0;
+  await assert.rejects(pendingSessionEvents({events:async()=>{calls++;return {hasMore:true,records:[{event:{seq:NaN}}]};}},'session',-1),/SESSION_EVENT_CURSOR_INVALID/);
+  assert.equal(calls,1);
+  await assert.rejects(pendingSessionEvents({events:async()=>({hasMore:true,records:[{event:{seq:7}}]})},'session',-1),/SESSION_EVENT_CURSOR_STALLED/);
+});
 
 test('defaults use Beijing weekdays and readable business instructions',()=>{
   assert.deepEqual(briefingDefaults.map(task=>[task.time,task.weekdays]),[

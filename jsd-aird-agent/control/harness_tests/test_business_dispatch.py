@@ -135,6 +135,39 @@ async def invoke(service, principal, run, name, args, call_id=None):
     return await service.tool(principal, run["id"], run["epoch"], call_id or str(uuid4()), name, args, native=name == "dsh_execute")
 
 
+async def test_repeated_publication_page_reuses_body_but_reauthorizes_each_call(setup, principal):
+    service, host, run, _ = setup
+    args = {**host.document, "offset": 0}
+    first = await invoke(service, principal, run, "document_read", args)
+    second = await invoke(service, principal, run, "document_read", args)
+    assert first["candidates"][0]["evidence_id"] == second["candidates"][0]["evidence_id"]
+    assert first["candidates"][0]["source"] == second["candidates"][0]["source"]
+    assert len([call for call in host.calls if call[0] == "document_read"]) == 1
+    assert len([call for call in host.calls if call[0] == "authorize_sources"]) >= 2
+    host.denied = True
+    with pytest.raises(HTTPException, match="TEST_ACCESS_REVOKED"):
+        await invoke(service, principal, run, "document_read", args)
+
+
+async def test_explicit_identical_refusal_does_not_repeat_host_read(setup, principal):
+    from aird_agent.hosts.jsd.host import HostToolError
+    service, host, run, _ = setup
+    original = host.call
+    reads = []
+    async def call(user, action, args, rid=None):
+        if action == "document_read":
+            reads.append(args)
+            raise HostToolError(422, "INVALID_TOOL_ARGUMENTS", "修正字段", repair={"path": ["offset"]})
+        return await original(user, action, args, rid)
+    host.call = call
+    args = {**host.document, "offset": 0}
+    first = await invoke(service, principal, run, "document_read", args)
+    second = await invoke(service, principal, run, "document_read", args)
+    assert first["error_code"] == "INVALID_TOOL_ARGUMENTS"
+    assert second["repeated_request"] and second["repair"] == first["repair"]
+    assert len(reads) == 1
+
+
 async def test_shared_numeric_check_uses_authorized_ledger_and_rechecks_access_on_replay(setup, principal):
     service, host, run, _ = setup
     discovered = await invoke(service, principal, run, "tool_search", {"query": "quantity_check"})
@@ -555,12 +588,22 @@ async def test_unified_business_reads_register_full_proof_and_expose_only_compac
     assert current["evidence"][candidate["evidence_id"]]["text"] == text
     assert model_result(result)["candidates"][0]["text"] == "数值和状态见rows"
     assert result["rows"] == [{"mass": 0, "measured": None}]
+    batch = await invoke(service, principal, run, "business_read_many", {"requests": [{
+        "ref": {"type": "CUSTOMER", "id": resource, "section": "content"}, "revision": "1"}]}, "repaired-batch")
+    assert {repair["rule"] for repair in batch["argument_repairs"]} == {"move_to_ref", "move_to_read"}
+    async with store.pool.connection() as conn:
+        saved = await (await conn.execute("SELECT arguments FROM agent_runtime.harness_calls WHERE run_id=%s AND call_id=%s",
+            (run["id"], "repaired-batch"))).fetchone()
+    assert saved["arguments"] == {"requests": [{"ref": {"type": "CUSTOMER", "id": resource, "revision": "1"}, "section": "content"}]}
     other = Principal(organization_id=uuid4(), actor_id=uuid4(), auth_version=1, username="another", role="USER")
     with pytest.raises(HTTPException):
         await store.get(other, "run", run["id"])
     host.denied = True
     with pytest.raises(HTTPException, match="TEST_ACCESS_REVOKED"):
         await invoke(service, principal, run, "business_read", {"ref": candidate["ref"]})
+    with pytest.raises(HTTPException, match="TEST_ACCESS_REVOKED"):
+        await invoke(service, principal, run, "business_read_many", {"requests": [{
+            "ref": {"type": "CUSTOMER", "id": resource, "section": "content"}, "revision": "1"}]})
 
 
 async def test_compute_lost_response_uses_the_native_call_receipt_without_replaying(setup, principal, store):
@@ -1009,6 +1052,12 @@ async def test_unknown_acquisition_is_reconciled_by_inspection_without_a_second_
         await invoke(service, principal, run, "literature_acquire", args, "acquire-2")
     reconciled = await reconcile(service, principal, run["id"], "acquire-1")
     assert reconciled["outcome"] == "CONFIRMED_SUCCEEDED" and not reconciled["replayed"]
+    # A simultaneous native delivery readback can arrive after background
+    # reconciliation has committed. Return its settled result without a write.
+    host_calls = len(host.calls)
+    again = await reconcile(service, principal, run["id"], "acquire-1")
+    assert again["outcome"] == "CONFIRMED_SUCCEEDED" and not again["replayed"]
+    assert len([call for call in host.calls[host_calls:] if call[0] == "literature_acquire_status"]) == 0
     status = await invoke(service, principal, run, "literature_acquire_status", args)
     assert status["status"] == "PARSING" and "activate_tools" not in status
     assert len(downloads) == 1

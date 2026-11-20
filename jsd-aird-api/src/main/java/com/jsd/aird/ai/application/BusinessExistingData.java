@@ -35,7 +35,7 @@ public class BusinessExistingData {
             case "PROJECT" -> Set.of("query", "customer_id");
             case "EXPERIMENT" -> Set.of("query", "project_id");
             case "STRUCTURED_DATA" -> Set.of("query", "file_name", "record_terms", "field_terms", "mode");
-            default -> Set.of("project_id");
+            default -> Set.of("project_id", "query");
         };
     }
     public Set<String> requiredFilters(String type) { return Set.of("STAGE", "TASK", "REQUIREMENT", "MATERIAL").contains(type) ? Set.of("project_id") : Set.of(); }
@@ -53,6 +53,8 @@ public class BusinessExistingData {
         for (var field : requiredFilters(type)) if (!filters.hasNonNull(field)) throw BusinessDataService.invalidFilter(
             filters(type), requiredFilters(type), field, "required", "缺少必要筛选字段：" + field);
         int offset = BusinessDataService.offset(args), limit = BusinessDataService.limit(args);
+        if (Set.of("STAGE", "TASK", "REQUIREMENT", "MATERIAL").contains(type)
+                && !filters.path("query").asText("").isBlank()) return filteredProjectRecords(args, filters, offset, limit);
         if ("STRUCTURED_DATA".equals(type)) {
             var full = execute(action, args); var selected = json.createArrayNode(); var all = full.path("candidates");
             for (int i = offset; i < Math.min(all.size(), offset + limit); i++) selected.add(all.path(i));
@@ -77,6 +79,28 @@ public class BusinessExistingData {
             pageOffset = next;
         }
         response.set("candidates", selected); return response;
+    }
+    private ObjectNode filteredProjectRecords(ObjectNode args, ObjectNode filters, int offset, int limit) {
+        if (!filters.path("query").isTextual() || filters.path("query").asText().length() > 1000)
+            throw BusinessDataService.invalidFilter(filters(args.path("type").asText()), Set.of("project_id"), "query", "type", "查询必须为不超过1000字的文本");
+        String query=filters.path("query").asText().strip().toLowerCase(Locale.ROOT);
+        var found=json.createArrayNode();ObjectNode response=null;int cursor=0,scanned=0;
+        while (true) {
+            var request=args.deepCopy().put("offset",cursor);request.remove("query");
+            if(request.path("filters").isObject())((ObjectNode)request.path("filters")).remove("query");
+            var page=execute("business_search",request);if(response==null)response=page.deepCopy();
+            for(var candidate:page.path("candidates")) {
+                if(++scanned>5000)throw new ApiException(ApiErrorCode.BAD_REQUEST,"项目记录超过5000条，请缩小查询范围");
+                // The domain reader authorizes records before any content is inspected.
+                if((candidate.path("text").asText()+" "+candidate.path("model_text").asText()).toLowerCase(Locale.ROOT).contains(query))found.add(candidate);
+            }
+            if(!page.has("next_offset"))break;
+            int next=page.path("next_offset").asInt();if(next<=cursor)throw new IllegalStateException("Non-progressing business page");cursor=next;
+        }
+        var selected=json.createArrayNode();for(int i=offset;i<Math.min(found.size(),offset+limit);i++)selected.add(found.get(i));
+        response.set("candidates",selected);response.put("total",found.size());response.remove("next_offset");
+        if(offset+limit<found.size())response.put("next_offset",offset+limit);
+        return response;
     }
     private ObjectNode execute(String action, ObjectNode args) {
         var ref = args.path("ref").isObject() ? (ObjectNode)args.path("ref") : json.createObjectNode();

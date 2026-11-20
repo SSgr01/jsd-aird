@@ -78,9 +78,10 @@ export class SandboxProcess {
         ...(typeof this.spec.stdio.stdin==='object'?{stdin:this.spec.stdio.stdin.data}:{}),
       }}).then(value=>{response=value;settled=true;},error=>{failure=error;settled=true;});
       let backlog=true, outputTerminal=false;
-      let recoveryStarted;
+      let recoveryStarted, idleDelay=200, previousStatus;
       while(!settled || backlog || !outputTerminal) {
         let output;
+        const previousBytes=this.streams.stdout.offset+this.streams.stderr.offset;
         try {
           output=await this.business('native-output',{...this.payload,
             stdout_offset:this.streams.stdout.offset,stderr_offset:this.streams.stderr.offset});
@@ -100,6 +101,8 @@ export class SandboxProcess {
           reconciled=output.reconciled_result;response=reconciled;failure=undefined;settled=true;
         }
         outputTerminal=terminal.has(output.status);
+        const progressed=previousBytes!==this.streams.stdout.offset+this.streams.stderr.offset || output.status!==previousStatus;
+        previousStatus=output.status;
         if(outputTerminal)this.quiescent=true;
         const uncertain=output.status==='UNKNOWN' || (!settled && outputTerminal)
           || response?.requires_reconciliation || failure && transientControlError(failure);
@@ -114,7 +117,11 @@ export class SandboxProcess {
           if(terminal.has(response.receipt?.status))this.quiescent=true;
           throw new Error(response.error);
         }
-        if((!settled || !outputTerminal) && !backlog)await delay(uncertain?1000:200);
+        // Quiet commands need no five-per-second authorization/readback loop.
+        // Drain available bytes immediately; activity resets the delay, while
+        // cancellation still reaches the broker through the abort listener.
+        idleDelay=progressed?200:Math.min(1000,idleDelay*2);
+        if((!settled || !outputTerminal) && !backlog)await delay(uncertain?1000:idleDelay);
       }
       if(!reconciled)await submitted;
       if(failure && !reconciled)throw failure;

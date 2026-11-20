@@ -25,6 +25,18 @@ def policy(settings):
     return bindings
 
 
+def test_persisted_business_runs_activate_registered_readers_without_exposing_other_tools(settings):
+    bindings = policy(settings)
+    service = SimpleNamespace(bindings=bindings, settings=settings, tools_for=bindings.tools_for,
+        instructions_for=bindings.instructions_for)
+    run = {"id": "run", "dsh_turn": 1, "epoch": 1, "pack_ids": ["core", "business-data"],
+           "pack_versions": bindings.packs.pin(["core", "business-data"]),
+           "active_tools": ["business_search", "removed_tool"]}
+    projected = binding_projection(service, run, {}, "{}")
+    assert {"business_search", "business_read", "business_read_many"} <= set(projected["active_tools"])
+    assert "removed_tool" not in projected["active_tools"]
+
+
 @pytest.mark.parametrize("selected", [
     ["core"], ["core", "literature"], ["core", "files"], ["core", "project-readonly"],
     ["core", "literature", "files", "project-readonly"],
@@ -46,6 +58,15 @@ def test_jsd_delivers_shared_file_and_only_selected_capability_guidance(settings
 def test_legacy_runs_keep_literature_guidance_and_shared_rules(settings):
     prompt = policy(settings).instructions_for({})
     assert ANSWER_INSTRUCTIONS in prompt and LITERATURE_INSTRUCTIONS in prompt
+
+
+def test_background_binding_uses_the_frozen_pending_read_path_without_changing_foreground(settings):
+    bindings = policy(settings)
+    run = {"pack_ids": ["core", "business-data"]}
+    assert "不手抄各条ID" not in bindings.instructions_for(run)
+    background = bindings.instructions_for({**run, "automation": {"builtin_id": "research-weekly"}})
+    assert "连续调用business_read_many({})" in background
+    assert "remaining_requests表示尚未送达，不是读取失败" in background
 
 
 @pytest.mark.parametrize("sandbox_enabled", [False, True])

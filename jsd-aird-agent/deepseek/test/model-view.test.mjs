@@ -5,9 +5,10 @@ import { presentation, modelResult, renderModelResult } from '../../enterprise-p
 test('business discovery retains original-file selection and saved-content page ranges',()=>{
   const files=[{file_id:'source',name:'固化条件.docx',content_type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',bytes:100,sha256:'fixed'}];
   const reading={section:'content',offset:20,returned:20,total:41,next_offset:40};
-  const value=modelResult({candidates:[{ref:{type:'PROJECT_DOCUMENT',id:'doc'},source:{kind:'BUSINESS_RECORD',resource_type:'PROJECT_DOCUMENT'},text:'已保存正文',files,reading}]});
+  const value=modelResult({candidates:[{ref:{type:'PROJECT_DOCUMENT',id:'doc'},source:{kind:'BUSINESS_RECORD',resource_type:'PROJECT_DOCUMENT'},text:'已保存正文',files,reading,available_relations:['所属项目','品管记录']}]});
   assert.deepEqual(value.candidates[0].files,files);
   assert.deepEqual(value.candidates[0].reading,reading);
+  assert.deepEqual(value.candidates[0].available_relations,['所属项目','品管记录']);
 });
 
 test('optimization candidates retain identities, inputs and predictions on the model path', () => {
@@ -43,6 +44,7 @@ test('readable source projection keeps the handles needed to continue reading th
   assert.equal(value.candidates[0].document_ref,value.document_sources[0].ref);
   assert.equal(value.candidates[0].page,3);
   assert.equal(value.candidates[0].text,'Sample B: 12 kPa at 25 °C');
+  assert.equal(value.candidates[0].citation,'[E:e1]');
   assert.ok(!JSON.stringify(value).includes('ledger-only'));
 });
 
@@ -92,6 +94,7 @@ test('search hits deliver each canonical body once and retain sample, condition 
     quote_offset:2,quote_count:8,table_context:{header_node_keys:['header']},requires_read:true,
   }]});
   assert.equal(value.hits[0].text,'Sample A: 12.38 HZ after 2000 cycles; PET substrate.');
+  assert.equal(value.hits[0].citation,'[E:e1]');
   assert.equal(value.hits[0].quote_id,'q1');
   assert.equal(value.document_sources[0].publication_id,'fixed');
   assert.equal(value.hits[0].document_ref,value.document_sources[0].ref);

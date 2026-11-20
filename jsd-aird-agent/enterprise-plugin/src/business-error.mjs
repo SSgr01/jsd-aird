@@ -45,7 +45,12 @@ export async function businessError(response) {
   if (detail?.code === 'INVALID_TOOL_ARGUMENTS') {
     const safe = {code: detail.code, path: detail.path, rule: detail.rule,
       expected: detail.expected, unexpected_fields: detail.unexpected_fields};
-    return new Error(prefix + ': ' + JSON.stringify(safe).slice(0, 2000));
+    return Object.assign(new Error(prefix + ': ' + JSON.stringify(safe).slice(0, 2000)
+      + '；按规则修正一次，明确拒绝的相同参数不要重试。'),{code:detail.code,status:response.status,repair:safe});
+  }
+  if(detail?.code==='TOOL_NOT_AVAILABLE') {
+    return Object.assign(new Error('工具不可用；立即通过 tool_search 按准确工具名重新发现一次，仍不可用则说明阻断。'),
+      {code:detail.code,status:response.status});
   }
   return new Error(prefix);
 }

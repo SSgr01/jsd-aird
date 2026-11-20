@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import HTTPException
+from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
@@ -13,10 +14,17 @@ from .contracts import Principal, digest
 from .stage_timing import measure
 
 
+class TimedConnection(AsyncConnection):
+    async def execute(self, *args, **kwargs):
+        with measure("db_query_ms"):
+            return await super().execute(*args, **kwargs)
+
+
 class Store:
     def __init__(self, dsn: str):
         self.pool = AsyncConnectionPool(
-            dsn, open=False, min_size=1, max_size=12, kwargs={"autocommit": True, "row_factory": dict_row}
+            dsn, open=False, min_size=1, max_size=12, connection_class=TimedConnection,
+            kwargs={"autocommit": True, "row_factory": dict_row}
         )
 
     async def migrate(self):

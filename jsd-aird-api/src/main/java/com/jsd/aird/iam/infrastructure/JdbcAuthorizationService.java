@@ -52,6 +52,12 @@ public class JdbcAuthorizationService implements AuthorizationService {
         }, developmentMode);
     }
 
+    private <T> T snapshot(String name, java.util.function.Supplier<T> load, Object... identity) {
+        var key = new java.util.ArrayList<Object>();
+        key.add(store); key.add(name); java.util.Collections.addAll(key, identity);
+        return com.jsd.aird.shared.security.AuthorizationReadScope.read(key, load);
+    }
+
     @Override
     public PermissionDecision check(PermissionCheck check) {
         var decision = checkExact(check);
@@ -71,11 +77,11 @@ public class JdbcAuthorizationService implements AuthorizationService {
         if (developmentMode) {
             return new PermissionDecision(true, check.permissionCode(), "ALLOW", "ALL", "DEVELOPMENT");
         }
-        var user = store.user(check.userId()).orElse(null);
+        var user = snapshot("user", () -> store.user(check.userId()), check.userId()).orElse(null);
         if (user == null || !check.organizationId().equals(user.organizationId()) || !"ACTIVE".equals(user.status())) {
             return PermissionDecision.denied(check.permissionCode());
         }
-        var definition = store.permissionDefinitions().stream()
+        var definition = snapshot("definitions", store::permissionDefinitions).stream()
                 .filter(item -> item.code().equals(check.permissionCode())).findFirst().orElse(null);
         if (definition == null) return PermissionDecision.denied(check.permissionCode());
 
@@ -96,7 +102,7 @@ public class JdbcAuthorizationService implements AuthorizationService {
     @Override
     public DataScopeResolver.ResolvedDataScope resolveScope(PermissionCheck check) {
         if (developmentMode) return DataScopeResolver.ResolvedDataScope.allow("ALL");
-        var user = store.user(check.userId()).orElse(null);
+        var user = snapshot("user", () -> store.user(check.userId()), check.userId()).orElse(null);
         if (user == null || !check.organizationId().equals(user.organizationId()) || !"ACTIVE".equals(user.status())) {
             return DataScopeResolver.ResolvedDataScope.deny("", "USER_NOT_ACTIVE");
         }
@@ -166,7 +172,7 @@ public class JdbcAuthorizationService implements AuthorizationService {
         var candidates = new java.util.ArrayList<String>();
         candidates.add(check.permissionCode());
         candidates.addAll(alternateCodes(check.permissionCode()));
-        var overrides = store.userOverrides(check.organizationId(), check.userId()).stream()
+        var overrides = snapshot("overrides", () -> store.userOverrides(check.organizationId(), check.userId()), check.organizationId(), check.userId()).stream()
                 .collect(Collectors.toMap(Binding::permissionCode, Function.identity(), (left, right) -> right));
         for (var code : candidates) {
             if (overrides.containsKey(code)) {
@@ -176,10 +182,10 @@ public class JdbcAuthorizationService implements AuthorizationService {
             }
         }
         if (binding == null && user.roleId() != null) {
-            var role = store.role(check.organizationId(), user.roleId()).orElse(null);
+            var role = snapshot("role", () -> store.role(check.organizationId(), user.roleId()), check.organizationId(), user.roleId()).orElse(null);
             if (role != null && role.enabled()) {
                 source = "ROLE:" + role.code();
-                var roleBindings = store.roleBindings(check.organizationId(), role.id());
+                var roleBindings = snapshot("roleBindings", () -> store.roleBindings(check.organizationId(), role.id()), check.organizationId(), role.id());
                 for (var code : candidates) {
                     binding = roleBindings.stream()
                             .filter(item -> item.permissionCode().equals(code)).findFirst().orElse(null);
@@ -301,9 +307,9 @@ public class JdbcAuthorizationService implements AuthorizationService {
     private BindingSelection v2Binding(PermissionCheck check, User user) {
         var roles = safeRoles(check.organizationId(), check.userId());
         var levelId = safeLevel(check.organizationId(), check.userId());
-        var operationOverrides = safeBindings(() -> store.userOperationOverrides(check.organizationId(), check.userId()));
-        var scopeOverrides = safeBindings(() -> store.userScopeOverrides(check.organizationId(), check.userId()));
-        var menuOverrides = store.userMenuOverrides(check.organizationId(), check.userId());
+        var operationOverrides = safeBindings(() -> snapshot("operations", () -> store.userOperationOverrides(check.organizationId(), check.userId()), check.organizationId(), check.userId()));
+        var scopeOverrides = safeBindings(() -> snapshot("scopes", () -> store.userScopeOverrides(check.organizationId(), check.userId()), check.organizationId(), check.userId()));
+        var menuOverrides = snapshot("menus", () -> store.userMenuOverrides(check.organizationId(), check.userId()), check.organizationId(), check.userId());
         var v2Active = !roles.isEmpty() || levelId != null || !operationOverrides.isEmpty()
                 || !scopeOverrides.isEmpty() || (menuOverrides != null && !menuOverrides.isEmpty());
         if (!v2Active) return new BindingSelection(null, "DEFAULT_DENY", false);
@@ -312,8 +318,8 @@ public class JdbcAuthorizationService implements AuthorizationService {
                 .filter(item -> item.permissionCode().equals(check.permissionCode()))
                 .filter(item -> check.menuKey() == null || check.menuKey().equals(item.menuKey()))
                 .findFirst().orElse(null);
-        var level = levelId == null ? null : store.permissionLevel(check.organizationId(), levelId).orElse(null);
-        var levelBinding = level == null ? null : store.permissionLevelBindings(check.organizationId(), level.id()).stream()
+        var level = levelId == null ? null : snapshot("level", () -> store.permissionLevel(check.organizationId(), levelId), check.organizationId(), levelId).orElse(null);
+        var levelBinding = level == null ? null : snapshot("levelBindings", () -> store.permissionLevelBindings(check.organizationId(), level.id()), check.organizationId(), level.id()).stream()
                 .filter(item -> item.permissionCode().equals(check.permissionCode()))
                 .filter(item -> check.menuKey() == null || item.menuKey() == null || check.menuKey().equals(item.menuKey()))
                 // The same atomic operation can be displayed on several menu rows.
@@ -328,7 +334,7 @@ public class JdbcAuthorizationService implements AuthorizationService {
                 : new Binding(levelBinding.permissionCode(), levelBinding.effect(), levelBinding.scopeType(), levelBinding.targetIds());
         var menuKeys = new LinkedHashSet<String>();
         roles.forEach(role -> {
-            var keys = store.roleMenus(check.organizationId(), role.id());
+            var keys = snapshot("roleMenus", () -> store.roleMenus(check.organizationId(), role.id()), check.organizationId(), role.id());
             if (keys != null) menuKeys.addAll(keys);
         });
         if (roles.isEmpty() && user.roleId() != null) {
@@ -379,12 +385,12 @@ public class JdbcAuthorizationService implements AuthorizationService {
     }
 
     private List<Role> safeRoles(java.util.UUID organizationId, java.util.UUID userId) {
-        var roles = store.userRoles(organizationId, userId);
+        var roles = snapshot("roles", () -> store.userRoles(organizationId, userId), organizationId, userId);
         return roles == null ? List.of() : roles;
     }
 
     private java.util.UUID safeLevel(java.util.UUID organizationId, java.util.UUID userId) {
-        var level = store.userPermissionLevel(organizationId, userId);
+        var level = snapshot("userLevel", () -> store.userPermissionLevel(organizationId, userId), organizationId, userId);
         return level == null ? null : level.orElse(null);
     }
 

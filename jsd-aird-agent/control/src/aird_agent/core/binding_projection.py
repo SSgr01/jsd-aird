@@ -16,7 +16,14 @@ def binding_projection(service, run, body, context):
     with measure("binding_projection_ms"):
         known = set(known)
         sources = {eid: value for eid, value in run.get("evidence", {}).items() if eid not in known}
-        values = {"tools": service.tools_for(run), "active_tools": run.get("active_tools", service.bindings.initial_tools(run)),
+        tools = service.tools_for(run)
+        allowed = {tool["name"] for tool in tools}
+        active = set(run.get("active_tools", service.bindings.initial_tools(run)))
+        if "business-data" in run.get("pack_ids", []):
+            from aird_agent.capabilities.business_data import business_pack
+            active.update(business_pack().initial_tools)
+        active = sorted(active & allowed)
+        values = {"tools": tools, "active_tools": active,
                   "instructions": service.instructions_for(run), "context": context}
         versions = {key: digest(value) for key, value in values.items()}
         return {"binding_protocol": 2, "id": run["id"], "dsh_turn": run["dsh_turn"], "epoch":run["epoch"],

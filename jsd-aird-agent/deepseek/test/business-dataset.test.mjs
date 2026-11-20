@@ -13,6 +13,26 @@ function fixture() {
     resolve:async(path,{cwd})=>({targetKey:cwd+'/'+path}),publish:async(path,content)=>writes.push({path,content})}};
   return {ctx,writes,dataset};
 }
+
+test('authorized record bodies become immutable native datasets without translating null or zero',async()=>{
+  const {ctx,writes}=fixture();
+  const text=JSON.stringify({section:'record',current_registration:{experiment_no:'ELN-001'},sections:{
+    testResults:[{records:[{testItem:'黏度',unit:'mPa·s',values:[{sample_key:'A',value:0},{sample_key:'B',value:null}]}]}]}});
+  const source={kind:'BUSINESS_RECORD',resource_type:'EXPERIMENT',resource_id:'experiment',version_id:'v1',
+    content_sha256:createHash('sha256').update(text).digest('hex')};
+  const input={candidates:[{source,text,evidence_id:'e1',model_text:'缺失'}]};
+  const result=await materializeBusinessDataset(ctx,{agent:{}},input);
+  const snapshot=JSON.parse(writes[0].content);
+  assert.deepEqual(snapshot.rows.map(row=>row.value),[0,null]);
+  assert.equal(snapshot.rows[1].registration.experiment_no,'ELN-001');
+  assert.deepEqual(snapshot.records[0].content,JSON.parse(text));
+  assert.equal(result.dataset.format,'business-records');
+  assert.match(result.analysis_hint,/null必须写成空白/);
+  assert.equal(input.dataset,undefined);
+  const count=writes.length;
+  await assert.rejects(materializeBusinessDataset(ctx,{agent:{}},{candidates:[{...input.candidates[0],text:text+' '}]}),/BUSINESS_RECORD_HASH_MISMATCH/);
+  assert.equal(writes.length,count);
+});
 test('Word originals retain their exact bytes in the native task directory',async()=>{
   const {ctx,writes}=fixture(),bytes=Buffer.from('PK\u0003\u0004word-original');
   const result=await materializeBusinessDataset(ctx,{agent:{}},{business_file:{name:'交付说明.docx',content_type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

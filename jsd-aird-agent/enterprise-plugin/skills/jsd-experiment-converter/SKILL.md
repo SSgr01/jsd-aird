@@ -5,6 +5,12 @@ description: 整理历史研发实验，按原文提取配方、工艺、多条�
 
 # JSD 实验记录转换
 
+## 已保存系统记录导出
+
+已有系统实验记录优先调用 business_export_records，将搜索返回的所有固定版本 ref 一次传入，收到 workbook.path 后 present 交付。无需运行下方历史转换流程。
+
+用户整理系统内已有实验记录、并非转换上传历史文件时，优先使用 business_search/read 返回的 business-records 数据文件。直接运行 `/usr/local/bin/python3 .business-data/export-records.py --input 本轮所有相关dataset.path --output 整理结果.xlsx`，再用 present 交付。脚本保留原值、空白、单位、方法、登记日期、草稿状态及出处，并逐值核对保存结果。不要手抄展示文字、编写另一个转换脚本或套用下方客户历史投料解释规则。只有用户明确需要标准模板转换时才进入以下流程。
+
 ## 本地历史资料先提取实验事实
 
 ### 历史资料已确认的整理口径

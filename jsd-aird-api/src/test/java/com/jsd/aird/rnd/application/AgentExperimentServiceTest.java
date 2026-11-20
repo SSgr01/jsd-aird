@@ -19,6 +19,54 @@ import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 
 class AgentExperimentServiceTest {
+    @Test void sourceChecksLoadAuthorizedExperimentOnceAndStillObserveEditsAndRevocation() {
+        var org = ActorContext.required().organizationId();
+        var model = json.createObjectNode().put("plan", "60℃保持2小时");
+        var detail = mock(ExperimentModels.Detail.class);
+        var summary = mock(ExperimentModels.Summary.class);
+        when(detail.summary()).thenReturn(summary); when(summary.title()).thenReturn("固化条件记录");
+        when(summary.experimentNo()).thenReturn("MG215-2611-F8-A");
+        when(detail.currentVersionId()).thenReturn(version);
+        when(repository.detail(org,experiment)).thenReturn(Optional.of(detail));
+        when(repository.version(org,experiment,version)).thenReturn(Optional.of(version(model)));
+        var result=service.read("get_experiment_record",json.createObjectNode()
+            .put("experiment_id",experiment.toString()).put("version_id",version.toString()).put("section","record"));
+        verify(repository,times(1)).detail(org,experiment);
+        var source=result.path("candidates").path(0).path("source");
+        clearInvocations(repository,authorization);
+        service.validateSource(source,null);
+        verify(repository,times(1)).detail(org,experiment);
+        verify(repository,times(1)).version(org,experiment,version);
+        verify(authorization,times(1)).require(any());
+        when(repository.version(org,experiment,version)).thenReturn(Optional.of(version(model.deepCopy().put("plan","80℃保持1小时"))));
+        assertThatThrownBy(()->service.validateSource(source,null)).isInstanceOf(ApiException.class)
+            .hasMessageContaining("已改变");
+        clearInvocations(repository,authorization);
+        doThrow(new ApiException(com.jsd.aird.shared.error.ApiErrorCode.DATA_SCOPE_DENIED))
+            .when(authorization).require(any());
+        assertThatThrownBy(()->service.validateSource(source,null)).isInstanceOf(ApiException.class);
+        verifyNoInteractions(repository);
+    }
+    @Test void emptySelectorsReadCompleteManualRecordsWithoutLosingNamesAndMethods() throws Exception {
+        var model = (ObjectNode)json.readTree("""
+            {"title":"MG-215","formulaItems":[{"name":"基础树脂","actualQty":95,"unit":"g"}],
+             "processSteps":[{"name":"固化","description":"60℃保持2小时"}],
+             "testResults":[{"name":"黏度","value":920,"unit":"mPa·s"}]}
+            """);
+        var projection = new AgentExperimentProjection(json);
+        var query = json.createObjectNode().put("section", "record").put("sample_key", "  ");
+        query.putArray("field_codes");
+        var whole = projection.page(experiment, version(model), query);
+        assertThat(whole.path("complete").asBoolean()).isTrue();
+        assertThat(projection.modelText(whole)).contains("基础树脂", "固化", "60℃保持2小时", "黏度", "920");
+        query.putNull("field_codes").putNull("sample_key");
+        assertThat(projection.page(experiment, version(model), query)).isEqualTo(whole);
+        query.putArray("field_codes").add("viscosity");
+        assertThatThrownBy(() -> projection.page(experiment, version(model), query)).isInstanceOf(ApiException.class);
+        query.put("field_codes", "invalid");
+        assertThatThrownBy(() -> projection.page(experiment, version(model), query.put("section", "overview")))
+            .isInstanceOf(ApiException.class);
+    }
     final ObjectMapper json = new ObjectMapper();
     final ExperimentDraftFacade drafts = mock(ExperimentDraftFacade.class);
     final JdbcTemplate jdbc = mock(JdbcTemplate.class);
@@ -79,12 +127,15 @@ class AgentExperimentServiceTest {
         var detail = mock(ExperimentModels.Detail.class);
         var summary = mock(ExperimentModels.Summary.class);
         when(detail.summary()).thenReturn(summary); when(summary.title()).thenReturn("实验记录");
+        when(summary.experimentNo()).thenReturn("MG215-2611-F8-A");
+        when(summary.experimentDate()).thenReturn(java.time.LocalDate.of(2026, 11, 18));
         when(detail.currentVersionId()).thenReturn(version);
         when(repository.detail(ActorContext.required().organizationId(), experiment)).thenReturn(Optional.of(detail));
         when(repository.version(ActorContext.required().organizationId(), experiment, version)).thenReturn(Optional.of(version(model)));
         var args = json.createObjectNode().put("experiment_id", experiment.toString()).put("version_id", version.toString())
             .put("section", "content").put("offset", 2).put("limit", 2);
         var result = service.read("get_experiment_record", args);
+        assertThat(result.path("candidates").path(0).path("model_text").asText()).contains("MG215-2611-F8-A", "2026-11-18");
         var source = result.path("candidates").path(0).path("source");
         service.validateSource(source, null);
         assertThat(result.path("reading").path("returned").asInt()).isEqualTo(2);

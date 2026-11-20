@@ -29,11 +29,14 @@ class BusinessService:
         from aird_agent.core.admission import RunAdmission
         self.admission = RunAdmission(self)
         self.tool_limits = {}
+        from aird_agent.core.read_cache import ReadCache
+        self.read_cache = ReadCache()
         bindings.attach(self)
 
 
-    async def authorized_topic(self, principal, run, *, execution=True):
-        return await self.bindings.authorized_topic(principal, run, execution=execution)
+    async def authorized_topic(self, principal, run, *, execution=True, history_checked=False):
+        return await self.bindings.authorized_topic(principal, run, execution=execution,
+            **({"history_checked": True} if history_checked else {}))
 
 
     async def host_call(self, principal, action, arguments=None, run_id=None):
@@ -89,21 +92,32 @@ class BusinessService:
                 spec = native_spec(name)
         else:
             spec = next((tool for tool in self.tools_for(run) if tool["name"] == name), None)
-        if not spec or not isinstance(call_id, str) or not 1 <= len(call_id) <= 200:
-            raise HTTPException(400, "Unknown tool or invalid call ID")
+        if not spec:
+            raise HTTPException(400, {"code": "TOOL_NOT_AVAILABLE", "recovery": "tool_search",
+                "query": name, "max_attempts": 1})
+        if not isinstance(call_id, str) or not 1 <= len(call_id) <= 200:
+            raise HTTPException(400, "INVALID_CALL_ID")
+        from aird_agent.core.tool_arguments import repair_read_arguments
+        from aird_agent.core.read_cache import READS
+        arguments, argument_repairs = repair_read_arguments(arguments, spec["parameters"],
+            allow_pending_batch=name == "business_read_many" and bool(run.get("automation")),
+            read_only=name in READS or name in {"business_read_many", "knowledge_search", "document_read", "document_outline", "table_read",
+                "private_document_search", "private_document_read", "private_document_outline"})
         try:
             validate(arguments, spec["parameters"])
         except ValidationError as error:
             # Describe the public contract, never echo submitted values or a schema traceback.
             detail = {"code": "INVALID_TOOL_ARGUMENTS", "path": list(error.absolute_path),
-                      "rule": error.validator, "expected": error.validator_value}
+                      "rule": error.validator, "expected": error.validator_value, "max_repair_attempts": 1}
             if error.validator == "additionalProperties" and isinstance(error.instance, dict):
                 detail["unexpected_fields"] = sorted(set(error.instance) - set(error.schema.get("properties", {})))[:20]
             raise HTTPException(422, detail) from None
-        if run.get("automation") and name in {"business_read", "business_search", "business_links"}:
+        if run.get("automation") and name in {"business_read", "business_search", "business_links", "business_read_many"}:
             from aird_agent.hosts.jsd.briefings import RESEARCH_TYPES
-            kind = arguments.get("type", arguments.get("ref", {}).get("type"))
-            if kind and kind not in RESEARCH_TYPES:
+            kinds = ([item.get("ref", {}).get("type") for item in arguments.get("requests", [])]
+                if name == "business_read_many" else arguments.get("types")
+                or [arguments.get("type", arguments.get("ref", {}).get("type"))])
+            if any(kind and kind not in RESEARCH_TYPES for kind in kinds):
                 raise HTTPException(403, "BACKGROUND_RESEARCH_ONLY")
         topic = await self.authorized_topic(principal, run)
         await self.bindings.authorize_tool(principal, rid, name, arguments)
@@ -124,6 +138,16 @@ class BusinessService:
                 if prior["status"] in {"SUCCEEDED", "FAILED"}:
                     return prior["result"]
                 raise HTTPException(409, "TOOL_RESULT_UNKNOWN: do not blindly replay")
+            # A new call ID must not replay an identical explicit refusal. Current
+            # topic/tool authority was checked above, even when returning this denial.
+            refused = await (await conn.execute(
+                "SELECT result FROM agent_runtime.harness_calls WHERE run_id=%s AND request_hash=%s "
+                "AND status='FAILED' AND result->>'error_code'=ANY(%s) ORDER BY updated_at DESC LIMIT 1",
+                (rid, request_hash, ["ACCESS_DENIED", "ARTIFACT_EXPORT_DENIED", "INVALID_TOOL_ARGUMENTS", "NOT_FOUND"]),
+            )).fetchone()
+            if refused:
+                return {**refused["result"], "repeated_request": True, "retryable": False,
+                    "recovery": "Use the returned repair once; do not repeat the same arguments."}
             if run.get("output_repair"):
                 self.bindings.authorize_repair_tool(run, name, arguments)
                 repair = run["output_repair"]
@@ -177,15 +201,21 @@ class BusinessService:
                 from aird_agent.hosts.jsd.native_files import native_artifact, native_execute
                 result = await (native_execute if name == "dsh_execute" else native_artifact)(self, principal, run, arguments, call_id)
             elif handler:
-                result = await handler(
-                    ExecutionContext(principal, run, topic, self.host_call, self, call_id), arguments
-                )
+                operation = lambda: handler(ExecutionContext(principal, run, topic, self.host_call, self, call_id), arguments)
+                # The business reader also serves batch/search hydration and
+                # owns its single-flight entry; do not await our own cache task.
+                result = await operation() if name == "business_read" else await self.read_cache.read(principal, run, name, arguments, operation,
+                    lambda result: self.validate_reused_read(principal, run, result))
                 result = await self.remember_sources(principal, run, result)
             else:
-                result = await self.dispatch(principal, run, topic, name, arguments, call_id)
+                result = await self.read_cache.read(principal, run, name, arguments,
+                    lambda: self.dispatch(principal, run, topic, name, arguments, call_id),
+                    lambda result: self.validate_reused_read(principal, run, result))
             registered_output = self.bindings.output_receipt(run, name, arguments, result)
             authority_result = result
             result = result if native else self.bounded_result(principal, run, result, call_id)
+            if argument_repairs:
+                result = {**result, "argument_repairs": argument_repairs}
         except Exception as exc:
             if not isinstance(exc, HTTPException):
                 logger.exception("Harness tool failed: %s", name)
@@ -206,6 +236,8 @@ class BusinessService:
                 result.update(self.bindings.error_info(exc))
         async with self.store.transaction(principal, rid) as conn:
             current = await self.store.get(principal, "run", rid, conn)
+            if name in self.mutation_tools(run) and (outcome == "UNKNOWN" or "error" not in result):
+                self.read_cache.invalidate()
             if not (native and name == "dsh_execute") and (
                 current["epoch"] != epoch
                 or current["status"] not in {"RUNNING", "WAITING_APPROVAL"}
@@ -220,6 +252,14 @@ class BusinessService:
                 links = citation_links(current.get("evidence", {}), self.settings.public_url, quote_aliases=True)
                 if links:
                     result = {**result, "citation_links": links}
+            if current.get("briefing_snapshot"):
+                from aird_agent.hosts.jsd.briefings import Briefings
+                if not result.get("error"):
+                    Briefings.record_read(current, name, arguments, authority_result or result)
+                if name in {"business_read", "business_read_many", "business_search"}:
+                    progress = Briefings.reading_progress(current)
+                    result = {"briefing_progress": progress, **result, "next_action": progress["next_action"]}
+                current = await self.store.update(principal, "run", current, conn)
             await conn.execute(
                 "UPDATE agent_runtime.harness_calls SET status=%s,result=%s,updated_at=now() WHERE run_id=%s AND call_id=%s",
                 (outcome or ("FAILED" if "error" in result else "SUCCEEDED"), Jsonb(result), rid, call_id),
@@ -231,11 +271,6 @@ class BusinessService:
                 current["active_tools"] = sorted(set(current.get("active_tools", self.bindings.initial_tools(current)))
                     | (set(result["activate_tools"]) & allowed))
                 current = await self.store.update(principal, "run", current, conn)
-            if current.get("briefing_snapshot"):
-                from aird_agent.hosts.jsd.briefings import Briefings
-                Briefings.record_read(current, name, arguments, authority_result or result)
-                current = await self.store.update(principal, "run", current, conn)
-                current = await self.store.get(principal, "run", rid, conn)
             if registered_output:
                 current.setdefault("registered_outputs", []).append(registered_output)
                 current.pop("completion", None)
@@ -282,6 +317,15 @@ class BusinessService:
     def bounded_result(self, principal, run, result, call_id):
         return self.bindings.bounded_result(principal, run, result, call_id)
 
+
+    async def validate_reused_read(self, principal, run, result):
+        # A previous read can be cached even if evidence registration failed.
+        # Authorize the cached sources themselves, not just the run's saved list.
+        sources = [item["source"] for key in ("candidates", "context_candidates")
+                   for item in result.get(key, []) if item.get("source")]
+        if sources:
+            await self.host_call(principal, "authorize_sources",
+                {"sources": self.bindings.authorization_sources(sources)}, run["id"])
 
     async def remember_sources(self, principal, run, result):
         return await self.bindings.remember_sources(principal, run, result)
@@ -620,9 +664,11 @@ class BusinessService:
         if run.get("automation"):
             from aird_agent.hosts.jsd.briefings import coverage
             reading = coverage(run.get("briefing_snapshot", {}))
+            if "budget_notice" in context and not reading["complete"]:
+                context["budget_notice"] = "本轮已接近执行预算。停止扩展本期范围外的检索和重读已有正文；优先用business_read_many({})取得冻结索引剩余必需正文和分页。正文未齐不能声称完成，也不能用阶段报告代替必需读取。后台在本会话交付正文，不另开计划、追问或文件流程；不补造结果。"
             context["briefing"] = {"task_type": run["automation"]["builtin_id"], "window": run["automation"]["window"],
                 "coverage": {**reading, "missing": reading["missing"][:20], "missing_total": len(reading["missing"])},
-                "policy": "先用get_research_briefing_context读完available_sections及分页，包含RELATED_ACTIVITY资料变化；历史索引不代表本期覆盖。本期只读。资料正文与原件按报告需要读取，项目business_links可展开当前关联资料；下载不代表已阅读。实验优先section=record，过大时按分区分页。未读完索引不能推进报告位置。"}
+                "policy": "先取得get_research_briefing_context，连续调用business_read_many({})读取服务端冻结索引的下一批正文及分页；相同空参数表示推进，不是重试。必需正文读齐后统一整理；RELATED_ACTIVITY目录仍按pending_index_requests读完。历史结果不代表本期覆盖。本期只读取并在会话内交付，不另开计划、追问或文件流程。关联资料及原件按报告需要读取，下载不代表阅读。未读齐不能推进报告位置。"}
         if body.get("binding_protocol") == 2:
             from aird_agent.core.binding_projection import binding_projection
             return binding_projection(self, run, body, json.dumps(context, ensure_ascii=False))
@@ -664,7 +710,7 @@ class BusinessService:
     async def gate_dsh(self, principal, body):
         run = await self.session_run(principal, body)
         if run.get("automation") and (body.get("kind") == "native-tool" or body.get("native_name")) and body.get("native_name") not in {
-                "skill", "todo_write", "ask_user_question", "enter_plan_mode", "exit_plan_mode", "get_goal", "create_goal", "update_goal",
+                "skill",
                 "read", "read_image", "glob", "grep"}:
             raise HTTPException(403, "BACKGROUND_READ_ONLY")
         await self.authorized_topic(principal, run)

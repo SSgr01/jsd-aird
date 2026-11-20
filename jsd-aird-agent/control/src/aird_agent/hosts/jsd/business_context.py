@@ -29,7 +29,7 @@ def version_conflict(error):
             and getattr(error, "tool_error", {}).get("error_code") == "VERSION_CONFLICT")
 
 
-async def authorize_history_snapshot(bindings, principal, previous):
+async def authorize_history_snapshot(bindings, principal, previous, *, authorized=None):
     """Re-read mutable records on a new turn; ACL failures always propagate.
 
     Old runs remain immutable. Only the evidence inherited by the new turn is
@@ -37,8 +37,25 @@ async def authorize_history_snapshot(bindings, principal, previous):
     forever or silently supply stale facts after a page edit.
     """
     request = await bindings.source_authorization(principal, previous, historical=True)
+    # This set belongs to one history request only. Include purpose so a
+    # historical briefing grant never substitutes for current-source access.
+    def key(source):
+        if (request.get("purpose") == "briefing-history" and source.get("kind") == "BUSINESS_RECORD"
+                and source.get("resource_type") in {"PROJECT", "STAGE", "TASK", "REQUIREMENT", "MATERIAL", "EXPERIMENT"}):
+            # Mirror Java authorizeBriefingHistory's permission target. It
+            # checks the readable record/version, not every old page/hash.
+            # This set lives only for the current history request.
+            return digest([request["purpose"], source["resource_type"], source.get("resource_id"),
+                           source.get("project_id"), source.get("version_id") if source["resource_type"] == "EXPERIMENT" else None])
+        return digest([request.get("purpose"), source])
+    if authorized is not None:
+        request = {**request, "sources": [source for source in request["sources"] if key(source) not in authorized]}
+        if not request["sources"]:
+            return previous
     try:
         await bindings.java(principal, "authorize_sources", request, previous["id"])
+        if authorized is not None:
+            authorized.update(key(source) for source in request["sources"])
         return previous
     except HTTPException as error:
         if not version_conflict(error) or request.get("purpose"):
@@ -47,6 +64,8 @@ async def authorize_history_snapshot(bindings, principal, previous):
     for source in request["sources"]:
         try:
             await bindings.java(principal, "authorize_sources", {"sources": [source]}, previous["id"])
+            if authorized is not None:
+                authorized.add(key(source))
             continue
         except HTTPException as error:
             if not version_conflict(error):
@@ -72,6 +91,8 @@ async def authorize_history_snapshot(bindings, principal, previous):
         if not candidates:
             raise HTTPException(409, "SOURCE_REFRESH_REQUIRED")
         await bindings.java(principal, "authorize_sources", {"sources": [item["source"] for item in candidates]}, previous["id"])
+        if authorized is not None:
+            authorized.update(key(item["source"]) for item in candidates)
         refreshed.extend(candidates)
         superseded.add(digest(source))
     snapshot = copy.deepcopy(previous)

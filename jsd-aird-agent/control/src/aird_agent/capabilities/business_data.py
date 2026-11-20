@@ -1,5 +1,8 @@
 """Small business contracts on the native harness; authority remains with Java."""
 
+import asyncio
+import json
+
 from fastapi import HTTPException
 
 from aird_agent.capabilities.definitions import STRING, tool
@@ -26,6 +29,14 @@ REFERENCE = {"type": "object", "properties": {
 PAGE = {"offset": {"type": "integer", "minimum": 0, "maximum": 100000},
         "limit": {"type": "integer", "minimum": 1, "maximum": 40}}
 FILTERS = {"type": "object", "additionalProperties": True}
+READ_PARAMETERS = {
+    "ref": REFERENCE, "section": STRING, "sample_key": STRING,
+    "page": {"type": "integer", "minimum": 1, "description": "图谱原始页码，配合section=page和include_file=true读取原图。"},
+    "include_file": {"type": "boolean"}, "file_id": STRING,
+    "field_codes": {"type": "array", "maxItems": 8, "items": STRING,
+        "description": "仅使用原记录返回的字段代码；实验record/content不传此项，登记日期和完整编号在current_registration。"}, **PAGE,
+    "refresh": {"type": "boolean", "description": "明确需要刷新本轮已读记录时为true。"},
+}
 EVIDENCE_REF = {"type": "object", "properties": {"evidence_id": STRING},
                 "required": ["evidence_id"], "additionalProperties": False}
 RESEARCH_BASIS = {"type": "array", "maxItems": 50, "items": {"type": "object", "properties": {
@@ -35,8 +46,11 @@ RESEARCH_BASIS = {"type": "array", "maxItems": 50, "items": {"type": "object", "
     **{key: STRING for key in ("conclusion", "applicability", "project_differences")},
 }, "required": ["source_ref", "variables", "conditions", "metrics", "pending_measurements",
                 "conclusion", "applicability", "project_differences"], "additionalProperties": False}}
-INSTRUCTIONS = """业务读取按查找→完整读取→真实关联展开。business_search不传type只返回可用类型及筛选字段，不执行名称查询；按required_filters补齐筛选。MATERIAL是项目资料，须先取得项目ID并传filters.project_id，不是按型号搜索的物料库。已标明不可用的模块不逐项重试，不绕过权限读取。
-query按连续文本匹配，使用一个明确编号或关键词，不把客户、型号和资料名称拼成一串；品管已知业务编号时，使用filters.business_no精确查找。搜索或关联返回files目录后，可沿ref用business_read获取指定file_id的原件；未请求原件时不能据此声称没有原件。
+INSTRUCTIONS = """业务读取按查找→完整读取→真实关联展开。business_search不传type只返回可用类型及筛选字段，不执行名称查询；按required_filters补齐筛选。目录不含正文，不能把取得目录说成查到了记录。产品型号不一定是原料编号：先并行查EXPERIMENT、RESEARCH_TEST与QUALITY_STANDARD，必要时查STRUCTURED_DATA及库存；RAW_MATERIAL零命中不能据此断言系统没有产品或实验资料。MATERIAL是项目资料，须先取得项目ID并传filters.project_id，不是按型号搜索的物料库。已标明不可用的模块不逐项重试，不绕过权限读取。
+查找命中不超过4条时会直接补齐授权正文；candidates中已有reading的正文直接使用。多条明确记录使用business_read_many批量传搜索返回的ref，不再用名称反复搜索。每项错误独立返回，失败不表示没有记录。读取相同固定版本或相同文献分页时复用本轮结果；需要最新状态时用refresh=true。
+参数错误按repair或公开schema修正一次；相同参数的明确拒绝不能原样重试。工具不存在时立即用tool_search按准确工具名重新发现一次，仍不可用就说明具体阻断，不改用反复搜索代替正文读取。权限拒绝、版本冲突、未知执行回执分别处理；用户确认不能替代系统回执。生成文件后直接present交付，成功登记前不能声称已有下载入口。
+query按连续文本匹配，使用一个明确编号或关键词，不把客户、型号和资料名称拼成一串。filters.business_no是单据编号的精确匹配，不是产品型号：查FR-318等产品型号用query，取得JC/COA/STD等完整业务编号后再精确匹配。按型号对相关类型查询均无资料时说明查过的范围与缺口，不继续拼接同义词、空格或更长词组尝试碰撞。搜索或关联返回files目录后，可沿ref用business_read获取指定file_id的原件；未请求原件时不能据此声称没有原件。
+业务任务先并行查直接相关类型；取得明确关联后沿ID或business_links读取，不再拼接多个名称反复搜索。生产单既有PRODUCTION_ORDER在线单据，也有PRODUCTION_UPLOAD上传单据，两类应一并查询。质量判定以已保存规格、结果和审核状态为依据；未取得的放行、签字、补测与物流时长保持未知，不编排半天、一天等承诺。
 沿搜索返回的ref读取具体修订；有next_offset时继续分页。关联只采用business_links返回的已确认关系，同名及相似批号只能作线索。
 品管、生产和研发资料的content为页面已保存正文，登记字段不能代替正文。大正文使用section=content，按reading中的offset、returned、total与next_offset读完；单元格原值、公式与数字格式保持区分。files仅为原文件目录，include_file=true按file_id下载原上传内容；有business_file.reading_path时用原生read阅读该文本投影，图片用read_image。文本投影不能代替内嵌图片和版式阅读。原件可能早于页面保存正文，不能相互替代。没有保存正文时按content_notice说明缺失，并按需要读取原件。
 项目business_links可发现会议纪要、项目文档、资料参考及关联业务资料。日报周报先读完RELATED_ACTIVITY及全部索引分页，再按报告需要展开正文、原文件和附件；发现目录、读取正文、下载原件与实际阅读附件是不同动作。不要求逐个附件全部读取。后台可阅读任务目录中的文件与大结果，不能运行脚本、修改文件或交付文件。
@@ -57,11 +71,162 @@ research_basis.source_ref使用source_refs中相同的{evidence_id:真实证据�
 本业务链正文、提示、工具说明和报告采用“实测、测定、评估、研发参考”等业务用词，避免“验收、测试、模拟、验证”；交叉折叠指标称“交叉评估”。仅两份标准模板的原名及原始证据保留原文。日报、周报和复盘全文留在当前对话，不另存项目文档。"""
 
 
+INSTRUCTIONS += """\n系统记录整理为Excel时，找到ref后直接调用business_export_records，把所有相关固定ref一次传入。该工具生成保留原值的表格并重新打开逐值核对；收到workbook.path后present交付。不要手写source_rows或转换脚本，不调用历史上传文件转换流程。
+空白或null只能说明未填写或缺失，除非原文明确记录，不能推断未测定、未执行或零值。没有重复性、允差或统计依据时，只说明数值差异，不能称合理波动、稳定或合格。日期字段保留原名称，登记日期不能改称测定日期。"""
+
+
+def report_project_ids(snapshot):
+    """Current context may belong to an indexed experiment without a project update."""
+    projects = set()
+    for entries in snapshot.get("sections", {}).values():
+        for item in entries:
+            ref = item.get("ref", {})
+            if ref.get("type") == "PROJECT":
+                projects.add(ref["id"])
+            if ref.get("project_id"):
+                projects.add(ref["project_id"])
+    return sorted(projects)
+
+
+def reading_size(result):
+    from aird_agent.evidence.presentation import model_result
+    return len(json.dumps(model_result(result), ensure_ascii=False, separators=(",", ":")))
+
+
+async def read_record(context, args, *, paginate=True):
+    payload = {key: value for key, value in args.items() if key != "refresh"}
+    if isinstance(payload.get("sample_key"), str):
+        payload["sample_key"] = payload["sample_key"].strip()
+    if not payload.get("sample_key"):
+        payload.pop("sample_key", None)
+    if not payload.get("field_codes"):
+        payload.pop("field_codes", None)
+    if payload.get("ref", {}).get("type") == "EXPERIMENT":
+        payload.setdefault("section", "record")
+    runtime = context.runtime
+    if runtime is not None and hasattr(runtime, "briefings"):
+        payload = runtime.briefings.read_request(context.run, payload)
+    if context.run.get("automation"):
+        snapshot = context.run.get("briefing_snapshot", {})
+        if not snapshot.get("frozen"):
+            raise HTTPException(409, "BACKGROUND_REPORT_SCOPE_REQUIRED: read get_research_briefing_context first")
+        payload["report_project_ids"] = report_project_ids(snapshot)
+    operation = lambda: context.host(context.principal, "business_read", payload, context.run["id"])
+    if runtime is not None and hasattr(runtime, "read_cache"):
+        result = await runtime.read_cache.read(context.principal, context.run, "business_read",
+            {**payload, **({"refresh": True} if args.get("refresh") else {})}, operation,
+            (lambda result: runtime.validate_reused_read(context.principal, context.run, result))
+            if hasattr(runtime, "validate_reused_read") else None)
+    else:
+        result = await operation()
+    if (paginate and payload.get("section") == "record" and payload.get("ref", {}).get("type") == "EXPERIMENT"
+            and reading_size(result) > 32000):
+        # Do not deliver a head/tail excerpt as a complete record. Its fixed
+        # overview supplies real section counts and subsequent page cursors.
+        return {**await read_record(context, {**args, "section": "overview"}, paginate=False),
+                "record_requires_paging": True,
+                "reading_notice": "完整记录超过本次正文容量，已返回同版本概览；按section_counts读取非空分区及分页，不能把概览当作读完正文。"}
+    return result
+
+
+async def read_many(context, requests, *, bounded=True):
+    limit = asyncio.Semaphore(4)
+    async def one(index, request):
+        async with limit:
+            try:
+                result = await read_record(context, request, paginate=bounded)
+                return {"index": index, "ref": request["ref"], "request": request, "result": result}
+            except HTTPException as error:
+                return {"index": index, "ref": request["ref"], "request": request, "error": str(error.detail),
+                        "status": error.status_code, **getattr(error, "tool_error", {})}
+    items = await asyncio.gather(*(one(i, req) for i, req in enumerate(requests)))
+    candidates, delivered, deferred = [], [], []
+    for position, item in enumerate(items):
+        result = item.pop("result", None)
+        if result is not None:
+            start = len(candidates)
+            item.update({key: value for key, value in result.items() if key != "candidates"})
+            proposed = [*candidates, *result.get("candidates", [])]
+            item["candidate_indexes"] = list(range(start, len(proposed)))
+            if bounded and reading_size({"items": [*delivered, item], "candidates": proposed}) > 36000:
+                if not delivered:
+                    delivered.append({"index": item["index"], "ref": item["ref"], "request": item["request"],
+                                      "error": "BUSINESS_PAGE_TOO_LARGE: 缩小分区或分页后读取正文。", "status": 422})
+                    deferred = requests[position+1:]
+                else:
+                    deferred = requests[position:]
+                break
+            candidates = proposed
+        delivered.append(item)
+    return {"items": delivered, "candidates": candidates,
+            "complete": not deferred and all("error" not in item for item in delivered),
+            **({"remaining_requests": deferred,
+                "reading_notice": "本批只包含已完整送达的正文，剩余请求未计入读取；继续remaining_requests，后台可直接business_read_many({})。"} if deferred else {})}
+
+
 def handler(name):
     async def invoke(context, args):
+        if name == "business_search" and args.get("types"):
+            if args.get("type"):
+                raise HTTPException(422, "BUSINESS_SEARCH_TYPE_CONFLICT: type与types只传一种。")
+            slots = asyncio.Semaphore(4)
+            async def search_one(kind):
+                request = {key: value for key, value in args.items() if key != "types"}
+                request.update(type=kind, read_records=False)
+                async with slots:
+                    try:
+                        return kind, request, await invoke(context, request)
+                    except HTTPException as error:
+                        return kind, request, {"error": str(error.detail), "status": error.status_code,
+                                              **getattr(error, "tool_error", {})}
+            searched = await asyncio.gather(*(search_one(kind) for kind in args["types"]))
+            candidates, searches, remaining = [], [], []
+            for kind, request, result in searched:
+                searches.append({"type": kind, "returned": len(result.get("candidates", [])),
+                    **{key: result[key] for key in ("total", "error", "error_code", "status", "repair", "resolution") if key in result},
+                    **({"next_request": {**request, "offset": result["next_offset"]}} if result.get("next_offset") is not None else {})})
+                for candidate in result.get("candidates", []):
+                    if reading_size({"candidates": [*candidates, candidate]}) <= 30000:
+                        candidates.append(candidate)
+                    elif candidate.get("ref"):
+                        remaining.append(candidate["ref"])
+            result = {"candidates": candidates, "searches": searches, "query_executed": True,
+                "searched_types": list(args["types"]), "lookup_complete": all(not result.get("error") for _, _, result in searched),
+                "records_complete": not remaining and all(not value.get("error") and value.get("next_offset") is None for _, _, value in searched),
+                "reading_notice": "联查结果逐类保留实际查询范围、命中和错误。空命中只代表这些范围没有匹配；受限和待分页不代表没有记录。不再换长词组重复查同一型号；未取得的企业信息列为资料缺口，先给有边界的分析。",
+                **({"remaining_refs": remaining} if remaining else {})}
+            refs = [candidate["ref"] for candidate in candidates if candidate.get("ref")]
+            if args.get("read_records", True) and 0 < len(refs) <= 4 and not remaining:
+                read = await read_many(context, [{"ref": ref, **({"refresh": True} if args.get("refresh") else {})} for ref in refs])
+                delivered = {item["index"] for item in read["items"] if "error" not in item}
+                result.update(candidates=[*read["candidates"], *[item for i, item in enumerate(candidates) if i not in delivered]],
+                    reads=read["items"], records_complete=result["records_complete"] and read["complete"]
+                        and not any(item.get("record_requires_paging") for item in read["items"]),
+                    **({"remaining_requests": read["remaining_requests"]} if read.get("remaining_requests") else {}))
+            return result
         if name == "get_research_briefing_context":
             return await context.runtime.briefings.context(context, args)
-        payload = dict(args)
+        if name == "business_read_many":
+            requests = args.get("requests")
+            if requests is None:
+                if not context.run.get("automation"):
+                    raise HTTPException(422, "BUSINESS_READ_REQUESTS_REQUIRED")
+                current = await context.runtime.store.get(context.principal, "run", context.run["id"])
+                requests = context.runtime.briefings.pending_reads(current)
+            result = await read_many(context, requests)
+            if context.run.get("automation"):
+                result["next_action"] = "本批正文已返回。继续调用business_read_many({})由服务端选择下一批未读固定记录；无requests仅用于后台继续本期读取。逐项错误先处理，不原样重试拒绝项。无剩余记录时整理正文。"
+            return result
+        if name == "business_export_records":
+            if context.run.get("automation") or "files" not in context.run.get("pack_ids", []):
+                raise HTTPException(403, "CAPABILITY_NOT_AUTHORIZED")
+            result = await read_many(context, [{"ref": ref} for ref in args["refs"]], bounded=False)
+            if not result["complete"]:
+                return {**result, "error": "EXPORT_SOURCE_INCOMPLETE", "retryable": False}
+            return {**result, "business_export": {"name": "业务记录.xlsx"}}
+        if name == "business_read":
+            return await read_record(context, args)
+        payload = {key: value for key, value in args.items() if key not in {"refresh", "read_records"}}
         if context.run.get("automation") and name in {"business_read", "business_search", "business_links"}:
             kind = args.get("type", args.get("ref", {}).get("type"))
             scoped = {"MEETING_MINUTES", "PROJECT_DOCUMENT", "PROJECT_REFERENCE", "QUALITY_UPLOAD", "PRODUCTION_UPLOAD", "RESEARCH_TEST", "RESEARCH_TEST_UPLOAD",
@@ -70,9 +235,7 @@ def handler(name):
                 snapshot = context.run.get("briefing_snapshot", {})
                 if not snapshot.get("frozen"):
                     raise HTTPException(409, "BACKGROUND_REPORT_SCOPE_REQUIRED: read get_research_briefing_context first")
-                payload["report_project_ids"] = sorted({item["ref"]["id"] for item in snapshot.get("sections", {}).get("PROJECT", [])})
-        if name == "business_read":
-            payload = context.runtime.briefings.read_request(context.run, payload)
+                payload["report_project_ids"] = report_project_ids(snapshot)
         if name in COMPUTATIONS:
             if not context.call_id:
                 raise HTTPException(409, "BUSINESS_CALL_ID_REQUIRED")
@@ -92,7 +255,23 @@ def handler(name):
                 ]
                 if any(item["source_ref"] not in payload.get("source_refs", []) for item in payload["research_basis"]):
                     raise HTTPException(422, "RESEARCH_BASIS_SOURCE_NOT_LINKED: include the same retrieved evidence_id in source_refs")
-        return await context.host(context.principal, name, payload, context.run["id"])
+        result = await context.host(context.principal, name, payload, context.run["id"])
+        if name == "business_search" and not args.get("type"):
+            query = args.get("query", args.get("filters", {}).get("query"))
+            if query:
+                result = {**result, "query_executed": False, "pending_query": query,
+                    "next_action": "这只是能力目录，尚未执行名称查询。按resource_types选择具体type；产品型号可并行查询EXPERIMENT、RESEARCH_TEST、QUALITY_STANDARD、STRUCTURED_DATA，不能只查RAW_MATERIAL后判定无资料。"}
+        if name == "business_search" and args.get("type") and args.get("read_records", True):
+            refs = [item["ref"] for item in result.get("candidates", []) if item.get("ref")]
+            if 0 < len(refs) <= 4 and not result.get("next_offset"):
+                read = await read_many(context, [{"ref": ref, **({"refresh": True} if args.get("refresh") else {})} for ref in refs])
+                returned = {item["index"] for item in read["items"] if "error" not in item}
+                failed = set(range(len(refs))) - returned
+                summaries = [item for i, item in enumerate(result.get("candidates", [])) if i in failed]
+                result = {**result, "candidates": [*read["candidates"], *summaries], "reads": read["items"],
+                          "records_complete": read["complete"] and not any(item.get("record_requires_paging") for item in read["items"]),
+                          **({"remaining_requests": read["remaining_requests"]} if read.get("remaining_requests") else {})}
+        return result
     return invoke
 
 
@@ -109,17 +288,27 @@ def business_pack():
             "project_refs": {"type": "array", "maxItems": 20, "items": {"type": "object", "properties": {
                 "type": {"const": "PROJECT"}, "id": STRING}, "required": ["type", "id"], "additionalProperties": False}}, **PAGE,
         }, ["task_type"]),
-        tool("business_search", "按权限查找业务对象。不传type返回可用类型和筛选字段；query按单个连续文本匹配。品管业务编号优先filters.business_no。返回ref和原文件目录，正文与下载继续用business_read。", {
-            "type": {"type": "string", "enum": READ_TYPES}, "query": STRING, "filters": FILTERS, **PAGE,
+        tool("business_search", "按权限查找业务对象。types可一次并行联查最多8类资料，逐类返回实际结果和错误；与type二选一。产品型号资料优先types=[EXPERIMENT,RESEARCH_TEST,QUALITY_STANDARD,RAW_MATERIAL,QUALITY_MANUAL,STRUCTURED_DATA]及准确query。不传type/types只返回能力目录。query是单个连续文本，不拆词。少量命中补齐固定正文。", {
+            "type": {"type": "string", "enum": READ_TYPES},
+            "types": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": True, "items": {"type": "string", "enum": READ_TYPES}},
+            "query": STRING, "filters": FILTERS, **PAGE,
+            "read_records": {"type": "boolean", "description": "默认补齐不超过4条命中的正文；仅需目录时为false。"},
+            "refresh": {"type": "boolean"},
         }),
         tool("business_read", "读取已保存正文及登记字段。大表格用section=content及offset/limit按next_offset读完。files是原文件目录，include_file=true下载原件；多个文件需指定file_id。原件可能早于保存正文，下载成功不代表已阅读。实验优先section=record，较大时按分区分页。", {
-            "ref": REFERENCE, "section": STRING, "sample_key": STRING,
-            "page": {"type": "integer", "minimum": 1, "description": "图谱原始页码；section=page且include_file=true取得该页图片，再用read_image实际看图。"},
-            "include_file": {"type": "boolean"},
-            "file_id": STRING,
-            "field_codes": {"type": "array", "maxItems": 8, "items": STRING}, **PAGE,
+            **READ_PARAMETERS,
         }, ["ref"]),
-        tool("business_links", "沿真实业务关联读取；先查看available_relations，再传relation选择一类。关联目标分别授权。", {
+        tool("business_read_many", "按固定ref批量读取正文，最多8条；每条单独授权，错误和分页分别返回。实验默认完整record。后台简报可传{}，服务端从本期冻结索引选择下一批未读记录及分页，无须复制ID；前台必须传requests。", {
+            "requests": {"type": "array", "minItems": 1, "maxItems": 8, "items": {
+                "type": "object", "properties": {key: value for key, value in READ_PARAMETERS.items() if key != "include_file"},
+                "required": ["ref"], "additionalProperties": False}},
+        }),
+        tool("business_export_records", "将已找到的固定实验记录直接整理为Excel，最多8条。平台批量读取正文、保留空白、零值、单位、方法、日期及出处，重新打开逐值核对后返回workbook.path；随后present交付。无需手写脚本或加载历史文件转换技能。", {
+            "refs": {"type": "array", "minItems": 1, "maxItems": 8, "items": {**REFERENCE,
+                "properties": {**REFERENCE["properties"], "type": {"const": "EXPERIMENT"}},
+                "anyOf": [{"required": ["version_id"]}, {"required": ["revision"]}]}},
+        }, ["refs"]),
+        tool("business_links", "沿真实业务关联读取；复制记录中的available_relations名称作为relation，不猜英文关联名。未提供名称时先省略relation取得目录，再选一类。关联目标分别授权。", {
             "ref": REFERENCE, "relation": STRING, **PAGE,
         }, ["ref"]),
         tool("business_query", "查询已接入业务表格。字段采用返回schema的名称；统计仅支持类型明确的数值。output=file将完整授权结果交给原生文件分析。", {
@@ -160,5 +349,5 @@ def business_pack():
             "kind": KINDS, "run_id": STRING,
         }, ["kind", "run_id"]),
     )
-    return CapabilityPack("business-data", "7", INSTRUCTIONS, specs, ("business_search",),
+    return CapabilityPack("business-data", "9", INSTRUCTIONS, specs, ("business_search", "business_read", "business_read_many", "business_export_records", "business_links", "business_query"),
                           {spec["name"]: handler(spec["name"]) for spec in specs}, mutations=frozenset(COMPUTATIONS | {"experiment_conversion"}))

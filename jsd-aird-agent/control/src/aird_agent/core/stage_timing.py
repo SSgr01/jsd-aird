@@ -31,6 +31,13 @@ def fields(**values):
         record.update({key: value for key, value in values.items() if value is not None})
 
 
+def observe(name, milliseconds):
+    record = CURRENT.get()
+    if record is not None:
+        record["durations_ms"][name] = record["durations_ms"].get(name, 0) + max(0, milliseconds)
+        record["counts"][name] = record["counts"].get(name, 0) + 1
+
+
 class StageTimingMiddleware:
     def __init__(self, app, *, enabled=False):
         self.app, self.enabled = app, enabled

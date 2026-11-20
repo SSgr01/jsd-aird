@@ -10,7 +10,7 @@ from aird_agent.core.contracts import Principal, digest
 from aird_agent.server.security import issue
 
 KINDS = ("project-morning", "research-weekly", "experiment-review")
-READ_TOOLS = frozenset({"tool_search", "business_search", "business_read", "business_links",
+READ_TOOLS = frozenset({"tool_search", "business_search", "business_read", "business_read_many", "business_links",
     "get_research_briefing_context", "get_experiment_loop", "get_compute_result", "knowledge_search", "document_read", "document_outline", "table_read",
     "source_context", "evidence_read", "evidence_context", "evidence_image_read", "evidence_quote", "query_structured_data"})
 RESEARCH_TYPES = {"PROJECT", "STAGE", "TASK", "REQUIREMENT", "MATERIAL", "EXPERIMENT", "STRUCTURED_DATA", "RAW_MATERIAL", "RAW_MATERIAL_SOURCE"}
@@ -53,7 +53,8 @@ def coverage(snapshot):
             if section == "EXPERIMENT":
                 for part, count in read.get("counts", {}).items():
                     if count and not section_complete(read, part, count):
-                        missing.append({"ref": item["ref"], "section": part})
+                        missing.append({"ref": item["ref"], "section": part,
+                                        "offset": section_cursor(read, part, count)})
     return {"complete": bool(snapshot.get("frozen")) and not snapshot.get("truncated") and not missing,
             "missing": missing, "counts": {key: len(items) for key, items in snapshot.get("sections", {}).items()}}
 
@@ -62,13 +63,18 @@ def section_complete(read, part, total):
     # Text limits can return overlapping, unequal page lengths. Completeness
     # depends on the union of actual server-returned row ranges, not on a
     # model repeating the next cursor verbatim. A gap must still block success.
+    return section_cursor(read, part, total) >= total
+
+
+def section_cursor(read, part, total):
+    """First undelivered row; repeated or disconnected pages cannot advance it."""
     cursor = 0
     for start, end in sorted((int(start), total if end is None else end)
             for start, end in read.get("pages", {}).get(part, {}).items()):
         if start > cursor:
             break
         cursor = max(cursor, end)
-    return cursor >= total
+    return cursor
 
 
 class Briefings:
@@ -310,16 +316,61 @@ class Briefings:
             if index not in saved["seen"].get(name, [])), "limit": limit}
             for name, items in snapshot["sections"].items()
             if any(index not in saved["seen"].get(name, []) for index in range(len(items)))]
+        from aird_agent.capabilities.business_data import report_project_ids
         return {"task_type": kind, "window": snapshot["window"], "section": section,
+            "context_project_refs": [{"type": "PROJECT", "id": pid} for pid in report_project_ids(snapshot)],
             "available_sections": list(snapshot["sections"]), "candidates": [] if section == "RELATED_ACTIVITY" else selected,
             **({"activities": selected} if section == "RELATED_ACTIVITY" else {}),
             "index_summary": {"counts": counts, "total": sum(counts.values()),
                 "text": f"本期活动索引：{count_text}，共 {sum(counts.values())} 个业务对象。",
                 "complete": not snapshot.get("truncated", False)},
-            "coverage": coverage(saved), "pending_index_requests": pending,
+            "coverage": {**coverage(saved), "missing": coverage(saved)["missing"][:8],
+                         "missing_total": len(coverage(saved)["missing"])}, "pending_index_requests": pending,
             **({"next_offset": offset+limit, "next_request": {"task_type": kind, "section": section, "offset": offset+limit, "limit": limit}}
                if offset+limit < len(entries) else {}),
-            "reading_notice": "索引仅表示活动记录，不能代替正文。next_request是本分区下一页的完整参数；pending_index_requests是尚未返回的索引页参数，传入同一工具继续读取。资料变化按报告需要沿ref读取正文；项目business_links可展开当前关联资料。下载原件不代表已阅读。实验优先section=record，过大时按分区分页。更新时间不代表已知前后差异。"}
+            "reading_notice": "索引仅表示活动记录，不能代替正文。next_request是本分区下一页的完整参数；pending_index_requests是尚未返回的索引页参数，传入同一工具继续读取。context_project_refs是本期记录已确认的当前关联项目，可按需授权读取上下文；不代表这些项目本期发生更新。资料变化按报告需要沿ref读取正文；项目business_links可展开当前关联资料。下载原件不代表已阅读。多个实验用business_read_many批量传固定ref，优先section=record，过大时按分区分页。更新时间不代表已知前后差异。"}
+
+    @staticmethod
+    def reading_progress(run):
+        state = coverage(run.get("briefing_snapshot", {}))
+        remaining = {ref_key(gap["ref"]) for gap in state["missing"] if gap.get("ref")}
+        return {"complete": state["complete"],
+                "cursor": digest([run.get("id"), run.get("epoch"), state["missing"]]),
+                "remaining_record_count": len(remaining),
+                "remaining_gap_count": len(state["missing"]),
+                "next_request": {} if remaining else None,
+                "next_action": "继续调用business_read_many({})读取下一批正文；相同空参数表示下一批，不是重试。分页推进时剩余条数可能不变。批间不要复述已有记录。"
+                    if remaining else "正文读取已齐备，核对剩余目录后整理本期报告。"
+                    if not state["complete"] else "本期记录已完整读取，现在整理报告，无须再读正文。"}
+
+    @staticmethod
+    def pending_reads(run, limit=8):
+        snapshot = run.get("briefing_snapshot", {})
+        if not snapshot.get("frozen"):
+            raise HTTPException(409, "BACKGROUND_REPORT_SCOPE_REQUIRED: read get_research_briefing_context first")
+        requests, seen = [], set()
+        for gap in coverage(snapshot)["missing"]:
+            ref = gap.get("ref")
+            if not ref:
+                continue
+            key = ref_key(ref)
+            reading = snapshot.get("reads", {}).get(key, {})
+            identity = (key, "record" if not reading.get("overview") else gap["section"])
+            if identity in seen:
+                continue
+            seen.add(identity)
+            if ref.get("type") == "EXPERIMENT" and not reading.get("overview"):
+                requests.append({"ref": ref, "section": "record"})
+            elif gap["section"] != "overview":
+                # Each section has an independent server cursor. Read known
+                # section heads together, but never guess a subsequent page.
+                # The host still bounds actual page text and returns its cursor.
+                requests.append({"ref": ref, "section": gap["section"], "offset": gap["offset"], "limit": 40})
+            else:
+                requests.append({"ref": ref})
+            if len(requests) >= limit:
+                break
+        return requests
 
     @staticmethod
     def read_request(run, args):
@@ -342,11 +393,29 @@ class Briefings:
 
     @staticmethod
     def record_read(run, name, args, result):
+        if isinstance(args.get("sample_key"), str) and not args["sample_key"].strip():
+            args = {key: value for key, value in args.items() if key != "sample_key"}
+        if name in {"business_read_many", "business_search"}:
+            items = result.get("items", []) if name == "business_read_many" else result.get("reads", [])
+            for item in items:
+                indexes = item.get("candidate_indexes", [])
+                candidates = [result["candidates"][index] for index in indexes]
+                request = item.get("request") or (args["requests"][item["index"]]
+                    if name == "business_read_many" else {"ref": item["ref"]})
+                Briefings.record_read(run, "business_read", request, {**item, "candidates": candidates})
+            return
         snapshot = run.get("briefing_snapshot")
         if not snapshot or name != "business_read" or result.get("error") or not result.get("candidates"):
             return
         reference = result["candidates"][0].get("ref") or args.get("ref", {})
         key = ref_key(reference)
+        # A delivered body also supplies its index identity/title/version. Do
+        # not force another directory call merely because it preceded discovery.
+        for section, entries in snapshot.get("sections", {}).items():
+            for index, item in enumerate(entries):
+                if item.get("ref") and ref_key(item["ref"]) == key:
+                    seen = snapshot.setdefault("seen", {})
+                    seen[section] = sorted(set(seen.get(section, [])) | {index})
         reading = snapshot.setdefault("reads", {}).setdefault(key, {})
         if reference.get("type") != "EXPERIMENT":
             reading["overview"] = True

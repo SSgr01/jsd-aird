@@ -21,6 +21,12 @@ public final class RequestTimingHolder {
         return Map.copyOf(VALUES.get());
     }
 
+    public static boolean active() { return VALUES.get().containsKey("agent_tool"); }
+
+    public static void add(String name, long value) {
+        VALUES.get().merge(name, Math.max(0, value), Long::sum);
+    }
+
     public static void set(Map<String, Long> values) {
         VALUES.get().clear();
         if (values != null) VALUES.get().putAll(values);

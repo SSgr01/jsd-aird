@@ -14,14 +14,27 @@ export const nativeTools = new Set(['read','read_image','write','edit','apply_pa
   'enter_plan_mode','exit_plan_mode','get_goal','create_goal','update_goal','job_output','job_list','job_kill', ...scheduleTools]);
 
 export function installNativeToolGuard(ctx, {runs}) {
+  const masks = new WeakMap();
+  const allowed = (bound,name) => !(bound?.automation && nativeTools.has(name) && !backgroundNativeTools.has(name))
+    && ((nativeTools.has(name) && bound && (scheduleTools.has(name) || bound.pack_ids?.includes('files')))
+      || bound?.tools.some(tool => tool.name === name));
   ctx.effect(() => ctx.tools.guard(execution => {
     if (!execution.agent) return 'ENTERPRISE_TOOL_DENIED';
     const bound = runs.get(execution.agent.id);
     if (bound?.automation && nativeTools.has(execution.name) && !backgroundNativeTools.has(execution.name))
       return 'BACKGROUND_READ_ONLY';
-    return (nativeTools.has(execution.name) && bound && (scheduleTools.has(execution.name) || bound.pack_ids?.includes('files'))) || bound?.tools.some(tool => tool.name === execution.name)
+    return allowed(bound,execution.name)
       ? undefined : 'ENTERPRISE_TOOL_DENIED';
   }));
+  // Restrict the agent's declarations and dispatch together. Business tools
+  // keep their own step-time discovery conditions; never mask the global registry.
+  return (agent,bound) => {
+    masks.get(agent)?.();
+    masks.delete(agent);
+    const deny=ctx.tools.definitions(agent).map(tool=>tool.name)
+      .filter(name=>nativeTools.has(name) && !allowed(bound,name));
+    if(deny.length)masks.set(agent,agent.ctx.tools.restrict({deny}));
+  };
 }
 
 /** Native tools retain their schemas, editing semantics, terminal cards and delivery cards. */
@@ -36,8 +49,18 @@ export function installNativeRuntime(ctx, {business,runs,profileOf,searchAvailab
   const register = async(exec,path,index=0,source_quotes=[])=> {
     const cwd=await ctx.workingDirectory.ensure(exec.agent,exec.signal), target=await ctx.fs.resolve(path,{cwd,signal:exec.signal});
     const content=await ctx.fs.readBytes(target,exec.signal,10*1024*1024);
-    const save = suffix => business('native-tool',bodyFor(exec,{name:'artifact_save',call_id:exec.callId+'/file-'+index+suffix,
-      arguments:{path:pathOf(target),base64:Buffer.from(content).toString('base64'),sha256:sha256(content),source_quotes}}),exec.signal);
+    const save = async suffix => {
+      const call_id=exec.callId+'/file-'+index+suffix;
+      const value=await business('native-tool',bodyFor(exec,{name:'artifact_save',call_id,
+        arguments:{path:pathOf(target),base64:Buffer.from(content).toString('base64'),sha256:sha256(content),source_quotes}}),exec.signal);
+      if(value.error==='TOOL_RESULT_UNKNOWN') {
+        // Read the original authority receipt once. Never replay a possibly committed save.
+        const receipt=await business('operation-reconcile',bodyFor(exec,{call_id}),exec.signal);
+        if(receipt.outcome==='CONFIRMED_SUCCEEDED' && receipt.result?.id)return receipt.result;
+        if(receipt.outcome==='CONFIRMED_FAILED')return receipt.result;
+      }
+      return value;
+    };
     const freeze = async(command, suffix) => {
       const bound=bodyFor(exec,{call_id:exec.callId+'/'+suffix+'-'+index});
       await business('gate',{...bound,kind:'tool',native_name:'bash'},exec.signal);
@@ -80,6 +103,9 @@ export function installNativeRuntime(ctx, {business,runs,profileOf,searchAvailab
     const bound=runs.get(exec.agent?.id);
     if(!bound)throw new Error('ENTERPRISE_TOOL_DENIED');
     if(bound.automation)await confineBackgroundRead(ctx,exec);
+    if(exec.name==='present' && (!Array.isArray(exec.arguments?.files) || !exec.arguments.files.length
+      || exec.arguments.files.length>8 || exec.arguments.files.some(file=>!file || typeof file.path!=='string' || !file.path.trim())))
+      throw new Error('INVALID_ARGUMENT: files 必须是包含 1 至 8 项的数组，每项为 {"path":"已有文件路径","description":"简要说明"}，不能传入字符串。按此格式修正一次；不要重复提交相同参数。尚未登记或交付文件。');
     if (['glob','grep'].includes(exec.name)) {
       await ctx.fs.resolve(exec.arguments.path || '.', {cwd:await ctx.workingDirectory.ensure(exec.agent,exec.signal),signal:exec.signal});
     }
@@ -154,5 +180,28 @@ export function installNativeRuntime(ctx, {business,runs,profileOf,searchAvailab
     }
   }
   ctx.plugin(EnterpriseShell);
-  return {register};
+  const exportRecords=async(exec,dataset,name)=>{
+    if(dataset?.format!=='business-records' || !/^\.business-data\/business-[a-f0-9]{20}\.json$/.test(dataset.path||'')
+        || dataset.export_script!=='.business-data/export-records.py' || name!=='业务记录.xlsx')
+      throw new Error('EXPORT_SOURCE_INCOMPLETE');
+    const cwd=await ctx.workingDirectory.ensure(exec.agent,exec.signal);
+    const output='业务记录-'+sha256(exec.callId).slice(0,12)+'.xlsx';
+    const payload=bodyFor(exec,{call_id:exec.callId+'/export'});
+    await business('gate',{...payload,kind:'tool',native_name:'bash'},exec.signal);
+    const process=new SandboxProcess(ctx,{
+      argv:['bash','-c','/usr/local/bin/python3 -I -B .business-data/export-records.py --input '+dataset.path+' --output '+output],
+      cwd:ctx.fs.processPath(await ctx.fs.resolve(cwd)),env:{},signal:exec.signal,
+      stdio:{stdout:{maxBytes:4096},stderr:{maxBytes:4096}},
+    },{business,payload,agent:exec.agent});
+    const result=await process.done;
+    if(result.exitCode!==0 || result.signal) {
+      exec.signal?.throwIfAborted();
+      throw new Error('BUSINESS_EXPORT_FAILED: '+process.collected.stderr.readFrom(0).text);
+    }
+    const target=await ctx.fs.resolve(output,{cwd,signal:exec.signal});
+    const bytes=await ctx.fs.readBytes(target,exec.signal,8*1024*1024);
+    return {path:output,sha256:sha256(bytes),bytes:bytes.length,
+      notice:'原值表格已生成并逐值核对；调用present登记后才可提供下载。'};
+  };
+  return {register,exportRecords};
 }

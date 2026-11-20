@@ -1,8 +1,9 @@
 import {relative,isAbsolute,sep} from 'node:path';
 
 export const backgroundReads = new Set(['read','read_image','glob','grep']);
-export const backgroundNativeTools = new Set([...backgroundReads,'skill','todo_write','ask_user_question',
-  'enter_plan_mode','exit_plan_mode','get_goal','create_goal','update_goal']);
+// Scheduled reports have a frozen scope and return their text in the session.
+// Interactive planning/question tools can suspend them or invent file work.
+export const backgroundNativeTools = new Set([...backgroundReads,'skill']);
 
 export async function confineBackgroundRead(ctx, execution) {
   if (!backgroundReads.has(execution.name)) return;

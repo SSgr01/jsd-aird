@@ -234,6 +234,13 @@ def create_app(settings=None, store=None, service=None):
             raise HTTPException(422, "INVALID_CALL_ID")
         return await reconcile(service, user, str(rid), call_id)
 
+    @app.post(PREFIX + "/runs/{rid}/operations/reconcile")
+    async def reconcile_operation_body(rid: UUID, body: dict, user=Depends(principal)):
+        call_id = body.get("call_id")
+        if not isinstance(call_id, str) or not 1 <= len(call_id) <= 200:
+            raise HTTPException(422, "INVALID_CALL_ID")
+        return await reconcile(service, user, str(rid), call_id)
+
     @app.get(PREFIX + "/packs")
     async def packs(user=Depends(principal)):
         context = await service.java(user, "runtime_context", {"profile": "agent", "context_refs": []})
@@ -310,7 +317,7 @@ def create_app(settings=None, store=None, service=None):
             await require_session_available(store, user, body["session_id"])
         if user.scope == "folder-conversion":
             await service.folders.check(user, body.get("session_id"))
-            if action not in {"folder-dispatch", "folder-export", "folder-ended", "experts", "model-result", "auxiliary-result", "catalog", "register", "admit", "admission-state", "admission-renew", "admission-release", "run-state", "ownership", "restore", "gate", "tool", "native-tool", "native-output", "native-cancel", "event", "stream", "complete", "failure", "bind", "model", "model-complete", "auxiliary-admit", "auxiliary-release"}:
+            if action not in {"folder-dispatch", "folder-export", "folder-ended", "experts", "model-result", "auxiliary-result", "catalog", "register", "admit", "admission-state", "admission-renew", "admission-release", "run-state", "ownership", "restore", "gate", "tool", "native-tool", "native-output", "native-cancel", "operation-reconcile", "event", "stream", "complete", "failure", "bind", "model", "model-complete", "auxiliary-admit", "auxiliary-release"}:
                 raise HTTPException(403, "FOLDER_SCOPE_DENIED")
         if action == "folder-ended" and user.scope == "folder-conversion":
             return await service.folders.ended(user, body["session_id"])
@@ -413,7 +420,7 @@ def create_app(settings=None, store=None, service=None):
             if not rid:
                 return {"run": None}
             run = snapshots.get(rid) or await store.get(user, "run", rid)
-            await service.authorized_topic(user, run, execution=False)
+            await service.authorized_topic(user, run, execution=False, history_checked=rid in snapshots)
             if action == "ownership":
                 if body.get("purpose") == "file-export":
                     from aird_agent.hosts.jsd.business_context import business_export_context
@@ -437,6 +444,19 @@ def create_app(settings=None, store=None, service=None):
             return await service.admit_auxiliary(user, body)
         if action in {"model-result", "auxiliary-result"}:
             return await service.model_result(user, body, auxiliary=action == "auxiliary-result")
+        if action == "operation-reconcile":
+            run = await service.session_run(user, body)
+            call_id = body.get("call_id")
+            if not isinstance(call_id, str) or not 1 <= len(call_id) <= 200:
+                raise HTTPException(422, "INVALID_CALL_ID")
+            outcome = await reconcile(service, user, run["id"], call_id)
+            if outcome["outcome"] == "STILL_UNKNOWN":
+                return {**outcome, "error": "TOOL_RESULT_UNKNOWN", "retryable": False}
+            async with store.pool.connection() as conn:
+                row = await (await conn.execute(
+                    "SELECT result FROM agent_runtime.harness_calls WHERE run_id=%s AND call_id=%s",
+                    (run["id"], call_id))).fetchone()
+            return {**outcome, "result": row["result"]}
         if action == "native-output":
             from aird_agent.hosts.jsd.native_files import native_output
             return await native_output(service, user, body)

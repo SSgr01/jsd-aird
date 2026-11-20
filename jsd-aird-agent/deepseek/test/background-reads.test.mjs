@@ -20,6 +20,7 @@ import EnterpriseWorkingDirectory from '../../enterprise-plugin/src/working-dire
 import {ensureTaskDirectory} from '../../enterprise-plugin/src/task-directories.mjs';
 import {installNativeRuntime,installNativeToolGuard} from '../../enterprise-plugin/src/native-runtime.mjs';
 import {backgroundNativeTools,confineBackgroundRead} from '../../enterprise-plugin/src/background-reads.mjs';
+import {createScope,bindScopeParent} from '../../../vendor/deepseek-harness/packages/core/scope/lib/index.js';
 
 const require=createRequire(new URL('../../../vendor/deepseek-harness/packages/fs/fs-local/package.json',import.meta.url));
 const {Context}=await import(pathToFileURL(require.resolve('@deepseek-ai/cordis')).href);
@@ -35,7 +36,8 @@ test('background native readers are limited to their task root even after changi
     await confineBackgroundRead(ctx,{name,agent:{},arguments:{[field]:'../source.txt'}});
     await assert.rejects(confineBackgroundRead(ctx,{name,agent:{},arguments:{[field]:'../../other/private.txt'}}),/BACKGROUND_FILE_OUTSIDE_TASK/);
   }
-  for(const name of ['bash','write','edit','apply_patch','present','job_kill'])assert.equal(backgroundNativeTools.has(name),false);
+  for(const name of ['bash','write','edit','apply_patch','present','job_kill','todo_write','ask_user_question',
+    'enter_plan_mode','exit_plan_mode','get_goal','create_goal','update_goal'])assert.equal(backgroundNativeTools.has(name),false);
   ctx.workingDirectory.taskRoot=()=>undefined;
   await assert.rejects(confineBackgroundRead(ctx,{name:'read',agent:{},arguments:{file_path:'source.txt'}}),/BACKGROUND_TASK_DIRECTORY_REQUIRED/);
 });
@@ -62,7 +64,7 @@ test('mounted native file and search tools read background task materials while 
     assert.equal(action,'gate','A background read must never execute or register a file');
     return {allowed:true};
   }});
-  installNativeToolGuard(ctx,{runs});
+  const align=installNativeToolGuard(ctx,{runs});
   await ctx.plugin(FileTools,{applyPatch:true});
   await ctx.plugin(SearchTools,{sampleOverCapGlobResults:false});
   await ctx.plugin(ShellEnv,{dshHome:join(base,'home')});
@@ -127,4 +129,42 @@ test('mounted native file and search tools read background task materials while 
   }
   assert.equal(calls.length,4,'Denied tools must not reach Control, execution or registration');
   assert.deepEqual(await readFile(ctx.fs.hostPath(directory+'/.business-data/会议 正文.txt')),original);
+  let presetScope;
+  const presetKey={id:'native-preset'};
+  await ctx.plugin(Object.assign(inner=>{presetScope=createScope(inner,presetKey);},{inject:['tools']}));
+  bindScopeParent(agent,presetKey);
+  presetScope.ctx.tools.register({name:'web_fetch',description:'native preset tool',parameters:{type:'object',properties:{}},
+    output:{schema:{type:'string'},render:(_args,value)=>[{type:'text',text:value}]},execute:async()=> 'web'});
+  for(const name of ['todo_write','ask_user_question','create_goal','enter_plan_mode'])
+    presetScope.ctx.tools.register({name,description:'interactive task control',parameters:{type:'object',properties:{}},
+      output:{schema:{type:'string'},render:(_args,value)=>[{type:'text',text:value}]},execute:async()=> 'interactive'});
+  assert.equal(ctx.tools.definitions().some(tool=>tool.name==='web_fetch'),false);
+  assert.ok(ctx.tools.executable('web_fetch',agent),'preset capability is inherited before binding');
+  const globalNames=ctx.tools.definitions().map(tool=>tool.name);
+  const selection=await ctx.tools.resolve({agent,signal:new AbortController().signal,
+    modelSelection:{provider:'image-fixture',model:'image-fixture'}});
+  align(agent,runs.get(agent.id));
+  for(const name of ['read','read_image','glob','grep']) {
+    assert.ok(ctx.tools.definitions(agent).some(tool=>tool.name===name));
+    assert.ok(ctx.tools.executable(name,agent,selection));
+  }
+  for(const name of ['write','edit','apply_patch','bash','present','web_fetch','todo_write','ask_user_question','create_goal','enter_plan_mode']) {
+    assert.equal(ctx.tools.definitions(agent).some(tool=>tool.name===name),false);
+    assert.equal(ctx.tools.executable(name,agent,selection),undefined);
+    const result=await execute(name,{});
+    assert.equal(result.isError,true);
+    assert.match(JSON.stringify(result),/BACKGROUND_READ_ONLY|UNKNOWN_TOOL/);
+  }
+  assert.deepEqual(ctx.tools.definitions().map(tool=>tool.name),globalNames,'other agents keep global tools');
+  selection.dispose();
+  // A foreground turn replaces, rather than intersects with, the old mask.
+  const foreground={id:'foreground-run',pack_ids:['files'],tools:[]};
+  runs.set(agent.id,foreground);align(agent,foreground);
+  assert.ok(ctx.tools.definitions(agent).some(tool=>tool.name==='bash'));
+  for(const name of ['todo_write','ask_user_question','create_goal','enter_plan_mode'])assert.ok(ctx.tools.executable(name,agent));
+  const noFiles={id:'business-run',pack_ids:[],tools:[]};
+  runs.set(agent.id,noFiles);align(agent,noFiles);
+  assert.equal(ctx.tools.executable('read',agent),undefined);
+  runs.set(agent.id,foreground);align(agent,foreground);
+  assert.ok(ctx.tools.executable('read',agent));
 });

@@ -96,6 +96,10 @@ public class AgentToolsController {
 
     @PostMapping("/internal/v1/agent-tools")
     public Object invoke(@RequestHeader(value="X-Jsd-Agent-Ticket", defaultValue="") String ticket, @RequestBody ToolRequest command) {
+        var previousTiming = com.jsd.aird.platform.web.RequestTimingHolder.snapshot();
+        com.jsd.aird.platform.web.RequestTimingHolder.put("agent_tool", 1);
+        long started = System.nanoTime();
+        try (var authorizationReads = com.jsd.aird.shared.security.AuthorizationReadScope.open()) {
         if (RETRIEVAL_ACTIONS.contains(command.action())) {
             try (var budget = com.jsd.aird.shared.resource.OperationBudget.open(
                     com.jsd.aird.shared.resource.OperationBudget.Kind.READ, Math.max(100, retrievalTimeoutMs));
@@ -107,6 +111,19 @@ public class AgentToolsController {
             }
         }
         return dispatch(ticket, command);
+        } finally {
+            var values = com.jsd.aird.platform.web.RequestTimingHolder.snapshot();
+            double elapsed = (System.nanoTime() - started) / 1_000_000.0;
+            double database = values.getOrDefault("db_query_ns", 0L) / 1_000_000.0;
+            org.slf4j.LoggerFactory.getLogger(AgentToolsController.class).info(
+                "AGENT_TOOL_TIMING action={} elapsed_ms={} db_query_ms={} db_query_count={}",
+                command.action(), elapsed, database, values.getOrDefault("db_query_count", 0L));
+            var attributes = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+            if (attributes instanceof org.springframework.web.context.request.ServletRequestAttributes servlet
+                    && servlet.getResponse() != null)
+                servlet.getResponse().setHeader("Server-Timing", "db_query;dur=" + database + ", agent_tool;dur=" + elapsed);
+            com.jsd.aird.platform.web.RequestTimingHolder.set(previousTiming);
+        }
     }
 
     private Object dispatch(String ticket, ToolRequest command) {

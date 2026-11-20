@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 BUSINESS_RECEIPTS = frozenset({
     "create_experiment_draft", "save_experiment_measurements", "run_model_training", "activate_trained_model",
     "run_prediction", "run_formula_design", "run_experiment_optimization", "continue_experiment_optimization",
+    "artifact_save", "dsh_execute",
 })
 
 
@@ -114,6 +115,9 @@ async def reconcile(service, principal, rid, call_id):
         ).fetchone()
     if not operation:
         raise HTTPException(404, "OPERATION_NOT_FOUND")
+    if operation["status"] in {"SUCCEEDED", "FAILED"}:
+        return {"outcome": "CONFIRMED_SUCCEEDED" if operation["status"] == "SUCCEEDED" else "CONFIRMED_FAILED",
+                "replayed": False, "receipt_id": None}
     if operation["status"] != "UNKNOWN":
         raise HTTPException(409, "Only operations with unknown outcomes require reconciliation")
     # A missing authority record is not proof of nonexecution. It never unlocks a retry.
@@ -172,6 +176,9 @@ async def reconcile(service, principal, rid, call_id):
                 (rid, call_id),
             )
         ).fetchone()
+        if record["status"] in {"SUCCEEDED", "FAILED"}:
+            return {"outcome": "CONFIRMED_SUCCEEDED" if record["status"] == "SUCCEEDED" else "CONFIRMED_FAILED",
+                    "replayed": False, "receipt_id": None}
         if record["status"] != "UNKNOWN":
             raise HTTPException(409, "Operation outcome already changed")
         rid_receipt = None

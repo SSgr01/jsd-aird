@@ -44,6 +44,7 @@ def test_compact_document_declarations_keep_body_version_conditions_and_ledger_i
     assert projected["document_sources"][0]["doi"] == "10.123/example"
     assert projected["candidates"][0]["table_context"] == raw["candidates"][0]["table_context"]
     assert [c["text"] for c in projected["candidates"]] == [c["text"] for c in raw["candidates"]]
+    assert [c["citation"] for c in projected["candidates"]] == ["[E:e1]", "[E:e2]"]
     assert "url" not in projected["candidates"][0]
     assert raw == before
     assert model_result(raw) == projected
@@ -73,6 +74,9 @@ def test_known_grouped_and_annotated_handles_are_repaired_without_a_model_or_sou
     eid = "e" + "a" * 24
     evidence = {eid: candidate(eid)}
     qid = quotes(evidence[eid])[0]["quote_id"]
+    assert normalize_citations(f"[E:{eid[1:]}]", evidence) == f"[E:{eid}]"
+    unknown = "[E:" + "b" * 24 + "]"
+    assert normalize_citations(unknown, evidence) == unknown
     for marker in (f"[E:{eid}、E:{qid}]", f"〔 E: {qid}，E:{eid}〕"):
         checked = normalize_citations(marker, evidence)
         assert checked == f"[E:{eid}][E:{eid}]"
@@ -106,6 +110,7 @@ def test_diagnostics_locate_unknown_handles_and_known_formatting_needs_no_model_
     assert issue["line"] == 2 and text[issue["start"]:issue["end"]] == "[E:unknown]"
     assert issue["code"] == "UNKNOWN_EVIDENCE_ID"
     assert result["available_evidence"][0]["evidence_id"] == eid
+    assert result["available_evidence"][0]["citation"] == f"[E:{eid}]"
     assert "12 mg" in result["available_evidence"][0]["excerpt"]
     normalized, valid = binding.validate_output(run, f"Measured 12 mg ( E: {eid} ).")
     assert valid and normalized == f"Measured 12 mg [E:{eid}]."

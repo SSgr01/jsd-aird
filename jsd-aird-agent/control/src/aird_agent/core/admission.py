@@ -89,6 +89,17 @@ class RunAdmission:
                 "AND a.organization_id=q.organization_id)<%s "
                 "AND (SELECT count(*) FROM agent_runtime.harness_admission a WHERE a.state IN ('GRANTED','RELEASING') "
                 "AND a.organization_id=q.organization_id AND a.actor_id=q.actor_id)<%s "
+                # A long scheduled report cannot consume the last interactive
+                # slot. Existing grants are never preempted and every original
+                # global/organization/user limit still applies. At limit=1,
+                # retain serial service rather than excluding background work.
+                "AND (coalesce(q.principal->>'scope','')<>'research-briefings' OR ("
+                "(SELECT count(*) FROM agent_runtime.harness_admission a WHERE a.state IN ('GRANTED','RELEASING') "
+                "AND a.principal->>'scope'='research-briefings')<%s "
+                "AND (SELECT count(*) FROM agent_runtime.harness_admission a WHERE a.state IN ('GRANTED','RELEASING') "
+                "AND a.principal->>'scope'='research-briefings' AND a.organization_id=q.organization_id)<%s "
+                "AND (SELECT count(*) FROM agent_runtime.harness_admission a WHERE a.state IN ('GRANTED','RELEASING') "
+                "AND a.principal->>'scope'='research-briefings' AND a.organization_id=q.organization_id AND a.actor_id=q.actor_id)<%s)) "
                 "ORDER BY coalesce((SELECT max(a.last_grant_order) FROM agent_runtime.harness_admission a WHERE a.organization_id=q.organization_id),0),"
                 "coalesce((SELECT max(a.last_grant_order) FROM agent_runtime.harness_admission a WHERE a.organization_id=q.organization_id AND a.actor_id=q.actor_id),0),"
                 "q.enqueued_at,q.run_id LIMIT 1",
@@ -96,6 +107,9 @@ class RunAdmission:
                     self.settings.max_running_runs,
                     self.settings.max_running_runs_per_organization or self.settings.max_running_runs,
                     self.settings.max_running_runs_per_user,
+                    max(1, self.settings.max_running_runs - 1),
+                    max(1, (self.settings.max_running_runs_per_organization or self.settings.max_running_runs) - 1),
+                    max(1, self.settings.max_running_runs_per_user - 1),
                 ),
             )
         ).fetchone()
@@ -296,7 +310,7 @@ class RunAdmission:
                     await self.store.event(principal, rid, "run.failed", {"error": run["error"]}, conn)
                 await conn.execute(
                     "UPDATE agent_runtime.harness_admission SET attempts=attempts+1,diagnostic=%s,dispatch_owner=NULL,"
-                    "dispatch_until=NULL,state=%s,retry_at=now()+(least(30,power(2,least(attempts,5))) * interval '1 second'),"
+                    "dispatch_until=NULL,state=%s,retry_at=now()+(CASE WHEN %s THEN 0 ELSE least(30,power(2,least(attempts,5))) END * interval '1 second'),"
                     "lease_until=now()+(%s * interval '1 second') WHERE run_id=%s",
                     (
                         Jsonb(diagnostic),
@@ -305,6 +319,7 @@ class RunAdmission:
                         else "RELEASED"
                         if terminal
                         else "GRANTED",
+                        terminal,
                         self.settings.admission_lease_seconds,
                         rid,
                     ),
@@ -388,6 +403,25 @@ class RunAdmission:
             ).fetchone()
             if not claimed:
                 return
+            run = await self.store.get(principal, "run", rid, conn)
+            ended = (run.get("dsh_turn") is not None
+                     and run.get("dsh_completed_turn") == run["dsh_turn"]
+                     or (run.get("dsh_stop_reason") or {}).get("kind") in {
+                         "completed", "error", "aborted", "interrupted", "max-tokens"})
+            unresolved = await (await conn.execute(
+                "SELECT 1 FROM agent_runtime.harness_calls WHERE run_id=%s "
+                "AND status IN ('RUNNING','UNKNOWN') LIMIT 1", (rid,),
+            )).fetchone()
+            if run["status"] in TERMINAL and ended and not unresolved:
+                # A durable native ending with settled operations is already
+                # proof of termination. A later turn may own this Session; do
+                # not inspect or abort it using an old delivery's authority.
+                await conn.execute(
+                    "UPDATE agent_runtime.harness_admission SET state='RELEASED',"
+                    "recovery_owner=NULL,recovery_until=NULL WHERE run_id=%s", (rid,),
+                )
+                self.wake.set()
+                return
         try:
             run = await self.store.get(principal, "run", rid)
             state = (
@@ -452,6 +486,15 @@ class RunAdmission:
                     principal, rid, "run.failed" if unknown or missing else "run.queued", {"status": run["status"]}, conn
                 )
             self.wake.set()
+        except Exception as error:
+            async with self.store.pool.connection() as conn:
+                await conn.execute(
+                    "UPDATE agent_runtime.harness_admission SET retry_at=now()+(%s * interval '1 second') "
+                    "WHERE run_id=%s AND recovery_owner=%s",
+                    (60 if isinstance(error, HTTPException) and error.status_code in {401, 403} else 15,
+                     rid, self.worker_id),
+                )
+            raise
         finally:
             async with self.store.pool.connection() as conn:
                 await conn.execute(
@@ -507,8 +550,8 @@ class RunAdmission:
             )).fetchall()
             stale = await (
                 await conn.execute(
-                    "SELECT * FROM agent_runtime.harness_admission WHERE state='RELEASING' "
-                    "OR (state='GRANTED' AND lease_until<=now())"
+                    "SELECT * FROM agent_runtime.harness_admission WHERE retry_at<=now() "
+                    "AND (state='RELEASING' OR (state='GRANTED' AND lease_until<=now()))"
                 )
             ).fetchall()
         for row in completed:

@@ -74,7 +74,7 @@ class JsdBindings(RuntimeBindings):
             with contextlib.suppress(Exception):
                 await self.sandbox.cancel(digest([run["id"], call["execution_epoch"], call["call_id"]])[:32])
 
-    async def authorized_topic(self, principal, run, *, execution=True):
+    async def authorized_topic(self, principal, run, *, execution=True, history_checked=False):
         if run.get("expert") and execution:
             from aird_agent.hosts.jsd.experts import resolve
             await resolve(self.runtime, principal, run["expert"])
@@ -93,7 +93,7 @@ class JsdBindings(RuntimeBindings):
             await refresh_draft_context(self, principal, run)
             if execution:
                 await self.java(principal, "authorize_sources", await self.source_authorization(principal, run), run.get("id"))
-            else:
+            elif not history_checked:
                 from aird_agent.hosts.jsd.business_context import authorize_history_snapshot
                 await authorize_history_snapshot(self, principal, run)
         else:
@@ -162,6 +162,8 @@ class JsdBindings(RuntimeBindings):
 
     def tools_for(self, run):
         tools = self.packs.tools(run["pack_ids"]) if run.get("pack_versions") else TOOLS
+        if "files" not in run.get("pack_ids", []):
+            tools = [item for item in tools if item["name"] != "business_export_records"]
         # The native catalog must already contain readers before an approved acquisition
         # adds its first source. Initial activation is still limited; readers enforce membership.
         if "business-data" in run.get("pack_ids", []):
@@ -370,17 +372,25 @@ class JsdBindings(RuntimeBindings):
             "来源时间没有时区时先确认，不擅自当作 UTC；保留来源原值，转换结果另列。"
             "没有执行能力时说明尚未计算，不猜测星期或换算结果。"
         )
-        return instructions + "\n\n" + sandbox + "\n\n" + calendar + role_instructions(run.get("expert"))
+        background = (
+            "\n本期后台简报先完成pending_index_requests中的索引页，随后连续调用business_read_many({})。"
+            "服务端按固定记录与缺失分页推进正文，优先使用这条路径，不手抄各条ID逐个读取分区。"
+            "相同的空参数每次选择当前下一批，不是原样重试；分页期间剩余条数可能不变，按实际游标继续。"
+            "remaining_requests表示尚未送达，不是读取失败；不要重查名称或把已有正文再读一遍。"
+            "批间不复述正文、不生成阶段报告；读取完整后再统一整理。明确拒绝按具体原因处理，不能绕过。"
+            if run.get("automation") else ""
+        )
+        return instructions + "\n\n" + sandbox + "\n\n" + calendar + background + role_instructions(run.get("expert"))
 
     async def authorize_history(self, principal, conversation):
         await self.authorize_conversation(principal, conversation)
-        snapshots = {}
+        snapshots, authorized = {}, set()
         for rid in {item["run_id"] for item in conversation.get("messages", []) if item.get("run_id")}:
             previous = await self.store.get(principal, "run", rid)
             await self.java(principal, "authorize", {"documents": previous.get("source_documents", [])}, rid)
             if previous.get("source_refs"):
                 from aird_agent.hosts.jsd.business_context import authorize_history_snapshot
-                previous = await authorize_history_snapshot(self, principal, previous)
+                previous = await authorize_history_snapshot(self, principal, previous, authorized=authorized)
             snapshots[rid] = previous
         return snapshots
 

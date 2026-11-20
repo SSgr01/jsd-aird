@@ -105,7 +105,7 @@ function projectResult(value) {
         if (!hit.source || (!hit.source_text && !hit.quote && !hit.context_quotes && !hit.already_retrieved && !hit.requires_read)) return projectResult(hit);
         const quotes = [...(hit.context_quotes || []), ...(hit.quote ? [hit.quote] : [])]
           .sort((a,b) => (a.start || 0) - (b.start || 0));
-        return {evidence_id:hit.evidence_id, ...sourceLabel(hit.source),
+        return {evidence_id:hit.evidence_id, ...(hit.evidence_id ? {citation:`[E:${hit.evidence_id}]`} : {}), ...sourceLabel(hit.source),
           ...Object.fromEntries(['node_offset','quote_offset','quote_count','table_context','requires_read','already_retrieved']
             .filter(name=>hit[name]!==undefined).map(name=>[name,hit[name]])),
           ...(hit.source_text || quotes.length ? {text:hit.source_text ?? quotes.map(quote=>quote.text).join('\n')} : {}),
@@ -113,12 +113,13 @@ function projectResult(value) {
       });
     } else if (['candidates','context_candidates'].includes(key) && Array.isArray(item) && item.every(candidate => candidate.evidence_id || candidate.source)) {
       output[key] = item.map(candidate => ({ evidence_id: candidate.evidence_id,
+        ...(candidate.evidence_id ? {citation:`[E:${candidate.evidence_id}]`} : {}),
         ...sourceLabel(candidate.source), offset: candidate.node_offset, text: candidate.model_text ?? candidate.text,
         ...(candidate.ref ? {ref: candidate.ref} : {}), ...(candidate.relation ? {relation: candidate.relation} : {}),
         ...(!documentIdentity(sourceLabel(candidate.source)) && value.citation_links?.[candidate.evidence_id]?.url
           ? {url:value.citation_links[candidate.evidence_id].url} : {}),
         ...(candidate.quote_id ? {quote_id:candidate.quote_id} : {}),
-        ...Object.fromEntries(['already_retrieved','quote_count','table_context','files','reading'].filter(key=>candidate[key]!==undefined).map(key=>[key,candidate[key]])),
+        ...Object.fromEntries(['already_retrieved','quote_count','table_context','files','reading','available_relations'].filter(key=>candidate[key]!==undefined).map(key=>[key,candidate[key]])),
         ...Object.fromEntries(['record_key','field','value','unit','value_type','condition','source_status']
           .filter(key=>candidate[key]!==undefined).map(key=>[key,candidate[key]])),
       }));

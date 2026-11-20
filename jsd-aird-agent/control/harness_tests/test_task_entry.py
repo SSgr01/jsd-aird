@@ -10,6 +10,25 @@ from aird_agent.server.task_entry import TaskRequest, create_task
 from test_business_dispatch import Host
 
 
+async def dispatch_queued(service, principal, run):
+    # The HTTP adapter now accepts into a durable queue. Drive that queue
+    # explicitly; other tests' retained owners must not enter this mock host.
+    async with service.store.pool.connection() as conn:
+        ticket = await (await conn.execute(
+            "SELECT * FROM agent_runtime.harness_admission WHERE run_id=%s", (run["id"],))).fetchone()
+    original = service.admission.head
+    service.admission.head = AsyncMock(return_value=ticket)
+    try:
+        assert await service.admission.grant(principal, run["id"])
+    finally:
+        service.admission.head = original
+    async with service.store.pool.connection() as conn:
+        ticket = await (await conn.execute(
+            "SELECT * FROM agent_runtime.harness_admission WHERE run_id=%s", (run["id"],))).fetchone()
+    await service.admission.dispatch(ticket)
+    return await service.store.get(principal, "run", run["id"])
+
+
 def test_public_task_contract_cannot_inject_a_second_model_prompt():
     values = {"canonical_conversation_id": uuid4(), "canonical_user_message_id": uuid4(), "question": "Explain"}
     for field in ("instructions", "prompt", "candidates", "profile"):
@@ -26,6 +45,8 @@ async def test_http_retry_reuses_native_session_and_rejects_changed_input(settin
     request = TaskRequest(canonical_conversation_id=uuid4(), canonical_user_message_id=uuid4(), question="Explain")
     try:
         first = await create_task(service, principal, request, "task:test")
+        assert first["status"] == "QUEUED" and not service.dsh_command.await_args_list
+        first = await dispatch_queued(service, principal, first)
         again = await create_task(service, principal, request, "task:test")
         assert first["id"] == again["id"]
         assert first["dsh_session_id"] == again["dsh_session_id"]
@@ -50,13 +71,16 @@ async def test_canonical_channel_is_owner_scoped_and_followup_keeps_native_histo
     other = principal.model_copy(update={"actor_id": uuid4()})
     try:
         first = await create_task(service, principal, request, "same-key")
+        first = await dispatch_queued(service, principal, first)
         async with store.transaction(principal, first["id"]) as conn:
             current = await store.get(principal, "run", first["id"], conn)
             current["status"] = "SUCCEEDED"
             await store.update(principal, "run", current, conn)
         followup = request.model_copy(update={"question": "Follow up", "canonical_user_message_id": uuid4()})
         second = await create_task(service, principal, followup, "next-key")
+        second = await dispatch_queued(service, principal, second)
         foreign = await create_task(service, other, request, "same-key")
+        foreign = await dispatch_queued(service, other, foreign)
         assert second["conversation_id"] == first["conversation_id"]
         assert second["dsh_session_id"] == first["dsh_session_id"]
         assert foreign["conversation_id"] != first["conversation_id"]

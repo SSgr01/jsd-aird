@@ -56,7 +56,8 @@ test('native tool resolution binds the claimed batch before the first prompt and
       : {allowed:true}};
   });
   let section, context, enterpriseRoute;
-  const ctx={tools:{register:(definition,options)=>{definitions.push({definition,options});return ()=>{};},guard:()=>()=>{}},
+  const ctx={tools:{register:(definition,options)=>{definitions.push({definition,options});return ()=>{};},
+    definitions:()=>definitions.map(row=>row.definition),guard:()=>()=>{}},
     plugin:()=>{},web:{registerSearchProvider:()=>{}},fs:{hostPath:path=>path,exposeAttachment:async(...args)=>exposed.push(args)},agents:{get:()=>undefined},sessions:{},systemPrompt:{section:value=>{if(value.name==='enterprise-policy')section=value;return ()=>{};},
       context:value=>{context=value;return ()=>{};}},llm:{},
     agentPresets:{presetForSession:()=> 'enterprise'},
@@ -149,6 +150,18 @@ test('native tool resolution binds the claimed batch before the first prompt and
   const message={role:'user',source:{kind:'user'},content:[{type:'text',text:'generate files'}]};
   events.get('agent/inbox/claimed')({agent,turn:1,message});
   await definitions[0].options.when({agent,signal});
+  const checkpoint={sessionId:'truncated',signal,purpose:'compaction',
+    tools:[{name:'business_read_many'}],toolHistory:{obsolete:true},
+    messages:[{role:'tool',content:[{type:'text',text:'实测 0；空白 null；单位 g'}]},
+      {role:'user',content:[{type:'text',text:'Native coding summary directive'}]}]};
+  const checkpointText='阶段摘要 [E:unmodified]';
+  const checkpointChunks=[];
+  for await(const chunk of events.get('llm/stream')(checkpoint,async function*(){
+    assert.deepEqual(checkpoint.tools,[]);
+    assert.equal(checkpoint.toolHistory,undefined);
+    yield {type:'block-end',index:0,block:{type:'text',text:checkpointText}};
+  }))checkpointChunks.push(chunk);
+  assert.equal(checkpointChunks[0].block.text,checkpointText,'auxiliary summaries bypass conversational citation/argument rewriting');
   events.get('agent/assistant-stream')({agent,frame:{type:'chunk',chunk:{type:'finish',reason:{kind:'max-tokens'}}}});
   await events.get('agent/turn-stopping')({agent,turn:1,signal});
   assert.equal(calls.filter(c=>c.action==='complete').at(-1).body.stop_reason,'max-tokens');

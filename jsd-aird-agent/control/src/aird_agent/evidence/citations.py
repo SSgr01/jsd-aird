@@ -71,6 +71,11 @@ def normalize_citations(text, evidence):
         return match[0]
 
     text = re.sub(r"\[\s*E:\s*([^\]\n]*)\]|〔\s*E:\s*([^〕\n]*)〕", known_group, text)
+    # A dropped 'e' prefix is lossless to repair only when the entire hash
+    # exactly identifies evidence already read in this run.
+    text = re.sub(r"\[\s*E:\s*([0-9a-f]{24})\s*\]|〔\s*E:\s*([0-9a-f]{24})\s*〕",
+        lambda match: "[E:e" + (match[1] or match[2]) + "]"
+        if "e" + (match[1] or match[2]) in evidence else match[0], text)
     text = re.sub(r"\[\s*E:\s*(q[0-9a-f]{24})\s*\]|〔\s*E:\s*(q[0-9a-f]{24})\s*〕",
         lambda match: "[E:" + quote_owners[match[1] or match[2]] + "]"
         if (match[1] or match[2]) in quote_owners else match[0], text)

@@ -1,4 +1,35 @@
 import { createUserMessage } from '../../../vendor/deepseek-harness/packages/llm/llm/lib/index.js';
+import { createHash } from 'node:crypto';
+
+/** Continue only while durable coverage advances; refusals cannot spin a loop. */
+export function briefingCoverageContinuation(coverage, events, turn, runId) {
+  if (coverage.complete) return;
+  const signature=createHash('sha256').update(JSON.stringify(coverage.missing)).digest('hex');
+  if (events.some(event=>event.type==='user/message'
+      && event.data.source?.kind==='enterprise-briefing-coverage'
+      && event.data.source.turn===turn && event.data.source.run_id===runId
+      && event.data.source.coverage_signature===signature)) return;
+  return {kind:'enterprise-briefing-coverage',turn,run_id:runId,coverage_signature:signature};
+}
+
+/** Controller pages contain projection records; replay only their native events. */
+export async function pendingSessionEvents(controller, sessionId, afterSeq, signal) {
+  const events = [];
+  let beforeSeq;
+  do {
+    const page = await controller.events({address:{kind:'session',sessionId},
+      ...(beforeSeq === undefined ? {} : {beforeSeq}),maxMessages:100},signal);
+    const batch = page.records.map(record => record.event);
+    if (batch.some(event => !Number.isSafeInteger(event?.seq) || event.seq < 0))
+      throw new Error('SESSION_EVENT_CURSOR_INVALID');
+    events.push(...batch.filter(event => event.seq > afterSeq));
+    if (!page.hasMore || !batch.length || batch.some(event => event.seq <= afterSeq)) break;
+    const cursor = Math.min(...batch.map(event => event.seq));
+    if (beforeSeq !== undefined && cursor >= beforeSeq) throw new Error('SESSION_EVENT_CURSOR_STALLED');
+    beforeSeq = cursor;
+  } while (true);
+  return events.sort((a,b)=>a.seq-b.seq);
+}
 
 /** Default enterprise tasks use the native scheduler, native Inbox and stable Sessions. */
 export const briefingDefaults = Object.freeze([
@@ -52,7 +83,7 @@ export function beginBriefingPeriod({agent, turn, signal}, decision) {
   // and errors as unfinished work for this newly scheduled business period.
   const message=createUserMessage({
     source:{kind:'enterprise-briefing-period',turn},content:[{type:'text',text:
-      '本期是独立的研发简报周期。前期正文和过程仍保留在会话历史中；本期从服务端活动索引重新读取固定记录。历史工具结果不代表本期读取，记录更新时间不代表已知前后变化。需要比较历史时，沿真实版本关联重新读取。日报使用上次成功报告截止至本次截止，首次回看24小时；周报使用上海时区本周范围，以服务端window为准。完整读取RELATED_ACTIVITY及全部索引分页；PROJECT、STAGE、TASK、EXPERIMENT主索引的每个ref继续用business_read读取固定记录，目录不能代替这一步。资料变化则按报告需要展开关联正文和附件，不要求逐个附件全部读取。files仅是原文件目录，include_file下载原件后用read读取business_file.reading_path，图片用read_image实际阅读；文本投影不包含内嵌图片和版式。正文、原件及下载目录不能相互替代。后台只可阅读任务目录中的文件，不得执行脚本、编辑或交付。'+
+      '本期是独立的研发简报周期。前期正文和过程仍保留在会话历史中；本期从服务端活动索引重新读取固定记录。历史工具结果不代表本期读取，记录更新时间不代表已知前后变化。需要比较历史时，沿真实版本关联重新读取。日报使用上次成功报告截止至本次截止，首次回看24小时；周报使用上海时区本周范围，以服务端window为准。先取得get_research_briefing_context，再连续调用business_read_many({})，由服务端按冻结索引选择每批未读固定记录及分页，直到没有剩余正文。不要手抄ID、挑读几条后跳过其余记录。按每批briefing_progress的剩余数量继续，批间不写长篇汇总或表格；正文全部送达后再一次整理报告。成功送达的正文同时覆盖该条索引；RELATED_ACTIVITY目录仍沿pending_index_requests读完。目录不能代替正文。资料变化按报告需要展开关联正文和附件，不要求逐个附件全部读取。files仅是原文件目录，include_file下载原件后用read读取business_file.reading_path，图片用read_image实际阅读；文本投影不包含内嵌图片和版式。正文、原件及下载目录不能相互替代。后台只可阅读任务目录中的文件，不得执行脚本、编辑或交付。'+
       ' 正文开头使用“## 本期重点”，用60至120字概括有依据的重点或结论；随后用“## 建议行动”列出最多三项建议，每项在同一行附对应业务来源引用，再展开完整正文。摘要与建议只能依据本期已读资料，没有可建议的事项时如实说明。'+
       ' 使用get_experiment_loop读取项目的建模、推荐、正式实测与优化轮次，沿activities调用get_compute_result读取具体运行；比较推荐与实际配方、预测与实测偏差，按实验版本和样品核对数字。解释原料时读取RAW_MATERIAL及其来源位置，结合已读文献说明适用条件。日报说明当日进展、待办、阻塞和建议；周报说明本周变化、成果与下周安排；复盘说明偏差与下一轮建议。正文采用实测、测定、评估和研发参考等用词，全文保留在本会话。后台只读取，不保存项目文档。'}],
   });

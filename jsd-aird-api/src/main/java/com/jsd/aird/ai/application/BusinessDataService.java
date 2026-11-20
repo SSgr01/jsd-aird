@@ -249,7 +249,7 @@ public class BusinessDataService {
             var result = json.createObjectNode(); result.set("available_relations", json.valueToTree(names));
             result.putArray("candidates").add(candidate(origin)); return timed(result);
         }
-        if (!names.contains(args.path("relation").asText())) throw new ApiException(ApiErrorCode.BAD_REQUEST, "不存在该已确认关系");
+        if (!names.contains(args.path("relation").asText())) throw invalidRelation(names);
         for (var relation : origin.relations()) {
             if (args.hasNonNull("relation") && !relation.name().equals(args.path("relation").asText())) continue;
             var target = relation.target(); String targetType = target.path("type").asText();
@@ -288,7 +288,7 @@ public class BusinessDataService {
             relations.putAll(BusinessProjectMaterials.RELATIONS);
             result.set("available_relations", json.valueToTree(new TreeSet<>(relations.keySet())));
             if (!args.hasNonNull("relation")) return timed(result);
-            if (!relations.containsKey(args.path("relation").asText())) throw new ApiException(ApiErrorCode.BAD_REQUEST, "不存在该项目关系");
+            if (!relations.containsKey(args.path("relation").asText())) throw invalidRelation(relations.keySet());
             for (var relation : relations.entrySet()) {
                 if (args.hasNonNull("relation") && !relation.getKey().equals(args.path("relation").asText())) continue;
                 var filter = json.createObjectNode().put("project_id", id(ref).toString());
@@ -329,7 +329,7 @@ public class BusinessDataService {
                 if(targets.size()>offset(args)+limit(args))result.put("next_offset",offset(args)+limit(args));
                 return timed(result);
             }
-            if(!"所属项目".equals(args.path("relation").asText()))throw new ApiException(ApiErrorCode.BAD_REQUEST,"不存在该实验关系");
+            if(!"所属项目".equals(args.path("relation").asText()))throw invalidRelation(Set.of("来源实验","所属项目"));
             var project=source.path("candidates").path(0).path("ref").path("project_id");
             if(project.isTextual()) {
                 var target=json.createObjectNode().put("type","PROJECT").put("id",project.asText());
@@ -344,6 +344,10 @@ public class BusinessDataService {
         return timed(result);
     }
     private static boolean hidden(ApiException error) { return Set.of(ApiErrorCode.NOT_FOUND, ApiErrorCode.PERMISSION_DENIED, ApiErrorCode.DATA_SCOPE_DENIED).contains(error.errorCode()); }
+    private static ApiException invalidRelation(Collection<String> available) {
+        return new ApiException(ApiErrorCode.BAD_REQUEST,"不存在该已确认关系",Map.of("code","INVALID_TOOL_ARGUMENTS",
+            "path",List.of("relation"),"rule","enum","allowed_values",available.stream().sorted().toList()));
+    }
     private void requireProjectScope(ObjectNode args,UUID project){
         if(!args.has("report_project_ids"))return;
         for(var value:args.path("report_project_ids"))if(project.toString().equals(value.asText()))return;
@@ -364,6 +368,7 @@ public class BusinessDataService {
             + "?ref=" + java.net.URLEncoder.encode(ref.toString(), java.nio.charset.StandardCharsets.UTF_8));
         var candidate = json.createObjectNode().put("text", text).put("model_text", modelMarkdown(row.title(), row.facts()));
         candidate.set("source", source); candidate.set("ref", ref);
+        candidate.set("available_relations", json.valueToTree(row.relations().stream().map(BusinessRecordView.Relation::name).distinct().sorted().toList()));
         if(originalFiles!=null && BusinessOriginalFiles.supports(ref.path("type").asText()))candidate.set("files",json.valueToTree(originalFiles.list(ref)));
         return candidate;
     }

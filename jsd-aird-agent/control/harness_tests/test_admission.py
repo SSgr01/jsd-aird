@@ -105,6 +105,49 @@ async def test_two_workers_never_oversubscribe_or_dispatch_twice(admission, prin
     assert len({call[1] for call in admission.calls}) == 2
 
 
+async def test_background_reports_reserve_same_user_interactive_capacity_without_preemption(admission, principal):
+    admission.settings = admission.settings.model_copy(update={"max_running_runs": 4, "max_running_runs_per_user": 2})
+    background = principal.model_copy(update={"scope": "research-briefings", "automation_grant_id": str(uuid4())})
+    first = await queued(admission, background)
+    second = await queued(admission, background)
+    interactive = await queued(admission, principal)
+    assert await admission.grant(background, first["id"])
+    assert not await admission.grant(background, second["id"])
+    assert await admission.grant(principal, interactive["id"])
+    assert (await admission.state(background, first["id"]))["admission"] == "GRANTED"
+    await finish(admission, principal, interactive["id"])
+    assert not await admission.grant(background, second["id"])
+    await finish(admission, background, first["id"])
+    assert await admission.grant(background, second["id"])
+
+
+async def test_background_global_reservation_is_atomic_across_workers(admission, principal):
+    admission.settings = admission.settings.model_copy(update={"max_running_runs": 4, "max_running_runs_per_user": 2})
+    owners = [principal.model_copy(update={"organization_id": uuid4(), "actor_id": uuid4(),
+        "scope": "research-briefings", "automation_grant_id": str(uuid4())}) for _ in range(4)]
+    reports = [await queued(admission, owner) for owner in owners]
+    other = RunAdmission(admission.service)
+    other.settings = admission.settings
+    await asyncio.gather(admission.cycle(), other.cycle())
+    await asyncio.gather(*admission.tasks, *other.tasks)
+    states = [await admission.state(owner, run["id"]) for owner, run in zip(owners, reports)]
+    assert sum(state["admission"] == "GRANTED" for state in states) == 3
+    interactive = await queued(admission, principal)
+    assert await admission.grant(principal, interactive["id"])
+    assert sum(state["admission"] == "GRANTED" for state in states) + 1 == 4
+
+
+async def test_single_slot_still_runs_background_reports_serially(admission, principal):
+    admission.settings = admission.settings.model_copy(update={"max_running_runs": 1})
+    background = principal.model_copy(update={"scope": "research-briefings", "automation_grant_id": str(uuid4())})
+    report = await queued(admission, background)
+    interactive = await queued(admission, principal)
+    assert await admission.grant(background, report["id"])
+    assert not await admission.grant(principal, interactive["id"])
+    await finish(admission, background, report["id"])
+    assert await admission.grant(principal, interactive["id"])
+
+
 async def test_organization_user_round_robin_and_fifo_survive_restart(admission, principal):
     admission.settings = admission.settings.model_copy(update={"max_running_runs": 1})
     p2 = principal.model_copy(update={"actor_id": uuid4()})
@@ -343,3 +386,33 @@ async def test_unreachable_host_does_not_stall_another_organizations_admission(a
     finally:
         confirm_stopped.set()
         await asyncio.gather(*admission.tasks)
+
+
+@pytest.mark.parametrize("unresolved,ended", [(False, True), (True, True), (False, False)])
+async def test_terminal_native_ending_releases_only_settled_old_run(admission, principal, unresolved, ended):
+    run = await queued(admission, principal)
+    assert await admission.grant(principal, run["id"])
+    async with admission.store.transaction(principal, run["id"]) as conn:
+        current = await admission.store.get(principal, "run", run["id"], conn)
+        current.update(status="FAILED", error="DSH_EXECUTION_INTERRUPTED", dsh_turn=3)
+        if ended:
+            current["dsh_stop_reason"] = {"kind": "error", "error": {"code": "TOOL_ACTIVATION_FAILED"}}
+        await admission.store.update(principal, "run", current, conn)
+        if unresolved:
+            await conn.execute(
+                "INSERT INTO agent_runtime.harness_calls(run_id,call_id,request_hash,tool_name,status) "
+                "VALUES(%s,'command','hash','dsh_execute','UNKNOWN')", (run["id"],),
+            )
+        await conn.execute("UPDATE agent_runtime.harness_admission SET lease_until=now()-interval '1 second' WHERE run_id=%s", (run["id"],))
+    async def unavailable(*_):
+        raise HTTPException(403, "OLD_DELIVERY_AUTHORITY_EXPIRED")
+    admission.service.runtime = unavailable
+    await admission.cycle()
+    await asyncio.gather(*admission.tasks, return_exceptions=True)
+    state = await admission.state(principal, run["id"])
+    assert state["admission"] == ("RELEASED" if ended and not unresolved else "RELEASING")
+    if unresolved or not ended:
+        # A refusal retains the slot and backs off, rather than spinning each tick.
+        await admission.cycle()
+        assert not admission.tasks
+    assert (await admission.store.get(principal, "run", run["id"]))["epoch"] == run["epoch"] + 1

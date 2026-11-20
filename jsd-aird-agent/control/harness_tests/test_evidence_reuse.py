@@ -16,6 +16,15 @@ def state(*items):
     return {"evidence": evidence}, list(evidence.values())
 
 
+def test_business_navigation_retains_exact_relation_names_without_target_authority():
+    item = candidate("authorized body")
+    item.update(ref={"type": "CUSTOMER", "id": "known"}, available_relations=["品管记录", "所属项目"])
+    shown = model_result({"candidates": [item]})["candidates"][0]
+    assert shown["available_relations"] == ["品管记录", "所属项目"]
+    assert shown["ref"] == item["ref"]
+    assert "targets" not in shown
+
+
 def search(run, items, query, budget=9000):
     page = search_preview({"query": query, "candidates": items}, budget, delivered=run)
     return delivery_result(run, "knowledge_search", {"query": query}, page)[0]
@@ -125,10 +134,11 @@ def test_overlapping_nodes_do_not_consume_the_budget_for_new_nodes():
     run, items = state(*(candidate(f"Node {i}: " + "Test conditions. " * 30) for i in range(3)))
     delivery_result(run, "document_read", {}, {"candidates": items[:2]})
     page = {"candidates": items[1:], "trace": {"total_nodes": 3}}
-    bounded = bound_document_page(page, {"offset": 1}, 1600, delivered=run)
+    bounded = bound_document_page(page, {"offset": 1}, 1800, delivered=run)
     assert len(bounded["candidates"]) == 2 and bounded["next_offset"] is None
+    assert len(bound_document_page(page, {"offset": 1}, 1800)["candidates"]) == 1
     projected, _ = delivery_result(run, "document_read", {}, bounded)
-    assert len(json.dumps(model_result(projected), ensure_ascii=False)) < 1600
+    assert len(json.dumps(model_result(projected), ensure_ascii=False)) < 1800
 
 
 def test_search_can_fit_a_new_hit_after_compacting_a_previously_returned_hit():

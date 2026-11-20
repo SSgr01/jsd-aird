@@ -16,19 +16,21 @@ public interface MaterialMapper {
 
     String COLS = "id, code, name, category, source_category, source_module, stage, contact_person, status, description, version, created_at, updated_at";
 
-    @Select("SELECT " + COLS + " FROM mdm.material WHERE id=#{id}")
+    @Select("SELECT " + COLS + ", false AS linked FROM mdm.material WHERE id=#{id}")
     MaterialRow findById(@Param("id") UUID id);
 
-    @Select("SELECT " + COLS + " FROM mdm.material WHERE code=#{code}")
+    @Select("SELECT " + COLS + ", false AS linked FROM mdm.material WHERE code=#{code}")
     MaterialRow findByCode(@Param("code") String code);
 
-    @Select("SELECT " + COLS + " FROM mdm.material ORDER BY created_at DESC LIMIT #{size} OFFSET #{offset}")
+    @Select("SELECT " + COLS + ", false AS linked FROM mdm.material ORDER BY created_at DESC LIMIT #{size} OFFSET #{offset}")
     List<MaterialRow> list(@Param("offset") int offset, @Param("size") int size);
 
     @Select("SELECT count(*) FROM mdm.material")
     long count();
 
-    @Select("<script>SELECT " + COLS + ", " +
+    @Select("<script>SELECT mdm.material." + "id, mdm.material.code, mdm.material.name, mdm.material.category, " +
+            "mdm.material.source_category, mdm.material.source_module, mdm.material.stage, mdm.material.contact_person, " +
+            "mdm.material.status, mdm.material.description, mdm.material.version, mdm.material.created_at, mdm.material.updated_at, " +
             "CASE WHEN pm.project_id IS NOT NULL THEN true ELSE false END AS linked " +
             "FROM mdm.material " +
             "LEFT JOIN mdm.project_material pm ON pm.material_id = mdm.material.id AND pm.project_id=#{projectId} " +

@@ -11,6 +11,65 @@ import java.io.ByteArrayInputStream;
 import static org.assertj.core.api.Assertions.*;
 
 class LabStructureCompatibilityTest {
+    @Test void matchesUniqueKnownLabelsWhenASectionTitleIsMissingOrAFieldMovesSections() throws Exception {
+        var json=new ObjectMapper();var parser=new XlsxStructureParser(json);
+        var pack=new UnifiedLabTemplateCatalog(json).compile(UnifiedLabTemplateCatalog.TEST,parser.parseInstance(getClass().getResourceAsStream("/templates/unified/test.xlsx"))).payload();
+        var source=json.createObjectNode();var sheet=source.withObject("/sheets/s").put("id","s").put("name","测试实验").put("rowCount",32);
+        var definitions=LabWorkbook.definition(pack.path("snapshot")).path("fields");
+        var codes=java.util.List.of("condition.substrate","condition.application","curing.mode","curing.equipment","curing.intensity","curing.energy");
+        for(int i=0;i<codes.size();i++) {
+            LabWorkbook.cell(sheet,6+i,1).put("v",definitions.path(codes.get(i)).path("label").asText());
+            LabWorkbook.cell(sheet,6+i,2).put("v",i<4?"条件"+i:"200");
+        }
+        LabWorkbook.cell(sheet,12,0).put("v","树脂物性");
+        LabWorkbook.cell(sheet,14,0).put("v","实验配方");
+        LabWorkbook.cell(sheet,14,1).put("v",definitions.path("plan.variable").path("label").asText());
+        for(int c=2;c<=6;c++)LabWorkbook.cell(sheet,14,c).put("v",(c-2)*3+"%B-2157");
+        LabWorkbook.cell(sheet,15,1).put("v",definitions.path("sample.experimentNo").path("label").asText());
+        LabWorkbook.cell(sheet,15,2).put("v","S001");
+        LabWorkbook.cell(sheet,16,1).put("v","MAT-A");LabWorkbook.cell(sheet,16,2).put("v",100);
+        LabWorkbook.cell(sheet,20,1).put("v",definitions.path("formula.total").path("label").asText());
+        var prepared=LabWorkbook.prepare(json,source,pack.path("snapshot"),"missing-heading");
+        WorkbookStructure.seed(json,prepared,pack.path("schema"),pack.path("mapping"),"missing-heading");
+        var checked=WorkbookStructure.validate(json,prepared,WorkbookStructure.instance(prepared));
+        var model=LabWorkbook.extract(json,prepared,json.createObjectNode(),"missing-heading");
+        assertThat(checked.path("issues").findValuesAsText("code")).doesNotContain("UNBOUND_VALUE");
+        assertThat(model.path("templateInstance").path("issues").findValuesAsText("code")).doesNotContain("UNBOUND_VALUE");
+        for(int i=0;i<codes.size();i++)assertThat(LabWorkbook.findField(LabWorkbook.sheet(prepared),codes.get(i))[0]).isEqualTo(6+i);
+        assertThat(LabWorkbook.findField(LabWorkbook.sheet(prepared),"plan.variable")[0]).isEqualTo(14);
+    }
+
+    @Test void checksCustomerWorkbookWhenProvided() throws Exception {
+        var path=System.getProperty("lab.customer.workbook");
+        org.junit.jupiter.api.Assumptions.assumeTrue(path!=null);
+        var json=new ObjectMapper();var parser=new XlsxStructureParser(json);
+        var pack=new UnifiedLabTemplateCatalog(json).compile(UnifiedLabTemplateCatalog.TEST,parser.parseInstance(getClass().getResourceAsStream("/templates/unified/test.xlsx"))).payload();
+        try(var input=java.nio.file.Files.newInputStream(java.nio.file.Path.of(path))) {
+            var prepared=LabWorkbook.prepare(json,parser.parseInstance(input).snapshot(),pack.path("snapshot"),"customer");
+            WorkbookStructure.seed(json,prepared,pack.path("schema"),pack.path("mapping"),"customer");
+            for(int pass=0;pass<2;pass++) {
+                prepared=LabWorkbook.prepare(json,prepared,pack.path("snapshot"),"customer");
+                var model=LabWorkbook.extract(json,prepared,json.createObjectNode(),"customer");
+                assertThat(model.path("templateInstance").path("issues").findValuesAsText("code")).doesNotContain("UNBOUND_VALUE");
+                assertThat(model.path("processSteps").findValuesAsText("fieldCode")).contains("condition.substrate","plan.variable");
+            }
+        }
+    }
+
+    @Test void reportsAnActuallyUnboundCellOnceAcrossBothValidators() throws Exception {
+        var json=new ObjectMapper();var parser=new XlsxStructureParser(json);
+        var pack=new UnifiedLabTemplateCatalog(json).compile(UnifiedLabTemplateCatalog.TEST,parser.parseInstance(getClass().getResourceAsStream("/templates/unified/test.xlsx"))).payload();
+        var source=pack.path("snapshot").deepCopy();
+        LabWorkbook.cell(LabWorkbook.sheet(source),140,2).put("v","待定位内容");
+        var prepared=LabWorkbook.prepare(json,source,pack.path("snapshot"),"unbound");
+        WorkbookStructure.seed(json,prepared,pack.path("schema"),pack.path("mapping"),"unbound");
+        for(int pass=0;pass<2;pass++) {
+            var model=LabWorkbook.extract(json,prepared,json.createObjectNode(),"unbound");
+            assertThat(java.util.stream.StreamSupport.stream(model.path("templateInstance").path("issues").spliterator(),false)
+                .filter(i->i.path("code").asText().equals("UNBOUND_VALUE")&&i.path("address").asText().equals("C141"))).hasSize(1);
+        }
+    }
+
     @Test void keepsDeletedFieldsDeletedWhenAnEditedInstanceIsPreparedAgain() throws Exception {
         var json=new ObjectMapper();var parser=new XlsxStructureParser(json);var catalog=new UnifiedLabTemplateCatalog(json);
         var pack=catalog.compile(UnifiedLabTemplateCatalog.TEST,parser.parseInstance(getClass().getResourceAsStream("/templates/unified/test.xlsx"))).payload();

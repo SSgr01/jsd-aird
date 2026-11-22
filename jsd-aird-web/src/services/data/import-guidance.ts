@@ -1,5 +1,21 @@
 import type { DataIssue, DataPreview, DataTemplateOption } from './data-api';
 
+export function isImportBlocker(issue: DataIssue) {
+  return issue.severity === 'BLOCKER' && issue.issueType !== 'REQUIRED_MISSING'
+    && !['RESOLVED', 'IGNORED'].includes(issue.status);
+}
+
+export function distinctRequiredNotices(issues: DataIssue[]) {
+  const seen = new Set<string>();
+  return issues.filter(issue => {
+    if (issue.issueType !== 'REQUIRED_MISSING' || ['RESOLVED', 'IGNORED'].includes(issue.status)) return false;
+    const key = JSON.stringify([issue.sheetId, issue.address || issue.rowNumber, issue.fieldCode]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export const templateCategory = (item: DataTemplateOption) => item.category?.trim() || '未分类';
 export function templateGroups(items: DataTemplateOption[], category?: string) {
   const groups = new Map<string, DataTemplateOption[]>();
@@ -18,8 +34,7 @@ export function sheetSummary(preview: DataPreview, sheetId: string) {
   const sheet = preview.sheets.find((item) => item.sheetId === sheetId);
   const mappings = preview.mappings.filter((item) => item.sheetId === sheetId && item.action === 'MAP' && item.fieldCode?.trim());
   const rows = preview.rows.filter((item) => item.sheetId === sheetId && !item.excluded);
-  const blockers = preview.issues.filter((item) => item.sheetId === sheetId && item.severity === 'BLOCKER'
-    && !['RESOLVED', 'IGNORED'].includes(item.status));
+  const blockers = preview.issues.filter((item) => item.sheetId === sheetId && isImportBlocker(item));
   return {
     mappingCount: mappings.length, recordCount: rows.length, blockerCount: blockers.length,
     message: !sheet?.selected ? '未选择导入'
@@ -29,14 +44,18 @@ export function sheetSummary(preview: DataPreview, sheetId: string) {
   };
 }
 
-export function confirmationBlockReason(preview: DataPreview) {
-  if (preview.issues.some((issue) => requiresTemplateChange(issue.issueType) && issue.severity === 'BLOCKER' && !['RESOLVED', 'IGNORED'].includes(issue.status)))
+export function confirmationBlockReason(preview: DataPreview, reviewedIssues = preview.issues) {
+  if (reviewedIssues.some((issue) => requiresTemplateChange(issue.issueType) && issue.severity === 'BLOCKER' && !['RESOLVED', 'IGNORED'].includes(issue.status)))
     return '文件中有内容无法按所选模板读取，请重新选择模板或文件；仍无法导入时请联系模板维护人员。';
-  const count = preview.issues.filter((issue) => issue.severity === 'BLOCKER' && !['RESOLVED', 'IGNORED'].includes(issue.status)).length;
+  const count = reviewedIssues.filter(isImportBlocker).length;
   if (count) return `有 ${count} 项阻断问题，请在下方定位并修正；草稿修正会保留`;
   if (['INCOMPATIBLE', 'REVIEW_REQUIRED'].includes(preview.job.compatibilityStatus || '')) return '文件与所选模板不一致，无法可靠读取。请重新选择模板或文件；仍无法导入时请联系模板维护人员。';
   if (preview.job.status === 'WAITING_MAPPING' && preview.mappings.some((item) => item.action !== 'IGNORE' && (item.action !== 'MAP' || !item.fieldCode))) return '部分内容无法按所选模板读取。请重新选择模板或文件；无需手动设置字段对应关系。';
-  if (preview.job.status !== 'WAITING_CONFIRM') return '数据尚未完成解析，请稍后刷新；处理失败时可重新解析或重新上传。';
+  const legacyRequiredOnly = preview.job.status === 'WAITING_MAPPING'
+    && preview.issues.some(issue => issue.issueType === 'REQUIRED_MISSING' && issue.severity === 'BLOCKER');
+  const definitionsResolved = preview.job.status === 'WAITING_MAPPING'
+    && preview.issues.some(isFieldDefinitionIssue) && !reviewedIssues.some(isFieldDefinitionIssue);
+  if (preview.job.status !== 'WAITING_CONFIRM' && !legacyRequiredOnly && !definitionsResolved) return '数据尚未完成解析，请稍后刷新；处理失败时可重新解析或重新上传。';
   return undefined;
 }
 

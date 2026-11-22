@@ -9,6 +9,7 @@ import { ContentLoading } from '@/components/loading/ContentLoading';
 import { trackSnapshot } from '@/features/template-workspace/workspace-loading';
 import { markPerformance } from '@/services/performance/metrics';
 import { editorUnchanged, flushEditorChanges, mergeAcknowledgement, pauseWorkspaceInputs, snapshotBlob, useSaveSession } from '@/features/template-workspace/editor-save';
+import { useLatestRequest } from '@/services/query/use-request-guard';
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
@@ -78,6 +79,7 @@ import {
   acceptRecognitionReviewItem,
   isRecognitionRegionRoot,
   mergeRecognitionReview,
+  recognitionNeedsAttention,
 } from '@/features/template-workspace/recognition-review';
 import { getAtPath, setAtPath } from '@/features/template-workspace/path-utils';
 import {
@@ -186,6 +188,7 @@ export function TemplateWorkspacePage() {
   const { message, modal } = App.useApp();
   const editorRef = useRef<EditorHandle>(null);
   const saveSession = useSaveSession(versionId);
+  const recognitionLoads = useLatestRequest(versionId || '');
   const workspaceRootRef = useRef<HTMLElement>(null);
   const savedGenerationRef = useRef(0);
   const autoAppendKeysRef = useRef(new Set<string>());
@@ -466,9 +469,17 @@ export function TemplateWorkspacePage() {
       return true;
     }
     setReviewSyncState('REFRESHING');
+    const isCurrent = recognitionLoads.begin();
+    const session = saveSession.current;
+    const generation = editGenerationRef.current;
+    const canMerge = () => isCurrent() && session.active && saveSession.current === session
+      && generation === editGenerationRef.current && canApply();
     try {
       const latestReview = await templateApi.getRecognitionReview(versionId);
-      if (!canApply()) return false;
+      if (!canMerge()) {
+        if (isCurrent() && session.active && saveSession.current === session) setReviewSyncState('STALE');
+        return false;
+      }
       // A structure confirmation is applied on the server during save.  The
       // resulting REGION_FIELDS suggestions are therefore not present in the
       // previous client model; merge the refreshed review immediately so the
@@ -492,7 +503,7 @@ export function TemplateWorkspacePage() {
       setReviewSyncState('FRESH');
       return true;
     } catch (error) {
-      if (!canApply()) return false;
+      if (!isCurrent() || !session.active || saveSession.current !== session) return false;
       setReviewSyncState('STALE');
       if (notifyOnFailure) {
         void message.warning(
@@ -1773,6 +1784,8 @@ export function TemplateWorkspacePage() {
   const pickingField = picking
     ? fieldModel.fields.find((field) => field.id === picking.fieldId)
     : undefined;
+  const configuredFieldCount = fieldModel.fields.filter((field) => !field.candidate && !isRegionModelField(field)).length;
+  const showRecognitionStatus = recognitionNeedsAttention(recognitionReview, configuredFieldCount, recognitionBusy, reviewSyncState);
 
   return (
     <WorkspaceFrame maximizable
@@ -1795,6 +1808,11 @@ export function TemplateWorkspacePage() {
             </Typography.Text>
             <h1 className="workspace-document-title" title={workspace.name}>{workspace.name}</h1></div>
           <span className="workspace-meta-item">V{workspace.versionNo}</span>
+          {configuredFieldCount > 0 && (
+            <span className="workspace-meta-item" title="模板已有的字段配置数量，不是待确认项">
+              {configuredFieldCount} 项字段
+            </span>
+          )}
           <span className="workspace-meta-item workspace-format">
             {workspace.format === 'XLSX' ? (
               <>
@@ -1812,6 +1830,20 @@ export function TemplateWorkspacePage() {
           />
         </div>
         <Space wrap className="workspace-header-actions">
+          {view === 'edit' && !showRecognitionStatus && (
+            <Dropdown menu={{
+              items: [
+                ...(recognitionReview?.recognitionRunId ? [{ key: 'review', label: '查看识别结果' }] : []),
+                { key: 'restart', label: '重新识别字段', disabled: !editable },
+              ],
+              onClick: ({ key }) => {
+                if (key === 'review') beginRecognitionReview();
+                if (key === 'restart') void restartRecognition();
+              },
+            }}>
+              <Button size="small">字段识别 <DownOutlined /></Button>
+            </Dropdown>
+          )}
           {canUpdate && ['PUBLISHED', 'RETIRED'].includes(workspace.status) && (
             <Button
               size="small"
@@ -1990,10 +2022,10 @@ export function TemplateWorkspacePage() {
           }} />
       ) : (
         <div className="workspace-main-stage">
-          {view === 'edit' && (
+          {view === 'edit' && showRecognitionStatus && (
             <RecognitionStatusBar
               review={recognitionReview}
-              configuredFieldCount={fieldModel.fields.filter((field) => !field.candidate && !isRegionModelField(field)).length}
+              configuredFieldCount={configuredFieldCount}
               job={recognitionJob}
               busy={recognitionBusy}
               editable={editable}

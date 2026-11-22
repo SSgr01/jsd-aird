@@ -64,6 +64,7 @@ export function TemplateImportRenderPage() {
           snapshot={snapshot}
           bindings={[]}
           editable={false}
+          fullscreenEnabled={false}
           onDirty={() => undefined}
           onEditorValue={() => undefined}
           onReady={markReady}

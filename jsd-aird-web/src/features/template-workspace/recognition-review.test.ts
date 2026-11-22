@@ -7,6 +7,7 @@ import {
   acceptRecognitionReviewItem,
   isRecognitionRegionRoot,
   mergeRecognitionReview,
+  recognitionNeedsAttention,
 } from './recognition-review';
 
 describe('recognition review draft merge', () => {
@@ -463,3 +464,27 @@ function createItem(update: Partial<RecognitionReviewItem> = {}): RecognitionRev
     ...update,
   };
 }
+
+
+describe('recognition status lifecycle', () => {
+  it('does not revive configured-field notices on save or reload', () => {
+    expect(recognitionNeedsAttention(undefined, 129, false, 'FRESH')).toBe(false);
+    const review = createReview(createItem({ status: 'CONFIRMED' }));
+    review.summary.pending = 0; review.summary.conflict = 0; review.summary.blockingIssueCount = 0;
+    if (review.statistics) { review.statistics.pendingFieldCount = 0; review.statistics.structureConflictGroups = 0; }
+    expect(recognitionNeedsAttention(review, 129, false, 'FRESH')).toBe(false);
+    expect(recognitionNeedsAttention(structuredClone(review), 129, false, 'FRESH')).toBe(false);
+  });
+  it('shows empty templates, active recognition and failed refreshes', () => {
+    expect(recognitionNeedsAttention(undefined, 0, false, 'FRESH')).toBe(true);
+    expect(recognitionNeedsAttention(undefined, 129, true, 'FRESH')).toBe(true);
+    expect(recognitionNeedsAttention(undefined, 129, false, 'STALE')).toBe(true);
+    expect(recognitionNeedsAttention(undefined, 129, false, 'REFRESHING')).toBe(true);
+  });
+  it.each(['pending', 'conflict', 'blockingIssueCount'] as const)('retains actual %s problems', (field) => {
+    const review = createReview(createItem()); review.summary[field] = 1;
+    expect(recognitionNeedsAttention(review, 129, false, 'FRESH')).toBe(true);
+    review.runStatus = 'FAILED';
+    expect(recognitionNeedsAttention(review, 129, false, 'FRESH')).toBe(true);
+  });
+});

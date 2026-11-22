@@ -20,11 +20,11 @@ export function documentWorkflowStatus(item: Pick<KnowledgeDocument, 'status' | 
     }
   }
   if (item.status !== 'READY') return parsingStatuses[item.status] || { label: item.status, color: 'default' };
-  if (item.reviewStatus === 'PUBLISHED') return { label: '已发布', color: 'success' };
   if (item.reviewStatus === 'REJECTED') return { label: '已驳回', color: 'error' };
   if (item.reviewStatus === 'SUPERSEDED') return { label: '已被新版本替代', color: 'default' };
   if (item.reviewRevisionStatus === 'BUILDING') return { label: '发布处理中', color: 'processing' };
   if (item.reviewRevisionStatus === 'FAILED') return { label: '发布失败', color: 'error' };
+  if (item.reviewStatus === 'PUBLISHED') return { label: item.reviewRevisionStatus === 'DRAFT' ? '已发布 · 有修订草稿' : '已发布', color: 'success' };
   if (item.reviewRevisionStatus === 'DRAFT') return { label: '待校对', color: 'gold' };
   return { label: '解析完成', color: 'success' };
 }

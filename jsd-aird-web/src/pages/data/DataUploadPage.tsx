@@ -1,3 +1,5 @@
+import { useLatestRequest } from '@/services/query/use-request-guard';
+import { usePolling } from '@/hooks/use-polling';
 import { FileExcelOutlined, FilePdfOutlined, FileWordOutlined, RightOutlined } from '@ant-design/icons';
 import { Alert, App, Form, Select, Upload } from 'antd';
 import type { UploadFile } from 'antd';
@@ -121,7 +123,9 @@ export function DataUploadPage() {
     ]);
   }, []);
 
+  const jobLoads = useLatestRequest(JSON.stringify([jobKeyword, jobStatus, jobs.page, jobs.size]));
   const loadJobs = useCallback(async (_options: { silent?: boolean } = {}) => {
+    const isCurrent = jobLoads.begin();
     if (!_options.silent) setJobsLoading(true);
     try {
       const page = await dataApi.listJobs({
@@ -130,22 +134,18 @@ export function DataUploadPage() {
         page: jobs.page,
         size: jobs.size,
       });
+      if (!isCurrent()) return;
       setJobs({ items: page.items, page: page.page, size: page.size, total: page.total });
     } catch (error) {
-      if (!_options.silent) void message.error(error instanceof Error ? error.message : '导入任务加载失败');
+      if (isCurrent() && !_options.silent) void message.error(error instanceof Error ? error.message : '导入任务加载失败');
     } finally {
-      if (!_options.silent) setJobsLoading(false);
+      if (isCurrent()) setJobsLoading(false);
     }
-  }, [jobKeyword, jobStatus, jobs.page, jobs.size, message]);
+  }, [jobKeyword, jobStatus, jobs.page, jobs.size, message, jobLoads]);
 
   useEffect(() => { void loadJobs(); }, [loadJobs]);
 
-  useEffect(() => {
-    const hasActiveJob = jobs.items.some((job) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status));
-    if (!hasActiveJob) return undefined;
-    const timer = window.setInterval(() => void loadJobs({ silent: true }), 3000);
-    return () => window.clearInterval(timer);
-  }, [jobs.items, loadJobs]);
+  usePolling(() => loadJobs({ silent: true }), jobs.items.some((job) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status)), 3000);
 
   const spreadsheetTemplates = useMemo(() => templates.filter((item) => item.format === 'XLSX'), [templates]);
   const wordTemplates = useMemo(() => templates.filter((item) => item.format === 'DOCX'), [templates]);

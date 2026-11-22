@@ -43,6 +43,9 @@ public class ExperimentService {
     private final TemplateDataImportFacade templates;
     private final JsonCanonicalizer canonicalizer;
     private final AuthorizationService authorization;
+    private com.jsd.aird.shared.excel.WorkbookFieldDefinitionReviews fieldDefinitionReviews;
+    @Autowired
+    public void setFieldDefinitionReviews(com.jsd.aird.shared.excel.WorkbookFieldDefinitionReviews reviews) { this.fieldDefinitionReviews = reviews; }
 
     public ExperimentService(ExperimentRepository repository, ObjectMapper json, FileStorageFacade files,
                              ExperimentEditModelNormalizer editModels) {
@@ -307,11 +310,13 @@ public class ExperimentService {
                 var marker = current.editModel().path("templateDataReview").isObject()
                         ? (ObjectNode) current.editModel().path("templateDataReview").deepCopy()
                         : json.createObjectNode().put("required", true).put("confirmed", false);
-                var unchanged = marker.path("confirmed").asBoolean(false)
-                        && marker.path("dataHash").asText("")
-                        .equals(dataHash(current.templateVersionId(), reviewData(model)));
+                var unchanged = templateReviewMatches(marker, current.templateVersionId(), model)
+                        || templateReviewMatches(marker, current.templateVersionId(), current.editModel())
+                        && dataHash(current.templateVersionId(), reviewData(current.editModel()))
+                            .equals(dataHash(current.templateVersionId(), reviewData(model)));
                 marker.put("confirmed", unchanged);
-                if (unchanged) marker.put("confirmedRevision", revision + 1);
+                if (unchanged) marker.put("confirmedRevision", revision + 1).put("hashVersion", 2)
+                        .put("dataHash", dataHash(current.templateVersionId(), reviewData(model)));
                 else marker.remove("confirmedRevision");
                 marker.put("required", true);
                 model.set("templateDataReview", marker);
@@ -320,15 +325,27 @@ public class ExperimentService {
         if (("EXCEL_IMPORT".equals(current.summary().sourceType()) || isTemplateImport(current)) && !confirmingData) {
             var previous = current.editModel().path("importDataReview");
             var marker = json.createObjectNode();
-            var unchanged = previous.path("confirmed").asBoolean(false)
-                    && previous.path("dataHash").asText("").equals(importDataHash(model.path("documentSnapshot")));
+            var unchanged = importReviewMatches(previous, model.path("documentSnapshot"))
+                    || importReviewMatches(previous, current.editModel().path("documentSnapshot"))
+                    && importDataHash(current.editModel().path("documentSnapshot")).equals(importDataHash(model.path("documentSnapshot")));
             marker.put("confirmed", unchanged);
             if (unchanged) {
                 marker.put("confirmedRevision", revision + 1);
-                marker.put("dataHash", previous.path("dataHash").asText());
+                marker.put("hashVersion", 2).put("dataHash", importDataHash(model.path("documentSnapshot")));
             }
             model.set("importDataReview", marker);
         }
+        if (confirmingData) {
+            // Hash the final normalized/extracted model that is actually persisted.
+            if (model.path("importDataReview").path("confirmed").asBoolean())
+                model.withObject("importDataReview").put("hashVersion", 2)
+                        .put("dataHash", importDataHash(model.path("documentSnapshot")));
+            if (model.path("templateDataReview").path("confirmed").asBoolean())
+                model.withObject("templateDataReview").put("hashVersion", 2)
+                        .put("dataHash", dataHash(current.templateVersionId(), reviewData(model)));
+        }
+        if (fieldDefinitionReviews != null) fieldDefinitionReviews.remember(actor.organizationId(), current.templateVersionId(),
+                com.jsd.aird.shared.excel.WorkbookStructure.instance(model.path("documentSnapshot")), actor.userId());
         var result = normalize(repository.saveDraft(
                 actor.organizationId(),
                 id,
@@ -368,9 +385,7 @@ public class ExperimentService {
         var marker = detail.editModel().path("templateDataReview");
         var confirmed = templateImport
                 ? importDataConfirmed(detail)
-                : marker.path("confirmed").asBoolean(false)
-                    && marker.path("confirmedRevision").asLong(-1) == detail.summary().revision()
-                    && marker.path("dataHash").asText("").equals(dataHash(detail.templateVersionId(), reviewData(detail.editModel())));
+                : templateReviewMatches(marker, detail.templateVersionId(), detail.editModel());
         return new TemplateDataReview(detail.templateVersionId(), definition.contractHash(), definition.fields(),
                 bindings, values.deepCopy(), confirmed,
                 com.jsd.aird.shared.excel.WorkbookStructure.seed(json,detail.editModel().path("documentSnapshot").deepCopy(),definition.schema(),definition.mappings(),id.toString()));
@@ -502,10 +517,29 @@ public class ExperimentService {
     }
 
     private String importDataHash(JsonNode snapshot) {
-        return canonicalizer.hash(snapshot);
+        return canonicalizer.hash(ExperimentReviewContent.workbook(json, snapshot));
+    }
+
+    private boolean importReviewMatches(JsonNode marker, JsonNode snapshot) {
+        return marker.path("confirmed").asBoolean(false) && canonicalizer != null
+                && marker.path("dataHash").asText("").equals(marker.path("hashVersion").asInt() == 2
+                    ? importDataHash(snapshot) : canonicalizer.hash(snapshot));
+    }
+
+    private boolean templateReviewMatches(JsonNode marker, UUID versionId, JsonNode model) {
+        return marker.path("confirmed").asBoolean(false) && versionId != null
+                && marker.path("dataHash").asText("").equals(dataHash(versionId,
+                    marker.path("hashVersion").asInt() == 2 ? reviewData(model) : legacyReviewData(model)));
     }
 
     private JsonNode reviewData(JsonNode model) {
+        var result = legacyReviewData(model).deepCopy();
+        if (result instanceof ObjectNode object && model.path("templateInstance").isObject())
+            object.set("templateInstance", ExperimentReviewContent.instance(json, model.path("templateInstance")));
+        return result;
+    }
+
+    private JsonNode legacyReviewData(JsonNode model) {
         if(!model.path("templateInstance").isObject())return model.path("dynamicValues");
         var result=json.createObjectNode();
         for(var key:List.of("dynamicValues","templateInstance","formulaItems","processSteps","testResults"))result.set(key,model.path(key));
@@ -534,9 +568,7 @@ public class ExperimentService {
 
     private boolean importDataConfirmed(Detail detail) {
         var marker = detail.editModel().path("importDataReview");
-        return marker.path("confirmed").asBoolean(false)
-                && marker.path("confirmedRevision").asLong(-1) == detail.summary().revision()
-                && marker.path("dataHash").asText("").equals(importDataHash(detail.editModel().path("documentSnapshot")));
+        return importReviewMatches(marker, detail.editModel().path("documentSnapshot"));
     }
 
     private boolean hasBoundWorkbookValue(JsonNode snapshot, JsonNode locator) {
@@ -636,9 +668,7 @@ public class ExperimentService {
             var model = current.editModel();
             if ("EXCEL_IMPORT".equals(current.summary().sourceType()) || isTemplateImport(current)) {
                 var marker = model.path("importDataReview");
-                if (!marker.path("confirmed").asBoolean(false)
-                        || marker.path("confirmedRevision").asLong(-1) != current.summary().revision()
-                        || !marker.path("dataHash").asText("").equals(importDataHash(model.path("documentSnapshot")))) {
+                if (!importReviewMatches(marker, model.path("documentSnapshot"))) {
                     throw validation("请先确认本次导入的实验数据，再提交审核");
                 }
             }
@@ -821,9 +851,31 @@ public class ExperimentService {
     }
 
     private Detail normalize(Detail detail) {
+        var model = editModels.normalize(detail.editModel(), detail.currentVersionId());
+        var structure = com.jsd.aird.shared.excel.WorkbookStructure.instance(model.path("documentSnapshot"));
+        var actor = ActorContext.required();
+        if (fieldDefinitionReviews != null && fieldDefinitionReviews.apply(actor.organizationId(), detail.templateVersionId(), structure)) {
+            com.jsd.aird.shared.excel.WorkbookStructure.validate(json, model.path("documentSnapshot"), structure);
+            if (com.jsd.aird.shared.lab.LabWorkbook.supported(detail.templateSnapshot())) {
+                var snapshot = com.jsd.aird.shared.lab.LabWorkbook.prepare(json, model.path("documentSnapshot"), detail.templateSnapshot(), detail.summary().id().toString());
+                model = com.jsd.aird.shared.lab.LabWorkbook.extract(json, snapshot, model, detail.summary().id().toString());
+            }
+            model = com.jsd.aird.shared.excel.WorkbookStructure.project(json, model.path("documentSnapshot"), model);
+        }
+        // Workflow transitions increment revision without changing reviewed data.
+        // Expose the effective revision consistently, including existing records.
+        for (var key : List.of("importDataReview", "templateDataReview")) {
+            if (!model.path(key).isObject() || !model.path(key).path("confirmed").asBoolean()) continue;
+            var marker = (ObjectNode) model.path(key);
+            boolean confirmed = key.equals("importDataReview")
+                    ? importReviewMatches(marker, model.path("documentSnapshot"))
+                    : templateReviewMatches(marker, detail.templateVersionId(), model);
+            marker.put("confirmed", confirmed);
+            if (confirmed) marker.put("confirmedRevision", detail.summary().revision());
+        }
         return new Detail(detail.summary(), detail.currentVersionId(), detail.sourceFileId(), detail.templateVersionId(),
                 detail.templateSnapshotHash(), detail.templateSnapshot(),
-                editModels.normalize(detail.editModel(), detail.currentVersionId()),
+                model,
                 detail.reviews(), detail.attachments());
     }
 

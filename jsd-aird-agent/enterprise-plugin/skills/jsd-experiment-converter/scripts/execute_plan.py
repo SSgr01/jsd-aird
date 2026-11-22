@@ -430,33 +430,46 @@ def execute(root, plan_path, output=None):
             if not isinstance(name_transforms, dict) or set(name_transforms) - name_refs:
                 raise ValueError('物料名提取只能引用本配方的真实物料来源坐标')
             converted_names = {}
-            def get_name(ref):
-                if ref not in converted_names:
+            def get_name(ref, transform=None):
+                transform = name_transforms.get(ref) if transform is None else transform
+                key = (ref, json.dumps(transform, sort_keys=True, ensure_ascii=False))
+                if key not in converted_names:
                     raw = get(ref)
-                    value = convert_value(raw, name_transforms.get(ref))
-                    converted_names[ref] = value
+                    value = convert_value(raw, transform)
+                    converted_names[key] = value
                     if value != raw or type(value) is not type(raw):
                         recipe_name_conversions.append({'sheet':name,'src':ref,'raw_value':raw,
-                            'value':value,'transform':name_transforms[ref]})
-                return converted_names[ref]
+                            'value':value,'transform':transform})
+                return converted_names[key]
+            entry_amount_transforms = {}
             if 'entries' in recipe:
                 if recipe.get('names') or recipe.get('amounts') or len(recipe['entries']) != len(groups):
                     raise ValueError('逐组entries须对应全部组，不能与names/amounts混用')
-                names, labels, amount_maps = [], [], []
+                names, labels, amount_maps, transform_maps = [], [], [], []
                 for entries in recipe['entries']:
-                    mapping = {}
+                    mapping, transforms = {}, {}
                     for entry in entries:
-                        label = get_name(entry['name'])
+                        if (not isinstance(entry, dict) or not {'name','amount'} <= entry.keys()
+                            or entry.keys() - {'name','amount','name_transform','amount_transform'}
+                            or not isinstance(entry['name'],str) or not isinstance(entry['amount'],str)):
+                            raise ValueError('逐组配方只接受真实name/amount来源及显式名称/用量提取，不接受直接填值')
+                        label = get_name(entry['name'], entry.get('name_transform'))
                         if (isinstance(label, bool) or not isinstance(label, (str, int, float))
                             or not str(label).strip() or label in mapping
                             or isinstance(label, float) and not math.isfinite(label)):
                             raise ValueError('逐组物料名缺失、无效或重复；须保留原始物料编码和逐次投料来源')
                         mapping[label] = entry['amount']
+                        if 'amount_transform' in entry:
+                            transforms[label] = entry['amount_transform']
                         if label not in labels:
                             labels.append(label)
                             names.append(entry['name'])
                     amount_maps.append(mapping)
+                    transform_maps.append(transforms)
                 amount_refs = [[mapping.get(label) for mapping in amount_maps] for label in labels]
+                entry_amount_transforms = {(i,j): transforms[label]
+                    for i,label in enumerate(labels) for j,transforms in enumerate(transform_maps)
+                    if label in transforms}
             else:
                 names, amount_refs = recipe['names'], recipe['amounts']
                 if any(ref is None for row in amount_refs for ref in row):
@@ -565,7 +578,7 @@ def execute(root, plan_path, output=None):
                 put(f"B{item['target_row']}", label)
                 for i, ref in enumerate(item['values']):
                     put(f"{get_column_letter(info['first_col']+i)}{item['target_row']}", get(ref))
-            material_names = [get_name(c) for c in names]
+            material_names = labels if 'entries' in recipe else [get_name(c) for c in names]
             if any(v is None for v in material_names):
                 raise ValueError("物料名称缺失，需要明确来源")
             if len(set(map(str, material_names))) != len(material_names):
@@ -591,7 +604,7 @@ def execute(root, plan_path, output=None):
                 put(f"B{row}", label)
                 for j, coord in enumerate(amount_refs[i]):
                     raw_value = get(coord) if coord is not None else None
-                    transform = amount_transforms.get(coord, recipe.get('amount_transform'))
+                    transform = entry_amount_transforms.get((i,j), amount_transforms.get(coord, recipe.get('amount_transform')))
                     value = convert_value(raw_value, transform) if coord is not None else None
                     target = f"{get_column_letter(info['first_col']+j)}{row}"
                     put(target, value)
@@ -601,7 +614,30 @@ def execute(root, plan_path, output=None):
             for item in spec.get("writes", []):
                 r, c = coordinate_to_tuple(item["dst"])
                 dst = f"{get_column_letter(c)}{map_row(r)}"
-                if 'srcs' in item:
+                if 'composition_parts' in item:
+                    if (set(item) != {'dst','composition_parts'} or kind!='test' or r!=20
+                        or not info['first_col'] <= c < info['first_col']+len(groups)
+                        or not isinstance(item['composition_parts'],list) or not item['composition_parts']):
+                        raise ValueError('组成描述须逐项引用原物料和原数值，只能写本组组成说明，不能折叠检测结果或写入g配方')
+                    parts=[];evidence=[]
+                    for binding in item['composition_parts']:
+                        if (not isinstance(binding,dict) or set(binding)!={'name','amount'}
+                            or any(not isinstance(binding[key],str) for key in ('name','amount'))):
+                            raise ValueError('组成描述只能接受真实name/amount来源，不接受直接填值或单位')
+                        label,amount=get(binding['name']),get(binding['amount'])
+                        if any(isinstance(v,bool) or not isinstance(v,(str,int,float))
+                               or isinstance(v,float) and not math.isfinite(v) for v in (label,amount)):
+                            raise ValueError('组成描述的名称及加入数须有原始非空值')
+                        display=amount
+                        if not docx:
+                            sn,cc=binding['amount'].rsplit('!',1) if '!' in binding['amount'] else (name,binding['amount'])
+                            if '%' in wf[sn][cc].number_format:display=converted(binding['amount'],'percent_to_text')
+                        parts.append(str(label).strip()+'：'+str(display))
+                        evidence.append({**binding,'raw_name':label,'raw_amount':amount,'display_amount':display})
+                    value='\n'.join(parts)
+                    derived_fields.append({'source':'composition_parts','target':dst,
+                        'domain':'COMPOSITION_AS_REPORTED_NOT_GRAM_CHARGES','parts':evidence})
+                elif 'srcs' in item:
                     if ('src' in item or 'transform' in item or not isinstance(item['srcs'],list)
                         or not item['srcs'] or not isinstance(item.get('join'),str)):
                         raise ValueError('多源文字须明确srcs列表及join分隔符，不与src或transform混用')

@@ -46,6 +46,9 @@ public class DataImportService {
     private final ImportCompatibilityEvaluator compatibilityEvaluator;
     private final ProjectResourceFacade projectResources;
     private AuthorizationService authorization;
+    private com.jsd.aird.shared.excel.WorkbookFieldDefinitionReviews fieldDefinitionReviews;
+    @Autowired
+    public void setFieldDefinitionReviews(com.jsd.aird.shared.excel.WorkbookFieldDefinitionReviews reviews) { this.fieldDefinitionReviews = reviews; }
 
     @Autowired
     public void setAuthorization(AuthorizationService authorization) { this.authorization = authorization; }
@@ -411,6 +414,7 @@ public class DataImportService {
         if(source==null||!source.path("sheets").isObject())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"工作簿草稿无效");
         var snapshot=source.deepCopy();
         var instance=com.jsd.aird.shared.excel.WorkbookStructure.validate(objectMapper,snapshot,provided);
+        if (fieldDefinitionReviews != null) fieldDefinitionReviews.remember(actor.organizationId(), job.templateVersionId(), instance, actor.userId());
         if(operations!=null&&!operations.isArray())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"结构操作记录无效");
         repository.saveWorkbookDraft(actor.organizationId(),id,snapshot,instance,operations==null?objectMapper.createArrayNode():operations,actor.userId());
         parseInternal(actor.organizationId(),id,true);
@@ -911,8 +915,7 @@ public class DataImportService {
                     var mapping = mappings.stream().filter(item -> row.sheetId().equals(item.sheetId())
                             && rowComponentId.equals(mappingComponentId(item))
                             && field.fieldCode().equals(item.fieldCode())).findFirst().orElse(null);
-                    issues.add(issue(row, mapping, "BLOCKER", "REQUIRED_MISSING", "必填字段为空"));
-                    rowBlocked = true;
+                    issues.add(issue(row, mapping, "WARNING", "REQUIRED_MISSING", "必填字段未填写，可稍后补充"));
                 }
             }
             rowBlocked |= issues.stream().anyMatch(item -> "BLOCKER".equals(item.severity()) && row.id().equals(issueRecordId(item)));
@@ -1109,9 +1112,22 @@ public class DataImportService {
     public void commit(UUID importJobId) {
         var actor = ActorContext.required();
         assertNotFreeform(actor.organizationId(), importJobId);
-        var job = repository.findJobForUpdate(actor.organizationId(), importJobId)
+        var lockedJob = repository.findJobForUpdate(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
-        if ("COMPLETED".equals(job.status())) return;
+        if ("COMPLETED".equals(lockedJob.status())) return;
+        // Revalidate older drafts whose empty required values were persisted as blockers.
+        var legacyRequired = repository.listIssues(actor.organizationId(), importJobId).stream()
+                .anyMatch(item -> "REQUIRED_MISSING".equals(item.issueType()) && "BLOCKER".equals(item.severity()));
+        var definitionReview = repository.listIssues(actor.organizationId(), importJobId).stream()
+                .anyMatch(item -> "FIELD_UNCONFIRMED".equals(item.issueType())
+                        || item.detail() != null && "FIELD_UNCONFIRMED".equals(item.detail().path("code").asText()));
+        if (definitionReview) {
+            // Re-extract against accepted definitions; never waive unresolved issues.
+            parseInternal(actor.organizationId(), importJobId, true);
+        } else if (legacyRequired) {
+            validateInternal(actor.organizationId(), importJobId);
+        }
+        var job = legacyRequired || definitionReview ? repository.findJobForUpdate(actor.organizationId(), importJobId).orElseThrow() : lockedJob;
         if ("INCOMPATIBLE".equals(job.compatibilityStatus())) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "上传文件与模板存在硬结构冲突，不能提交正式数据");
         }

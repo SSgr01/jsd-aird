@@ -61,7 +61,10 @@ public final class LabWorkbook {
         var def=(ObjectNode)authoritative.deepCopy();
         var fields=(ObjectNode)def.path("fields");
         if(incoming.path("fields").isObject())incoming.path("fields").fields().forEachRemaining(entry->{
-            if(fields.has(entry.getKey())||!entry.getKey().matches("(?:LOCAL_|INSTANCE_LOCAL[.])[A-Za-z0-9_.]{1,160}"))return;
+            if(!entry.getKey().matches("(?:LOCAL_|INSTANCE_LOCAL[.])[A-Za-z0-9_.]{1,160}"))return;
+            // A template may contain an older unconfirmed copy of the same local
+            // field. The saved instance's reviewed definition takes precedence.
+            if(fields.has(entry.getKey())&&!fields.path(entry.getKey()).path("local").asBoolean())return;
             var local=(ObjectNode)entry.getValue().deepCopy();
             if(!Set.of("TEXT","NUMBER","MIXED","HARDNESS","ADHESION").contains(local.path("resultKind").asText()))throw invalid("临时字段结果类型无效");
             local.put("local",true).put("trainingEligible",false);

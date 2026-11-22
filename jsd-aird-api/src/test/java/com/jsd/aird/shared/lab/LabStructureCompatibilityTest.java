@@ -11,6 +11,27 @@ import java.io.ByteArrayInputStream;
 import static org.assertj.core.api.Assertions.*;
 
 class LabStructureCompatibilityTest {
+    @Test void keepsConfirmedLocalFieldWhenTemplateContainsAnOlderPendingDefinition() throws Exception {
+        var json = new ObjectMapper();
+        var parser = new XlsxStructureParser(json);
+        var pack = new UnifiedLabTemplateCatalog(json).compile(UnifiedLabTemplateCatalog.TEST,
+                parser.parseInstance(getClass().getResourceAsStream("/templates/unified/test.xlsx"))).payload();
+        var baseline = pack.path("snapshot").deepCopy();
+        var local = ((ObjectNode) LabWorkbook.definition(baseline)).withObject("/fields/LOCAL_hardness")
+                .put("fieldCode", "LOCAL_hardness").put("label", "硬度：750g").put("groupId", "film")
+                .put("scope", "SAMPLE").put("domain", "TEST").put("semantic", "VALUE")
+                .put("resultKind", "TEXT").put("unit", "").put("local", true).put("confirmed", false);
+        var source = baseline.deepCopy();
+        var reviewed = ((ObjectNode) LabWorkbook.definition(source)).withObject("/fields/LOCAL_hardness");
+        reviewed.put("confirmed", true).put("unit", "g");
+        var sheet = LabWorkbook.sheet(source);
+        LabWorkbook.cell(sheet, 72, 1).put("v", "硬度：750g").withObject("/custom/lab")
+                .put("role", "LABEL").put("fieldCode", "LOCAL_hardness");
+        var prepared = LabWorkbook.prepare(json, source, baseline, "local-review");
+        assertThat(LabWorkbook.definition(prepared).at("/fields/LOCAL_hardness/confirmed").asBoolean()).isTrue();
+        assertThat(LabWorkbook.definition(prepared).at("/fields/LOCAL_hardness/unit").asText()).isEqualTo("g");
+        assertThat(local.path("confirmed").asBoolean()).isFalse();
+    }
     @Test void matchesUniqueKnownLabelsWhenASectionTitleIsMissingOrAFieldMovesSections() throws Exception {
         var json=new ObjectMapper();var parser=new XlsxStructureParser(json);
         var pack=new UnifiedLabTemplateCatalog(json).compile(UnifiedLabTemplateCatalog.TEST,parser.parseInstance(getClass().getResourceAsStream("/templates/unified/test.xlsx"))).payload();

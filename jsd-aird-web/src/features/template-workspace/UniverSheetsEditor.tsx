@@ -1,11 +1,15 @@
 import '@/compat/browser';
 import { observeEditorSize } from './observe-editor-size';
+import { SheetEditorViewport } from './SheetEditorViewport';
+import { bindSheetWheelFocus } from './sheet-wheel-focus';
+import { scrollableFreeze, workbookWithScrollableFreeze } from './scrollable-freeze';
 import { markPerformance } from '@/services/performance/metrics';
 import { editorReady } from './workspace-loading';
 import { editorTheme } from './editor-theme';
 import {
   createUniver,
   ICommandService,
+  IUniverInstanceService,
   IUndoRedoService,
   CommandType,
   CanceledError,
@@ -63,6 +67,8 @@ interface Props {
   onEditorLabel?: (binding: TemplateBinding, value: unknown) => void;
   bindings: TemplateBinding[];
   editable?: boolean;
+  /** Disable interactive chrome for the server's spreadsheet capture page. */
+  fullscreenEnabled?: boolean;
   /** Hide Univer's built-in permission dialog for read-only workbooks. */
   permissionDialogVisible?: boolean;
   onSelectionChange?: (selection: EditorSelection) => void;
@@ -84,6 +90,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     onEditorLabel,
     bindings,
     editable = true,
+    fullscreenEnabled = true,
     permissionDialogVisible = true,
     onSelectionChange,
     onUnboundCellChange,
@@ -247,6 +254,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     container.replaceChildren(host);
     let cancelled = false;
     let stopObservingSize: (() => void) | undefined;
+    let stopWheelFocus: (() => void) | undefined;
     let animationFrame = 0;
     let commandSubscription: { dispose(): void } | undefined;
     let beforeCommandSubscription: { dispose(): void } | undefined;
@@ -264,6 +272,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     let recentUnboundKey = '';
     let recentUnboundAt = 0;
     let cellChangeEventsArmed = false;
+    let adjustingViewport = false;
     let fieldEditGroup: { dispose(): void } | undefined;
     let fieldEditCommand: object | undefined;
     let structureOwner: object | undefined;
@@ -272,7 +281,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     const initializeRuntime = () => {
       if (cancelled) return;
       const { width, height } = container.getBoundingClientRect();
-      if (width < 320 || height < 240) {
+      if (width <= 0 || height <= 0) {
         animationFrame = window.requestAnimationFrame(initialize);
         return;
       }
@@ -312,10 +321,40 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       ownedApi = univerAPI;
       univerRef.current = univer;
       apiRef.current = univerAPI;
-      const workbook = univerAPI.createWorkbook(workbookWithExplicitRowHeights(snapshot));
-      stopObservingSize = observeEditorSize(container, () => {
-        if (!cancelled) univer.__getInjector().get(IRenderManagerService).getRenderUnitById(workbook.getId())?.engine.resize();
+      const workbook = univerAPI.createWorkbook(workbookWithScrollableFreeze(workbookWithExplicitRowHeights(snapshot), {
+        width: Math.max(1, width - 47), height: Math.max(1, height - (editableRef.current ? 160 : 84)),
+      }));
+      stopWheelFocus = bindSheetWheelFocus(container, () => {
+        univer.__getInjector().get(IUniverInstanceService).focusUnit(workbook.getId());
       });
+      const resizeViewport = () => {
+        if (cancelled) return;
+        univer.__getInjector().get(IRenderManagerService).getRenderUnitById(workbook.getId())?.engine.resize();
+        const canvas = container.querySelector<HTMLCanvasElement>('canvas[id^="univer-sheet-main-canvas"]');
+        if (!canvas || canvas.clientWidth <= 0 || canvas.clientHeight <= 0) return;
+        for (const sheet of workbook.getSheets()) {
+          const freeze = sheet.getFreeze();
+          if (!freeze.xSplit && !freeze.ySplit) continue;
+          const model = sheet.getSheet();
+          const zoom = model.getConfig().zoomRatio || 1;
+          let frozenHeight = 0;
+          let frozenWidth = 0;
+          for (let row = Math.max(0, freeze.startRow - freeze.ySplit); row < freeze.startRow && frozenHeight < canvas.clientHeight; row++) frozenHeight += model.getRowHeight(row) * zoom;
+          for (let column = Math.max(0, freeze.startColumn - freeze.xSplit); column < freeze.startColumn && frozenWidth < canvas.clientWidth; column++) frozenWidth += model.getColumnWidth(column) * zoom;
+          const next = scrollableFreeze(freeze, { width: canvas.clientWidth - 47, height: canvas.clientHeight - 20 },
+            { width: frozenWidth, height: frozenHeight });
+          if (next.xSplit !== freeze.xSplit || next.ySplit !== freeze.ySplit) {
+            // Viewport maintenance is not a content edit or an undo step.
+            adjustingViewport = true;
+            try {
+              univer.__getInjector().get(ICommandService).syncExecuteCommand('sheet.mutation.set-frozen', {
+                unitId: workbook.getId(), subUnitId: sheet.getSheetId(), ...next,
+              });
+            } finally { adjustingViewport = false; }
+          }
+        }
+      };
+      stopObservingSize = observeEditorSize(container, resizeViewport);
       const structureOperationFor = (command: { id: string; params?: object }) => operationFromUniverCommand(command.id === 'sheet.command.set-worksheet-name'
         ? { ...command, params: { ...command.params, subUnitId: (command.params as { subUnitId?: string })?.subUnitId ?? workbook.getActiveSheet()?.getSheetId() } } : command);
       clipboardSubscription = univer.__getInjector().get(ISheetClipboardService).addClipboardHook(templatePasteStyleHook(
@@ -388,6 +427,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       window.requestAnimationFrame(() => {
         window.requestAnimationFrame(() => {
           if (!cancelled) {
+            resizeViewport();
             // createWorkbook emits value-mutation commands while restoring the snapshot. They are not user
             // edits and must never trigger field discovery or data correction callbacks.
             editorReady();
@@ -458,7 +498,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       ) => {
         const unitId = (command.params as { unitId?: string } | undefined)?.unitId;
         if (unitId && unitId !== workbook.getId()) return;
-        if (!editableRef.current || applyingInstanceRef.current) return;
+        if (!editableRef.current || applyingInstanceRef.current || adjustingViewport) return;
         if (options?.fromChangeset || options?.syncOnly || options?.applyFormulaCalculationResult)
           return;
         if (command.id === 'univer.command.undo' || command.id === 'univer.command.redo') {
@@ -803,6 +843,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     return () => {
       cancelled = true;
       stopObservingSize?.();
+      stopWheelFocus?.();
       cellChangeEventsArmed = false;
       window.cancelAnimationFrame(animationFrame);
       commandSubscription?.dispose();
@@ -1201,7 +1242,9 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
   );
 
   if (initializationError) throw initializationError;
-  return <div ref={containerRef} className="univer-editor-surface" aria-label={ariaLabel} />;
+  return <SheetEditorViewport fullscreenEnabled={fullscreenEnabled}>
+    <div ref={containerRef} className="univer-editor-surface" aria-label={ariaLabel} />
+  </SheetEditorViewport>;
 });
 
 function resolveSheet(api: FUniver | undefined, binding: TemplateBinding) {

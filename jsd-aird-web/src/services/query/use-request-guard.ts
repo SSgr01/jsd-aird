@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { getSessionEpoch } from '@/services/http/auth-events';
 
 /** Ownership for direct reads that do not use the business query cache. */
@@ -7,7 +7,7 @@ export function useRequestGuard(scope: string) {
   const currentScope = useRef(scope);
   currentScope.current = scope;
   useEffect(() => () => active.current?.abort(), [scope]);
-  return useCallback(() => {
+  const begin = useCallback(() => {
     active.current?.abort();
     const controller = new AbortController();
     active.current = controller;
@@ -22,4 +22,20 @@ export function useRequestGuard(scope: string) {
         epoch === getSessionEpoch(),
     };
   }, []);
+  return useMemo(() => Object.assign(begin, { invalidate: () => active.current?.abort() }), [begin]);
+}
+
+/** The same ownership guard for reads and writes whose API does not accept AbortSignal. */
+export function useLatestRequest(scope: string) {
+  const request = useRequestGuard(scope);
+  const owner = useMemo(() => ({ active: true }), [scope]);
+  useEffect(() => {
+    owner.active = true;
+    return () => { owner.active = false; };
+  }, [owner]);
+  return useMemo(() => ({
+    begin: () => { const current = request(); return () => owner.active && current.current(); },
+    invalidate: request.invalidate,
+    isActive: () => owner.active,
+  }), [owner, request]);
 }

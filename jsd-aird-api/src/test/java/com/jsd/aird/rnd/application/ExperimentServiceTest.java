@@ -224,6 +224,72 @@ class ExperimentServiceTest {
     }
 
     @Test
+    void keepsLegacyReviewAfterPublicationAndAdvancesItsEffectiveRevision() {
+        var id = UUID.randomUUID();
+        var snapshot = mapper.createObjectNode();
+        snapshot.withObject("/sheets/s/cellData/0/0").put("v", "750g");
+        var model = mapper.createObjectNode();
+        model.set("documentSnapshot", snapshot);
+        var canonicalizer = new JsonCanonicalizer(mapper);
+        model.withObject("importDataReview").put("confirmed", true).put("confirmedRevision", 2)
+                .put("dataHash", canonicalizer.hash(snapshot));
+        var summary = new Summary(id, "EXP-REVIEW", "硬度记录", null, null,
+                "EXCEL_IMPORT", ExperimentStatus.COMPLETED, null, null, null, null, null, null,
+                "creator", LocalDate.of(2026, 11, 20), 1, 4, Instant.now());
+        when(repository.detail(ORGANIZATION_ID, id)).thenReturn(Optional.of(new Detail(summary,
+                UUID.randomUUID(), null, null, null, mapper.createObjectNode(), model, List.of(), List.of())));
+        var reviewService = new ExperimentService(repository, mapper, files,
+                new ExperimentEditModelNormalizer(mapper), null, null, canonicalizer);
+        var detail = reviewService.detail(id);
+        assertThat(detail.editModel().at("/importDataReview/confirmed").asBoolean()).isTrue();
+        assertThat(detail.editModel().at("/importDataReview/confirmedRevision").asLong()).isEqualTo(4);
+        snapshot.withObject("/sheets/s/cellData/0/0").put("v", "800g");
+        assertThat(reviewService.detail(id).editModel().at("/importDataReview/confirmed").asBoolean()).isFalse();
+    }
+
+    @Test
+    void keepsReviewAcrossCanvasSaveSubmissionAndPublicationWithoutASecondConfirmation() {
+        var id = UUID.randomUUID(); var version = UUID.randomUUID();
+        java.util.function.BiFunction<ExperimentStatus, Long, Summary> summaryFor = (status, revision) ->
+                new Summary(id, "EXP-FLOW", "材料性能记录", null, null, "EXCEL_IMPORT", status,
+                        null, null, null, null, null, null, "creator", LocalDate.of(2026, 11, 20), 1, revision, Instant.now());
+        var model = mapper.createObjectNode();
+        model.withObject("/documentSnapshot/sheets/s/cellData/0/0").put("v", "750g");
+        var state = new java.util.concurrent.atomic.AtomicReference<>(new Detail(summaryFor.apply(ExperimentStatus.DRAFT, 1L),
+                version, null, null, null, mapper.createObjectNode(), model, List.of(), List.of()));
+        when(repository.detail(ORGANIZATION_ID, id)).thenAnswer(invocation -> Optional.of(state.get()));
+        when(repository.saveDraft(any(), any(), any(Long.class), any(), any(), any())).thenAnswer(invocation -> {
+            var draft = invocation.<ExperimentRepository.Draft>getArgument(3);
+            var current = state.get();
+            var next = new Detail(summaryFor.apply(current.summary().status(), current.summary().revision() + 1),
+                    version, null, null, null, mapper.createObjectNode(), draft.editModel(), List.of(), List.of());
+            state.set(next); return next;
+        });
+        when(repository.transition(any(), any(), any(Long.class), any(), any(), any(), any())).thenAnswer(invocation -> {
+            var current = state.get();
+            var next = new Detail(summaryFor.apply(invocation.getArgument(3), current.summary().revision() + 1),
+                    version, null, null, null, mapper.createObjectNode(), current.editModel(), List.of(), List.of());
+            state.set(next); return next;
+        });
+        var reviewService = new ExperimentService(repository, mapper, files,
+                new ExperimentEditModelNormalizer(mapper), null, null, new JsonCanonicalizer(mapper));
+        var confirmed = reviewService.confirmTemplateData(id, 1);
+        var layout = (com.fasterxml.jackson.databind.node.ObjectNode) confirmed.editModel().deepCopy();
+        layout.withObject("/documentSnapshot/sheets/s").put("zoomRatio", 1.5);
+        layout.withObject("/documentSnapshot/sheets/s/freeze").put("ySplit", 0);
+        var saved = reviewService.save(id, 2, new ExperimentService.DraftCommand("EXP-FLOW", "材料性能记录",
+                null, null, null, null, null, "creator", LocalDate.of(2026, 11, 20), null, null,
+                mapper.createObjectNode(), layout));
+        assertThat(saved.editModel().at("/importDataReview/confirmed").asBoolean()).isTrue();
+        var submitted = reviewService.transition(id, 3, ExperimentStatus.PENDING_REVIEW, null);
+        assertThat(submitted.editModel().at("/importDataReview/confirmedRevision").asLong()).isEqualTo(4);
+        var published = reviewService.transition(id, 4, ExperimentStatus.COMPLETED, null);
+        assertThat(published.editModel().at("/importDataReview/confirmed").asBoolean()).isTrue();
+        assertThat(published.editModel().at("/importDataReview/confirmedRevision").asLong()).isEqualTo(5);
+        assertThat(reviewService.detail(id).editModel().at("/importDataReview/confirmed").asBoolean()).isTrue();
+    }
+
+    @Test
     void templateImportRequiresItsBoundFieldValueBeforeConfirmation() {
         var id = UUID.randomUUID();
         var versionId = UUID.randomUUID();

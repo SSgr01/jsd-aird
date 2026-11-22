@@ -1,5 +1,5 @@
 import { App } from 'antd';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { DataPublication } from '@/services/data/data-api';
 import { DataPublicationPanel } from './DataPublicationPanel';
 
@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
 vi.mock('@/services/data/data-api', () => ({ dataApi: api }));
 
 const draft: DataPublication = { revision: 'a'.repeat(64), status: 'DRAFT', legacyPublished: false, publishedEnabled: true, versions: [], events: [] };
+function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done; }); return { promise, resolve }; }
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -86,4 +87,44 @@ it('shows review results, operator, time and rejection reason in the template-st
   expect(within(history).getByText(/陈志远 ·/)).toBeInTheDocument();
   expect(within(history).getByText('提交审核')).toBeInTheDocument();
   expect(within(history).queryByRole('table')).not.toBeInTheDocument();
+});
+
+it('keeps publication after an older approved-state refresh arrives', async () => {
+  const delayed = deferred<DataPublication>();
+  api.publication.mockResolvedValueOnce({ ...draft, status: 'APPROVED' })
+    .mockReturnValueOnce(delayed.promise).mockResolvedValue({ ...draft, status: 'PUBLISHED' });
+  const changed = vi.fn();
+  const view = render(<App><DataPublicationPanel jobId="job" refreshKey="one" onStateChange={changed} /></App>);
+  await screen.findByRole('button', { name: /发\s*布/ });
+  view.rerender(<App><DataPublicationPanel jobId="job" refreshKey="two" onStateChange={changed} /></App>);
+  await waitFor(() => expect(api.publication).toHaveBeenCalledTimes(2));
+  fireEvent.click(screen.getByRole('button', { name: /发\s*布/ }));
+  await screen.findByText('已发布', { selector: '.ant-tag' });
+  await act(async () => delayed.resolve({ ...draft, status: 'APPROVED' }));
+  expect(changed).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'PUBLISHED' }));
+  expect(screen.queryByRole('button', { name: /发\s*布/ })).not.toBeInTheDocument();
+});
+
+it('does not open another record when a revision action finishes after navigation', async () => {
+  const delayed = deferred<unknown>();
+  api.publication.mockResolvedValueOnce({ ...draft, status: 'PUBLISHED' }).mockResolvedValue(draft);
+  api.publicationAction.mockReturnValueOnce(delayed.promise);
+  const edit = vi.fn();
+  const view = render(<App><DataPublicationPanel jobId="old" onEdit={edit} canConfirm /></App>);
+  fireEvent.click(await screen.findByRole('button', { name: '创建修订' }));
+  view.rerender(<App><DataPublicationPanel jobId="new" onEdit={edit} canConfirm /></App>);
+  await screen.findByRole('button', { name: '提交审核' });
+  await act(async () => delayed.resolve({}));
+  expect(edit).not.toHaveBeenCalled();
+  expect(api.publication).toHaveBeenCalledTimes(2);
+});
+
+it('preserves the last state when the action succeeds but its refresh fails', async () => {
+  api.publication.mockResolvedValueOnce({ ...draft, status: 'PUBLISHED' }).mockRejectedValue(new Error('offline'));
+  const edit = vi.fn();
+  render(<App><DataPublicationPanel jobId="job" onEdit={edit} /></App>);
+  fireEvent.click(await screen.findByRole('button', { name: '创建修订' }));
+  await screen.findByText('操作已提交，但状态刷新失败，请刷新确认');
+  expect(edit).not.toHaveBeenCalled();
+  expect(screen.getByText('已发布', { selector: '.ant-tag' })).toBeInTheDocument();
 });

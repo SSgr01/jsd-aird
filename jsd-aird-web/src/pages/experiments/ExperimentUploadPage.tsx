@@ -1,3 +1,5 @@
+import { useLatestRequest } from '@/services/query/use-request-guard';
+import { usePolling } from '@/hooks/use-polling';
 import {
   CloudUploadOutlined,
   DeleteOutlined,
@@ -65,7 +67,9 @@ export function ExperimentUploadPage() {
   const [assemblyStatuses, setAssemblyStatuses] = useState<Record<string, ExperimentSyncStatus>>({});
   const requestedAssemblyStatuses = useRef(new Set<string>());
 
+  const loads = useLatestRequest('experiment-uploads');
   const load = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    const isCurrent = loads.begin();
     if (!silent) setLoading(true);
     try {
       const [free, allTemplateJobs, conversionJobs] = await Promise.all([
@@ -73,16 +77,17 @@ export function ExperimentUploadPage() {
         loadAllPages((page, size) => dataApi.listExperimentJobs({ page, size })),
         dataApi.conversions(),
       ]);
+      if (!isCurrent()) return;
       setFreeJobs(free);
       setConversions(conversionJobs);
       setTemplateJobs(allTemplateJobs
         .filter((item) => item.importPurpose === 'EXPERIMENT_DRAFT'));
     } catch (error) {
-      if (!silent) void message.error(error instanceof Error ? error.message : '实验上传记录加载失败');
+      if (isCurrent() && !silent) void message.error(error instanceof Error ? error.message : '实验上传记录加载失败');
     } finally {
-      if (!silent) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [message]);
+  }, [message, loads]);
 
   useEffect(() => {
     setTemplatesLoading(true);
@@ -114,11 +119,7 @@ export function ExperimentUploadPage() {
     () => [...freeJobs, ...templateJobs].some((job) => ACTIVE_JOB_STATES.includes(job.status)) || conversions.some(job => job.status === 'QUEUED'),
     [freeJobs, templateJobs, conversions],
   );
-  useEffect(() => {
-    if (!running) return undefined;
-    const timer = window.setInterval(() => void load({ silent: true }), 2000);
-    return () => window.clearInterval(timer);
-  }, [load, running]);
+  usePolling(() => load({ silent: true }), running, 2000);
 
   const chosenTemplate = useMemo(
     () => templates.find((item) => item.versionId === templateVersionId),
@@ -240,16 +241,13 @@ export function ExperimentUploadPage() {
   const assemblyPollingKey = visibleJobs.flatMap((item) => item.kind === 'TEMPLATE'
     && assemblyStatuses[item.job.id]?.links.some((link) => ['READY', 'RUNNING'].includes(link.status))
     ? [item.job.id] : []).join('|');
-  useEffect(() => {
-    const ids = assemblyPollingKey ? assemblyPollingKey.split('|') : [];
-    if (!ids.length) return undefined;
-    const timer = window.setInterval(() => {
-      void Promise.all(ids.map(async (id) => [id, await dataApi.experimentSyncStatus(id)] as const))
-        .then((items) => setAssemblyStatuses((current) => ({ ...current, ...Object.fromEntries(items) })))
-        .catch(() => undefined);
-    }, 1800);
-    return () => window.clearInterval(timer);
-  }, [assemblyPollingKey]);
+  const assemblyReads = useLatestRequest(assemblyPollingKey);
+  usePolling(async () => {
+    const isCurrent = assemblyReads.begin();
+    const ids = assemblyPollingKey.split('|');
+    const items = await Promise.all(ids.map(async (id) => [id, await dataApi.experimentSyncStatus(id)] as const));
+    if (isCurrent()) setAssemblyStatuses((current) => ({ ...current, ...Object.fromEntries(items) }));
+  }, Boolean(assemblyPollingKey), 1800, assemblyPollingKey);
 
   const records: UploadWorkspaceRecord[] = visibleJobs
     .map((item) => item.kind === 'TEMPLATE' ? templateRecord(item.job) : item.kind === 'CONVERSION' ? conversionRecord(item.job) : freeRecord(item.job));

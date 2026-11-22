@@ -109,6 +109,62 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'本组标准检测结果'):
             execute(self.root,self.plan_path,self.root/'_work/rejected.xlsx')
 
+    def test_multiple_recipe_items_in_one_source_cell_keep_separate_extractions(self):
+        source = self.root/'原始实验/测试实验/inline-recipe.xlsx'
+        wb = Workbook();ws = wb.active
+        ws['A1'],ws['B1'] = 'sample-A','sample-B'
+        ws['A2'] = 'Resin: 9.20\nF279: 0.80\nBP/10% 2.25'
+        wb.save(source);wb.close()
+        entries = [{'name':'A2','amount':'A2',
+                    'name_transform':{'pattern':r'('+label+r')'},
+                    'amount_transform':{'pattern':label+r'[: ]+([0-9.]+)','numeric':True}}
+                   for label in ['Resin','F279','BP/10%']]
+        spec = dict(source_sheet='Sheet',groups=['A1','B1'],group_identity_role='SAMPLE',
+                    recipe={'entries':[entries,[dict(entry) for entry in entries]]},writes=[])
+        plan = dict(version=1,source=source.relative_to(self.root).as_posix(),kind='test',
+                    source_sha256=digest(source),template_sha256=digest(self.root/'标准模板/test.xlsx'),
+                    sheets=[spec],skipped=[])
+        write_json(self.plan_path,plan)
+        result = execute(self.root,self.plan_path)
+        out = load_workbook(self.root/result['output'],data_only=True)
+        try:
+            self.assertEqual([out.active[f'B{r}'].value for r in range(52,55)],['Resin','F279','BP/10%'])
+            for col in 'CD':
+                self.assertEqual([out.active[f'{col}{r}'].value for r in range(52,55)],[9.2,.8,2.25])
+                self.assertEqual(out.active[f'{col}60'].value,12.25)
+        finally:out.close()
+        entries[0]['amount_transform'] = {'pattern':r'([0-9]+\.[0-9]+)','numeric':True}
+        write_json(self.plan_path,plan)
+        with self.assertRaisesRegex(ValueError,'不唯一'):
+            execute(self.root,self.plan_path,self.root/'_work/rejected.xlsx')
+        entries[0]['amount_value'] = 9.2
+        write_json(self.plan_path,plan)
+        with self.assertRaisesRegex(ValueError,'不接受直接填值'):
+            execute(self.root,self.plan_path,self.root/'_work/rejected.xlsx')
+
+    def test_percentage_composition_keeps_source_basis_without_gram_total(self):
+        source=self.root/'原始实验/测试实验/composition.xlsx'
+        wb=Workbook();ws=wb.active
+        ws['A1']='sample-A';ws['A2']='stock 95/5';ws['B2']=97.5
+        ws['A3']=2959;ws['B3']=.02;ws['B3'].number_format='0%'
+        wb.save(source);wb.close()
+        binding={'dst':'C20','composition_parts':[{'name':'A2','amount':'B2'},{'name':'A3','amount':'B3'}]}
+        spec={'source_sheet':'Sheet','groups':['A1'],'group_identity_role':'SAMPLE',
+              'recipe':{'names':[],'amounts':[]},'writes':[binding]}
+        plan={'version':1,'source':source.relative_to(self.root).as_posix(),'kind':'test',
+              'source_sha256':digest(source),'template_sha256':digest(self.root/'标准模板/test.xlsx'),
+              'sheets':[spec],'skipped':[]}
+        write_json(self.plan_path,plan);result=execute(self.root,self.plan_path)
+        out=load_workbook(self.root/result['output'],data_only=True)
+        try:
+            self.assertEqual(out.active['C20'].value,'stock 95/5：97.5\n2959：2%')
+            self.assertIsNone(out.active['C52'].value)
+            self.assertIsNone(out.active['C60'].value)
+        finally:out.close()
+        binding['dst']='C104';write_json(self.plan_path,plan)
+        with self.assertRaisesRegex(ValueError,'只能写本组组成说明'):
+            execute(self.root,self.plan_path,self.root/'_work/rejected.xlsx')
+
     def test_repeated_charges_keep_original_names_order_and_path_inference(self):
         source=self.root/'原始实验/合成实验/林志华实验记录/fixture.xlsx'
         source.parent.mkdir()

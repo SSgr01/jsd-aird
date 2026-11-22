@@ -352,7 +352,7 @@ a:active,
 
 .app-content-workspace {
   height: calc(100dvh - 64px);
-  min-height: 640px;
+  min-height: 0;
   margin-top: 64px;
   padding: 0;
   overflow: hidden;
@@ -1693,7 +1693,7 @@ a:active,
 .workspace-shell {
   display: flex;
   height: 100%;
-  min-height: 640px;
+  min-height: 0;
   overflow: hidden;
   background: var(--app-surface);
   border: 0;

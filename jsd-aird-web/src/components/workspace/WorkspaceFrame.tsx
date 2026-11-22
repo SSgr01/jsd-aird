@@ -79,11 +79,11 @@ export const WorkspaceFrame = forwardRef<HTMLElement, WorkspaceFrameProps>(funct
 });
 
 /** Place last in the existing toolbar. Renders nothing without explicit opt-in. */
-export function WorkspaceMaximizeButton() {
+export function WorkspaceMaximizeButton({ targetLabel = '工作区' }: { targetLabel?: string }) {
   const workspace = useContext(WorkspaceContext);
   if (!workspace) return null;
   const label = workspace.maximized ? '还原' : '全屏';
-  return <Tooltip title={workspace.maximized ? '还原工作区（Esc）' : '全屏工作区'}>
+  return <Tooltip title={workspace.maximized ? `还原${targetLabel}（Esc）` : `全屏${targetLabel}`}>
     <Button className="workspace-maximize-button" aria-label={label} aria-pressed={workspace.maximized}
       icon={workspace.maximized ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
       onMouseDown={(event) => event.preventDefault()} onClick={workspace.toggle}>{label}</Button>

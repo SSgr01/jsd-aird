@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkspaceReviewActions } from './WorkspaceReviewActions';
 
@@ -10,6 +10,11 @@ vi.mock('@/services/reviews/workspace-review-api', () => ({ workspaceReviewApi: 
 vi.mock('@/components/auth/usePermission', () => ({ usePermission: (code: string) => permissions.has(code) }));
 
 describe('workspace review actions', () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((done) => { resolve = done; });
+    return { promise, resolve };
+  }
   beforeEach(() => {
     vi.clearAllMocks();
     permissions.clear();
@@ -79,5 +84,50 @@ describe('workspace review actions', () => {
     expect(await screen.findByRole('button', { name: /驳\s*回/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '审核记录' }));
     await waitFor(() => expect(api.history).toHaveBeenCalledWith('KNOWLEDGE_VERSION', 'version-1'));
+  });
+
+  it.each(['QUALITY_RECORD', 'PRODUCTION_UPLOAD', 'KNOWLEDGE_VERSION', 'PROJECT_DOCUMENT', 'PRODUCTION_ORDER'] as const)(
+    '%s ignores an old refresh arriving after approval', async (type) => {
+      for (const prefix of ['quality.view', 'production.view', 'knowledge.view', 'project.document']) permissions.add(`${prefix}.approve`);
+      const delayed = deferred<{ status: string }>();
+      api.get.mockResolvedValueOnce({ status: 'SUBMITTED' }).mockReturnValueOnce(delayed.promise);
+      const changed = vi.fn();
+      const view = render(<WorkspaceReviewActions type={type} id="one" saved refreshKey={1} onStatusChange={changed} />);
+      await screen.findByRole('button', { name: '审核通过' });
+      view.rerender(<WorkspaceReviewActions type={type} id="one" saved refreshKey={2} onStatusChange={changed} />);
+      await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+      fireEvent.click(screen.getByRole('button', { name: '审核通过' }));
+      await screen.findByText('审核通过', { selector: '.ant-tag' });
+      await act(async () => delayed.resolve({ status: 'SUBMITTED' }));
+      expect(screen.getByText('审核通过', { selector: '.ant-tag' })).toBeInTheDocument();
+      expect(changed).toHaveBeenLastCalledWith('APPROVED');
+    },
+  );
+
+  it('ignores an approval response after switching to another record', async () => {
+    permissions.add('quality.view.approve');
+    const delayed = deferred<{ status: string }>();
+    api.get.mockResolvedValueOnce({ status: 'SUBMITTED' }).mockResolvedValue({ status: 'NOT_SUBMITTED' });
+    api.approve.mockReturnValueOnce(delayed.promise);
+    const view = render(<WorkspaceReviewActions type="QUALITY_RECORD" id="one" saved />);
+    fireEvent.click(await screen.findByRole('button', { name: '审核通过' }));
+    view.rerender(<WorkspaceReviewActions type="QUALITY_RECORD" id="two" saved />);
+    await screen.findByText('草稿');
+    await act(async () => delayed.resolve({ status: 'APPROVED' }));
+    expect(screen.getByText('草稿')).toBeInTheDocument();
+    expect(screen.queryByText('审核通过')).not.toBeInTheDocument();
+  });
+
+  it('keeps the current review state after a failed approval and allows retry', async () => {
+    permissions.add('quality.view.approve');
+    api.get.mockResolvedValue({ status: 'SUBMITTED' });
+    api.approve.mockRejectedValueOnce(new Error('连接中断'));
+    render(<WorkspaceReviewActions type="QUALITY_RECORD" id="one" saved />);
+    fireEvent.click(await screen.findByRole('button', { name: '审核通过' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '审核通过' })).toBeEnabled());
+    expect(screen.getByText('待审核')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '审核通过' }));
+    await screen.findByText('审核通过', { selector: '.ant-tag' });
+    expect(api.approve).toHaveBeenCalledTimes(2);
   });
 });

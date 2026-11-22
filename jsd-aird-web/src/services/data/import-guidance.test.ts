@@ -1,8 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { confirmationBlockReason, importIssueMessage, requiresTemplateChange, sheetSummary, templateGroups } from './import-guidance';
+import { confirmationBlockReason, distinctRequiredNotices, importIssueMessage, requiresTemplateChange, sheetSummary, templateGroups } from './import-guidance';
 import type { DataPreview, DataTemplateOption } from './data-api';
 
 describe('data import guidance', () => {
+  it('uses accepted definition reviews while keeping other actual blockers', () => {
+    const issue = { severity: 'BLOCKER', status: 'OPEN', issueType: 'FIELD_UNCONFIRMED' } as const;
+    const preview = { job: { status: 'WAITING_MAPPING' }, mappings: [], issues: [issue] } as unknown as DataPreview;
+    expect(confirmationBlockReason(preview)).toContain('1 项阻断问题');
+    expect(confirmationBlockReason(preview, [])).toBeUndefined();
+    expect(confirmationBlockReason(preview, [{ ...preview.issues[0]!, issueType: 'TYPE_ERROR' }])).toContain('1 项阻断问题');
+  });
+  it('allows older required-empty drafts and merges repeated source-cell reminders', () => {
+    const issue = { severity: 'BLOCKER', status: 'OPEN', issueType: 'REQUIRED_MISSING', sheetId: 'one', address: 'B2', fieldCode: 'name' } as const;
+    const preview = { job: { status: 'WAITING_MAPPING' }, mappings: [], issues: [issue, { ...issue }, { ...issue, address: 'D2' }] } as unknown as DataPreview;
+    expect(confirmationBlockReason(preview)).toBeUndefined();
+    expect(distinctRequiredNotices(preview.issues)).toHaveLength(2);
+    preview.issues.push({ ...preview.issues[0]!, issueType: 'TYPE_ERROR' });
+    expect(confirmationBlockReason(preview)).toContain('1 项阻断问题');
+  });
   it('directs unreadable template structures back to file/template selection instead of field configuration', () => {
     expect(requiresTemplateChange('UNMAPPED_FIELD')).toBe(true);
     expect(requiresTemplateChange('REQUIRED_MISSING')).toBe(false);

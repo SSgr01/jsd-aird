@@ -937,7 +937,7 @@ function registerSpectrumUI(scope, {React, api, Modal, useExpert, marker}) {
             setSelected(Object.fromEntries(charts.filter(chart => {
               const previous = initialSelection.find(item => item.id === chart.id);
               return !previous.versionId || previous.versionId === chart.sha256;
-            }).map(chart => [chart.id, {chart, pages:initialSelection.find(item => item.id === chart.id).pages}])));
+            }).map(chart => [chart.id, {chart, pages:initialSelection.find(item => item.id === chart.id).pages ?? Array.from({length:chart.pageCount}, (_,index) => index+1)}])));
             if (changed) setError('部分图谱原文件已更新，请重新勾选后确认。');
             initialized.current = true;
           }
@@ -963,7 +963,7 @@ function registerSpectrumUI(scope, {React, api, Modal, useExpert, marker}) {
       setSelected(current => {
         if (current[chart.id]) {const next = {...current}; delete next[chart.id]; return next;}
         if (Object.keys(current).length >= 12) {setError('一次最多选择 12 张图谱。'); return current;}
-        return {...current, [chart.id]:{chart, pages:[1]}};
+        return {...current, [chart.id]:{chart, pages:Array.from({length:chart.pageCount}, (_,index) => index+1)}};
       });
     };
     async function attach() {
@@ -1039,9 +1039,10 @@ function registerSpectrumUI(scope, {React, api, Modal, useExpert, marker}) {
           button('移除', () => toggle(chart), {disabled:busy, 'aria-label':'移除 ' + chart.title})),
         h('div', {className:'jsd-spectrum-pages', role:'group', 'aria-label':chart.title + ' 页码'},
           Array.from({length:chart.pageCount}, (_,index) => index+1).map(number => h('label', {key:number},
-            h('input', {type:'checkbox', checked:pages.includes(number), disabled:busy || (!pages.includes(number) && (pages.length >= 5 || count >= limit)),
+            h('input', {type:'checkbox', checked:pages.includes(number), disabled:busy || (!pages.includes(number) && count >= limit),
               onChange:() => updatePages(chart.id, pages.includes(number) ? pages.filter(value => value !== number) : [...pages, number])}), '第 ' + number + ' 页')))))),
       h('footer', {className:'jsd-spectrum-footer'}, h('span', null, Object.keys(selected).length + ' 张图谱 · ' + count + ' / 20 页'),
+        count > limit && h('span', {role:'alert'}, '所选页面超过 20 页，请取消部分页面后确认。'),
         button(busy ? '正在准备图谱…' : '确认选择', () => void attach(), {className:'jsd-expert-primary', disabled:busy || initializing || (!count && !initialSelection.length) || count > limit || Object.values(selected).some(item => !item.pages.length)})));
   }
   function Selector({sessionId, useInput}) {
@@ -1050,7 +1051,7 @@ function registerSpectrumUI(scope, {React, api, Modal, useExpert, marker}) {
     const [open, setOpen] = useState(false), [initialSelection, setInitialSelection] = useState([]);
     const selected = spectrumDraftSelection(input).selection;
     useEffect(() => {
-      if (current?.sessionId === sessionId) {setInitialSelection(current.ids.map(id => ({id,pages:[1]}))); setOpen(true); launched = null; listeners.forEach(fn => fn());}
+      if (current?.sessionId === sessionId) {setInitialSelection(current.ids.map(id => ({id}))); setOpen(true); launched = null; listeners.forEach(fn => fn());}
     }, [current, sessionId]);
     if (expert?.id !== 'spectrum-assistant') return null;
     return h(React.Fragment, null,

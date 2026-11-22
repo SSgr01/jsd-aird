@@ -27,6 +27,19 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 class DataImportValidationTest {
+    @Test void emptyRequiredValuesRemainSubmittableWarnings() {
+        givenJob();
+        when(templates.getVersion(ORGANIZATION_ID,templateVersionId)).thenReturn(definition(true));
+        when(repository.listMappings(ORGANIZATION_ID,jobId)).thenReturn(List.of(mapping("A",mapper.createObjectNode().put("bindingId","a").put("dataPath","/material/name"))));
+        when(repository.listRows(ORGANIZATION_ID,jobId)).thenReturn(List.of(row("A","")));
+        service.validateInternal(ORGANIZATION_ID,jobId);
+        var rows=ArgumentCaptor.forClass(List.class);var issues=ArgumentCaptor.forClass(List.class);
+        verify(repository).replaceValidation(eq(ORGANIZATION_ID),eq(jobId),rows.capture(),issues.capture(),eq("WAITING_CONFIRM"));
+        assertThat(((DataRepository.Row)rows.getValue().getFirst()).status()).isEqualTo("VALID");
+        assertThat(issues.getValue()).anyMatch(item -> ((DataRepository.Issue)item).issueType().equals("REQUIRED_MISSING")
+                && ((DataRepository.Issue)item).severity().equals("WARNING"));
+        assertThat(issues.getValue()).noneMatch(item -> ((DataRepository.Issue)item).severity().equals("BLOCKER"));
+    }
     @Test void draftAndParsedUnboundCellProduceOneWarning() {
         givenJob();var definition=definition(false);
         var instance=mapper.createObjectNode();

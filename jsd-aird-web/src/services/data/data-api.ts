@@ -69,9 +69,6 @@ export const dataApi = {
   async conversions(batchId?: string) {
     const response = await httpClient.get<ApiResponse<ExperimentConversion[]>>('/api/v1/data/experiment-conversions', { params: { batchId } }); return response.data.data;
   },
-  async conversionForImport(id: string) {
-    const response = await httpClient.get<ApiResponse<ExperimentConversion | null>>(`/api/v1/data/experiment-conversions/for-import/${id}`); return response.data.data;
-  },
   async startConversions(batchId: string, retryFailed = false) {
     const response = await httpClient.post<{ tasks: Array<{ conversion_id: string; session_id: string; accepted: boolean }> }>('/agent/business/conversion-start', { batch_id: batchId, retry_failed: retryFailed }, { timeout: 120000 }); return response.data;
   },

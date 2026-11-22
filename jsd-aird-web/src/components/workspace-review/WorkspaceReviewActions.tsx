@@ -1,5 +1,6 @@
 import { Button, Input, List, Modal, Space, Tag, message } from 'antd';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLatestRequest } from '@/services/query/use-request-guard';
 import { usePermission } from '@/components/auth/usePermission';
 import { workspaceReviewApi, type WorkspaceReviewEvent, type WorkspaceReviewState, type WorkspaceReviewType } from '@/services/reviews/workspace-review-api';
 
@@ -29,31 +30,52 @@ export function WorkspaceReviewActions({ type, id, saved, enabled = true, publis
   const [rejectReason, setRejectReason] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<WorkspaceReviewEvent[]>([]);
+  const requests = useLatestRequest(`${type}:${id}`);
+  const operations = useLatestRequest(`${type}:${id}`);
+  const historyLoads = useLatestRequest(`${type}:${id}`);
+  const running = useRef(false);
+  const statusChanged = useRef(onStatusChange);
+  statusChanged.current = onStatusChange;
 
   useEffect(() => {
-    if (!id || !saved) return;
-    let active = true;
+    setState(undefined); setBusy(false); running.current = false;
+    setRejectOpen(false); setHistoryOpen(false); setHistory([]); setRejectReason('');
+  }, [type, id]);
+
+  useEffect(() => {
+    if (!id || !saved || running.current) return;
+    const isCurrent = requests.begin();
     void workspaceReviewApi.get(type, id).then((next) => {
-      if (active) { setState(next); onStatusChange?.(next.status); }
-    }).catch((error) => void message.error(error instanceof Error ? error.message : '审核状态加载失败'));
-    return () => { active = false; };
-  }, [type, id, saved, refreshKey, onStatusChange]);
+      if (isCurrent()) { setState(next); statusChanged.current?.(next.status); }
+    }).catch((error) => { if (isCurrent()) void message.error(error instanceof Error ? error.message : '审核状态加载失败'); });
+    return () => requests.invalidate();
+  }, [type, id, saved, refreshKey, requests]);
 
   const run = async (action: 'submit' | 'approve' | 'reject') => {
+    if (running.current) return;
+    const isCurrent = operations.begin();
+    requests.invalidate();
+    running.current = true;
     setBusy(true);
     try {
       const next = action === 'reject'
         ? await workspaceReviewApi.reject(type, id, rejectReason.trim())
         : await workspaceReviewApi[action](type, id);
+      if (!isCurrent()) return;
       setState(next);
-      onStatusChange?.(next.status);
+      statusChanged.current?.(next.status);
       if (action === 'reject') { setRejectOpen(false); setRejectReason(''); }
       message.success(action === 'submit' ? '已提交审核' : action === 'approve' ? '审核已通过' : '已驳回');
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '审核操作失败');
+      if (isCurrent()) message.error(error instanceof Error ? error.message : '审核操作失败');
     } finally {
-      setBusy(false);
+      if (isCurrent()) { running.current = false; setBusy(false); }
     }
+  };
+  const showHistory = async () => {
+    const isCurrent = historyLoads.begin(); setHistoryOpen(true); setHistory([]);
+    try { const next = await workspaceReviewApi.history(type, id); if (isCurrent()) setHistory(next); }
+    catch (error) { if (isCurrent()) void message.error(error instanceof Error ? error.message : '审核记录加载失败'); }
   };
 
   return <>
@@ -65,7 +87,7 @@ export function WorkspaceReviewActions({ type, id, saved, enabled = true, publis
       <Button disabled={!enabled || busy} onClick={() => void run('approve')}>审核通过</Button>
       {(type === 'QUALITY_RECORD' || type === 'PRODUCTION_UPLOAD' || type === 'KNOWLEDGE_VERSION') && <Button danger disabled={!enabled || busy} onClick={() => setRejectOpen(true)}>驳回</Button>}
     </Space>}
-    {state && <Button onClick={() => { setHistoryOpen(true); void workspaceReviewApi.history(type, id).then(setHistory).catch((error) => void message.error(error instanceof Error ? error.message : '审核记录加载失败')); }}>审核记录</Button>}
+    {state && <Button onClick={() => void showHistory()}>审核记录</Button>}
     <Modal title="审核记录" open={historyOpen} footer={null} onCancel={() => setHistoryOpen(false)}>
       <List locale={{ emptyText: '暂无审核记录' }} dataSource={history} renderItem={(item) => <List.Item>
         <Space direction="vertical" size={0}>

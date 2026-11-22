@@ -889,6 +889,14 @@
   scrollbar-gutter: stable;
 }
 .pm-unified-list-page .pm-table-scroll:has(.ant-table-content) { max-height: none; overflow: visible; }
+/* AntD supplies inline overflow-y:hidden for horizontal-only tables. Once we
+   cap the shared viewport, both axes must remain reachable. */
+.pm-unified-list-page .ant-table-content { overflow-y: auto !important; }
+/* The inner AntD viewport owns scrolling; native tables retain their wrapper. */
+.pm-unified-list-page :is(.cm-table-wrap, .quality-grid-wrap):has(.ant-table-content) {
+  max-height: none;
+  overflow: visible;
+}
 .pm-unified-list-page :is(.pm-table, .cm-table, .quality-grid) { width: 100%; border-collapse: separate; border-spacing: 0; }
 .pm-unified-list-page :is(.pm-table, .cm-table, .quality-grid) th,
 .pm-unified-list-page .ant-table-thead > tr > th {

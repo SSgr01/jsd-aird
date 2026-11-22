@@ -1,4 +1,6 @@
 import { FormModal } from '@/components/form-dialog/FormModal';
+import { useLatestRequest } from '@/services/query/use-request-guard';
+import { usePolling } from '@/hooks/use-polling';
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
@@ -23,7 +25,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { FilePreviewModal, downloadPreviewFile, type FilePreviewDescriptor } from '@/components/file-preview';
 import { usePermission } from '@/components/auth/usePermission';
 import { DataPublicationPanel } from '@/features/data-workbench/DataPublicationPanel';
-import { confirmationBlockReason, isFieldDefinitionIssue, requiresTemplateChange } from '@/services/data/import-guidance';
+import { confirmationBlockReason, isFieldDefinitionIssue, isImportBlocker, requiresTemplateChange } from '@/services/data/import-guidance';
 import type { DataPublication } from '@/services/data/data-api';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import {
@@ -56,7 +58,6 @@ import { instanceWorkbookView } from '@/features/data-workbench/instance-workboo
 import { workbookCellValue } from '@/features/data-workbench/cell-format';
 import { AutoSaveFieldInput } from '@/features/data-workbench/AutoSaveFieldInput';
 import { DataReviewFooter } from '@/features/data-workbench/DataReviewFooter';
-import { ExperimentConversionNotice } from '@/features/data-workbench/ExperimentConversionNotice';
 import { FieldDefinitionReview } from '@/features/data-workbench/FieldDefinitionReview';
 import {
   deduplicateFieldDefinitionIssues,
@@ -114,10 +115,14 @@ export function DataImportJobPage({
   const [instance, setInstance] = useState<WorkbookTemplateInstance>();
   const [structureDirty, setStructureDirty] = useState(false);
   const structureDirtyRef = useRef(false);
+  const editGeneration = useRef(0);
   const structureOperations = useRef<unknown[]>([]);
   const markStructureDirty = () => {
+    if (!loads.isActive()) return;
+    editGeneration.current++;
     structureDirtyRef.current = true; setStructureDirty(true);
     window.requestAnimationFrame(() => {
+      if (!loads.isActive()) return;
       const live = editorRef.current?.getSnapshot(), current = editorRef.current?.getTemplateInstance?.();
       if (live && current) {
         const view = instanceWorkbookView(live, current, true);
@@ -134,13 +139,25 @@ export function DataImportJobPage({
     && !['PENDING_REVIEW', 'APPROVED', 'PUBLISHED', 'DISABLED'].includes(publication?.status || '');
   const canDownload = usePermission(workspaceMode === 'EXPERIMENT' ? 'eln.upload.download' : 'data.upload.download');
 
+  const loads = useLatestRequest(`${workspaceMode}:${id}`);
+  const assemblyLoads = useLatestRequest(`${workspaceMode}:${id}`);
+  useEffect(() => {
+    setPreview(undefined); setWorkbook(undefined); setInstance(undefined); setPublication(undefined);
+    setAssemblyPlan(undefined); setAssemblyLinks([]); setLoading(true); structureDirtyRef.current = false; setStructureDirty(false);
+    editGeneration.current = 0; structureOperations.current = []; correctionRevision.current = undefined;
+    setDocumentCorrections({}); setSaving(false); setSavingCell(undefined);
+    setSelectedFieldKey(undefined); setSelectedBindingId(undefined);
+  }, [id, workspaceMode]);
   const load = useCallback(async (options: { silent?: boolean; preserveSnapshot?: boolean; skipWorkbook?: boolean } = {}) => {
+    if (!loads.isActive()) return;
+    const isCurrent = loads.begin();
     if (!options.silent) {
       setLoading(true);
       setLoadError(undefined);
     }
     try {
       const nextPreview = await dataApi.preview(id, workspaceMode === 'EXPERIMENT');
+      if (!isCurrent()) return;
       const stillProcessing = ['PARSING', 'VALIDATING', 'COMMITTING'].includes(nextPreview.job.status);
       const nextWorkbook = options.skipWorkbook && stillProcessing
         ? undefined
@@ -148,12 +165,14 @@ export function DataImportJobPage({
           if (stillProcessing || ['DOC', 'DOCX', 'IMAGE'].includes(nextPreview.job.sourceFormat)) return undefined;
           throw error;
         });
+      if (!isCurrent()) return;
       setPreview(nextPreview);
       setLoadError(undefined);
       void projectResourceApi.links('DATA_IMPORT_JOB', id).then((relations) => {
+        if (!isCurrent()) return;
         setRelatedProjects(relations);
         setProjectRelations(relations.map((item) => ({ projectId: item.projectId, stageId: item.stageId, taskId: item.taskId })));
-      }).catch(() => { setRelatedProjects([]); setProjectRelations([]); });
+      }).catch(() => { if (isCurrent()) { setRelatedProjects([]); setProjectRelations([]); } });
       if (nextWorkbook) {
         const nextInstance = resolveInstanceDefinition(nextWorkbook.snapshot, nextWorkbook.templateInstance) ?? labWorkbookInstance(nextWorkbook.snapshot);
         if (nextInstance) writeWorkbookInstance(nextWorkbook.snapshot, nextInstance);
@@ -169,11 +188,11 @@ export function DataImportJobPage({
         setSelectedBindingId((current) => current || firstDefinition?.bindingId || firstField?.bindingId);
       }
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : '导入任务加载失败');
+      if (isCurrent()) setLoadError(error instanceof Error ? error.message : '导入任务加载失败');
     } finally {
-      if (!options.silent) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [id, message, workspaceMode]);
+  }, [id, loads, workspaceMode]);
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
@@ -183,13 +202,15 @@ export function DataImportJobPage({
 
   const loadAssembly = useCallback(async () => {
     if (preview?.job.status !== 'COMPLETED' || preview.templateContract?.importContractVersion !== 9) return;
+    const isCurrent = assemblyLoads.begin();
     try {
       const sync = await dataApi.experimentSyncStatus(id);
+      if (!isCurrent()) return;
       setAssemblyPlan(sync.plan); setAssemblyLinks(sync.links);
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : '实验草稿组装计划加载失败');
+      if (isCurrent()) void message.error(error instanceof Error ? error.message : '实验草稿组装计划加载失败');
     }
-  }, [id, message, preview]);
+  }, [id, assemblyLoads, message, preview]);
   useEffect(() => { void loadAssembly(); }, [loadAssembly]);
   useEffect(() => {
     if (workspaceMode !== 'EXPERIMENT' || !assemblyPlan) return;
@@ -200,22 +221,12 @@ export function DataImportJobPage({
       onExperimentReady?.(onlyLinked.experimentId);
     }
   }, [assemblyLinks, assemblyPlan, onExperimentLinksReady, onExperimentReady, workspaceMode]);
-  useEffect(() => {
-    if (!assemblyLinks.some((item) => ['READY', 'RUNNING'].includes(item.status))) return undefined;
-    const timer = window.setInterval(() => void loadAssembly(), 1600);
-    return () => window.clearInterval(timer);
-  }, [assemblyLinks, loadAssembly]);
+  usePolling(loadAssembly, assemblyLinks.some((item) => ['READY', 'RUNNING'].includes(item.status)), 1600, id);
 
   const processing = Boolean(preview && ['PARSING', 'VALIDATING', 'COMMITTING'].includes(preview.job.status));
-  useEffect(() => {
-    if (!processing) return undefined;
-    const timer = window.setInterval(() => void load({ silent: true, skipWorkbook: true }), 1600);
-    return () => window.clearInterval(timer);
-  }, [load, processing]);
+  usePolling(() => load({ silent: true, skipWorkbook: true }), processing, 1600, id);
 
   const fields = workbook?.fields || [];
-  const blockers = preview?.issues.filter((issue) => issue.severity === 'BLOCKER'
-    && !['RESOLVED', 'IGNORED'].includes(issue.status)) || [];
 
   if (loading && !preview) return <div className="data-workbench-loading"><Spin /></div>;
   if (!preview) return (
@@ -231,6 +242,7 @@ export function DataImportJobPage({
   );
 
   const displayedIssues = deduplicateFieldDefinitionIssues(preview.issues, instance, preview.sheets);
+  const blockers = displayedIssues.filter(isImportBlocker);
   const definitionReviews = definitionReviewItems(instance, displayedIssues);
   const issuesOutsideDefinition = displayedIssues.filter((issue) =>
     !issueRepresentedByDefinition(issue, definitionReviews));
@@ -300,6 +312,7 @@ export function DataImportJobPage({
         correctedValue: displayedValue,
         reason: '导入确认页直接修正',
       });
+      if (!loads.isActive()) return;
       correctionRevision.current = Object.keys(documentCorrections).length ? savedJob.revision : undefined;
       setWorkbook((current) => current ? {
         ...current,
@@ -310,11 +323,12 @@ export function DataImportJobPage({
       await load({ silent: true, preserveSnapshot: true });
       void message.success('修正值已保存并重新校验');
     } catch (error) {
+      if (!loads.isActive()) return;
       correctionRevision.current ??= preview.job.revision;
       setDocumentCorrections(current => ({ ...current, [fieldKey(field) || '']: formatImportValue(displayedValue) }));
       void message.error(error instanceof Error ? error.message : '修正值保存失败，当前修改仍保留');
     } finally {
-      setSavingCell(undefined);
+      if (loads.isActive()) setSavingCell(undefined);
     }
   };
 
@@ -322,15 +336,18 @@ export function DataImportJobPage({
     setSaving(true);
     try {
       if (structureDirtyRef.current) throw new Error('请先保存工作簿草稿，再完成数据核对');
+      loads.invalidate();
       await dataApi.commit(id, workspaceMode === 'EXPERIMENT');
+      if (!loads.isActive()) return;
       await load();
       if (workspaceMode === 'EXPERIMENT') await loadAssembly();
+      if (!loads.isActive()) return;
       void message.success(workspaceMode === 'EXPERIMENT'
         ? '导入数据已完成核对，实验草稿生成状态已更新'
         : '数据已完成核对，可以提交审核');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '正式数据提交失败');
-    } finally { setSaving(false); }
+    } finally { if (loads.isActive()) setSaving(false); }
   };
 
   const retryAssembly = async () => {
@@ -343,24 +360,32 @@ export function DataImportJobPage({
         categoryId, assemblyKeys,
       });
       await loadAssembly();
+      if (!loads.isActive()) return;
       void message.success('已重新发起实验草稿生成');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '实验草稿重试未能发起');
-    } finally { setSaving(false); }
+    } finally { if (loads.isActive()) setSaving(false); }
   };
 
   const reExtract = async () => {
     setSaving(true);
     try {
       if (structureDirtyRef.current) throw new Error('请先保存工作簿草稿，再重新解析');
+      loads.invalidate();
       await dataApi.reExtract(id,preview.job.revision);
+      if (!loads.isActive()) return;
       await load();
       void message.success('数据已重新读取并校验');
     } catch (error) { void message.error(error instanceof Error ? error.message : '重新读取失败'); }
-    finally { setSaving(false); }
+    finally { if (loads.isActive()) setSaving(false); }
   };
 
   const saveDraft = async (silent = false) => {
+    if (!loads.isActive()) return false;
+    loads.invalidate();
+    const generation = editGeneration.current;
+    const sentOperations = [...structureOperations.current];
+    const editor = editorRef.current;
     setSaving(true);
     setLoadError(undefined);
     try {
@@ -369,18 +394,21 @@ export function DataImportJobPage({
         for (const [key,value] of Object.entries(documentCorrections)) {
           const field=fields.find(f=>fieldKey(f)===key);
           if (!field?.sheetId || !field.address) throw new Error('字段位置已变化，请核对后保存');
-          await editorRef.current?.writeCell?.(field.sheetId,field.address,value);
+          await editor?.writeCell?.(field.sheetId,field.address,value);
         }
-        const live = editorRef.current?.getSnapshot();
+        const live = editor?.getSnapshot();
         if (!live) throw new Error('工作簿尚未准备好');
-        const saved = await dataApi.saveWorkbookDraft(id, { revision: savedJob.revision, snapshot: live, templateInstance: editorRef.current?.getTemplateInstance?.() ?? instance, structureOperations: structureOperations.current }, workspaceMode === 'EXPERIMENT');
-        structureOperations.current = [];
-        structureDirtyRef.current = false; setStructureDirty(false); correctionRevision.current = undefined;
-        setDocumentCorrections({});
+        const saved = await dataApi.saveWorkbookDraft(id, { revision: savedJob.revision, snapshot: live, templateInstance: editor?.getTemplateInstance?.() ?? instance, structureOperations: sentOperations }, workspaceMode === 'EXPERIMENT');
+        if (!loads.isActive()) return false;
+        structureOperations.current = structureOperations.current.slice(sentOperations.length);
+        const unchanged = generation === editGeneration.current;
+        correctionRevision.current = unchanged ? undefined : saved.job.revision;
+        if (unchanged) { structureDirtyRef.current = false; setStructureDirty(false); }
+        setDocumentCorrections(current => Object.fromEntries(Object.entries(current).filter(([key, value]) => documentCorrections[key] !== value)));
         setPreview(current => current ? { ...current, job: saved.job } : current);
         // Refresh extraction results without replaying normalized metadata as a new user edit.
-        setInstance(editorRef.current?.getTemplateInstance?.() ?? saved.workbook.templateInstance ?? instance);
-        setWorkbook(current => ({ ...saved.workbook, snapshot: current?.snapshot ?? saved.workbook.snapshot }));
+        if (unchanged) setInstance(editor?.getTemplateInstance?.() ?? saved.workbook.templateInstance ?? instance);
+        setWorkbook(current => unchanged || !current ? { ...saved.workbook, snapshot: current?.snapshot ?? saved.workbook.snapshot } : current);
         await load({ silent: true, preserveSnapshot: true });
         if (!silent) void message.success('工作簿草稿已保存并重新校验');
         return true;
@@ -389,22 +417,25 @@ export function DataImportJobPage({
         const field = fields.find((item) => fieldKey(item) === key);
         if (!field?.editable || !field.recordId) throw new Error('字段位置已变化，请重新核对后保存');
         savedJob = await dataApi.correctValue(id, field.recordId, { revision: savedJob.revision, bindingId: field.bindingId, valuePath: field.valuePath, correctedValue: value, reason: '保存导入草稿' });
+        if (!loads.isActive()) return false;
         const ownedJob = savedJob;
         correctionRevision.current = savedJob.revision;
         setPreview(current => current ? { ...current, job: ownedJob } : current);
-        setDocumentCorrections((current) => { const next = { ...current }; delete next[key]; return next; });
+        setDocumentCorrections((current) => { if (current[key] !== value) return current; const next = { ...current }; delete next[key]; return next; });
       }
       savedJob = await dataApi.saveMappings(id, savedJob.revision, preview.mappings);
-      correctionRevision.current = undefined;
+      if (!loads.isActive()) return false;
+      correctionRevision.current = generation === editGeneration.current ? undefined : savedJob.revision;
       setPreview(current => current ? { ...current, job: savedJob } : current);
       await load();
       if (!silent) void message.success('导入草稿已保存');
       return true;
-    } catch (error) { const reason=error instanceof Error ? error.message : '未保存内容仍保留'; setLoadError(`草稿保存失败：${reason}`); void message.error(reason); return false; }
-    finally { setSaving(false); }
+    } catch (error) { if (!loads.isActive()) return false; const reason=error instanceof Error ? error.message : '未保存内容仍保留'; setLoadError(`草稿保存失败：${reason}`); void message.error(reason); return false; }
+    finally { if (loads.isActive()) setSaving(false); }
   };
 
   const changeFieldCorrection = (field: DataFieldValueView, value: string) => {
+    editGeneration.current++;
     correctionRevision.current ??= preview.job.revision;
     setDocumentCorrections((current) => {
       const key = fieldKey(field) || '';
@@ -433,6 +464,7 @@ export function DataImportJobPage({
         correctedValue: value,
         reason: '导入核对页自动保存',
       });
+      if (!loads.isActive()) return;
       correctionRevision.current = savedJob.revision;
       setPreview((current) => current ? { ...current, job: savedJob } : current);
       setDocumentCorrections((current) => {
@@ -444,10 +476,11 @@ export function DataImportJobPage({
       });
       await load({ silent: true });
     } catch (error) {
+      if (!loads.isActive()) return;
       void message.error(error instanceof Error ? error.message : '修改保存失败，当前内容仍保留');
       throw error;
     } finally {
-      setSavingCell(undefined);
+      if (loads.isActive()) setSavingCell(undefined);
     }
   };
 
@@ -470,6 +503,7 @@ export function DataImportJobPage({
         : {}),
     });
     await editorRef.current?.setTemplateInstance?.(next);
+    if (!loads.isActive()) return;
     setInstance(next);
     markStructureDirty();
     if (!(await saveDraft(true))) throw new Error('字段确认尚未保存，请重试');
@@ -482,9 +516,10 @@ export function DataImportJobPage({
     try {
       const relations = await projectResourceApi.replaceLinks('DATA_IMPORT_JOB', id,
         projectRelations.filter((item) => item.projectId), relatedProjects);
+      if (!loads.isActive()) return;
       setRelatedProjects(relations); setRelationOpen(false); void message.success('关联项目已保存');
     } catch (error) { void message.error(error instanceof Error ? error.message : '关联项目保存失败'); }
-    finally { setSaving(false); }
+    finally { if (loads.isActive()) setSaving(false); }
   };
   const meta = (
     <Space wrap size={8}>
@@ -513,7 +548,7 @@ export function DataImportJobPage({
         {canUpdate && workbook?.editable && <Button loading={saving} disabled={Boolean(savingCell) || processing} onClick={() => void saveDraft()}>保存草稿</Button>}
         {workspaceMode === 'DATA' && <DataPublicationPanel jobId={id} refreshKey={preview.job.updatedAt}
           versionContainer={versionContainer}
-          canConfirm={preview.job.status === 'WAITING_CONFIRM' && !blockers.length && !['INCOMPATIBLE', 'REVIEW_REQUIRED'].includes(compatibility)}
+          canConfirm={!confirmationBlockReason(preview, displayedIssues)}
           disabled={saving || Boolean(savingCell) || structureDirty || Object.keys(documentCorrections).length > 0}
           onStateChange={setPublication} onChanged={() => void load()} />}
         <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
@@ -538,7 +573,6 @@ export function DataImportJobPage({
           onEdit={editFieldDefinition}
           onConfirm={confirmFieldDefinition}
         />
-        {workspaceMode === 'EXPERIMENT' && <ExperimentConversionNotice importId={id} confirmed={preview.job.status === 'COMPLETED'} />}
         <WorkbenchNotice preview={preview} issues={issuesOutsideDefinition} processing={processing} onIssue={(issue) => {
           if (isFieldDefinitionIssue(issue) && instance) {
             const location = fieldDefinitionIssueLocation(issue, instance, preview.sheets);
@@ -553,8 +587,8 @@ export function DataImportJobPage({
           if (issue.sheetId && issue.address && !requiresTemplateChange(issue.issueType)) { editorRef.current?.focusCell?.(issue.sheetId, issue.address); setActiveTab('data'); }
           else navigate(workspaceMode === 'EXPERIMENT' ? '/experiments/upload' : '/data/upload');
         }} />
-        {!processing && preview.job.status !== 'COMPLETED' && confirmationBlockReason(preview) && <Alert type="warning" showIcon
-          message={confirmationBlockReason(preview)} action={<Button onClick={() => navigate(workspaceMode === 'EXPERIMENT' ? '/experiments/upload' : '/data/upload')}>重新选择模板或文件</Button>} />}
+        {!processing && preview.job.status !== 'COMPLETED' && confirmationBlockReason(preview, displayedIssues) && <Alert type="warning" showIcon
+          message={confirmationBlockReason(preview, displayedIssues)} action={<Button onClick={() => navigate(workspaceMode === 'EXPERIMENT' ? '/experiments/upload' : '/data/upload')}>重新选择模板或文件</Button>} />}
         {structureDirty && <Alert type="info" showIcon message="工作簿还有未保存的修改，可继续编辑或点击“保存草稿”。" />}
         {Object.keys(documentCorrections).length > 0 && <Alert type="info" showIcon message="字段修改正在自动保存，也可点击“保存草稿”立即保存。" />}
       </>}
@@ -625,7 +659,7 @@ export function DataImportJobPage({
             busy={saving}
             saving={Boolean(savingCell) || Object.keys(documentCorrections).length > 0}
             blocked={structureDirty || definitionReviews.length > 0 || blockers.length > 0
-              || preview.job.status !== 'WAITING_CONFIRM'
+              || Boolean(confirmationBlockReason(preview, displayedIssues))
               || ['INCOMPATIBLE', 'REVIEW_REQUIRED'].includes(compatibility)}
             blockedHint={structureDirty
               ? '左侧工作簿有未保存修改，请先点击顶部“保存草稿”'

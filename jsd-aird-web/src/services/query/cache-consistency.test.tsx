@@ -40,6 +40,8 @@ beforeEach(()=>{
   rows=[{id:'one',title:'before',category:'A',revision:1}];
   reads=0;writes=0;holdRead=false;held=[];writeFailure=undefined;commitBeforeFailure=false;readFailures=[];deleteRows=false;
   httpClient.defaults.adapter=config=>{
+    // Session validation is independent of business reads and may run when its TTL expires.
+    if (config.url === '/api/v1/auth/me') return Promise.resolve(response(config, testUser));
     if (config.method==='get') {
       reads++;
       const status=readFailures.shift();
@@ -92,7 +94,8 @@ it('discards known-invalid inactive filters, categories and totals after a mutat
 });
 
 it.each([400,422])('keeps valid cached rows and does not retry a rejected %s write',async status=>{
-  const {result}=renderHook(()=>useBusinessQuery('projects',{},read));
+  // Background polling has its own matrix; only write-triggered reads count here.
+  const {result}=renderHook(()=>useBusinessQuery('projects',{},read,{live:false}));
   await waitFor(()=>expect(result.current.data?.items[0]?.revision).toBe(1));
   writeFailure=status;
   await act(async()=>{await expect(save()).rejects.toMatchObject({status})});

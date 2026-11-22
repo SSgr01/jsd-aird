@@ -156,6 +156,18 @@ test('picker reopens with the draft selection, updates images without duplicates
     await waitFor(() => assert.equal(Boolean(view.queryByLabelText('选择图谱与页面')),false));
     assert.deepEqual(state.attachmentIds,['personal-file']); assert.equal(document.references.length,0);
     assert.ok(document.text.includes('说明依据')); assert.equal(files.size,1);
+    chart.pageCount = 6;
+    fireEvent.click(view.getByRole('button',{name:'添加图谱并选择页面'}));
+    await waitFor(() => assert.ok(view.getByText('样品图谱')));
+    fireEvent.click(view.getByRole('checkbox',{name:/样品图谱/}));
+    for (let page=1;page<=6;page++) assert.equal(view.getByLabelText('第 '+page+' 页').checked,true);
+    fireEvent.click(view.getByLabelText('第 3 页'));
+    fireEvent.click(view.getByRole('button',{name:'确认选择'}));
+    await waitFor(() => assert.equal(Boolean(view.queryByLabelText('选择图谱与页面')),false));
+    assert.deepEqual(spectrumDraftSelection(document).selection[0].pages,[1,2,4,5,6]);
+    await open();
+    assert.equal(view.getByLabelText('第 3 页').checked,false);
+    assert.equal(view.getByLabelText('第 6 页').checked,true);
   } finally {
     cleanup?.(); globalThis.fetch = originalFetch; dom.window.close();
     for (const [key,descriptor] of saved) {if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}

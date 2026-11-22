@@ -96,7 +96,7 @@ public class SeedUnifiedExperiments {
                                         double contact=round(69 + 28*fraction + 0.08*additive + random.nextGaussian()*1.2,1);
                                         set(sheet, "optical.gloss20", c, round(gloss-5,1)); set(sheet, "optical.gloss60", c, gloss); set(sheet, "optical.gloss85", c, round(Math.min(99,gloss+2),1));
                                         setPercent(sheet, "optical.haze", c, round(1.2+random.nextDouble()*1.6,1)); setPercent(sheet, "optical.transmittance", c, round(89+random.nextDouble()*3,1));
-                                        set(sheet, "hardness.1000g", c, fraction>0.72?"H":"HB"); set(sheet, "hardness.700g", c, fraction>0.72?"2H":"H");
+                                        set(sheet, "hardness.1000g", c, fraction>0.72?"H":"HB"); set(sheet, "hardness.750g", c, fraction>0.72?"2H":"H");
                                         set(sheet, "hardness.500g", c, fraction>0.72?"2H":"H");
                                         set(sheet, "adhesion.pc", c, fraction > 0.77 ? "4B" : "5B"); set(sheet, "adhesion.afterBoiling.pc", c, fraction > 0.77 ? "3B" : "4B");
                                         set(sheet, "optical.deltaE", c, round(0.3+random.nextDouble()*0.6,2));

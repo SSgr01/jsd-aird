@@ -12,6 +12,15 @@ import {
   writeFieldModel,
 } from './field-model';
 import type { BusinessField, FieldModel, TemplateBinding } from './types';
+import type { PublishReviewSyncState } from './publish-readiness';
+
+export function recognitionNeedsAttention(review: RecognitionReview | undefined, configuredFields: number, busy: boolean, sync: PublishReviewSyncState) {
+  return busy || sync !== 'FRESH' || review?.runStatus === 'FAILED'
+    || (review?.summary.pending ?? 0) > 0 || (review?.summary.conflict ?? 0) > 0
+    || (review?.summary.blockingIssueCount ?? 0) > 0 || (review?.statistics?.pendingFieldCount ?? 0) > 0
+    || (review?.statistics?.structureConflictGroups ?? 0) > 0
+    || (!review?.recognitionRunId && configuredFields === 0);
+}
 
 export function mergeRecognitionReview(
   schema: Record<string, unknown>,

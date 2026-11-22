@@ -3,6 +3,8 @@ import { FileTextOutlined, UploadOutlined } from '@ant-design/icons';
 import { App, Form, Input, Select, Space, Typography, Upload } from 'antd';
 import type { UploadFile } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLatestRequest } from '@/services/query/use-request-guard';
+import { usePolling } from '@/hooks/use-polling';
 import { useNavigate } from 'react-router-dom';
 
 import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload-workspace';
@@ -35,7 +37,7 @@ async function runLimited<T, R>(items: T[], limit: number, worker: (item: T, ind
 function taskStatus(task: KnowledgeUploadTask) {
   if (task.status === 'FAILED') return { label: '处理失败', color: 'error' };
   if (task.status === 'DUPLICATE') return { label: '文件重复', color: 'warning' };
-  if (task.status === 'COMPLETED') return { label: '解析完成，待校对', color: 'success' };
+  if (task.status === 'COMPLETED') return { label: '上传处理完成', color: 'success' };
   if (task.status === 'QUEUED') return { label: '解析排队', color: 'processing' };
   return { label: '正在上传', color: 'processing' };
 }
@@ -64,17 +66,23 @@ export function KnowledgeLibraryPage() {
   const [uploadCapabilities, setUploadCapabilities] = useState<KnowledgeUploadCapabilities>();
   const [tasksLoading, setTasksLoading] = useState(true);
   const uploadLock = useRef(false);
+  const taskLoads = useLatestRequest('knowledge-uploads');
+  const updateUploadTasks = (update: Parameters<typeof setUploadTasks>[0]) => {
+    taskLoads.invalidate(); setUploadTasks(update);
+  };
 
   const loadUploadTasks = useCallback(async (silent = false) => {
+    const isCurrent = taskLoads.begin();
     if (!silent) setTasksLoading(true);
     try {
-      setUploadTasks(await knowledgeApi.uploadTasks());
+      const next = await knowledgeApi.uploadTasks();
+      if (isCurrent()) setUploadTasks(next);
     } catch (error) {
-      if (!silent) void message.error(error instanceof Error ? error.message : '上传记录加载失败');
+      if (isCurrent() && !silent) void message.error(error instanceof Error ? error.message : '上传记录加载失败');
     } finally {
-      if (!silent) setTasksLoading(false);
+      if (isCurrent()) setTasksLoading(false);
     }
-  }, [message]);
+  }, [message, taskLoads]);
 
   useEffect(() => { void loadUploadTasks(); }, [loadUploadTasks]);
 
@@ -83,11 +91,7 @@ export function KnowledgeLibraryPage() {
       .catch((error) => void message.error(error instanceof Error ? error.message : '上传能力加载失败'));
   }, [message]);
 
-  useEffect(() => {
-    if (!uploadTasks.some((task) => ['STAGING', 'CHECKING', 'SUBMITTING', 'QUEUED'].includes(task.status))) return undefined;
-    const timer = window.setInterval(() => void loadUploadTasks(true), 4000);
-    return () => window.clearInterval(timer);
-  }, [loadUploadTasks, uploadTasks]);
+  usePolling(() => loadUploadTasks(true), uploadTasks.some((task) => ['STAGING', 'CHECKING', 'SUBMITTING', 'QUEUED'].includes(task.status)), 4000);
 
   useEffect(() => {
     setCategoryId(undefined);
@@ -120,7 +124,7 @@ export function KnowledgeLibraryPage() {
   const removeUploadTask = async (taskId: string) => {
     try {
       await knowledgeApi.deleteUploadTask(taskId);
-      setUploadTasks((current) => current.filter((item) => item.id !== taskId));
+      updateUploadTasks((current) => current.filter((item) => item.id !== taskId));
       void message.success('上传记录已移除');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '移除上传记录失败');
@@ -136,7 +140,7 @@ export function KnowledgeLibraryPage() {
           uploadContext: task.uploadContext, documentId: task.documentId,
           documentVersionId: task.documentVersionId, message: '已重新提交解析',
         });
-        setUploadTasks((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+        updateUploadTasks((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
         void message.success('已重新提交解析，历史解析记录会保留');
       } catch (error) { void message.error(error instanceof Error ? error.message : '重新解析失败'); }
       return;
@@ -153,7 +157,7 @@ export function KnowledgeLibraryPage() {
         const selected = await chooseExactDuplicateResolution(preflight);
         if (selected.resolution === 'SKIP') {
           const updated = await knowledgeApi.updateUploadTask(task.id, { status: 'DUPLICATE', progress: 100, message: '与已有文件内容相同，已跳过' });
-          setUploadTasks((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+          updateUploadTasks((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
           return;
         }
         resolution = { resolution: 'NEW_VERSION', targetDocumentId: selected.targetDocumentId };
@@ -175,7 +179,7 @@ export function KnowledgeLibraryPage() {
         status: 'QUEUED', progress: 100, sourceFileId: task.sourceFileId, uploadContext: context,
         documentId: created.id, documentVersionId: created.currentVersionId, message: '已重新提交解析',
       });
-      setUploadTasks((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+      updateUploadTasks((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
       void message.success('已重新进入解析队列');
     } catch (error) { void message.error(error instanceof Error ? error.message : '上传记录重试失败'); }
   };
@@ -208,12 +212,12 @@ export function KnowledgeLibraryPage() {
         }
       }));
       const entries = createdEntries.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
-      setUploadTasks((current) => [...entries.map((entry) => entry.task), ...current]);
+      updateUploadTasks((current) => [...entries.map((entry) => entry.task), ...current]);
       const prepared = await runLimited(entries, 3, async ({ file, task }) => {
         const update = async (status: Exclude<KnowledgeUploadTask['status'], 'COMPLETED'>, progress: number,
           extra: Partial<Pick<KnowledgeUploadTask, 'sourceFileId' | 'uploadContext' | 'documentId' | 'documentVersionId' | 'message'>> = {}) => {
           const updated = await knowledgeApi.updateUploadTask(task.id, { status, progress, ...extra });
-          setUploadTasks((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+          updateUploadTasks((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
           return updated;
         };
         try {

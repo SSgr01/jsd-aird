@@ -16,6 +16,8 @@ import { downloadPreviewFile } from '@/components/file-preview';
 import { fetchFilePreviewBlob, stageFile } from '@/services/files';
 import { knowledgeApi, type KnowledgeDocument, type KnowledgeProcessing, type KnowledgeReview, type KnowledgeVersion, type Publication, type PublishedContent, type StructuredNode } from '@/services/knowledge';
 import { projectResourceApi, type ProjectRelationTarget } from '@/services/project/project-resource-api';
+import { useLatestRequest } from '@/services/query/use-request-guard';
+import { usePolling } from '@/hooks/use-polling';
 import { pendingKnowledgeReviewPath } from './knowledge-document-routing';
 import { documentWorkflowStatus } from './knowledge-workflow-status';
 
@@ -27,13 +29,39 @@ export function KnowledgeDocumentPage() {
   const historySelection = useRef<{ documentId: string; publicationId: string }>();
   const [relationOpen, setRelationOpen] = useState(false); const [projectRelations, setProjectRelations] = useState<ProjectRelationTarget[]>([]);
   const canUpdate = usePermission('knowledge.view.update'); const canReview = canUpdate; const canAssign = usePermission('knowledge.view.update'); const canAuthorizeAi = usePermission('ai.external'); const canDownload = usePermission('knowledge.view.view'); const canDelete = usePermission('knowledge.view.delete');
-  const load = useCallback(async (silent = false) => { if (!id) return; if (!silent) { setLoading(true); setLoadError(undefined); } try { const [document, history, released, process] = await Promise.all([knowledgeApi.get(id), knowledgeApi.versions(id), knowledgeApi.publications(id), knowledgeApi.processing(id)]); const current = released.find((value) => value.status === 'CURRENT'); setItem(document); setProjectRelations((document.relatedProjects || []).map((relation) => ({ projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId }))); setProcessing(process); setVersions(history); setPublications(released); const historyId = historySelection.current?.documentId === id ? historySelection.current.publicationId : undefined; setPublicationId(historyId && released.some((entry) => entry.id === historyId) ? historyId : current?.id); const reviewRequired = (canReview || canUpdate) && (document.reviewStatus === 'PENDING_REVIEW' || document.reviewStatus === 'REJECTED' || document.reviewRevisionStatus === 'BUILDING' || document.reviewRevisionStatus === 'FAILED' || document.status === 'FAILED' || document.status === 'PENDING_PROVIDER'); if (reviewRequired) { try { setReview(await knowledgeApi.review(id, document.currentVersionId)); } catch { setReview(undefined); } } else { setReview(undefined); } } catch (reason) { if (!silent) setLoadError(reason instanceof Error ? reason.message : '文件详情加载失败'); } finally { if (!silent) setLoading(false); } }, [canReview, canUpdate, id, message]);
-  useEffect(() => { void load(); }, [load]);
+  const loads = useLatestRequest(id || '');
+  const load = useCallback(async (silent = false) => {
+    if (!id) return;
+    const isCurrent = loads.begin();
+    if (!silent) { setLoading(true); setLoadError(undefined); }
+    try {
+      const [document, history, released, process] = await Promise.all([
+        knowledgeApi.get(id), knowledgeApi.versions(id), knowledgeApi.publications(id), knowledgeApi.processing(id),
+      ]);
+      if (!isCurrent()) return;
+      const reviewRequired = (canReview || canUpdate) && (document.reviewStatus === 'PENDING_REVIEW'
+        || document.reviewStatus === 'REJECTED' || document.reviewRevisionStatus === 'BUILDING'
+        || document.reviewRevisionStatus === 'FAILED' || document.reviewRevisionStatus === 'DRAFT'
+        || document.status === 'FAILED' || document.status === 'PENDING_PROVIDER');
+      const nextReview = reviewRequired ? await knowledgeApi.review(id, document.currentVersionId) : undefined;
+      if (!isCurrent()) return;
+      const current = released.find((value) => value.status === 'CURRENT');
+      const historyId = historySelection.current?.documentId === id ? historySelection.current.publicationId : undefined;
+      setItem(document); setProcessing(process); setVersions(history); setPublications(released); setReview(nextReview);
+      setProjectRelations((document.relatedProjects || []).map((relation) => ({ projectId: relation.projectId, stageId: relation.stageId, taskId: relation.taskId })));
+      setPublicationId(historyId && released.some((entry) => entry.id === historyId) ? historyId : current?.id);
+      setLoadError(undefined);
+    } catch (reason) {
+      if (isCurrent()) setLoadError(reason instanceof Error ? reason.message : '文件详情加载失败');
+    } finally { if (isCurrent()) setLoading(false); }
+  }, [canReview, canUpdate, id, loads]);
   useEffect(() => {
-    if (review?.reviewRevision?.status !== 'BUILDING' && !(processing && !processing.terminal && ['READY', 'RUNNING'].includes(processing.jobStatus || ''))) return;
-    const timer = window.setInterval(() => { void load(true); }, 3000);
-    return () => window.clearInterval(timer);
-  }, [load, review?.reviewRevision?.status, processing?.terminal, processing?.jobStatus]);
+    setItem(undefined); setReview(undefined); setProcessing(undefined); setVersions([]); setPublications([]);
+    setPublicationId(undefined); setPublished(undefined); historySelection.current = undefined; setLoading(true);
+  }, [id]);
+  useEffect(() => { void load(); }, [load]);
+  usePolling(() => load(true), review?.reviewRevision?.status === 'BUILDING'
+    || Boolean(processing && !processing.terminal && ['READY', 'RUNNING'].includes(processing.jobStatus || '')), 3000, id);
   useEffect(() => { if (!id || !publicationId) { setPublished(undefined); setPublishedLoading(false); setPublishedError(undefined); return; } let active = true; setPublished(undefined); setPublishedLoading(true); setPublishedError(undefined); void knowledgeApi.publishedContent(id, publicationId).then((value) => { if (active) setPublished(value); }).catch((reason) => { if (active) setPublishedError(reason instanceof Error ? reason.message : '发布内容加载失败'); }).finally(() => { if (active) setPublishedLoading(false); }); return () => { active = false; }; }, [id, publicationId, publicationLoadAttempt]);
   const directReviewPath = pendingKnowledgeReviewPath(canReview, item, review);
   useEffect(() => {
@@ -59,8 +87,9 @@ export function KnowledgeDocumentPage() {
   const saveRelations = async () => { if (!id || !item) return; setUploading(true); try { await projectResourceApi.replaceLinks('KNOWLEDGE_DOCUMENT', id, projectRelations.filter((relation) => relation.projectId), item.relatedProjects || []); setRelationOpen(false); await load(); void message.success('关联项目已保存'); } catch (reason) { void message.error(reason instanceof Error ? reason.message : '关联项目保存失败'); } finally { setUploading(false); } };
   const selectedTableId = published ? findTableForSource(published.confirmedDocument.content, selectedSourceNodeKey) : undefined;
   return <WorkspaceFrame maximizable className="business-page knowledge-document-view">
+    {loadError && <InlineNotice tone="warning" details={loadError} action={<Button onClick={() => void load(true)}>重新加载</Button>}>刷新失败，仍显示上次成功加载的内容。</InlineNotice>}
     <div className="business-page-heading"><Space><Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/knowledge/view')}>返回知识库</Button><div><Typography.Title level={1} style={{ margin: 0 }}>{item.title}</Typography.Title><Typography.Text type="secondary">{currentPublication ? `当前发布 #${currentPublication.publicationNo}` : '尚未发布'} · 原文件与确认内容同屏查看</Typography.Text><div>{item.relatedProjects?.map((relation) => <Tag color="blue" key={`${relation.projectId}-${relation.stageId || ''}-${relation.taskId || ''}`} onClick={() => navigate(`/projects/${relation.projectId}`)} style={{ cursor: 'pointer' }}>{relation.projectName}{relation.stageName ? ` / ${relation.stageName}` : ''}{relation.taskName ? ` / ${relation.taskName}` : ''}</Tag>)}</div></div></Space><Space wrap>{canUpdate && <><input ref={fileInput} hidden type="file" onChange={(event) => { void uploadVersion(event.target.files?.[0]); event.currentTarget.value = ''; }} /><Button icon={<UploadOutlined />} loading={uploading} disabled={!item.categoryId} onClick={() => fileInput.current?.click()}>上传新版本</Button></>}{canReview && pendingNewVersion && revisionStatus !== 'BUILDING' && review?.reviewRevision && <Button type="primary" onClick={() => navigate(`/knowledge/review/${review.documentId}/${review.versionId}`)}>进入校对</Button>}{canUpdate && currentPublication && <Button icon={<EditOutlined />} onClick={() => navigate(`/knowledge/review/${item.id}/${currentPublication.versionId}?mode=revision`)}>修订内容</Button>}{canDownload && <Button icon={<DownloadOutlined />} onClick={() => void download()}>下载原文件</Button>}{canAuthorizeAi && (item.aiStatus === 'APPROVED' ? <Button danger onClick={() => grant('REVOKE')}>撤销 AI</Button> : <Button icon={<SafetyCertificateOutlined />} disabled={!currentPublication} onClick={() => grant('APPROVE')}>授权 AI</Button>)}{canUpdate && canAssign && <Button icon={<LinkOutlined />} onClick={() => setRelationOpen(true)}>关联项目</Button>}{canDelete && item.allowedActions?.includes('DELETE') ? <Button danger icon={<DeleteOutlined />} onClick={deleteDocument}>删除</Button> : null}{canUpdate && (item.allowedActions?.includes('DISABLE') || item.allowedActions?.includes('RESTORE')) ? <Button danger={item.allowedActions.includes('DISABLE')} icon={item.allowedActions.includes('DISABLE') ? <StopOutlined /> : <UndoOutlined />} onClick={changeLifecycle}>{item.allowedActions.includes('DISABLE') ? '停用' : '恢复'}</Button> : null}<WorkspaceMaximizeButton /></Space></div>
-    {item.currentVersionId && <Space wrap><WorkspaceReviewActions type="KNOWLEDGE_VERSION" id={item.currentVersionId} saved={true} enabled={Boolean(review?.reviewRevision && revisionStatus === 'DRAFT')} published={item.reviewStatus === 'PUBLISHED' || item.reviewStatus === 'SUPERSEDED'} /></Space>}
+    {item.currentVersionId && <Space wrap><WorkspaceReviewActions type="KNOWLEDGE_VERSION" id={item.currentVersionId} saved={true} enabled={Boolean(review?.reviewRevision && revisionStatus === 'DRAFT')} published={item.reviewRevisionStatus === 'PUBLISHED' || item.reviewRevisionStatus === 'SUPERSEDED'} /></Space>}
     <KnowledgeDocumentStatus item={item} processing={processing} review={review} hasPublication={Boolean(currentPublication)} pendingNewVersion={pendingNewVersion} canRetry={canUpdate && Boolean(review)} retrying={retrying} onRetry={() => void retryParse()} />
     {publications.length > 0 && <div className="knowledge-publication-switch"><Typography.Text type="secondary">查看发布历史</Typography.Text><Select value={publicationId} style={{ width: 220 }} onChange={(value) => { historySelection.current = value === currentPublication?.id ? undefined : { documentId: item.id, publicationId: value }; setPublicationId(value); setPublished(undefined); setSelectedSourceNodeKey(undefined); }} options={publications.map((value) => ({ value: value.id, label: `发布 #${value.publicationNo}${value.status === 'CURRENT' ? '（当前）' : ''}` }))} /></div>}
     {published ? <DocumentComparisonViewer original={<OriginalDocumentViewer fileName={published.originalName} contentType={published.contentType} load={loadOriginal} contentUrl={knowledgeApi.contentUrl(item.id, sourceVersionId)} sourceNodes={published.sourceNodes} selectedSourceNodeKey={selectedSourceNodeKey} onSourceSelect={setSelectedSourceNodeKey} />} result={<><StructuredDocumentRenderer value={published.confirmedDocument} selectedSourceNodeKey={selectedSourceNodeKey} onSourceSelect={(keys) => setSelectedSourceNodeKey(keys[0])} />{selectedTableId && <VirtualDataTable documentId={item.id} publicationId={published.publication.id} sourceTableId={selectedTableId} />}</>} resultTitle={`确认内容 · 发布 #${published.publication.publicationNo}`} /> : publicationId ? <DocumentComparisonViewer preferOriginal original={<OriginalDocumentViewer fileName={sourceVersion?.originalName || item.originalName} contentType={sourceVersion?.contentType || item.contentType} load={loadOriginal} contentUrl={knowledgeApi.contentUrl(item.id, sourceVersionId)} sourceNodes={[]} />} result={<div className="knowledge-viewer-state">{publishedLoading || !publishedError ? <><Spin /><span>正在加载发布内容</span></> : <InlineNotice tone="error" details={publishedError} action={<Button onClick={() => setPublicationLoadAttempt((value) => value + 1)}>重新加载</Button>}>发布内容暂时无法加载，请重试。</InlineNotice>}</div>} /> : <DocumentComparisonViewer preferOriginal original={<OriginalDocumentViewer fileName={item.originalName} contentType={item.contentType} load={loadOriginal} contentUrl={knowledgeApi.contentUrl(item.id, sourceVersionId)} sourceNodes={[]} />} result={<div className="knowledge-viewer-state"><Empty description={revisionStatus === 'BUILDING' ? '正在发布，请稍候' : '文件发布后，确认内容将在这里展示'} /></div>} />}

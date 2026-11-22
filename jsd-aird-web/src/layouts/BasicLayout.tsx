@@ -35,7 +35,6 @@ import { ProLayout, type MenuDataItem } from '@ant-design/pro-components';
 import { App, Avatar, Button, Dropdown, Input, Modal, Result, Tooltip, Typography, type InputRef, type MenuProps } from 'antd';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSidebarAutoCollapse } from './use-sidebar-auto-collapse';
 import { BrandMark } from '@/components/brand/BrandMark';
 import './desktop-shell.css';
 import './sidebar.css';
@@ -320,7 +319,6 @@ export function BasicLayout() {
     if (isAssistant) setAssistantNavExpanded(!next);
     else setCollapsed(next);
   }, [isAssistant, setCollapsed]);
-  useSidebarAutoCollapse(layoutCollapsed, changeNavigationCollapsed);
   const user = useAuthStore((state) => state.user);
   const permissions = user?.permissions ?? [];
   const menuKeys = user?.menuKeys;

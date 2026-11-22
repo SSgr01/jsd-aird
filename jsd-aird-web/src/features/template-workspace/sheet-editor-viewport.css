@@ -1,0 +1,37 @@
+/* One stable viewport for every embedded spreadsheet. Resizing and fullscreen
+   must never replace the live workbook or reset selection/undo history. */
+.sheet-editor-viewport {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--app-surface);
+}
+.sheet-editor-viewport-toolbar {
+  display: flex;
+  height: 34px;
+  align-items: center;
+  justify-content: flex-end;
+  padding-inline: 8px;
+  border-bottom: 1px solid var(--app-border);
+}
+.sheet-editor-viewport-toolbar .ant-btn { height: 28px; font-size: 12px; }
+.sheet-editor-viewport[data-fullscreen-enabled='true'] > .univer-editor-surface {
+  top: 34px;
+  height: calc(100% - 34px);
+}
+/* Sheet workspaces use the editor's control, not the surrounding page control.
+   Document/knowledge workspaces keep their existing fullscreen behavior. */
+.workspace-frame:has(.sheet-editor-viewport) > :is(.workspace-header, .data-workbench-header) .workspace-maximize-button {
+  display: none;
+}
+/* On short windows, tall page notices must not squeeze the canvas to zero.
+   Let the surrounding workspace scroll while the sheet owns its cell scrolling. */
+.workspace-frame:has(.sheet-editor-viewport):not(.sheet-editor-viewport) {
+  overflow: auto;
+}
+.workspace-frame:has(.sheet-editor-viewport) > :is(.data-workbench-grid, .workspace-main-stage, .prototype-workspace-grid, .template-workspace-grid) {
+  min-height: 280px;
+  flex-shrink: 0;
+}

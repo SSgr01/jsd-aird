@@ -6,6 +6,7 @@ import { usePermission } from '@/components/auth/usePermission';
 import { dataApi, type DataPublication } from '@/services/data/data-api';
 import { publicationLabels, actionLabels, snapshotRows } from './publication-display';
 import { FormModal } from '@/components/form-dialog/FormModal';
+import { useLatestRequest } from '@/services/query/use-request-guard';
 
 export function DataPublicationPanel({ jobId, refreshKey, canConfirm = false, disabled = false, readOnly = false, lazy = false, onChanged, onStateChange, onEdit, versionContainer, permissionPrefix = 'data.upload' }: {
   versionContainer?: HTMLElement | null;
@@ -28,46 +29,67 @@ export function DataPublicationPanel({ jobId, refreshKey, canConfirm = false, di
   const [reviewerId, setReviewerId] = useState<string>();
   const [reviewersLoading, setReviewersLoading] = useState(false);
   const [reviewersError, setReviewersError] = useState<string>();
-  const requestSequence = useRef(0);
+  const requests = useLatestRequest(jobId);
+  const operations = useLatestRequest(jobId);
+  const reviewerLoads = useLatestRequest(jobId);
+  const snapshotLoads = useLatestRequest(jobId);
+  const running = useRef(false);
+  const stateChanged = useRef(onStateChange); stateChanged.current = onStateChange;
+  useEffect(() => {
+    setState(undefined); setError(undefined); setBusy(false); running.current = false;
+    setOpen(false); setSubmitOpen(false); setRejectOpen(false); setReviewHistoryOpen(false); setSnapshot(undefined);
+  }, [jobId]);
   const canUpdate = usePermission(`${permissionPrefix}.update`);
   const canSubmit = usePermission(`${permissionPrefix}.submit`);
   const canReview = usePermission(`${permissionPrefix}.approve`);
   const canPublish = usePermission(`${permissionPrefix}.publish`);
 
-  const load = useCallback(async () => {
-    const sequence = ++requestSequence.current;
+  const load = useCallback(async (afterMutation = false) => {
+    if (running.current && !afterMutation) return undefined;
+    const isCurrent = requests.begin();
     try {
       const next = await dataApi.publication(jobId);
-      if (sequence === requestSequence.current) { setState(next); setError(undefined); onStateChange?.(next); }
+      if (!isCurrent()) return undefined;
+      setState(next); setError(undefined); stateChanged.current?.(next);
       return next;
-    } catch (err) { if (sequence === requestSequence.current) setError(err instanceof Error ? err.message : '审核信息加载失败'); return undefined; }
-  }, [jobId, onStateChange]);
+    } catch (err) { if (isCurrent()) setError(err instanceof Error ? err.message : '审核信息加载失败'); return undefined; }
+  }, [jobId, requests]);
   const loadReviewers = useCallback(async () => {
+    const isCurrent = reviewerLoads.begin();
     setReviewersLoading(true); setReviewersError(undefined);
     try {
       const items = await dataApi.dataReviewers(jobId);
+      if (!isCurrent()) return;
       setReviewers(items);
       setReviewerId((current) => items.some((user) => user.id === current) ? current
         : items.some((user) => user.id === state?.reviewer?.id) ? state?.reviewer?.id
           : items.length === 1 ? items[0]?.id : undefined);
-    } catch (err) { setReviewersError(err instanceof Error ? err.message : '发布审核人加载失败'); }
-    finally { setReviewersLoading(false); }
-  }, [jobId, state?.reviewer?.id]);
-  useEffect(() => { if (!lazy || open) void load(); }, [load, refreshKey, lazy, open]);
+    } catch (err) { if (isCurrent()) setReviewersError(err instanceof Error ? err.message : '发布审核人加载失败'); }
+    finally { if (isCurrent()) setReviewersLoading(false); }
+  }, [jobId, reviewerLoads, state?.reviewer?.id]);
+  useEffect(() => { if (!lazy || open) void load(); return () => requests.invalidate(); }, [load, requests, refreshKey, lazy, open]);
   useEffect(() => { if (submitOpen) void loadReviewers(); }, [submitOpen, loadReviewers]);
   const run = async (action: () => Promise<unknown>, success: string) => {
-    requestSequence.current++;
+    if (running.current) return false;
+    const isCurrent = operations.begin();
+    requests.invalidate(); running.current = true;
     setBusy(true);
-    try { await action(); await load(); onChanged?.(); void message.success(success); return true; }
-    catch (err) { void message.error(err instanceof Error ? err.message : '操作失败'); return false; }
-    finally { setBusy(false); }
+    try {
+      await action(); if (!isCurrent()) return false;
+      const refreshed = await load(true); if (!isCurrent()) return false;
+      if (!refreshed) { void message.warning('操作已提交，但状态刷新失败，请刷新确认'); return false; }
+      onChanged?.(); void message.success(success); return true;
+    }
+    catch (err) { if (isCurrent()) void message.error(err instanceof Error ? err.message : '操作失败'); return false; }
+    finally { if (isCurrent()) { running.current = false; setBusy(false); } }
   };
   const showDetails = () => { setSnapshot(undefined); setOpen(true); };
   const showSnapshot = async (id: string, version: number) => {
+    const isCurrent = snapshotLoads.begin();
     setBusy(true);
-    try { setSnapshot({ version, data: await dataApi.publicationSnapshot(jobId, id) }); setOpen(true); }
-    catch (err) { void message.error(err instanceof Error ? err.message : '快照读取失败'); }
-    finally { setBusy(false); }
+    try { const data = await dataApi.publicationSnapshot(jobId, id); if (isCurrent()) { setSnapshot({ version, data }); setOpen(true); } }
+    catch (err) { if (isCurrent()) void message.error(err instanceof Error ? err.message : '快照读取失败'); }
+    finally { if (isCurrent()) setBusy(false); }
   };
   const activeSnapshot = state?.confirmedSnapshot;
   const reviewEvents = state?.events.filter((event) => ['SUBMITTED', 'APPROVED', 'RETURNED', 'WITHDRAWN'].includes(event.action)

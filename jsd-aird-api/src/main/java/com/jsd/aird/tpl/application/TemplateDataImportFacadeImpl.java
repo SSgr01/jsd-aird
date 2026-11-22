@@ -22,6 +22,9 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, ProjectTemplateFacade {
+    private com.jsd.aird.shared.excel.WorkbookFieldDefinitionReviews fieldDefinitionReviews;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setFieldDefinitionReviews(com.jsd.aird.shared.excel.WorkbookFieldDefinitionReviews reviews) { this.fieldDefinitionReviews = reviews; }
 
     private final TemplateRepository repository;
     private final FileObjectRepository files;
@@ -402,6 +405,13 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
             // Univer's array formulas, and an uploaded formula cache is not evidence.
             var labModel=com.jsd.aird.shared.lab.LabWorkbook.extract(objectMapper,prepared,objectMapper.createObjectNode(),fileId.toString());
             var pack=new UnifiedLabTemplateCatalog(objectMapper).describe(workspace.templateCode(),prepared,objectMapper.createObjectNode()).payload();
+            var reviewedInstance = pack.path("schema").path("x-jsd-workbook-instance");
+            if (fieldDefinitionReviews != null && fieldDefinitionReviews.apply(organizationId, versionId, reviewedInstance)) {
+                com.jsd.aird.shared.excel.WorkbookStructure.validate(objectMapper, prepared, reviewedInstance);
+                prepared = com.jsd.aird.shared.lab.LabWorkbook.prepare(objectMapper, prepared, readSnapshot(organizationId, workspace), fileId.toString());
+                labModel = com.jsd.aird.shared.lab.LabWorkbook.extract(objectMapper, prepared, objectMapper.createObjectNode(), fileId.toString());
+                pack = new UnifiedLabTemplateCatalog(objectMapper).describe(workspace.templateCode(), prepared, objectMapper.createObjectNode()).payload();
+            }
             var fields=new LinkedHashMap<String,FieldDefinition>();collectSchemaFields(pack.path("schema"),fields);
             var contract=pack.path("contract");
             var definition=new DataTemplateDefinition(workspace.templateId(),versionId,workspace.templateCode(),workspace.name(),null,workspace.versionNo(),"XLSX",pack.path("schema"),pack.path("mapping"),List.copyOf(fields.values()),9,contract.path("layoutStructureVersion").asInt(),contract.path("contractHash").asText(),contract);
@@ -436,9 +446,13 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
         var workspace=repository.findWorkspace(organizationId,versionId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"模板版本不存在"));
         var snapshot=(ObjectNode)source.deepCopy();
         var instance=com.jsd.aird.shared.excel.WorkbookStructure.validate(objectMapper,snapshot,provided);
+        if (fieldDefinitionReviews != null && fieldDefinitionReviews.apply(organizationId, versionId, instance)) {
+            instance = com.jsd.aird.shared.excel.WorkbookStructure.validate(objectMapper, snapshot, instance);
+        }
         JsonNode labIssues=instance.path("issues");
         if(com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot)) {
             snapshot=com.jsd.aird.shared.lab.LabWorkbook.prepare(objectMapper,snapshot,readSnapshot(organizationId,workspace),versionId.toString());
+            instance=com.jsd.aird.shared.excel.WorkbookStructure.validate(objectMapper,snapshot,com.jsd.aird.shared.excel.WorkbookStructure.instance(snapshot));
             var labModel=com.jsd.aird.shared.lab.LabWorkbook.extract(objectMapper,snapshot,objectMapper.createObjectNode(),versionId.toString());
             labIssues=labModel.path("templateInstance").path("issues");
         }

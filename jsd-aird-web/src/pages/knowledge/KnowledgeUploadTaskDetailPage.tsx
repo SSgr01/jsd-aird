@@ -15,6 +15,7 @@ export function KnowledgeUploadTaskDetailPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    setTask(undefined); setLoading(true);
     let current = true;
     void knowledgeApi.uploadTasks().then((items) => {
       if (current) setTask(items.find((item) => item.id === id));
@@ -31,7 +32,7 @@ export function KnowledgeUploadTaskDetailPage() {
 
   const status = task.status === 'FAILED' ? <Tag color="error">处理失败</Tag>
     : task.status === 'DUPLICATE' ? <Tag color="warning">文件重复</Tag>
-      : task.status === 'COMPLETED' ? <Tag color="success">解析完成，待校对</Tag>
+      : task.status === 'COMPLETED' ? <Tag color="success">上传处理完成</Tag>
         : <Tag color="processing">处理中</Tag>;
 
   return <div className="knowledge-document-page">

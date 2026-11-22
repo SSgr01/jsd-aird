@@ -43,3 +43,5 @@ SQL 安装验证使用独立临时 PostgreSQL 集群，不连接业务库：
 ```powershell
 python deployment/unified-experiments/verify_sql.py --postgres-bin "D:/PostgreSQL/18/bin"
 ```
+
+测试实验标准模板的硬度载荷为 1kg、750g、500g，对应字段编码 `hardness.1000g`、`hardness.750g`、`hardness.500g`。已安装的旧模板应通过修订发布更新；历史实验快照不改写。

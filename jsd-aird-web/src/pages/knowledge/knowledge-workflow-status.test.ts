@@ -9,6 +9,9 @@ describe('knowledge workflow status', () => {
     [{ status: 'READY', reviewStatus: 'PENDING_REVIEW', reviewRevisionStatus: 'FAILED' }, '发布失败'],
     [{ status: 'READY', reviewStatus: 'PUBLISHED', reviewRevisionStatus: 'PUBLISHED' }, '已发布'],
     [{ status: 'READY', reviewStatus: 'REJECTED', reviewRevisionStatus: 'FAILED' }, '已驳回'],
+    [{ status: 'READY', reviewStatus: 'PUBLISHED', reviewRevisionStatus: 'BUILDING' }, '发布处理中'],
+    [{ status: 'READY', reviewStatus: 'PUBLISHED', reviewRevisionStatus: 'FAILED' }, '发布失败'],
+    [{ status: 'READY', reviewStatus: 'PUBLISHED', reviewRevisionStatus: 'DRAFT' }, '已发布 · 有修订草稿'],
   ] as const)('maps %o to %s', (input, expected) => {
     expect(documentWorkflowStatus(input)).toMatchObject({ label: expected });
   });

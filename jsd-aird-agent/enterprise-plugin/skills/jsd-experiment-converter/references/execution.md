@@ -61,6 +61,8 @@ python -X utf8 scripts/execute_plan.py --root ROOT --plan ROOT/.dsh/cache/jsd-ex
 - 百分比浓度可显式用`writes.transform="percent_to_text"`保留为带百分号的条件文字；执行器要求该Excel源格本身有百分比数值格式，拒绝把普通小数猜成百分比。以浓度本身区分方案时可用`group_identity_role="PLAN"`及`group_transform="percent_to_text"`，不造实验编号；源数值和数值格式仍留原文对照。
 - `recipe.amount_transforms`按本配方真实用量格指定显式转换，例如`{"V11":{"pattern":"^F-1834/([0-9.]+)$","numeric":true}}`。原用量全文及转换步骤保留报告；层别、浓度等含义仍须另写入对应方案，不能只提取数字而丢条件。
 - `recipe.name_transforms`可逐格显式提取同格中的原物料名，适用于原文明确写成“XZ545    12”这类物料和投料共格的情况；与该格`amount_transforms`分别声明唯一正则，报告分别保留两种提取的完整原文。只允许本配方名称来源，不改写工作副本、不构造物料名，也不靠截断删除浓度或组成。
+- 一格正文含多项配方时，`recipe.entries`的每项可声明`name_transform`和`amount_transform`，分别从该项`name`、`amount`指向的真实原格唯一提取名称和用量。不同物料可以引用同一正文格并使用各自正则；每项提取均保留完整原文及提取规则。仍不得填字面值、改写工作副本、合并重复投料或省略浓度；逐组用量及合计照常核验。
+- 原记录是百分含量或混配比例，不能写入g配方时，可用`writes: [{"dst":"C20","composition_parts":[{"name":"A6","amount":"C6"},{"name":"B7","amount":"C7"}]}]`逐项生成该组“组成说明”。名称和加入数全部重读真实来源；有Excel百分格式才显示百分号，其余按原加入数显示，不猜单位、不生成g合计。仅允许测试模板各组第20行，拒绝字面值或作为检测结果合并入口，明细及原数值格式保留核验。
 - 每次执行的核验回执位于源指纹目录的`verifications/<plan_sha>-<output_sha>.json`，result.verification引用该独立报告。通用verification.json只是最新缓存，不能将其当所有历史产物的报告；复用时检查源、模板、计划、输出和对应报告指纹。
 
 ### 已合入主 skill 的显式能力

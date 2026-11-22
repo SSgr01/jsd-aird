@@ -112,4 +112,24 @@ class SpectrumWorkbenchIntegrationTest {
         selected.put("version_id","0".repeat(64));
         assertThatThrownBy(() -> host.contextResource(request)).isInstanceOf(ApiException.class);
     }
+    @Test void workbenchAcceptsAllSixPagesAndRejectsMoreThanTwenty() throws Exception {
+        try (var pdf = new PDDocument(); var bytes = new ByteArrayOutputStream()) {
+            for (int i = 0; i < 6; i++) pdf.addPage(new PDPage(new PDRectangle(30, 20)));
+            pdf.save(bytes); original = bytes.toByteArray();
+        }
+        var base = row("多页图谱", BusinessViews.hash(original));
+        chart = new SpectrumRepository.ChartRow(base.id(),org,categoryId,"IR","红外",base.fileObjectId(),
+            base.title(),"native.pdf","application/pdf",original.length,base.sha256(),"A","B01","25°C","{}",6,"READY",Instant.EPOCH,Instant.EPOCH);
+        var host = new AgentHostService(mock(LiteratureResearchService.class),mock(com.jsd.aird.kb.api.ResearchKnowledgeFacade.class),
+            mock(com.jsd.aird.mdm.api.AgentProjectFacade.class),mock(AgentSourceAuthorization.class),mock(AuthorizationService.class),json,mock(PrivateResearchSourceService.class));
+        @SuppressWarnings("unchecked") var provider = (ObjectProvider<BusinessDataService>)mock(ObjectProvider.class);
+        when(provider.getObject()).thenReturn(data); ReflectionTestUtils.setField(host,"businessData",provider);
+        var selected = json.createObjectNode().put("kind","SPECTRUM").put("resource_id",chartId.toString()).put("version_id",chart.sha256());
+        var pages = selected.putArray("pages"); for (int i=1;i<=6;i++) pages.add(i);
+        var request = json.createObjectNode(); request.set("ref",selected);
+        assertThat(host.contextResource(request).path("candidates").size()).isEqualTo(6);
+        for (int i=7;i<=21;i++) pages.add(i);
+        assertThatThrownBy(() -> host.contextResource(request)).isInstanceOf(ApiException.class)
+            .hasMessageContaining("请选择图谱原文件版本和页面");
+    }
 }

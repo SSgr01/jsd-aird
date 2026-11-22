@@ -182,7 +182,7 @@ public class AgentHostService {
         switch (ref.path("kind").asText()) {
             case "SPECTRUM" -> {
                 if (!ref.path("version_id").asText().matches("[a-f0-9]{64}") || !ref.path("pages").isArray()
-                        || ref.path("pages").isEmpty() || ref.path("pages").size() > 5)
+                        || ref.path("pages").isEmpty() || ref.path("pages").size() > 20)
                     throw new ApiException(ApiErrorCode.BAD_REQUEST, "请选择图谱原文件版本和页面");
                 var request = mapper.createObjectNode();
                 request.set("ref", mapper.createObjectNode().put("type", "SPECTRUM").put("id", id.toString()));

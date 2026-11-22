@@ -72,6 +72,7 @@ public class DataWorkbookService {
         if(effectiveInstance.isObject()) {
             var execution=templates.prepareWorkbookImport(actor.organizationId(),job.templateVersionId(),snapshot,effectiveInstance);
             definition=execution.definition();bindings=execution.bindings();
+            com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot, definition.schema().path("x-jsd-workbook-instance"));
         }
         var fields = importFields(rows, mappings, sheets, componentByBinding(definition));
         var fieldDefinitions = fieldDefinitions(definition, bindings, fields);

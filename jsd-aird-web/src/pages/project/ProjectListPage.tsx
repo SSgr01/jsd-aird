@@ -763,7 +763,7 @@ export function ProjectListPage() {
                 }
                 extra="留空时由系统自动生成"
               >
-                <Input placeholder="例如 JSD-PM-20260810-JFSE2" maxLength={64} />
+                <Input placeholder="例如 JSD-2026-001" maxLength={64} />
               </Form.Item>
               <Form.Item
                 name="name"

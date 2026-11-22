@@ -81,7 +81,7 @@ public class MyBatisProjectRepository implements ProjectRepository {
 
     @Override
     public String nextProjectCode(int year) {
-        var prefix = "JSD-PM-" + year + "-";
+        var prefix = "JSD-" + year + "-";
         return prefix + String.format("%03d", mapper.maxSequence(ActorContext.required().organizationId(), prefix) + 1);
     }
 

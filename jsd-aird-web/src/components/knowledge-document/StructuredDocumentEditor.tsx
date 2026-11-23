@@ -56,7 +56,8 @@ function StructuredDocumentPageEditor({ value, onChange, onSelectionChange, sele
     },
   });
 
-  useEffect(() => { editor?.setEditable(!disabled); }, [disabled, editor]);
+  // Approval and permission changes only toggle editing; they do not change content.
+  useEffect(() => { editor?.setEditable(!disabled, false); }, [disabled, editor]);
   useEffect(() => {
     if (!editor) return;
     const current = JSON.stringify(editor.getJSON()); const next = JSON.stringify(value);

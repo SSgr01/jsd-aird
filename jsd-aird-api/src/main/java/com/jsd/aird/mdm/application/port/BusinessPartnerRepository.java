@@ -27,6 +27,10 @@ public interface BusinessPartnerRepository {
 
     boolean existsByName(String normalizedName, UUID excludedId);
 
+    boolean existsByPartnerCode(String partnerCode);
+
+    String nextPartnerCode();
+
     void insert(BusinessPartner partner, String normalizedName, String operator);
 
     boolean update(BusinessPartner partner, String normalizedName, String operator);

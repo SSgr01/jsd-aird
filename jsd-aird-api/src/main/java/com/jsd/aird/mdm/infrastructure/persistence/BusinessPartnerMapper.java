@@ -114,6 +114,13 @@ public interface BusinessPartnerMapper {
     @Select("<script>SELECT EXISTS(SELECT 1 FROM mdm.business_partner WHERE normalized_name=#{name} <if test='excludedId != null'>AND id != #{excludedId}</if>)</script>")
     boolean exists(@Param("code") String code, @Param("name") String name, @Param("excludedId") UUID excludedId);
 
+    @Select("SELECT EXISTS(SELECT 1 FROM mdm.business_partner WHERE partner_code=#{partnerCode})")
+    boolean existsByPartnerCode(@Param("partnerCode") String partnerCode);
+
+    @Select("SELECT coalesce(max(substring(partner_code from '[0-9]+$')::int), 0) FROM mdm.business_partner " +
+        "WHERE partner_code ~ ('^' || #{prefix} || '[0-9]{3,4}$')")
+    int maxSequence(@Param("prefix") String prefix);
+
     @Insert("INSERT INTO mdm.business_partner(id,partner_code,name,normalized_name,industry,address,status,remark,customer_level,cooperation_status,main_business,custom_fields,version,created_at,updated_at,created_by,updated_by,organization_id,department_id) VALUES(#{id},#{code},#{name},#{normalized},#{industry},#{address},#{status},#{remark},#{customerLevel},#{cooperationStatus},#{mainBusiness},CAST(#{customFields} AS jsonb),0,#{now},#{now},#{userId},CAST(#{operator} AS uuid),#{organizationId},(SELECT department_id FROM iam.app_user WHERE id=#{userId} AND organization_id=#{organizationId}))")
     void insert(@Param("id") UUID id, @Param("code") String code, @Param("name") String name,
                 @Param("normalized") String normalized, @Param("industry") String industry, @Param("address") String address,

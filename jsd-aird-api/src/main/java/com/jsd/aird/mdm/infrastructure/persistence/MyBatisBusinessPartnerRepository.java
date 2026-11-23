@@ -69,6 +69,17 @@ public class MyBatisBusinessPartnerRepository implements BusinessPartnerReposito
         return mapper.exists(null, n, x);
     }
 
+    @Override
+    public boolean existsByPartnerCode(String partnerCode) {
+        return mapper.existsByPartnerCode(partnerCode);
+    }
+
+    @Override
+    public String nextPartnerCode() {
+        var prefix = "CUS-";
+        return prefix + String.format("%03d", mapper.maxSequence(prefix) + 1);
+    }
+
     public void insert(BusinessPartner p, String n, String o) {
         var actor = ActorContext.required();
         mapper.insert(p.id(), p.partnerCode(), p.name(), n, p.industry(), p.address(), p.status().name(), p.remark(),

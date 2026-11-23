@@ -55,7 +55,7 @@ export interface BusinessPartner {
   allowedActions?: string[];
 }
 export interface PartnerInput {
-  partnerCode: string;
+  partnerCode?: string;
   name: string;
   industry?: string;
   address?: string;

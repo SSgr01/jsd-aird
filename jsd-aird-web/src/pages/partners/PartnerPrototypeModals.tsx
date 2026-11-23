@@ -76,6 +76,7 @@ function toCustomFieldRecord(fields?: CustomField[]): Record<string, unknown> {
   );
 }
 type CustomerValues = {
+  partnerCode?: string;
   name: string;
   industry?: string;
   level?: string;
@@ -122,6 +123,7 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
     form.setFieldsValue(
       partner
         ? {
+            partnerCode: partner.partnerCode,
             name: partner.name,
             industry: partner.industry,
             region: partner.address,
@@ -129,7 +131,7 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
             level: partner.customerLevel,
             cooperation: partner.cooperationStatus,
           }
-        : { name: undefined, industry: undefined, region: undefined, business: undefined },
+        : { partnerCode: undefined, name: undefined, industry: undefined, region: undefined, business: undefined },
     );
     setPeople([]);
     setNameTouched(false);
@@ -201,7 +203,7 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
         return;
       }
       const input = {
-        partnerCode: partner?.partnerCode ?? `CUS-${Date.now().toString().slice(-10)}`,
+        partnerCode: v.partnerCode?.trim() || partner?.partnerCode,
         name: v.name,
         industry: v.industry,
         address: v.region,
@@ -273,9 +275,18 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
           <h3>公司资料</h3>
           <p>填写客户公司的基础资料。</p>
           <Form form={form} layout="vertical">
-            <Form.Item name="name" label="公司名称" rules={[{ required: true }, { max: 20, message: '公司名称不能超过20个字' }]}>
-              <Input placeholder="请输入公司名称" maxLength={20} showCount />
-            </Form.Item>
+            <div className="cm-form-grid">
+              <Form.Item
+                name="partnerCode"
+                label="客户编号"
+                extra={partner ? undefined : '留空时由系统自动生成，例如 CUS-001'}
+              >
+                <Input placeholder="例如 CUS-001" maxLength={32} />
+              </Form.Item>
+              <Form.Item name="name" label="公司名称" rules={[{ required: true }, { max: 20, message: '公司名称不能超过20个字' }]}>
+                <Input placeholder="请输入公司名称" maxLength={20} showCount />
+              </Form.Item>
+            </div>
             <div className="cm-form-grid">
               <Form.Item name="industry" label="所属行业">
                 <Input placeholder="请输入所属行业" />

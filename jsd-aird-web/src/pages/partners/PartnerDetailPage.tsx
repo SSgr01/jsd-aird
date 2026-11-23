@@ -227,6 +227,10 @@ export function PartnerDetailPage() {
       msg.error('请输入公司名称');
       return;
     }
+    if (!partner.partnerCode || !partner.partnerCode.trim()) {
+      msg.error('请输入客户编号');
+      return;
+    }
     companySavingRef.current = true;
     setCompanySaving(true);
     const mergedCustomFields: Record<string, string> = Object.fromEntries(extFields.filter((f) => f.key).map((f) => [f.key, f.value ?? '']));
@@ -246,7 +250,7 @@ export function PartnerDetailPage() {
       await updatePartner(id!, input);
       setPartner((prev) => prev ? {
         ...prev,
-        partnerCode: input.partnerCode,
+        partnerCode: partner.partnerCode,
         name: input.name,
         industry: input.industry,
         address: input.address,
@@ -340,7 +344,10 @@ export function PartnerDetailPage() {
         </div>
         {can('list', 'update') && <Button size="small" type="primary" icon={<EditOutlined />} loading={companySaving} onClick={() => void saveCompany()}>保存</Button>}
       </div>
-      <label className="cm-block-field"><span className="cm-required">公司名称</span><Input value={partner.name ?? ''} status={!partner.name ? 'error' : undefined} maxLength={20} showCount placeholder="请输入公司名称" onChange={(e) => setPartner({ ...partner, name: e.target.value })} /></label>
+      <div className="cm-form-grid">
+        <label><span className="cm-required">客户编号</span><Input value={partner.partnerCode ?? ''} status={!partner.partnerCode ? 'error' : undefined} maxLength={32} placeholder="例如 CUS-001" onChange={(e) => setPartner({ ...partner, partnerCode: e.target.value })} /></label>
+        <label><span className="cm-required">公司名称</span><Input value={partner.name ?? ''} status={!partner.name ? 'error' : undefined} maxLength={20} showCount placeholder="请输入公司名称" onChange={(e) => setPartner({ ...partner, name: e.target.value })} /></label>
+      </div>
       <div className="cm-form-grid">
         <label>所属行业<Input value={partner.industry ?? ''} onChange={(e) => setPartner({ ...partner, industry: e.target.value })} /></label>
         <label>客户等级<Select value={partner.customerLevel ?? '未分类'} options={customerLevels.map((value) => ({ value }))} onChange={(value) => setPartner({ ...partner, customerLevel: value })} /></label>

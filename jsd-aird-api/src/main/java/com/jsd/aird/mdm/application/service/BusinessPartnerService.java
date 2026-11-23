@@ -13,6 +13,7 @@ import com.jsd.aird.shared.error.*;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.text.Normalizer;
@@ -90,11 +91,17 @@ public class BusinessPartnerService implements com.jsd.aird.mdm.api.BusinessPart
         requireWrite();
         var normalized = normalize(c.name());
         if (repository.existsByName(normalized, null)) duplicate();
+        var code = resolveCode(c.partnerCode());
+        if (repository.existsByPartnerCode(code)) throw duplicatePartnerCode(code);
         var now = Instant.now();
-        var partner = new BusinessPartner(UUID.randomUUID(), c.partnerCode().trim(), c.name().trim(),
+        var partner = new BusinessPartner(UUID.randomUUID(), code, c.name().trim(),
             c.industry(), c.address(), PartnerStatus.ACTIVE, c.remark(), List.of(), c.customerLevel(),
             c.cooperationStatus(), c.mainBusiness(), c.customFields(), 0, now, now);
-        repository.insert(partner, normalized, operator());
+        try {
+            repository.insert(partner, normalized, operator());
+        } catch (DuplicateKeyException exception) {
+            duplicate();
+        }
         appendAudit("CUSTOMER_CREATED", partner.id());
         return new PartnerCommands.Created(partner.id(), 0);
     }
@@ -107,11 +114,15 @@ public class BusinessPartnerService implements com.jsd.aird.mdm.api.BusinessPart
         requireVersion(c.version());
         var normalized = normalize(c.name());
         if (repository.existsByName(normalized, id)) duplicate();
-        var updated = new BusinessPartner(id, c.partnerCode().trim(), c.name().trim(), c.industry(), c.address(),
+        var code = requirePartnerCode(c.partnerCode());
+        if (!code.equals(current.partnerCode()) && repository.existsByPartnerCode(code)) throw duplicatePartnerCode(code);
+        var updated = new BusinessPartner(id, code, c.name().trim(), c.industry(), c.address(),
             current.status(), c.remark(), current.contacts(), c.customerLevel(),
             c.cooperationStatus(), c.mainBusiness(), c.customFields(), c.version(), current.createdAt(), Instant.now());
-        if (!repository.update(updated, normalized, operator())) {
-            conflict();
+        try {
+            if (!repository.update(updated, normalized, operator())) conflict();
+        } catch (DuplicateKeyException exception) {
+            duplicate();
         }
         projectRepository.refreshPartnerName(id, updated.name(), operator());
         appendAudit("CUSTOMER_UPDATED", id);
@@ -160,6 +171,20 @@ public class BusinessPartnerService implements com.jsd.aird.mdm.api.BusinessPart
 
     static void requireVersion(Long value) {
         if (value == null || value < 0) throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "编辑操作必须提供version");
+    }
+
+    private String resolveCode(String partnerCode) {
+        return partnerCode == null || partnerCode.isBlank() ? repository.nextPartnerCode() : partnerCode.trim();
+    }
+
+    private static String requirePartnerCode(String partnerCode) {
+        if (partnerCode == null || partnerCode.isBlank())
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "客户编号不能为空");
+        return partnerCode.trim();
+    }
+
+    private static ApiException duplicatePartnerCode(String code) {
+        return new ApiException(ApiErrorCode.VALIDATION_ERROR, "客户编号已存在：" + code);
     }
 
     static void duplicate() {

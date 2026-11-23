@@ -45,11 +45,15 @@ import {
 import './quality-pages.css';
 
 type ViewMode = 'preview' | 'edit' | 'versions';
+const wordDocumentTypes = new Set(['coa', 'defect', 'manual', 'msds', 'label']);
 const textValue = (value: unknown) =>
   typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value);
 
 const SheetsEditor = lazy(async () => ({
   default: (await import('@/features/template-workspace/UniverSheetsEditor')).UniverSheetsEditor,
+}));
+const DocsEditor = lazy(async () => ({
+  default: (await import('@/features/template-workspace/UniverDocsEditor')).UniverDocsEditor,
 }));
 
 async function parseExcelSnapshot(blob: Blob, fileName: string): Promise<Record<string, unknown>> {
@@ -229,6 +233,11 @@ export function QualityRecordWorkspacePage() {
       let initialWorkbook = detail.workbookSnapshot && Object.keys(detail.workbookSnapshot).length
         ? detail.workbookSnapshot
         : undefined;
+      if (wordDocumentTypes.has(detail.businessType) && detail.sourceFileId
+        && /\.docx$/i.test(detail.sourceFileName || '')
+        && initialWorkbook?.editorMode !== 'UNIVER_DOCS') {
+        initialWorkbook = await qualityApi.documentSnapshot(detail.id);
+      }
       let sourceWorkbook: Record<string, unknown> | undefined;
       // XLSX uploads are parsed server-side into a Univer snapshot that keeps
       // sheets, merged cells, dimensions and styles. Only fall back to the
@@ -244,7 +253,7 @@ export function QualityRecordWorkspacePage() {
           /* structured fallback remains available */
         }
       }
-      if (!initialWorkbook && !sourceWorkbook) {
+      if (!initialWorkbook && !sourceWorkbook && !wordDocumentTypes.has(detail.businessType)) {
         initialWorkbook = buildQualityWorkbookSnapshot(
           detail,
           definitions.find((item) => item.id === detail.businessType) ?? {
@@ -314,7 +323,7 @@ export function QualityRecordWorkspacePage() {
     setSaving(true);
     try {
       const currentWorkbook = workbook ? editorRef.current?.getSnapshot() || workbook : undefined;
-      const nextDraft = currentWorkbook
+      const nextDraft = currentWorkbook && !wordDocumentTypes.has(record.businessType)
         ? parseQualityWorkbookData(currentWorkbook, type, draft)
         : draft;
       for (const field of fields) {
@@ -433,6 +442,8 @@ export function QualityRecordWorkspacePage() {
   const displayed = selectedVersion?.data ?? (view === 'preview' ? record.data : draft);
   const displayedWorkbook =
     selectedVersion?.workbookSnapshot ?? (selectedVersion ? undefined : workbook);
+  const isWordDocument = wordDocumentTypes.has(record.businessType);
+  const wordSnapshot = isWordDocument && displayedWorkbook?.editorMode === 'UNIVER_DOCS';
   const currentReviewStatus = record.workflowStatus === 'PUBLISHED' ? 'PUBLISHED' : reviewStatus ?? record.workflowStatus;
   const reviewLocked = currentReviewStatus === 'SUBMITTED' || currentReviewStatus === 'APPROVED' || currentReviewStatus === 'PUBLISHED';
   const readonly = view !== 'edit' || Boolean(selectedVersion) || reviewLocked;
@@ -466,7 +477,7 @@ export function QualityRecordWorkspacePage() {
         </div>
         <Space wrap>
           <SaveStateBadge state={saveState} />
-          {canExport && <Button icon={<DownloadOutlined />} onClick={() => void exportRecord()}>
+          {canExport && !isWordDocument && <Button icon={<DownloadOutlined />} onClick={() => void exportRecord()}>
             导出
           </Button>}
           {canDownload && record.sourceFileId && (
@@ -569,7 +580,20 @@ export function QualityRecordWorkspacePage() {
                     <Typography.Text type="secondary">当前为预览状态，不可编辑</Typography.Text>
                   )}
                 </div>
-                {displayedWorkbook ? (
+                {wordSnapshot ? (
+                  <div className="quality-word-canvas">
+                    <Suspense fallback={<Spin tip="正在加载 Word 文档" />}>
+                      <DocsEditor
+                        key={selectedVersion?.id ?? 'current'}
+                        ref={editorRef}
+                        snapshot={displayedWorkbook}
+                        editable={editable}
+                        onDirty={() => setDirty(true)}
+                      />
+                    </Suspense>
+                  </div>
+                ) : null}
+                {!isWordDocument && displayedWorkbook ? (
                   <div
                     className="quality-excel-canvas"
                     key={selectedVersion?.id ?? 'current'}
@@ -593,7 +617,7 @@ export function QualityRecordWorkspacePage() {
                     </Suspense>
                   </div>
                 ) : null}
-                {!displayedWorkbook ? (
+                {!displayedWorkbook || (isWordDocument && !wordSnapshot) ? (
                   <div className="quality-record-fields">
                     {fields.map((field) => (
                       <label key={field.key}>

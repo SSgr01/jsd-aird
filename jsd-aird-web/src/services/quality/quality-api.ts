@@ -154,6 +154,8 @@ export const qualityApi = {
     })),
   record: async (id: string) =>
     data(await httpClient.get<ApiResponse<QualityRecord>>(`/api/v1/quality/records/${id}`)),
+  documentSnapshot: async (id: string) =>
+    data(await httpClient.get<ApiResponse<Record<string, unknown>>>(`/api/v1/quality/records/${id}/document-snapshot`)),
   renameRecord: async (id: string, input: {
     revision: number;
     name: string;

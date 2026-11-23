@@ -1329,6 +1329,12 @@
   border: 0;
   border-radius: 0;
 }
+.quality-excel-workspace .quality-word-canvas {
+  position: relative;
+  height: calc(100% - 76px);
+  min-height: 520px;
+  overflow: hidden;
+}
 .quality-excel-workspace .quality-record-fields {
   max-width: 1100px;
   margin: 0 auto;

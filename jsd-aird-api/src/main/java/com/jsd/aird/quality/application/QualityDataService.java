@@ -29,6 +29,7 @@ import java.util.regex.Pattern;
 @Service
 public class QualityDataService {
     @org.springframework.beans.factory.annotation.Autowired(required=false) private com.jsd.aird.ops.api.ProjectMaterialActivity materialActivity;
+    @org.springframework.beans.factory.annotation.Autowired(required=false) private com.jsd.aird.tpl.api.WordDocumentParser wordDocumentParser;
     private final QualityDataStore repository;
     private final ObjectMapper objectMapper;
     private final FileStorageFacade storage;
@@ -71,6 +72,22 @@ public class QualityDataService {
     public PageResponse<QualityDataStore.RecordView> records(String type,UUID categoryId,String keyword,UUID projectId,String status,String format,int page,int size) { var a=ActorContext.required(); requireType(type); if(status!=null&&!status.isBlank()&&!"coa".equals(type))throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"仅 COA 支持状态筛选"); var scope=authorization.resolveScope(new com.jsd.aird.iam.api.PermissionCheck(a.organizationId(),a.userId(),"quality.view.view","QUALITY",null,"READ")); if(!scope.allowed())throw new ApiException(ApiErrorCode.PERMISSION_DENIED,"当前用户没有品管数据查看权限"); return repository.records(a.organizationId(),a.role(),type,categoryId,keyword,projectId,status==null||status.isBlank()?null:status,format,Math.max(1,page),Math.min(100,Math.max(1,size)),new QualityDataStore.DataScopeFilter(scope.scopeType(),a.userId(),scope.targetIds())); }
     public QualityDataStore.RecordView recordByBusinessNo(String type,String businessNo) { var a=ActorContext.required(); requireType(type); var item=repository.recordByBusinessNo(a.organizationId(),a.role(),type,businessNo).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"品管数据不存在或不可见")); requireView(item.id()); return item; }
     public QualityDataStore.RecordView record(UUID id) { var a=ActorContext.required(); requireView(id); return repository.record(a.organizationId(), a.role(), id); }
+    public JsonNode documentSnapshot(UUID id) {
+        var record = record(id);
+        if (!Set.of("coa", "defect", "manual", "msds", "label").contains(record.businessType()))
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "当前品管数据不是 Word 文档");
+        if (record.workbookSnapshot() != null && "UNIVER_DOCS".equals(record.workbookSnapshot().path("editorMode").asText()))
+            return record.workbookSnapshot();
+        if (record.sourceFileId() == null || record.sourceFileName() == null || !record.sourceFileName().toLowerCase(Locale.ROOT).endsWith(".docx"))
+            throw new ApiException(ApiErrorCode.NOT_FOUND, "该记录没有可读取的 DOCX 原文");
+        if (wordDocumentParser == null) throw new ApiException(ApiErrorCode.INTERNAL_ERROR, "Word 文档解析服务不可用");
+        var actor = ActorContext.required();
+        try (var stored = storage.open(actor.organizationId(), record.sourceFileId())) {
+            return wordDocumentParser.parse(stored.stream()).initialEditorSnapshot();
+        } catch (Exception exception) {
+            throw new ApiException(ApiErrorCode.BAD_REQUEST, "Word 文档解析失败：" + exception.getMessage());
+        }
+    }
     private void requireView(UUID id) { var a=ActorContext.required(); authorization.require(new com.jsd.aird.iam.api.PermissionCheck(a.organizationId(),a.userId(),"quality.view.view","QUALITY",id,"READ")); }
     @Transactional public QualityDataStore.RecordView rename(UUID id, RenameCommand command) {
         var actor = ActorContext.required();
@@ -211,6 +228,8 @@ public class QualityDataService {
             }
             if (isXlsx(input.originalName())) {
                 workbookSnapshot = workbookParser.parseInstance(new ByteArrayInputStream(bytes)).snapshot();
+            } else if (isWordDocument(def.id(), input.originalName()) && wordDocumentParser != null) {
+                workbookSnapshot = wordDocumentParser.parse(new ByteArrayInputStream(bytes)).initialEditorSnapshot();
             } else if (isImage(input.originalName(), input.contentType())) {
                 applyImageOcr(def, data, input, bytes);
             }
@@ -254,8 +273,10 @@ public class QualityDataService {
         var a=ActorContext.required();
         var resolved=authorization.resolveScope(new com.jsd.aird.iam.api.PermissionCheck(a.organizationId(),a.userId(),"quality.upload.view","QUALITY_UPLOAD",null,"READ"));
         if(!resolved.allowed())throw new ApiException(ApiErrorCode.PERMISSION_DENIED,"当前用户没有品管上传查看权限");
+        var scopeType = "SELECTED".equals(resolved.scopeType()) && resolved.targetIds().isEmpty()
+                ? "CREATOR" : resolved.scopeType();
         return repository.uploads(a.organizationId(),a.userId(),a.role(),keyword,status,projectId,Math.max(1,page),Math.min(100,Math.max(1,size)),
-                new com.jsd.aird.iam.api.RecordDataScope(resolved.scopeType(),a.userId(),resolved.targetIds()));
+                new com.jsd.aird.iam.api.RecordDataScope(scopeType,a.userId(),resolved.targetIds()));
     }
 
     @Transactional public void deleteUpload(UUID id) { var a=ActorContext.required(); var current=repository.findUpload(a.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"上传记录不存在")); repository.deleteUpload(a.organizationId(),id); if(materialActivity!=null)materialActivity.record("DELETED","QUALITY_UPLOAD",id,current.projectId(),current.originalName()); audit(a,"QUALITY_UPLOAD_DELETED","QUALITY_UPLOAD",id,null); }
@@ -287,6 +308,8 @@ public class QualityDataService {
                 }
                 if (isXlsx(input.originalName())) {
                     workbookSnapshot = workbookParser.parseInstance(new ByteArrayInputStream(bytes)).snapshot();
+                } else if (isWordDocument(definition.id(), input.originalName()) && wordDocumentParser != null) {
+                    workbookSnapshot = wordDocumentParser.parse(new ByteArrayInputStream(bytes)).initialEditorSnapshot();
                 } else if (isImage(input.originalName(), input.contentType())) {
                     applyImageOcr(definition, data, input, bytes);
                 }
@@ -369,6 +392,10 @@ public class QualityDataService {
     }
     private boolean isXlsx(String name) {
         return name != null && name.toLowerCase(Locale.ROOT).endsWith(".xlsx");
+    }
+    private boolean isWordDocument(String type, String name) {
+        return Set.of("coa", "defect", "manual", "msds", "label").contains(type)
+                && name != null && name.toLowerCase(Locale.ROOT).endsWith(".docx");
     }
     private boolean isImage(String name, String contentType) {
         var lowerName = name == null ? "" : name.toLowerCase(Locale.ROOT);

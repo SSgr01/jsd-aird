@@ -69,7 +69,7 @@ export function PartnerListPage() {
     owners: [],
   });
   const [modal, setModal] = useState<{
-    mode: 'customer' | 'requirement' | 'followup';
+    mode: 'customer' | 'followup';
     partner?: BusinessPartner;
   }>();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -215,7 +215,7 @@ export function PartnerListPage() {
           customFields: partner.customFields,
         });
       }));
-      msg.success(`已复制 ${selectedPartners.length} 个客户，复制结果未继承原客户的需求、项目和跟进关系`);
+      msg.success(`已复制 ${selectedPartners.length} 个客户，复制结果未继承原客户的项目和跟进关系`);
       setSelectedIds([]);
       setSelectedPartnersById({});
       await load();
@@ -259,7 +259,6 @@ export function PartnerListPage() {
         客户等级: x.customerLevel || '',
         负责人: (x.ownerNames ?? []).join('、'),
         合作状态: x.cooperationStatus || '',
-        客户需求: x.requirementCount ?? 0,
         关联项目: x.projectCount ?? 0,
         最近跟进: x.latestFollowUpAt
           ? dayjs(x.latestFollowUpAt).format('YYYY-MM-DD HH:mm')
@@ -282,7 +281,7 @@ export function PartnerListPage() {
       <div className="page-heading cm-customer-page-heading">
         <div>
           <Typography.Title level={2}>客户列表</Typography.Title>
-          <Typography.Text type="secondary">统一管理公司档案、客户需求、关联项目及跟进记录。</Typography.Text>
+          <Typography.Text type="secondary">统一管理公司档案、关联项目及跟进记录。</Typography.Text>
         </div>
         <div className="cm-customer-page-actions">
           <Typography.Text type="secondary">已选 {selectedIds.length} 项</Typography.Text>
@@ -407,7 +406,6 @@ export function PartnerListPage() {
                   <th>客户等级</th>
                   <th>负责人</th>
                   <th>合作状态</th>
-                  <th>客户需求</th>
                   <th>关联项目</th>
                   <th>最近跟进</th>
                   <th className="table-action-column">操作</th>
@@ -438,7 +436,6 @@ export function PartnerListPage() {
                         {owners.length > 0 ? owners.join('、') : '—'}
                       </td>
                       <td>{x.cooperationStatus ? <span className={statusTagClass(x.cooperationStatus)}>{x.cooperationStatus}</span> : '—'}</td>
-                      <td>{x.requirementCount ?? 0} 条</td>
                       <td>{x.projectCount ?? 0} 个</td>
                       <td>{x.latestFollowUpAt ? dayjs(x.latestFollowUpAt).format('YYYY-MM-DD HH:mm') : '—'}</td>
                       <td className="table-action-column">
@@ -512,7 +509,6 @@ export function PartnerListPage() {
                       </span>
                     </div>
                     <div className="cm-customer-card-stats">
-                      <span className="cm-customer-card-stat">客户需求 {x.requirementCount ?? 0} 条</span>
                       <span className="cm-customer-card-stat">关联项目 {x.projectCount ?? 0} 个</span>
                     </div>
                     <div className="cm-customer-card-foot">

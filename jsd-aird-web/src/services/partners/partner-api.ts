@@ -50,7 +50,6 @@ export interface BusinessPartner {
   createdAt: string;
   updatedAt: string;
   ownerNames?: string[];
-  requirementCount?: number;
   projectCount?: number;
   latestFollowUpAt?: string;
   allowedActions?: string[];

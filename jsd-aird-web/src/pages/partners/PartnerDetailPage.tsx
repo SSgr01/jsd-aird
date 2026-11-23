@@ -4,8 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useBlocker, useParams } from 'react-router-dom';
 import { createContact, deleteContact, getContactProjectVectors, getPartner, getPartnerAudits, getPartnerContacts, updateContact, updatePartner, type ContactProjectVector, type PartnerAuditEntry } from '@/services/partners/partner-api';
 import type { BusinessPartner, ContactInput, PartnerContact, PartnerInput } from '@/services/partners/partner-api';
-import { deleteCommunication, deleteRequirement, getCommunications, getRequirements } from '@/services/partners/crm-api';
-import type { Communication, Requirement } from '@/services/partners/crm-api';
+import { deleteCommunication, getCommunications } from '@/services/partners/crm-api';
+import type { Communication } from '@/services/partners/crm-api';
 import { formatProjectStatus, getProjects, type Project } from '@/services/project/project-api';
 import { useAuthStore } from '@/stores/auth-store';
 import dayjs from '@/utils/dayjs';
@@ -41,35 +41,6 @@ const customerLevelTagClasses: Record<string, string> = {
   潜在客户: 'status-not_started',
   潜在: 'status-not_started',
 };
-const requirementUrgencyTagClasses: Record<string, string> = {
-  高: 'priority-high',
-  中: 'priority-medium',
-  低: 'priority-low',
-};
-const requirementStatusTagClasses: Record<Requirement['status'], string> = {
-  DRAFT: 'status-not_started',
-  CONFIRMED: 'status-pending',
-  IN_PROJECT: 'status-in_progress',
-  COMPLETED: 'status-completed',
-  CANCELLED: 'status-cancelled',
-};
-const requirementStateName: Record<Requirement['status'], string> = {
-  DRAFT: '草稿',
-  CONFIRMED: '已确认',
-  IN_PROJECT: '已立项',
-  COMPLETED: '已完成',
-  CANCELLED: '已取消',
-};
-const requirementDisplayStatusTagClasses: Record<string, string> = {
-  草稿: 'status-not_started',
-  未开始: 'status-not_started',
-  待开始: 'status-pending',
-  已确认: 'status-pending',
-  进行中: 'status-in_progress',
-  已立项: 'status-in_progress',
-  已完成: 'status-completed',
-  已取消: 'status-cancelled',
-};
 const projectStatusTagClasses: Record<string, string> = {
   NOT_STARTED: 'status-not_started',
   IN_PROGRESS: 'status-in_progress',
@@ -97,7 +68,6 @@ export function PartnerDetailPage() {
     extFields: extFields.filter((f) => f.key).map((f) => ({ key: f.key, value: f.value })),
   });
   const hasUnsavedCompanyChanges = () => partner ? companyFields(partner) !== savedSnapshot : false;
-  const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [communications, setCommunications] = useState<Communication[]>([]);
   const [, setAudits] = useState<PartnerAuditEntry[]>([]);
   const [projects, setProjects] = useState<ContactProjectVector[]>([]);
@@ -106,18 +76,15 @@ export function PartnerDetailPage() {
     projects.forEach((p) => { if (!map.has(p.projectId)) map.set(p.projectId, p); });
     return [...map.values()];
   }, [projects]);
-  const [requirementsLoaded, setRequirementsLoaded] = useState(false);
   const [communicationsLoaded, setCommunicationsLoaded] = useState(false);
-  const [requirementsLoading, setRequirementsLoading] = useState(false);
   const [communicationsLoading, setCommunicationsLoading] = useState(false);
-  const [businessModal, setBusinessModal] = useState<{ mode: 'requirement' | 'followup'; edit?: Requirement | Communication }>();
+  const [businessModal, setBusinessModal] = useState<{ mode: 'followup'; edit?: Communication }>();
   const [activeKey, setActiveKey] = useState<string>('overview');
   const authUser = useAuthStore((state) => state.user);
   const can = (area: string, action: string) => authUser?.permissions.includes(`customer.${area}.${action}`) ?? false;
   const menuKeys = authUser?.menuKeys;
   const tabMenuKeys: Record<string, string> = {
     overview: 'customer.overview',
-    requirements: 'customer.needs',
     projects: 'customer.projects',
     meetings: 'customer.followup',
   };
@@ -137,11 +104,10 @@ export function PartnerDetailPage() {
     if (!id) return;
     setLoading(true);
     try {
-      const [base, contacts, projectVectors, reqPage, commPage, auditEntries] = await Promise.all([
+      const [base, contacts, projectVectors, commPage, auditEntries] = await Promise.all([
         getPartner(id),
         getPartnerContacts(id),
         getContactProjectVectors(id),
-        getRequirements({ partnerId: id, page: 1, size: 100 }),
         getCommunications({ partnerId: id, page: 1, size: 100 }),
         getPartnerAudits(id),
       ]);
@@ -156,8 +122,6 @@ export function PartnerDetailPage() {
       // 负责人卡片默认折叠（新建的临时联系人保持展开）
       setCollapsedContactIds(new Set(value.contacts.filter((c) => !newContactIds.includes(c.id)).map((c) => c.id)));
       setProjects(projectVectors);
-      setRequirements(reqPage.items);
-      setRequirementsLoaded(true);
       setCommunications(commPage.items);
       setCommunicationsLoaded(true);
       setAudits(auditEntries);
@@ -195,17 +159,6 @@ export function PartnerDetailPage() {
     if (!allowedTabKeys.includes(activeKey)) setActiveKey(allowedTabKeys[0] ?? '');
   }, [activeKey, allowedTabKeys]);
 
-  const ensureRequirements = useCallback(async () => {
-    if (!id || requirementsLoaded) return;
-    setRequirementsLoading(true);
-    try {
-      const reqPage = await getRequirements({ partnerId: id, page: 1, size: 100 });
-      setRequirements(reqPage.items);
-      setRequirementsLoaded(true);
-    } finally {
-      setRequirementsLoading(false);
-    }
-  }, [id, requirementsLoaded]);
   const ensureCommunications = useCallback(async () => {
     if (!id || communicationsLoaded) return;
     setCommunicationsLoading(true);
@@ -233,11 +186,10 @@ export function PartnerDetailPage() {
     } catch { /* ignore */ }
   }, [id]);
   useEffect(() => {
-    if (activeKey === 'requirements') void ensureRequirements();
     if (activeKey === 'meetings') void ensureCommunications();
     if (activeKey === 'audit') void ensureAudits();
     if (activeKey === 'projects') void ensureProjects();
-  }, [activeKey, ensureRequirements, ensureCommunications, ensureAudits, ensureProjects]);
+  }, [activeKey, ensureCommunications, ensureAudits, ensureProjects]);
   const blocker = useBlocker(({ currentLocation, nextLocation }) =>
     activeKey === 'overview' &&
     hasUnsavedCompanyChanges() &&
@@ -262,7 +214,6 @@ export function PartnerDetailPage() {
 
   const tabLabelMap: Record<string, string> = {
     overview: '公司概览',
-    requirements: '客户需求',
     projects: '关联项目',
     meetings: '跟进记录',
     audit: '操作记录',
@@ -524,60 +475,6 @@ export function PartnerDetailPage() {
     <div className="cm-tabs-shell">{allowedTabKeys.length ? <Tabs className="cm-tabs" activeKey={activeKey} onChange={setActiveKey} items={[
       { key: 'overview', label: '公司概览', children: <div className="cm-tab-body">{overview}</div> },
       {
-        key: 'requirements',
-        label: '客户需求',
-        children: (
-          <div className="cm-tab-body">
-            <div className="cm-section-title">
-              <h5>客户需求 <small>{requirements.length} 条</small></h5>
-              {can('needs', 'create') && <Button type="primary" icon={<PlusOutlined />} onClick={() => setBusinessModal({ mode: 'requirement' })}>新建客户需求</Button>}
-            </div>
-            <div className="cm-table-card" style={{ marginTop: 12 }} aria-busy={requirementsLoading}>
-              {requirementsLoading ? (
-                <div className="cm-table-loading"><Spin /></div>
-              ) : (
-                <div className="cm-table-wrap">
-                  <table className="cm-table cm-requirement-list">
-                    <thead>
-                      <tr><th>需求编号</th><th>需求名称</th><th>关联项目</th><th>提出日期</th><th>预计完成日期</th><th>紧急程度</th><th>状态</th><th className="table-action-column">操作</th></tr>
-                    </thead>
-                    <tbody>
-                      {requirements.map((row) => (
-                        <tr key={row.id}>
-                          <td>{row.requirementCode}</td>
-                          <td>{row.title}</td>
-                          <td>{(() => {
-                            const ids = row.projectIds?.length ? row.projectIds : row.projectId ? [row.projectId] : [];
-                            const links = ids.map((projectId) => {
-                              const project = allProjects.find((p) => String(p.id) === projectId);
-                              return project ? <Link key={projectId} to={`/projects/${projectId}`}>{project.name}</Link> : null;
-                            }).filter(Boolean);
-                            return links.length ? links.map((link, index) => <span key={index}>{index > 0 && '、'}{link}</span>) : '—';
-                          })()}</td>
-                          <td>{row.raisedAt || '—'}</td>
-                          <td>{row.deliveryDate || '—'}</td>
-                          <td>{row.urgency ? <span className={`pm-tag ${requirementUrgencyTagClasses[row.urgency] ?? 'status-not_started'}`}>{row.urgency}</span> : '—'}</td>
-                          <td><span className={`pm-tag ${requirementDisplayStatusTagClasses[row.customStatusName?.trim() || ''] ?? (row.customStatusName ? 'status-custom' : requirementStatusTagClasses[row.status])}`}>{row.customStatusName || requirementStateName[row.status]}</span></td>
-                          <td className="table-action-column">
-                            <div className="cm-row-actions management-table-actions">
-                              {can('needs', 'update') && <button className="cm-link-button" onClick={() => setBusinessModal({ mode: 'requirement', edit: row })}>编辑</button>}
-                              {can('needs', 'delete') && <Popconfirm title="删除该客户需求？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteRequirement(row.id, row.version); msg.success('客户需求已删除'); await load(); })()}>
-                                <Button danger type="text" onClick={(e) => e.stopPropagation()}>删除</Button>
-                              </Popconfirm>}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              {!requirementsLoading && !requirements.length && <Empty className="cm-empty" description="暂无客户需求" />}
-            </div>
-          </div>
-        ),
-      },
-      {
         key: 'projects',
         label: '关联项目',
         children: (
@@ -748,6 +645,6 @@ export function PartnerDetailPage() {
       },
       */
     ].filter((item) => allowedTabKeys.includes(item.key))} /> : <Empty description="当前业务角色未授权客户详情功能" />}</div>
-    {businessModal && <PartnerPrototypeModal mode={businessModal.mode} partner={partner} requirement={businessModal.edit instanceof Object && 'requirementCode' in businessModal.edit ? (businessModal.edit as Requirement) : undefined} communication={businessModal.edit instanceof Object && 'recordCode' in businessModal.edit ? (businessModal.edit as Communication) : undefined} open onClose={() => setBusinessModal(undefined)} onSaved={async () => { if (businessModal.mode === 'requirement') { setRequirementsLoaded(false); await ensureRequirements(); } else { setCommunicationsLoaded(false); await ensureCommunications(); } }} />}
+    {businessModal && <PartnerPrototypeModal mode={businessModal.mode} partner={partner} communication={businessModal.edit} open onClose={() => setBusinessModal(undefined)} onSaved={async () => { setCommunicationsLoaded(false); await ensureCommunications(); }} />}
   </div>;
 }

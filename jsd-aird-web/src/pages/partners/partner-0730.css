@@ -32,9 +32,6 @@
 .cm-project-status{margin-left:8px;font-size:12px;font-weight:500;padding:1px 8px;border-radius:10px}
 .cm-project-status.active{color:var(--app-success);background:var(--app-success-soft)}
 .cm-project-status.ended{color:var(--app-text-secondary);background:var(--app-surface-subtle)}
-.cm-requirement-list .ant-table{font-size:13px}
-.cm-requirement-list .ant-table-thead>tr>th{background:var(--app-surface-subtle);color:var(--app-text-secondary)}
-.cm-requirement-list .ant-tag{margin:0}
 .cm-project-list .ant-table{font-size:13px}
 .cm-project-list .ant-table-thead>tr>th{background:var(--app-surface-subtle);color:var(--app-text-secondary)}
 .cm-communication-list .ant-table{font-size:13px}
@@ -47,5 +44,4 @@
 .cm-project-card-label{color:var(--app-text-secondary)}
 .cm-project-card-value{font-weight:500;color:var(--app-text);overflow-wrap:anywhere}
 .cm-company-section{padding:18px;border:1px solid var(--app-border);border-radius:10px;background:var(--app-surface)}.cm-company-section h5 small{color:var(--app-text-secondary);font-size:12px;font-weight:400}.cm-detail-soft-card{min-height:340px;padding:12px;background:var(--app-surface-subtle);border-radius:8px}.cm-detail-soft-card .ant-table,.cm-detail-soft-card .ant-table-container{background:transparent}.cm-detail-soft-card .ant-table-cell{padding:9px!important;background:transparent!important}.cm-detail-soft-card .ant-table-thead{display:none}
-.cm-detail-soft-card .cm-requirement-list .ant-table-thead{display:table-header-group}
 @media(max-width:1000px){.cm-company-editor{grid-template-columns:1fr;gap:24px}.cm-bulk-bar{align-items:flex-start;flex-direction:column;gap:8px}}

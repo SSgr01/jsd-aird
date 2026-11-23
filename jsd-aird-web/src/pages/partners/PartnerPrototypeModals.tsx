@@ -4,8 +4,8 @@ import { App, Button, Col, DatePicker, Form, Input, Row, Select, Space } from 'a
 import dayjs from '@/utils/dayjs';
 import type { Dayjs } from 'dayjs';
 import { useEffect, useRef, useState } from 'react';
-import { createCommunication, createRequirement, updateCommunication, updateRequirement } from '@/services/partners/crm-api';
-import type { Communication, CommunicationInput, Requirement, RequirementInput } from '@/services/partners/crm-api';
+import { createCommunication, updateCommunication } from '@/services/partners/crm-api';
+import type { Communication, CommunicationInput } from '@/services/partners/crm-api';
 import { getProjects } from '@/services/project/project-api';
 import type { Project } from '@/services/project/project-api';
 import {
@@ -25,12 +25,11 @@ import { useAuthStore } from '@/stores/auth-store';
 import './partner-modals.css';
 
 type Props = {
-  mode?: 'customer' | 'requirement' | 'followup';
+  mode?: 'customer' | 'followup';
   partner?: BusinessPartner;
   open: boolean;
   onClose: () => void;
   onSaved: () => void;
-  requirement?: Requirement;
   communication?: Communication;
 };
 type CustomField = { key: string; value: string };
@@ -84,17 +83,6 @@ type CustomerValues = {
   region?: string;
   business?: string;
 };
-type RequirementValues = {
-  title: string;
-  raisedAt?: Dayjs;
-  deliveryDate?: Dayjs;
-  urgency?: string;
-  status?: string;
-  customStatusName?: string;
-  projectId?: string;
-  projectIds?: string[];
-  rawRequirement?: string;
-};
 type FollowupValues = {
   name: string;
   time: Dayjs;
@@ -109,11 +97,8 @@ export function PartnerPrototypeModal({
   open,
   onClose,
   onSaved,
-  requirement,
   communication,
 }: Props) {
-  if (mode === 'requirement')
-    return <RequirementModal partner={partner} requirement={requirement} open={open} onClose={onClose} onSaved={onSaved} />;
   if (mode === 'followup')
     return <FollowupModal partner={partner} communication={communication} open={open} onClose={onClose} onSaved={onSaved} />;
   return <CustomerModal partner={partner} open={open} onClose={onClose} onSaved={onSaved} />;
@@ -448,181 +433,6 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
     </FormModal>
   );
 }
-
-function RequirementModal({ partner, requirement, open, onClose, onSaved }: Omit<Props, 'mode'>) {
-  const { message } = App.useApp();
-  const [form] = Form.useForm<RequirementValues>();
-  const [requirementCustomFields, setRequirementCustomFields] = useState<CustomField[]>([]);
-  const [allProjects, setAllProjects] = useState<Project[]>([]);
-  const [saving, setSaving] = useState(false);
-  const savingRef = useRef(false);
-  useEffect(() => {
-    if (!open) return;
-    void getProjects({ page: 1, size: 1000 }).then((res) => setAllProjects(res.items));
-    if (requirement) {
-      const statusName = requirement.customStatusName
-        ? '自定义状态'
-        : (requirementStateMap[requirement.status] ?? '自定义状态');
-      form.setFieldsValue({
-        title: requirement.title,
-        rawRequirement: requirement.rawRequirement,
-        urgency: requirement.urgency,
-        raisedAt: requirement.raisedAt ? dayjs(requirement.raisedAt) : undefined,
-        deliveryDate: requirement.deliveryDate ? dayjs(requirement.deliveryDate) : undefined,
-        status: statusName,
-        customStatusName: requirement.customStatusName,
-        projectId: requirement.projectId,
-        projectIds: requirement.projectIds ?? (requirement.projectId ? [requirement.projectId] : []),
-      });
-    } else {
-      form.resetFields();
-      form.setFieldsValue({ status: '草稿', urgency: '中', raisedAt: dayjs() });
-    }
-    setRequirementCustomFields(toCustomFieldList(requirement?.customFields));
-  }, [form, open, requirement]);
-  const save = async () => {
-    if (savingRef.current) return;
-    savingRef.current = true;
-    setSaving(true);
-    try {
-      const v = await form.validateFields();
-      if (!partner) return;
-      if (v.raisedAt && v.deliveryDate && v.raisedAt.isAfter(v.deliveryDate)) {
-        message.error('提出日期不能大于预计完成日期');
-        return;
-      }
-      const isCustomStatus = v.status === '自定义状态';
-      const payload: RequirementInput = {
-        partnerId: partner.id,
-        title: v.title,
-        rawRequirement: v.rawRequirement,
-        urgency: v.urgency,
-        raisedAt: v.raisedAt?.format('YYYY-MM-DD'),
-        deliveryDate: v.deliveryDate?.format('YYYY-MM-DD'),
-        status: (isCustomStatus ? 'DRAFT' : (requirementStateReverse[v.status ?? '草稿'] ?? 'DRAFT')) as Requirement['status'],
-        customStatusName: isCustomStatus ? v.customStatusName : undefined,
-        projectId: v.projectIds?.[0] ?? v.projectId,
-        projectIds: [...new Set(v.projectIds ?? (v.projectId ? [v.projectId] : []))],
-        metrics: [],
-        customFields: toCustomFieldRecord(requirementCustomFields),
-        version: requirement?.version ?? 0,
-      };
-      if (requirement) await updateRequirement(requirement.id, payload);
-      else await createRequirement(payload);
-      form.resetFields();
-      message.success(requirement ? '客户需求已更新' : '客户需求已创建');
-      onSaved();
-      onClose();
-    } catch (e) {
-      message.error(errorMessage(e, '客户需求保存失败'));
-    } finally {
-      savingRef.current = false;
-      setSaving(false);
-    }
-  };
-  return (
-    <FormModal form={form}
-      className="cm-prototype-modal cm-form-modal"
-      width={960}
-      open={open}
-      onCancel={onClose}
-      title={requirement ? '编辑客户需求' : '新建客户需求'}
-      onOk={() => save()} confirmLoading={saving} okText="保存" cancelText="取消"
-    >
-      <Form form={form} layout="vertical">
-        <Row className="cm-form-row" gutter={24}>
-          <Col span={12}>
-            <Form.Item name="title" label="需求名称" rules={[{ required: true }]}>
-              <Input placeholder="未命名记录" />
-            </Form.Item>
-          </Col>
-          <Col span={12}>
-              <Form.Item name="projectIds" label="关联项目">
-                <Select
-                mode="multiple"
-                  showSearch
-                  allowClear
-                  placeholder="搜索并选择项目"
-                  optionFilterProp="label"
-                options={allProjects.map((p) => ({
-                  label: `${p.projectCode} ${p.name}${p.owner ? `（负责人：${p.owner}）` : ''}`,
-                  value: p.id,
-                }))}
-              />
-            </Form.Item>
-          </Col>
-        </Row>
-        <Row className="cm-form-row" gutter={24}>
-          <Col span={6}>
-            <Form.Item name="raisedAt" label="提出日期">
-              <DatePicker format="YYYY/MM/DD" style={{ width: '100%' }} />
-            </Form.Item>
-          </Col>
-          <Col span={6}>
-            <Form.Item name="deliveryDate" label="预计完成日期">
-              <DatePicker format="YYYY/MM/DD" style={{ width: '100%' }} placeholder="年/月/日" />
-            </Form.Item>
-          </Col>
-          <Col span={6}>
-            <Form.Item name="urgency" label="紧急程度">
-              <Select options={['高', '中', '低'].map((value) => ({ value }))} />
-            </Form.Item>
-          </Col>
-          <Col span={6}>
-            <Form.Item name="status" label="状态">
-              <Select options={['草稿', '已确认', '已立项', '已完成', '已取消', '自定义状态'].map((value) => ({ value }))} />
-            </Form.Item>
-          </Col>
-        </Row>
-        <Form.Item shouldUpdate={(prev, curr) => prev.status !== curr.status} noStyle>
-          {() =>
-            form.getFieldValue('status') === '自定义状态' ? (
-              <Form.Item
-                name="customStatusName"
-                label="自定义状态名称"
-                rules={[{ required: true, message: '请输入自定义状态名称' }]}
-              >
-                <Input placeholder="请输入自定义状态名称" />
-              </Form.Item>
-            ) : null
-          }
-        </Form.Item>
-        <Form.Item name="rawRequirement" label="需求总结">
-          <Input.TextArea rows={4} placeholder="请输入需求总结" />
-        </Form.Item>
-        <div className="cm-edit-divider"><span>自定义字段</span></div>
-        <div className="cm-custom-fields">
-          {requirementCustomFields.map((field, index) => (
-            <div className="cm-custom-field-row" key={index}>
-              <Input
-                value={field.key}
-                placeholder="字段名"
-                onChange={(e) => {
-                  const next = [...requirementCustomFields];
-                  next[index] = { ...next[index]!, key: e.target.value };
-                  setRequirementCustomFields(next);
-                }}
-              />
-              <Input
-                value={field.value ?? ''}
-                placeholder="字段值"
-                onChange={(e) => {
-                  const next = [...requirementCustomFields];
-                  next[index] = { ...next[index]!, value: e.target.value };
-                  setRequirementCustomFields(next);
-                }}
-              />
-              <Button danger icon={<DeleteOutlined />} onClick={() => setRequirementCustomFields(requirementCustomFields.filter((_, i) => i !== index))} />
-            </div>
-          ))}
-          <Button className="cm-custom-field" icon={<PlusOutlined />} onClick={() => setRequirementCustomFields([...requirementCustomFields, { key: '', value: '' }])}>新增字段</Button>
-        </div>
-      </Form>
-    </FormModal>
-  );
-}
-const requirementStateMap: Record<string, string> = { DRAFT: '草稿', CONFIRMED: '已确认', IN_PROJECT: '已立项', COMPLETED: '已完成', CANCELLED: '已取消' };
-const requirementStateReverse: Record<string, string> = { 草稿: 'DRAFT', 已确认: 'CONFIRMED', 已立项: 'IN_PROJECT', 已完成: 'COMPLETED', 已取消: 'CANCELLED' };
 
 function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<Props, 'mode'>) {
   const { message } = App.useApp();

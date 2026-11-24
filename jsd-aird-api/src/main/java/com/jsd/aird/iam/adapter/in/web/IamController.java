@@ -43,8 +43,9 @@ public class IamController {
             @RequestParam(required = false) String keyword,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
-            @RequestParam(required = false) String permissionView) {
-        return success(service.users(ActorContext.required(), keyword, page, size, permissionView));
+            @RequestParam(required = false) String permissionView,
+            @RequestParam(required = false) UUID departmentId) {
+        return success(service.users(ActorContext.required(), keyword, page, size, permissionView, departmentId));
     }
 
     @PostMapping("/users")

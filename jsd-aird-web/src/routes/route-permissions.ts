@@ -178,6 +178,7 @@ export function requiredPermissionForPath(pathname: string): string | undefined 
   if (path === '/quality/upload') return 'quality.upload.create';
   if (path === '/quality/view' || path.startsWith('/quality/records/')) return 'quality.view';
   if (path.startsWith('/system/users')) return 'system.user.view';
+  if (path.startsWith('/system/departments')) return 'system.user.view';
   if (path.startsWith('/system/roles') || path.startsWith('/system/user-permissions')) return 'system.permissions.view';
   if (path.startsWith('/system/dictionary')) return 'system.dictionary.view';
   if (path.startsWith('/system/parameters')) return 'system.parameters.view';
@@ -254,6 +255,7 @@ export function requiredMenuForPath(pathname: string): string | undefined {
   if (path === '/spectrum/chat') return 'ai.qa';
   if (path.startsWith('/spectrum')) return 'spectrum.view';
   if (path.startsWith('/system/users')) return 'system.users';
+  if (path.startsWith('/system/departments')) return 'system.users';
   if (path.startsWith('/system/user-permissions') || path.startsWith('/system/roles')) return 'system.permissions';
   if (path.startsWith('/system/dictionary')) return 'system.dictionary';
   if (path.startsWith('/system/audit-logs')) return 'system.audit';
@@ -356,6 +358,7 @@ export function firstAccessiblePath(permissions: string[], menuKeys?: string[]):
 
 const systemMenuPaths = [
   '/system/users',
+  '/system/departments',
   '/system/user-permissions',
   '/system/dictionary',
   '/system/audit-logs',

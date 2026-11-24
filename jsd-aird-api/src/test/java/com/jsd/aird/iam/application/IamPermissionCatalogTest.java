@@ -62,6 +62,7 @@ class IamPermissionCatalogTest {
                 "knowledge.upload.retry", "data.upload.delete", "quality.upload.download");
         assertThat(codes).doesNotContain("ai.search.create", "project.materials.delete");
         assertThat(codes).doesNotContain("spectrum.view.publish");
+        assertThat(codes).doesNotContain("inventory.rnd.delete", "inventory.production.delete");
     }
 
     @Test

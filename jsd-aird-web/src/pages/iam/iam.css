@@ -4,8 +4,9 @@
 .iam-stat-card .ant-statistic-content { color: var(--app-text); font-weight: 700; }
 .iam-card .ant-card-body { min-width: 0; padding: var(--iam-card-padding); }
 .iam-toolbar, .iam-context-bar, .iam-role-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
-.iam-user-management-page .iam-toolbar { display: grid; grid-template-columns: minmax(0, 360px) minmax(0, 1fr); align-items: center; }
+.iam-user-management-page .iam-toolbar { display: grid; grid-template-columns: minmax(0, 360px) minmax(180px, 240px) minmax(0, 1fr); align-items: center; }
 .iam-user-management-page .iam-toolbar .ant-input-search { width: 100%; max-width: none !important; }
+.iam-user-management-page .iam-user-department-filter { width: 100%; }
 .iam-user-management-page .iam-toolbar > .ant-typography { justify-self: end; }
 .iam-user-management-page .ant-table-wrapper { min-width: 0; }
 .iam-audit-page .iam-audit-toolbar { align-items: stretch; justify-content: flex-start; }
@@ -238,3 +239,22 @@
 }
 
 .permission-v4-check:focus-within { outline: 2px solid var(--app-focus-border); outline-offset: 2px; }
+.iam-department-layout { display: grid; grid-template-columns: minmax(280px, 380px) minmax(0, 1fr); min-height: 520px; border-top: 1px solid #e8ebee; background: #fff; }
+.iam-department-tree { padding: 20px 18px; border-right: 1px solid #e8ebee; overflow: auto; }
+.iam-department-section-title { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 16px; }
+.iam-department-section-title span, .iam-department-count { color: #7b8490; font-size: 12px; font-weight: 400; }
+.iam-department-node { display: flex; justify-content: space-between; gap: 12px; width: 100%; padding-right: 12px; }
+.iam-department-detail { padding: 28px 32px; min-width: 0; }
+.iam-department-detail-head { display: flex; align-items: center; gap: 12px; color: #137d73; }
+.iam-department-detail-head h4.ant-typography { margin: 0; color: #202a35; }
+.iam-department-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin: 30px 0; }
+.iam-department-facts dt { color: #697582; font-size: 12px; margin-bottom: 8px; }
+.iam-department-facts dd { margin: 0; font-size: 16px; font-weight: 600; }
+.iam-department-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 28px; border-bottom: 1px solid #e8ebee; }
+.iam-department-children { display: grid; gap: 8px; margin-top: 24px; max-width: 460px; }
+.iam-department-children button { display: flex; justify-content: space-between; padding: 10px 12px; border: 1px solid #e8ebee; border-radius: 4px; background: #fff; text-align: left; cursor: pointer; }
+.iam-department-children button:hover { border-color: #137d73; }
+.iam-department-children button span { color: #7b8490; }
+.iam-department-users { display: grid; gap: 10px; margin-top: 24px; }
+.iam-department-users .ant-table-wrapper { min-width: 0; }
+@media (max-width: 760px) { .iam-department-layout { grid-template-columns: 1fr; } .iam-department-tree { border-right: 0; border-bottom: 1px solid #e8ebee; min-height: 240px; } .iam-department-detail { padding: 22px 18px; } .iam-department-facts { grid-template-columns: 1fr; gap: 16px; } }

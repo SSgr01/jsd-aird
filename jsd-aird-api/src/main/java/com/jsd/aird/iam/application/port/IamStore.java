@@ -33,7 +33,12 @@ public interface IamStore {
 
     List<User> users(UUID organizationId, String keyword, int page, int size, RecordDataScope dataScope);
 
+    List<User> users(UUID organizationId, String keyword, int page, int size,
+                     RecordDataScope dataScope, UUID departmentId);
+
     long countUsers(UUID organizationId, String keyword, RecordDataScope dataScope);
+
+    long countUsers(UUID organizationId, String keyword, RecordDataScope dataScope, UUID departmentId);
 
     long countUsersByStatus(UUID organizationId, String status);
 

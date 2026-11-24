@@ -55,6 +55,18 @@ public class IamBootstrapService {
         }
 
         IamPermissionCatalog.definitions().forEach(store::ensurePermission);
+        var existingRoles = store.roles(organization.id());
+        if (!existingRoles.isEmpty()) {
+            log.info("IAM 组织已有业务角色，跳过默认角色和权限等级初始化");
+            if (enabled && !store.hasSystemAdmin(organization.id())) {
+                var adminRole = existingRoles.stream()
+                        .filter(role -> "SYSTEM_ADMIN".equals(role.code()))
+                        .findFirst()
+                        .orElseThrow(() -> new IllegalStateException("IAM 已有业务角色但缺少系统管理员角色"));
+                createBootstrapAdmin(organization.id(), adminRole.id());
+            }
+            return;
+        }
         var roles = seedRoles(organization.id());
         seedRolePermissions(organization.id(), roles);
         seedPermissionModel(organization.id(), roles);

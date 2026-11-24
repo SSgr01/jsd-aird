@@ -67,6 +67,7 @@ const SpectrumViewPage = routePage(async () => ({ default: (await import('@/page
 const LoginPage = routePage(async () => ({ default: (await import('@/pages/auth/LoginPage')).LoginPage }));
 const ChangePasswordPage = routePage(async () => ({ default: (await import('@/pages/auth/ChangePasswordPage')).ChangePasswordPage }));
 const UserManagementPage = routePage(async () => ({ default: (await import('@/pages/iam/UserManagementPage')).UserManagementPage }));
+const DepartmentTreePage = routePage(async () => ({ default: (await import('@/pages/iam/DepartmentTreePage')).DepartmentTreePage }));
 const RolePermissionsPage = routePage(async () => ({ default: (await import('@/pages/iam/RolePermissionsPage')).RolePermissionsPage }));
 const UserPermissionsPage = routePage(async () => ({ default: (await import('@/pages/iam/UserPermissionsPage')).UserPermissionsPage }));
 const AuditLogsPage = routePage(async () => ({ default: (await import('@/pages/iam/AuditLogsPage')).AuditLogsPage }));
@@ -196,6 +197,7 @@ const applicationRoutes: RouteObject[] = [
       { path: 'research-test/standards', element: <PagePermissionGate permission="research-test.standard.view"><ResearchTestListPage type="STANDARD" /></PagePermissionGate> },
       { path: 'research-test/standards/:id', element: <PagePermissionGate permission="research-test.standard.view"><ResearchTestWorkspacePage type="STANDARD" /></PagePermissionGate> },
       { path: 'system/users', element: <UserManagementPage /> },
+      { path: 'system/departments', element: <DepartmentTreePage /> },
       { path: 'system/roles', element: <RolePermissionsPage /> },
       { path: 'system/user-permissions', element: <UserPermissionsPage /> },
       { path: 'system/audit-logs', element: <AuditLogsPage /> },
@@ -284,6 +286,7 @@ registerRoutePreload('/research-test/reports/:id', ResearchTestWorkspacePage.pre
 registerRoutePreload('/research-test/standards', ResearchTestListPage.preload);
 registerRoutePreload('/research-test/standards/:id', ResearchTestWorkspacePage.preload);
 registerRoutePreload('/system/users', UserManagementPage.preload);
+registerRoutePreload('/system/departments', DepartmentTreePage.preload);
 registerRoutePreload('/system/roles', RolePermissionsPage.preload);
 registerRoutePreload('/system/user-permissions', UserPermissionsPage.preload);
 registerRoutePreload('/system/audit-logs', AuditLogsPage.preload);

@@ -72,22 +72,50 @@ public class JdbcIamStore implements IamStore {
             "u.organization_id = ? AND (CAST(? AS text) IS NULL OR u.username ILIKE ? OR u.display_name ILIKE ? OR COALESCE(u.department_name, '') ILIKE ?)";
 
     public List<User> users(UUID organizationId, String keyword, int page, int size, RecordDataScope dataScope) {
+        return users(organizationId, keyword, page, size, dataScope, null);
+    }
+
+    @Override
+    public List<User> users(UUID organizationId, String keyword, int page, int size,
+                            RecordDataScope dataScope, UUID departmentId) {
         var like = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
         var offset = Math.max(0, (page - 1) * size);
         var args = new ArrayList<Object>();
         args.add(organizationId); args.add(like); args.add(like); args.add(like); args.add(like);
-        var where = USER_KEYWORD_WHERE + userScopeCondition(dataScope, args);
+        var where = USER_KEYWORD_WHERE + userScopeCondition(dataScope, args)
+                + userDepartmentCondition(departmentId, organizationId, args);
         args.add(size); args.add(offset);
         return jdbc.query(userSql(where) + " ORDER BY u.created_at DESC LIMIT ? OFFSET ?",
                 (rs, row) -> user(rs, row), args.toArray());
     }
 
     public long countUsers(UUID organizationId, String keyword, RecordDataScope dataScope) {
+        return countUsers(organizationId, keyword, dataScope, null);
+    }
+
+    @Override
+    public long countUsers(UUID organizationId, String keyword, RecordDataScope dataScope, UUID departmentId) {
         var like = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
         var args = new ArrayList<Object>();
         args.add(organizationId); args.add(like); args.add(like); args.add(like); args.add(like);
         return jdbc.queryForObject("SELECT count(*) FROM iam.app_user u WHERE "
-                + USER_KEYWORD_WHERE + userScopeCondition(dataScope, args), Long.class, args.toArray());
+                + USER_KEYWORD_WHERE + userScopeCondition(dataScope, args)
+                + userDepartmentCondition(departmentId, organizationId, args), Long.class, args.toArray());
+    }
+
+    private String userDepartmentCondition(UUID departmentId, UUID organizationId, List<Object> args) {
+        if (departmentId == null) return "";
+        args.add(departmentId);
+        args.add(organizationId);
+        return """
+                 AND u.department_id IN (
+                     WITH RECURSIVE subtree AS (
+                         SELECT id FROM iam.department WHERE id = ? AND organization_id = ?
+                         UNION ALL
+                         SELECT d.id FROM iam.department d JOIN subtree s ON d.parent_id = s.id
+                     ) SELECT id FROM subtree
+                 )
+                """;
     }
 
     public boolean userInScope(UUID organizationId, UUID userId, RecordDataScope dataScope) {

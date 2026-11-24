@@ -464,6 +464,25 @@ class IamAdminServiceTest {
                 .containsExactly("system.permissions.view", "system.users.view");
     }
 
+    @Test
+    void filtersUsersByDepartmentWithinUserScope() {
+        var departmentId = UUID.randomUUID();
+        var scopedAuthorization = mock(AuthorizationService.class);
+        when(scopedAuthorization.check(any())).thenReturn(
+                new PermissionDecision(true, "system.user.view", "ALLOW", "ALL", "TEST"));
+        when(scopedAuthorization.resolveScope(any())).thenReturn(
+                DataScopeResolver.ResolvedDataScope.allow("ALL", Set.of()));
+        when(store.users(any(), any(), anyInt(), anyInt(), any(), eq(departmentId))).thenReturn(List.of());
+        when(store.countUsers(any(), any(), any(), eq(departmentId))).thenReturn(0L);
+        var scopedService = new IamAdminService(store, scopedAuthorization, passwordEncoder, audit, auditPresentation);
+
+        scopedService.users(actor, null, 1, 20, null, departmentId);
+
+        var expectedScope = new RecordDataScope("ALL", ACTOR_ID, Set.of());
+        verify(store).users(eq(ORGANIZATION_ID), isNull(), eq(1), eq(20), eq(expectedScope), eq(departmentId));
+        verify(store).countUsers(eq(ORGANIZATION_ID), isNull(), eq(expectedScope), eq(departmentId));
+    }
+
     private static User userWithVersion(UUID id, UUID organizationId, String roleCode, String status, long version) {
         return new User(id, organizationId, "user-" + id.toString().substring(0, 8), "测试用户", null, null, null,
                 UUID.randomUUID(), roleCode, roleCode, status, false, "hash", version, Instant.now(), 0, null);

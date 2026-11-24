@@ -27,6 +27,7 @@ import {
   AppstoreOutlined,
   SettingOutlined,
   UserOutlined,
+  ApartmentOutlined,
   SearchOutlined,
   PlusOutlined,
   AimOutlined,
@@ -189,6 +190,7 @@ const route = {
       routes: [
         { path: '/system/users', name: '用户管理', icon: <UserOutlined /> },
         { path: '/system/user-permissions', name: '用户权限配置', icon: <SettingOutlined /> },
+        { path: '/system/departments', name: '组织架构管理', icon: <ApartmentOutlined /> },
         { path: '/system/dictionary', name: '基础字典', icon: <FileTextOutlined /> },
         { path: '/system/audit-logs', name: '操作日志', icon: <AuditOutlined /> },
         { path: '/system/parameters', name: '系统参数', icon: <SettingOutlined /> },

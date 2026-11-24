@@ -17,6 +17,8 @@ export interface IamUser {
 }
 
 export interface IamRole { id: string; code: string; name: string; builtin: boolean; enabled: boolean; policyVersion: number; }
+export interface DepartmentNode { id: string; name: string; parentId: string | null; sortOrder: number; userCount: number; }
+export interface DepartmentUser { id: string; username: string; displayName: string; email?: string; phone?: string; roleId?: string; roleCode: string | null; roleName: string | null; status: string; lastLoginAt?: string; authVersion: number; }
 export interface PermissionDefinition { code: string; module: string; name: string; risk: string; defaultScope: string; }
 export interface PermissionBinding { menuKey?: string; permissionCode: string; effect: 'ALLOW' | 'DENY'; scopeType: string; targetIds: string[]; }
 export interface PermissionLevelBinding { menuKey?: string | null; permissionCode: string; effect: 'ALLOW'; scopeType: string; targetIds: string[]; }
@@ -68,7 +70,12 @@ export interface AuditLogQuery {
 const responseData = async <T>(request: Promise<{ data: ApiResponse<T> }>) => (await request).data.data;
 
 export const iamApi = {
-  users: (params?: { keyword?: string; page?: number; size?: number; permissionView?: 'users' | 'permissions' }, signal?: AbortSignal) => responseData<PageResponse<IamUser>>(httpClient.get('/api/v1/iam/users', { params, signal })),
+  departments: () => responseData<DepartmentNode[]>(httpClient.get('/api/v1/iam/departments')),
+  departmentUsers: (id: string) => responseData<DepartmentUser[]>(httpClient.get(`/api/v1/iam/departments/${id}/users`)),
+  createDepartment: (payload: { name: string; parentId: string | null; sortOrder: number }) => responseData<DepartmentNode>(httpClient.post('/api/v1/iam/departments', payload)),
+  updateDepartment: (id: string, payload: { name: string; parentId: string | null; sortOrder: number }) => responseData<DepartmentNode>(httpClient.patch(`/api/v1/iam/departments/${id}`, payload)),
+  deleteDepartment: (id: string) => responseData<void>(httpClient.delete(`/api/v1/iam/departments/${id}`)),
+  users: (params?: { keyword?: string; departmentId?: string; page?: number; size?: number; permissionView?: 'users' | 'permissions' }, signal?: AbortSignal) => responseData<PageResponse<IamUser>>(httpClient.get('/api/v1/iam/users', { params, signal })),
   createUser: (payload: { username: string; displayName: string; email?: string; phone?: string; departmentName?: string; roleId: string; password: string }) => responseData<{ user: IamUser }>(httpClient.post('/api/v1/iam/users', payload)),
   updateUser: (id: string, payload: { expectedVersion: number; displayName: string; email?: string; phone?: string; departmentName?: string; roleId: string }) => responseData<IamUser>(httpClient.patch(`/api/v1/iam/users/${id}`, payload)),
   enableUser: (id: string, expectedVersion: number) => responseData<void>(httpClient.post(`/api/v1/iam/users/${id}/enable`, { expectedVersion })),

@@ -62,13 +62,23 @@ public class IamAdminService {
      * 避免其中一行的配置意外收窄另一行的用户列表。
      */
     public PageResponse<UserView> users(Actor actor, String keyword, int page, int size, String permissionView) {
+        return users(actor, keyword, page, size, permissionView, null);
+    }
+
+    public PageResponse<UserView> users(Actor actor, String keyword, int page, int size,
+                                        String permissionView, UUID departmentId) {
         requireAny(actor, "system.user.view", "system.permissions.view");
         var safePage = Math.max(1, page);
         var safeSize = Math.min(100, Math.max(1, size));
         var code = "permissions".equalsIgnoreCase(permissionView) ? "system.permissions.view" : "system.users.view";
         var dataScope = userDataScope(actor, code);
-        var items = store.users(actor.organizationId(), keyword, safePage, safeSize, dataScope).stream().map(this::userView).toList();
-        var total = store.countUsers(actor.organizationId(), keyword, dataScope);
+        var items = (departmentId == null
+                ? store.users(actor.organizationId(), keyword, safePage, safeSize, dataScope)
+                : store.users(actor.organizationId(), keyword, safePage, safeSize, dataScope, departmentId))
+                .stream().map(this::userView).toList();
+        var total = departmentId == null
+                ? store.countUsers(actor.organizationId(), keyword, dataScope)
+                : store.countUsers(actor.organizationId(), keyword, dataScope, departmentId);
         return new PageResponse<>(items, safePage, safeSize, total, (total + safeSize - 1) / safeSize);
     }
 

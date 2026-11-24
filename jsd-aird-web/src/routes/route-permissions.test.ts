@@ -58,6 +58,7 @@ describe('system settings navigation', () => {
     name: '系统设置',
     routes: [
       { path: '/system/users', name: '用户管理' },
+      { path: '/system/departments', name: '机构树管理' },
       { path: '/system/user-permissions', name: '用户权限配置' },
       { path: '/system/dictionary', name: '基础字典' },
       { path: '/system/audit-logs', name: '操作日志' },
@@ -73,6 +74,7 @@ describe('system settings navigation', () => {
   it('respects menu grants and permission grants', () => {
     expect(firstAccessibleSystemPath([], ['system.permissions'])).toBe('/system/user-permissions');
     expect(firstAccessibleSystemPath(['system.user.view'], ['system.users'])).toBe('/system/users');
+    expect(canViewPathWithMenus('/system/departments', ['system.user.view'], ['system.users'])).toBe(true);
     expect(firstAccessibleSystemPath(['system.audit.view'], ['system.audit'])).toBe('/system/audit-logs');
     expect(firstAccessibleSystemPath(['system.user.view'], ['system.audit'])).toBe('/system/audit-logs');
   });

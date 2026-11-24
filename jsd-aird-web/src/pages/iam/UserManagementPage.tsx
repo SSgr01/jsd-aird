@@ -1,12 +1,13 @@
 import { useRequestGuard } from '@/services/query/use-request-guard';
 import { EditOutlined, LockOutlined, MoreOutlined, PlusOutlined, ReloadOutlined, UserOutlined } from '@ant-design/icons';
-import { App, Avatar, Button, Card, Col, Dropdown, Form, Input, Modal, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd';
+import { App, Avatar, Button, Card, Col, Dropdown, Form, Input, Modal, Row, Select, Space, Statistic, Table, Tag, TreeSelect, Typography } from 'antd';
 import { forwardRef, type ReactNode, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 
 import { generateAdminPassword } from '@/services/auth/password-generator';
-import { iamApi, type IamRole, type IamUser } from '@/services/iam/iam-api';
+import { iamApi, type DepartmentNode, type IamRole, type IamUser } from '@/services/iam/iam-api';
 import { HttpError } from '@/services/http/errors';
 import { useAuthStore } from '@/stores/auth-store';
+import { departmentTreeOptions } from './department-tree-options';
 import './iam.css';
 import '@/styles/management-list.css';
 
@@ -53,9 +54,11 @@ export function UserManagementPage() {
     || (action !== 'create' && permissions.includes('system.users.update'));
   const [users, setUsers] = useState<IamUser[]>([]);
   const [roles, setRoles] = useState<IamRole[]>([]);
+  const [departmentNodes, setDepartmentNodes] = useState<DepartmentNode[]>([]);
   const [total, setTotal] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [keyword, setKeyword] = useState('');
+  const [departmentId, setDepartmentId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
@@ -66,16 +69,17 @@ export function UserManagementPage() {
   const resetPasswordInputRef = useRef<PasswordFieldHandle>(null);
 
   const beginUsersRequest = useRequestGuard('iam-users');
-  const load = async (nextPage = currentPage) => {
+  const load = async (nextPage = currentPage, nextDepartmentId = departmentId) => {
     const request = beginUsersRequest();
     setLoading(true);
     try {
-      const [page, roleItems] = await Promise.all([
-        iamApi.users({ keyword: keyword || undefined, page: nextPage, size: 20 }, request.signal),
+      const [page, roleItems, departments] = await Promise.all([
+        iamApi.users({ keyword: keyword || undefined, departmentId: nextDepartmentId ?? undefined, page: nextPage, size: 20 }, request.signal),
         iamApi.roles(),
+        iamApi.departments(),
       ]);
       if (!request.current()) return;
-      setUsers(page.items); setTotal(page.total); setRoles(roleItems);
+      setUsers(page.items); setTotal(page.total); setRoles(roleItems); setDepartmentNodes(departments);
     } catch (error) { if (request.current()) message.error(error instanceof HttpError ? error.message : '用户列表加载失败'); }
     finally { if (request.current()) setLoading(false); }
   };
@@ -167,6 +171,8 @@ export function UserManagementPage() {
   };
 
   const departments = useMemo(() => new Set(users.map((user) => user.departmentName).filter(Boolean)).size, [users]);
+  const departmentOptions = useMemo(() => departmentTreeOptions(departmentNodes), [departmentNodes]);
+  const departmentFilterOptions = useMemo(() => departmentTreeOptions(departmentNodes, 'id'), [departmentNodes]);
   const columns = [
     { title: '用户', key: 'user', render: (_: unknown, user: IamUser) => <Space><Avatar size="small" icon={<UserOutlined />} /><div><div className="iam-user-name">{user.displayName}</div><Typography.Text type="secondary">{user.username}</Typography.Text></div></Space> },
     { title: '部门', dataIndex: 'departmentName', key: 'departmentName', render: (value?: string) => value || '未设置' },
@@ -179,12 +185,12 @@ export function UserManagementPage() {
   return <div className="iam-page pm-unified-list-page iam-user-management-page">
     <div className="page-heading"><div><Typography.Title level={2}>用户管理</Typography.Title><Typography.Text type="secondary">维护系统账号、部门归属和主角色，账号状态变化会立即影响当前会话。</Typography.Text></div><Space><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>{can('create') && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增用户</Button>}</Space></div>
     <Row gutter={[12, 12]} className="list-summary-strip"><Col xs={12} sm={12} lg={6}><Card className="iam-stat-card"><Statistic title="用户总数" value={total} prefix={<UserOutlined />} /></Card></Col><Col xs={12} sm={12} lg={6}><Card className="iam-stat-card"><Statistic title="启用账号" value={users.filter((user) => user.status === 'ACTIVE').length} /></Card></Col><Col xs={12} sm={12} lg={6}><Card className="iam-stat-card"><Statistic title="部门数量" value={departments} /></Card></Col><Col xs={12} sm={12} lg={6}><Card className="iam-stat-card"><Statistic title="系统角色" value={roles.length} /></Card></Col></Row>
-    <Card className="iam-card" variant="borderless"><div className="iam-toolbar"><Input.Search allowClear value={keyword} onChange={(event) => setKeyword(event.target.value)} onSearch={() => { setCurrentPage(1); void load(1); }} placeholder="搜索用户名、姓名或部门" /><Typography.Text type="secondary">共 {total} 个账号</Typography.Text></div><Table rowKey="id" loading={loading} columns={columns} dataSource={users} scroll={{ x: 'max-content' }} pagination={{ current: currentPage, total, pageSize: 20, onChange: (nextPage) => { setCurrentPage(nextPage); void load(nextPage); } }} /></Card>
+    <Card className="iam-card" variant="borderless"><div className="iam-toolbar"><Input.Search allowClear value={keyword} onChange={(event) => setKeyword(event.target.value)} onSearch={() => { setCurrentPage(1); void load(1); }} placeholder="搜索用户名、姓名或部门" /><TreeSelect className="iam-user-department-filter" allowClear showSearch treeDefaultExpandAll treeNodeFilterProp="title" placeholder="按机构查询" value={departmentId ?? undefined} treeData={departmentFilterOptions} onChange={(value) => { const nextId = value || null; setDepartmentId(nextId); setCurrentPage(1); void load(1, nextId); }} /><Typography.Text type="secondary">共 {total} 个账号</Typography.Text></div><Table rowKey="id" loading={loading} columns={columns} dataSource={users} scroll={{ x: 'max-content' }} pagination={{ current: currentPage, total, pageSize: 20, onChange: (nextPage) => { setCurrentPage(nextPage); void load(nextPage); } }} /></Card>
     <Modal title={editing ? '编辑用户' : '新增用户'} open={modalOpen} onCancel={() => { setModalOpen(false); clearPasswordInputs(); }} destroyOnHidden width={520} footer={<Space><Button onClick={() => { setModalOpen(false); clearPasswordInputs(); }}>取消</Button><Button type="primary" htmlType="submit" form="iam-user-form">保存</Button></Space>}>
       <Form<UserForm> id="iam-user-form" layout="vertical" initialValues={{ username: editing?.username, displayName: editing?.displayName, email: editing?.email, phone: editing?.phone, departmentName: editing?.departmentName, roleId: editing?.roleId ?? roles[0]?.id }} onFinish={(values) => void submit(values)} requiredMark={false}>
         <Form.Item name="username" label="账号" rules={[{ required: true, message: '请输入账号' }]}><Input disabled={Boolean(editing)} /></Form.Item>
         <Form.Item name="displayName" label="姓名" rules={[{ required: true, message: '请输入姓名' }]}><Input /></Form.Item>
-        <Form.Item name="email" label="邮箱"><Input /></Form.Item><Form.Item name="phone" label="手机号"><Input /></Form.Item><Form.Item name="departmentName" label="部门"><Input /></Form.Item>
+        <Form.Item name="email" label="邮箱"><Input /></Form.Item><Form.Item name="phone" label="手机号"><Input /></Form.Item><Form.Item name="departmentName" label="部门"><TreeSelect allowClear showSearch treeDefaultExpandAll treeNodeFilterProp="title" placeholder="请选择机构" treeData={departmentOptions} /></Form.Item>
         <Form.Item name="roleId" label="主角色" rules={[{ required: true, message: '请选择主角色' }]}><Select options={roles.map((role) => ({ value: role.id, label: role.name }))} /></Form.Item>
         {!editing && <PasswordField ref={passwordInputRef} label="初始密码" prefix={<LockOutlined />} onError={(text) => { void message.warning(text); }} />}
       </Form>

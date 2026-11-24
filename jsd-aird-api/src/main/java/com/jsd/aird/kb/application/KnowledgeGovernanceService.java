@@ -170,9 +170,7 @@ public class KnowledgeGovernanceService {
     @Transactional
     public KnowledgeGovernanceRepository.ReviewView saveReview(UUID documentId, UUID versionId, ReviewCommand command) {
         var actor = ActorContext.required();
-        var reviewStatus = workspaceReviews.get("KNOWLEDGE_VERSION", versionId).status();
-        if ("SUBMITTED".equals(reviewStatus) || "APPROVED".equals(reviewStatus))
-            throw new ApiException(ApiErrorCode.REVIEW_STATE_CONFLICT, "当前版本已提交审核，不能继续修改");
+        workspaceReviews.requireEditable("KNOWLEDGE_VERSION", versionId);
         requireReviewIdentity(documentId, versionId, command.documentId(), command.versionId());
         var scope = normalizeScope(command.libraryScope());
         var update = reviewUpdate(documentId, versionId, command.reviewRevisionId(), command.lockVersion(),
@@ -440,6 +438,7 @@ public class KnowledgeGovernanceService {
                                                                       UUID reviewRevisionId, UUID sourceTableId,
                                                                       TableReviewCommand command) {
         var actor = ActorContext.required();
+        workspaceReviews.requireEditable("KNOWLEDGE_VERSION", versionId);
         if (!governance.saveTableReview(actor.organizationId(), actor.userId(), reviewRevisionId,
                 command.lockVersion(), sourceTableId, command.patches(), command.rows())) {
             optimisticConflict(documentId, versionId);

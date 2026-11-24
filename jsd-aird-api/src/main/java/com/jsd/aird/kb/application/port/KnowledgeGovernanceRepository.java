@@ -22,6 +22,10 @@ public interface KnowledgeGovernanceRepository {
                                JsonNode diagnosticResult, List<DocumentParser.TextBlock> blocks,
                                List<DocumentParser.SourceTable> sourceTables);
     void updateParseRunStatus(UUID organizationId, UUID parseRunId, String status, String errorMessage);
+    default ParseRunRow createCandidateParseRun(UUID organizationId, UUID actorId, UUID documentId, UUID versionId,
+                                               DocumentParser.ParsedDocument parsed, JsonNode diagnostic) {
+        throw new UnsupportedOperationException("Candidate parse runs not supported");
+    }
     Optional<ReviewView> review(UUID organizationId, UUID documentId, UUID versionId);
     Optional<PublishedContentView> publishedContent(UUID organizationId, UUID documentId, UUID publicationId);
     Optional<TableWindow> reviewTableWindow(UUID organizationId, UUID reviewRevisionId, UUID sourceTableId,

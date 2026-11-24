@@ -31,7 +31,9 @@ Rebuild example (model name and dimension must match the deployed service):
       --embedding-model Qwen/Qwen3-Embedding-0.6B --embedding-dimension 1024 --dry-run
 Remove --dry-run to submit work. Repeat the same command and --manifest to resume;
 use --retry-failed to retry terminal failures. Update both API and Worker first.
---max-in-flight controls bounded document concurrency for import and rebuild (1–16).
+--max-in-flight controls document concurrency (1–128). Import defaults to 16;
+vector rebuild defaults to 8. Worker coalesces compatible files into real MinerU
+batch requests; batch size/concurrency and OCR policy belong to server configuration.
 Workers reuse one login with isolated cookie jars; never run other scripts or a
 browser session under the same account while this script runs. HTTP 401 stops the
 run immediately, preserving submitted jobs and the manifest for resume. Uploads
@@ -871,6 +873,7 @@ def import_directory(args: argparse.Namespace) -> int:
                 copy_document_state(record, document)
                 record["message"] = "已发布并授权 AI" + ("（关联已有文档）" if record.get("duplicate") else "")
                 record["bodyImportStatus"] = "COMPLETED"
+                capture_parse_provenance(api, record)
                 sync_enrichment(api, record, retry_failed=args.retry_failed)
                 record["documentUrl"] = f"{api.base_url}/knowledge/documents/{document_id}"
                 record["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
@@ -893,15 +896,15 @@ def import_directory(args: argparse.Namespace) -> int:
                 emit(f"[处理] 失败：{relative} — {error}", file=sys.stderr)
                 return False, record
 
-        def submit_record(record):
-            # Duplicate files may resolve to one document: serialize its review/metadata writes.
-            lock = document_locks.setdefault(record.get('documentId'), threading.Lock())
-            def run():
-                if not hasattr(thread_client, 'api'):
-                    thread_client.api = api.fork()
-                with lock:
-                    return finish_record(record.copy(), thread_client.api)
-            pending.add(executor.submit(run))
+        category_lock = threading.Lock()
+        document_locks_guard = threading.Lock()
+
+        def finish_serialized(record, worker_api):
+            # Duplicate paths can resolve to one document. Serialize its writes only.
+            with document_locks_guard:
+                lock = document_locks.setdefault(record.get('documentId'), threading.Lock())
+            with lock:
+                return finish_record(record.copy(), worker_api)
 
         def finish_next():
             nonlocal completed, failed, processed_pending
@@ -917,7 +920,12 @@ def import_directory(args: argparse.Namespace) -> int:
                     failed += 1
                 emit(f"进度 {completed + failed}/{len(files)} | 成功 {completed} | 失败/待处理 {failed} | 在途 {len(pending)} | {Path(record['relativePath']).name[:60]}")
 
-        for index, file_path in enumerate(files, start=1):
+        parent_api = api
+
+        def import_file(index, file_path):
+            if not hasattr(thread_client, 'api'):
+                thread_client.api = parent_api.fork()
+            api = thread_client.api
             relative = file_path.relative_to(source).as_posix()
             digest = ""
             prior = None
@@ -941,18 +949,17 @@ def import_directory(args: argparse.Namespace) -> int:
                     record["message"] = f"文件超过 {max_file_bytes} 字节限制"
                     append_manifest(manifest, record)
                     emit(f"[{index}/{len(files)}] 超过限制：{relative}")
-                    failed += 1
-                    continue
+                    return False, record
                 if file_path.suffix.lower() not in supported_suffixes:
                     record["importStatus"] = "FAILED"
                     record["message"] = "文件格式不在知识库导入支持范围内"
                     append_manifest(manifest, record)
                     emit(f"[{index}/{len(files)}] 暂不支持：{relative}")
-                    failed += 1
-                    continue
+                    return False, record
 
                 metadata = file_metadata(file_path.relative_to(source), category_mode, args.category_id)
-                category = categories.resolve(metadata)
+                with category_lock:
+                    category = categories.resolve(metadata)
                 record.update({
                     "categoryMode": category_mode,
                     "targetScope": args.scope,
@@ -971,11 +978,8 @@ def import_directory(args: argparse.Namespace) -> int:
                     version_id = document["currentVersionId"]
                     record.update(documentId=document_id, versionId=version_id, fileId=file_id)
                     append_manifest(manifest, record)
-                    submit_record(record)
                     emit(f"[{index}/{len(files)}] 已加入处理队列：{relative}")
-                    if len(pending) >= effective_max_in_flight:
-                        finish_next()
-                    continue
+                    return finish_serialized(record, api)
                 else:
                     if not file_id:
                         staged = api.stage_file(file_path)
@@ -1000,12 +1004,9 @@ def import_directory(args: argparse.Namespace) -> int:
                         require_document_target(api, duplicate_document_value, record)
                         record["message"] = "内容相同，继续核对元数据、发布和 AI 授权"
                         append_manifest(manifest, record)
-                        submit_record(record)
                         emit(f"[{index}/{len(files)}] 已存在，继续处理：{relative}；"
                               f"原文档：{document_location(api, duplicate_document_value)}")
-                        if len(pending) >= effective_max_in_flight:
-                            finish_next()
-                        continue
+                        return finish_serialized(record, api)
                     title = file_path.stem[:260]
                     created = create_or_resolve_duplicate(api, record, lambda: queue_api_call(api, lambda: api.json(
                         "POST", "/api/v1/knowledge/documents", {
@@ -1025,13 +1026,10 @@ def import_directory(args: argparse.Namespace) -> int:
                     record.update(documentId=document_id, versionId=version_id)
                     refresh_document_state(api, record, document_id)
                     append_manifest(manifest, record)
-                    submit_record(record)
                     emit(f"[{index}/{len(files)}] 已建文档并加入解析队列：{relative}")
-                    if len(pending) >= effective_max_in_flight:
-                        finish_next()
+                    return finish_serialized(record, api)
             except Exception as error:  # Preserve progress for this item and continue the directory.
                 require_session(error)
-                failed += 1
                 record.update({"sha256": digest or record.get("sha256", ""), "importStatus": "FAILED",
                                "message": str(error),
                                "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
@@ -1047,6 +1045,13 @@ def import_directory(args: argparse.Namespace) -> int:
                         record.pop(field, None)
                 append_manifest(manifest, record)
                 emit(f"[{index}/{len(files)}] 失败：{relative} — {error}", file=sys.stderr)
+
+                return False, record
+
+        for index, file_path in enumerate(files, start=1):
+            pending.add(executor.submit(import_file, index, file_path))
+            if len(pending) >= effective_max_in_flight:
+                finish_next()
 
         while pending:
             finish_next()
@@ -1081,6 +1086,27 @@ class RebuildClient(ApiClient):
         return super()._run(["--connect-timeout", "10", "--max-time", "120", *args], body)
 
 
+def capture_parse_provenance(api, record):
+    review = api.json("GET", f"{api_path_document(record['documentId'])}/versions/{record['versionId']}/review")
+    if not isinstance(review, dict):
+        return
+    run = review.get("parseRun") or {}
+    if not isinstance(run, dict):
+        return
+    metadata = run.get("diagnosticResult") or {}
+    if not isinstance(metadata, dict):
+        return
+    for name, value in {
+        "parseSource": metadata.get("provider"), "parseTier": metadata.get("tier"),
+        "parseOcrMode": metadata.get("ocrMode", metadata.get("requestedOcrMode")),
+        "remoteTaskId": run.get("providerTaskId"), "remoteFileId": metadata.get("remoteFileId"),
+        "parseBatchFileCount": metadata.get("batchFileCount"),
+        "completenessWarnings": metadata.get("completenessWarnings", []),
+    }.items():
+        if value is not None:
+            record[name] = value
+
+
 def inventory(api, *, category_id=None, scope=None, page_size=100):
     """Collect all pages before submitting work so index updates cannot shift pages."""
     documents = {}
@@ -1108,6 +1134,106 @@ def inventory(api, *, category_id=None, scope=None, page_size=100):
         if not result["items"] or page >= int(result["totalPages"]):
             raise ImportErrorWithMessage("知识库分页数量不完整，未提交重建任务")
         page += 1
+
+
+def copy_repair_state(record, row):
+    record.update(status=row['status'], message=row.get('error'), parseRunId=row.get('parseRunId'))
+    result = row.get('result') or {}
+    metadata = result.get('metadata') or {}
+    record.update(parseSource=metadata.get('repairSource'), parseTier=metadata.get('tier'),
+                  parseOcrMode=metadata.get('ocrMode', metadata.get('parseMode')),
+                  remoteTaskId=result.get('providerTaskId'),
+                  completenessWarnings=metadata.get('completenessWarnings', []))
+
+
+def repair_existing(args):
+    """Persistent candidates only. Never adopt, edit, approve, publish or rebuild vectors."""
+    username = args.username or os.environ.get("JSD_AIRD_USERNAME")
+    password = os.environ.get("JSD_AIRD_PASSWORD")
+    curl = shutil.which("curl")
+    if not username or not password or not curl:
+        raise ImportErrorWithMessage("需要 curl、JSD_AIRD_USERNAME 和 JSD_AIRD_PASSWORD")
+    if not 1 <= args.page_size <= 100:
+        raise ValueError("page-size 须为 1–100")
+    context = {"mode": "repair-existing", "baseUrl": args.base_url.rstrip('/'),
+               "categoryId": args.category_id, "scope": args.scope}
+    manifest = Path(args.manifest or ".runtime/knowledge-parse-repair.jsonl").expanduser().resolve()
+    previous = read_progress(manifest, context)
+    with tempfile.TemporaryDirectory(prefix="jsd-kb-repair-") as temporary:
+        api = RebuildClient(args.base_url, Path(temporary) / "cookies.txt", curl)
+        api.login(username, password)
+        try:
+            documents = inventory(api, category_id=args.category_id, scope=args.scope, page_size=args.page_size)
+            records = []
+            run_key = args.request_key or str(uuid.uuid4())
+            for document in documents:
+                version = document.get("currentVersionId")
+                if not version:
+                    continue
+                old = previous.get(document['id'])
+                if old and old.get('versionId') != version:
+                    old = None
+                record = copy.deepcopy(old) if old else {
+                    "context": context, "documentId": document['id'], "versionId": version,
+                    "title": document.get('title'), "requestKey": run_key,
+                    "status": "SELECTED",
+                }
+                records.append(record)
+            endpoint = "/api/v1/knowledge/parse-repairs"
+            selected = [r for r in records if r.get('status') not in {'READY', 'ADOPTED'}
+                        and (r.get('status') != 'FAILED' or args.retry_failed)]
+            width = min(100, args.max_in_flight)
+            for start in range(0, len(selected), width):
+                group = selected[start:start + width]
+                files = [{"documentId": r['documentId'], "versionId": r['versionId']} for r in group]
+                preview = api.json('POST', endpoint + '/preview', {"files": files, "requestKey": "preview"})
+                if not isinstance(preview, list) or len(preview) != len(group):
+                    raise ImportErrorWithMessage("历史修复预览数量不匹配")
+                emit(f"修复预览 {len(group)} 份，已有 ZIP {sum(bool(v.get('hasArchivedZip')) for v in preview)} 份")
+                if args.dry_run:
+                    continue
+                # Persist keys BEFORE submission. A lost HTTP response resumes the same request.
+                for record in group:
+                    record['status'] = 'SUBMITTING' if not record.get('repairId') else record['status']
+                    save(manifest, record)
+                # A selection may contain keys from several interrupted runs. Keep each original key.
+                by_key = {}
+                for record in group:
+                    by_key.setdefault(record['requestKey'], []).append(record)
+                for key, targets in by_key.items():
+                    body = {"files": [{"documentId": r['documentId'], "versionId": r['versionId']} for r in targets],
+                            "requestKey": key, "retryFailed": args.retry_failed}
+                    rows = queue_api_call(api, lambda: api.json('POST', endpoint, body), args.queue_wait_timeout_minutes * 60,
+                                          len(targets))
+                    returned = {r['versionId']: r for r in rows}
+                    if len(returned) != len(targets):
+                        raise ImportErrorWithMessage("历史修复提交结果不完整；保留清单后重跑")
+                    for record in targets:
+                        row = returned[record['versionId']]
+                        record.update(repairId=row['id'], status=row['status'], jobId=row.get('jobId'))
+                        copy_repair_state(record, row)
+                        save(manifest, record)
+            if args.dry_run:
+                return 0
+            active = [r for r in records if r.get('repairId') and r.get('status') not in {'READY', 'ADOPTED', 'FAILED'}]
+            deadline = time.monotonic() + args.parse_timeout_minutes * 60
+            while active:
+                for record in active[:]:
+                    row = api.json('GET', endpoint + '/' + record['repairId'])
+                    copy_repair_state(record, row)
+                    save(manifest, record)
+                    if row['status'] in {'READY', 'ADOPTED', 'FAILED'}:
+                        active.remove(record)
+                        emit(f"修复候选 {row['status']}：{record.get('title')}；{row.get('error') or record['repairId']}")
+                if not active:
+                    break
+                if time.monotonic() >= deadline:
+                    raise ImportErrorWithMessage("修复等待超时，后台任务和候选结果保留，使用相同清单续跑")
+                pause(api, max(0.5, args.poll_seconds))
+            emit(f"历史修复候选已保存：{manifest}；请校对后采用并发布")
+            return 1 if any(r.get('status') == 'FAILED' for r in records) else 0
+        finally:
+            api.json('POST', '/api/v1/auth/logout', {})
 
 
 def verify_target(state, model, dimension):
@@ -1287,7 +1413,7 @@ def rebuild_vectors(args):
                         emit(f"状态检查失败：{document['id']} — {error}")
                         return "CHECK_FAILED"
 
-                concurrency = min(args.max_in_flight, 16)
+                concurrency = args.max_in_flight
                 emit(f"最多同时跟踪 {concurrency} 份资料；共享一次登录，保留原断点清单")
                 for index, (document, outcome) in enumerate(parallel_items(api, documents, concurrency, rebuild_one), 1):
                     counts[outcome] = counts.get(outcome, 0) + 1
@@ -1322,8 +1448,8 @@ def main() -> int:
     parser.add_argument("--parse-timeout-minutes", type=int, default=24 * 60)
     parser.add_argument("--publish-timeout-minutes", type=int, default=120,
                         help="单份资料等待发布的分钟数，默认 120；超时保留后台任务和断点，不重新上传")
-    parser.add_argument("--max-in-flight", type=int, default=8,
-                        help="并行跟踪解析/发布或向量重建的文件数，默认 8，最多 16；导入另受组织队列容量限制")
+    parser.add_argument("--max-in-flight", type=int,
+                        help="并行跟踪文件数；目录导入默认 16，向量重建默认 8，最多 128；后端将兼容文件合并成 MinerU 批次")
     parser.add_argument("--queue-wait-timeout-minutes", type=int, default=24 * 60,
                         help="单次等待任务队列容量的最长分钟数，默认 1440")
     parser.add_argument("--retry-failed", action="store_true", help="重试解析失败的文档，以及解析完成但发布或索引失败的文档")
@@ -1333,6 +1459,7 @@ def main() -> int:
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--enrich-existing", action="store_true", help="仅补全服务器已有资料；按 category-id 或全部，不上传和重新 OCR")
     modes.add_argument("--rebuild-vectors", action="store_true", help="分页重建已发布且已授权 AI 的存量资料向量，无需源目录或 OCR")
+    modes.add_argument("--repair-existing", action="store_true", help="修复存量解析：优先已有 ZIP，否则重新解析；仅生成候选，绝不自动发布")
     parser.add_argument("--embedding-model", dest="model", default=os.environ.get("JSD_AIRD_EMBEDDING_MODEL"),
                         help="重建目标模型名，须与 API 和 Worker 配置完全一致")
     parser.add_argument("--embedding-dimension", dest="dimension", type=int,
@@ -1343,11 +1470,13 @@ def main() -> int:
     parser.add_argument("--request-key", help="已有资料补全任务的幂等请求标识，重跑可复用")
     parser.add_argument("--metadata-wait-seconds", type=int, default=0, help="等候异步补全的秒数，默认提交后记录状态即退出；断点续跑可重新检查")
     args = parser.parse_args()
+    if args.max_in_flight is None:
+        args.max_in_flight = 8 if args.rebuild_vectors else 16
     global OUTPUT
     OUTPUT = ConsoleOutput(args.verbose)
     try:
-        if args.parse_timeout_minutes < 1 or args.publish_timeout_minutes < 1 or not 1 <= args.max_in_flight <= 16 or args.queue_wait_timeout_minutes < 1:
-            raise ValueError("超时必须为正整数，并行文件数须为 1–16")
+        if args.parse_timeout_minutes < 1 or args.publish_timeout_minutes < 1 or not 1 <= args.max_in_flight <= 128 or args.queue_wait_timeout_minutes < 1:
+            raise ValueError("超时必须为正整数，并行文件数须为 1–128")
         uuid.UUID(args.category_id) if args.category_id else None
         if args.metadata_wait_seconds < 0:
             raise ValueError("等候秒数不能为负数")
@@ -1357,6 +1486,10 @@ def main() -> int:
             return rebuild_vectors(args)
         if args.enrich_existing:
             return enrich_existing(args)
+        if args.repair_existing:
+            if args.source_dir or args.include:
+                raise ValueError("历史修复不使用源目录或 --include；用 --category-id / --scope 筛选")
+            return repair_existing(args)
         if not args.source_dir:
             raise ValueError("请指定来源目录，或使用 --enrich-existing / --rebuild-vectors 处理已入库资料")
         if args.scope is None:

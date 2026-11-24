@@ -30,7 +30,8 @@ public class QualityDataRepository implements QualityDataStore {
                   AND v.change_type='PUBLISH' AND v.lock_version=r.lock_version) THEN 'PUBLISHED'
             ELSE COALESCE((SELECT w.status FROM ops.workspace_review w
                 WHERE w.organization_id=r.organization_id AND w.resource_type='QUALITY_RECORD'
-                  AND w.resource_id=r.id AND w.resource_updated_at=r.updated_at), 'NOT_SUBMITTED')
+                  AND w.resource_id=r.id AND w.resource_content_hash=
+                      ops.workspace_review_content_hash('QUALITY_RECORD',r.organization_id,r.id)), 'NOT_SUBMITTED')
             END workflow_status
             """;
     private final JdbcTemplate jdbc; private final ObjectMapper mapper;
@@ -221,6 +222,9 @@ public class QualityDataRepository implements QualityDataStore {
                   WHERE v.organization_id=r.organization_id AND v.record_id=r.id
                     AND v.change_type='PUBLISH' AND v.lock_version=r.lock_version)
             """,user,org,id,expected));
+        // A new revision must be reviewed even when its initial content is identical.
+        jdbc.update("UPDATE ops.workspace_review SET resource_content_hash=null "
+                + "WHERE organization_id=? AND resource_type='QUALITY_RECORD' AND resource_id=?",org,id);
         return record(org,id);
     }
     public UploadView insertUpload(UUID org,UUID user,UUID recordId,QualityDataService.UploadInput in){var id=UUID.randomUUID();jdbc.update("INSERT INTO quality.upload_file(id,organization_id,file_id,category_id,original_name,content_type,file_size,sha256,project_id,project_name,stage_id,stage_name,task_id,task_name,visibility,status,generated_record_id,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",id,org,in.fileId(),in.categoryId(),in.originalName(),in.contentType(),in.size(),in.sha256(),in.projectId(),in.projectName(),in.stageId(),in.stageName(),in.taskId(),in.taskName(),in.visibility(),"DRAFT_CREATED",recordId,user);return upload(org,id);}

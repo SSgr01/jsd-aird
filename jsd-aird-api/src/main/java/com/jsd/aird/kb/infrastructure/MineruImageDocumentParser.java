@@ -56,7 +56,7 @@ public final class MineruImageDocumentParser implements com.jsd.aird.kb.api.Imag
                     ? new ParseContext(null, null, null, "application/pdf", pdfBytes.length, OcrMode.ON, false)
                     : new ParseContext(context.organizationId(), context.actorId(), context.sourceFileId(),
                             "application/pdf", pdfBytes.length, OcrMode.ON, false,
-                            context.documentId(), context.documentVersionId());
+                            context.documentId(), context.documentVersionId(), context.tier());
             var parsed = pdfParser.parse(new ByteArrayInputStream(pdfBytes), pdfName(fileName), pdfContext);
             var metadata = new LinkedHashMap<>(parsed.metadata());
             metadata.put("sourceFormat", "IMAGE");

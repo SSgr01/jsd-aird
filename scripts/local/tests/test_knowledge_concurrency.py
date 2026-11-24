@@ -115,6 +115,54 @@ class KnowledgeConcurrencyTest(unittest.TestCase):
         with self.assertRaises(module.SessionExpired):
             module.sync_enrichment(Client(), {'documentId': 'doc', 'versionId': 'version'})
 
+    def test_new_files_upload_and_create_concurrently_before_waiting_for_parse(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder)
+            for name in ('a.pdf', 'b.pdf'):
+                (source / name).write_bytes(name.encode())
+            api = Mock(base_url='http://localhost')
+            api.cancelled = threading.Event()
+            api.fork.return_value = api
+            upload_barrier, create_barrier = threading.Barrier(2), threading.Barrier(2)
+            def upload(path):
+                upload_barrier.wait(10)
+                return {'fileId': path.name}
+            def request(method, path, value=None):
+                if path.endswith('/preflight'):
+                    return {'decision': 'NEW_DOCUMENT'}
+                if method == 'POST' and path.endswith('/documents'):
+                    create_barrier.wait(10)
+                    return {'id': value['fileId'], 'currentVersionId': 'version'}
+                return {}
+            api.stage_file.side_effect = upload
+            api.json.side_effect = request
+            args = SimpleNamespace(source_dir=folder, manifest=str(source / 'progress.jsonl'),
+                                   include=None, category_mode='fixed', category_id='category', dry_run=False,
+                                   username='admin', base_url='http://localhost', scope='INTERNAL',
+                                   max_in_flight=2, queue_wait_timeout_minutes=1, parse_timeout_minutes=1,
+                                   retry_failed=False, auto_approve=True, metadata_wait_seconds=0)
+            capabilities = {'maxFileBytes': 100, 'supportedExtensions': ['.pdf'],
+                            'queue': {'organizationJobLimit': 8}}
+            def sync(client, record, **kwargs):
+                record.update(metadataStatus='ACCEPTED', vectorIndexStatus='PRESENT', importStatus='COMPLETED')
+            with patch.dict(module.os.environ, {'JSD_AIRD_PASSWORD': 'secret'}), \
+                    patch.object(module, 'ApiClient', return_value=api), \
+                    patch.object(module, 'upload_capabilities', return_value=capabilities), \
+                    patch.object(module, 'queue_api_call', side_effect=lambda client, operation, *rest: operation()), \
+                    patch.object(module, 'CategoryResolver') as resolver, \
+                    patch.object(module, 'refresh_document_state', return_value={'currentVersionId': 'version'}), \
+                    patch.object(module, 'sync_document_metadata'), \
+                    patch.object(module, 'capture_parse_provenance'), \
+                    patch.object(module, 'sync_enrichment', side_effect=sync), \
+                    patch.object(module, 'finish_document', side_effect=lambda client, doc, *a, **kw: {'id': doc, 'status': 'READY'}):
+                resolver.return_value.resolve.return_value = {'id': 'category', 'name': 'category'}
+                self.assertEqual(0, module.import_directory(args))
+            api.login.assert_called_once()
+            self.assertEqual(2, api.stage_file.call_count)
+            records = module.read_manifest(source / 'progress.jsonl')
+            self.assertEqual(2, len(records))
+            self.assertTrue(all(row['importStatus'] == 'COMPLETED' for row in records.values()))
+
     def test_import_finishes_two_documents_concurrently_with_one_login(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder)

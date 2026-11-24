@@ -16,6 +16,17 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 class JdbcKnowledgeGovernanceRepositoryTest {
+    @Test void candidateAssetsCannotReplacePublishedAssetMappings() {
+        var jdbc=mock(JdbcTemplate.class); var json=new ObjectMapper();
+        var repository=new JdbcKnowledgeGovernanceRepository(jdbc,json,mock(StructuredDocumentCodec.class));
+        var diagnostic=json.createObjectNode().put("resultFileId",UUID.randomUUID().toString());
+        diagnostic.putArray("resultAssets").addObject().put("assetFileId",UUID.randomUUID().toString()).put("entryPath","images/a.png");
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(repository,"persistResultAssets",UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID(),
+                diagnostic,java.util.List.of(),true);
+        var sql=ArgumentCaptor.forClass(String.class); var args=ArgumentCaptor.forClass(Object[].class);
+        verify(jdbc).update(sql.capture(),args.capture());
+        assertThat(sql.getValue()).contains("DO NOTHING").doesNotContain("DO UPDATE");
+    }
 
     @Test
     void imageWithoutCoordinatesStoresEmptyArrayInsteadOfInvalidJson() {

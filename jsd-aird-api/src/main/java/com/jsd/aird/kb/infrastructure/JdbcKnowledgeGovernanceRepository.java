@@ -90,6 +90,23 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                                       String errorMessage, JsonNode diagnosticResult,
                                       List<DocumentParser.TextBlock> blocks,
                                       List<DocumentParser.SourceTable> sourceTables) {
+        return writeParseRun(organizationId, actorId, documentId, versionId, status, parserVersion, provider,
+                providerTaskId, errorMessage, diagnosticResult, blocks, sourceTables, false);
+    }
+
+    @Override
+    @Transactional
+    public ParseRunRow createCandidateParseRun(UUID organizationId, UUID actorId, UUID documentId, UUID versionId,
+            DocumentParser.ParsedDocument parsed, JsonNode diagnostic) {
+        return writeParseRun(organizationId, actorId, documentId, versionId, "SUCCEEDED", parsed.parserVersion(),
+                "MineruDocumentParser", parsed.providerTaskId(), null, diagnostic, parsed.blocks(), parsed.sourceTables(), true);
+    }
+
+    private ParseRunRow writeParseRun(UUID organizationId, UUID actorId, UUID documentId, UUID versionId,
+            String status, String parserVersion, String provider, String providerTaskId, String errorMessage,
+            JsonNode diagnosticResult, List<DocumentParser.TextBlock> blocks, List<DocumentParser.SourceTable> sourceTables,
+            boolean candidate) {
+        jdbc.queryForList("SELECT id FROM kb.document_version WHERE organization_id=? AND id=? FOR UPDATE", organizationId, versionId);
         var id = UUID.randomUUID();
         var runNo = jdbc.queryForObject("SELECT coalesce(max(run_no), 0) + 1 FROM kb.document_parse_run WHERE document_version_id = ?",
                 Integer.class, versionId);
@@ -117,6 +134,7 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                 """, id, organizationId, documentId, versionId, runNo, parseStatus, parserVersion, provider,
                 providerTaskId, errorMessage, json(diagnosticResult), json(initial.sourceDocument()),
                 StructuredDocumentCodec.SCHEMA_VERSION);
+        if (candidate) jdbc.update("UPDATE kb.document_parse_run SET candidate_only=true WHERE id=?", id);
         for (var source : initial.sourceNodes()) {
             jdbc.update("""
                     INSERT INTO kb.document_source_node (
@@ -130,7 +148,7 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                 insertIssue(id, source.sourceNodeKey(), "LOW_TEXT_CONFIDENCE", "WARNING", "文字识别置信度较低，请重点校对");
             }
         }
-        persistResultAssets(organizationId, documentId, versionId, diagnosticResult, initial.sourceNodes());
+        persistResultAssets(organizationId, documentId, versionId, diagnosticResult, initial.sourceNodes(), candidate);
         for (var table : safe(sourceTables)) {
             if (table.sourceBlockNo() < 0 || table.sourceBlockNo() >= initial.sourceNodes().size()) continue;
             var sourceNodeKey = initial.sourceNodes().get(table.sourceBlockNo()).sourceNodeKey();
@@ -153,7 +171,7 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                         """, tableId, cell.rowNo(), cell.columnNo(), cell.displayValue(), json(anchor));
             }
         }
-        if (!"FAILED".equals(parseStatus)) {
+        if (!"FAILED".equals(parseStatus) && !candidate) {
             var effectiveActor = actorId == null ? createdBy(documentId) : actorId;
             var basePublicationId = jdbc.query("SELECT current_publication_id FROM kb.document WHERE organization_id = ? AND id = ?",
                     (rs, ignored) -> Optional.ofNullable(rs.getObject(1, UUID.class)), organizationId, documentId)
@@ -186,6 +204,11 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
 
     private void persistResultAssets(UUID organizationId, UUID documentId, UUID versionId,
                                      JsonNode diagnosticResult, List<StructuredDocumentCodec.SourceNodeDraft> sourceNodes) {
+        persistResultAssets(organizationId, documentId, versionId, diagnosticResult, sourceNodes, false);
+    }
+    private void persistResultAssets(UUID organizationId, UUID documentId, UUID versionId,
+                                     JsonNode diagnosticResult, List<StructuredDocumentCodec.SourceNodeDraft> sourceNodes,
+                                     boolean candidate) {
         if (diagnosticResult == null || !diagnosticResult.path("resultAssets").isArray()) return;
         UUID defaultResultFileId = uuid(diagnosticResult.path("resultFileId").asText(null));
         for (var asset : diagnosticResult.path("resultAssets")) {
@@ -199,14 +222,13 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                         id, organization_id, document_id, document_version_id, result_file_id,
                         asset_file_id, entry_path, content_type, size_bytes
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (result_file_id, entry_path) DO UPDATE SET
-                        asset_file_id = EXCLUDED.asset_file_id,
-                        content_type = EXCLUDED.content_type,
-                        size_bytes = EXCLUDED.size_bytes
-                    """, UUID.randomUUID(), organizationId, documentId, versionId, resultFileId,
+                    ON CONFLICT (result_file_id, entry_path)
+                    """ + (candidate ? " DO NOTHING" : " DO UPDATE SET asset_file_id=EXCLUDED.asset_file_id, content_type=EXCLUDED.content_type, size_bytes=EXCLUDED.size_bytes"),
+                    UUID.randomUUID(), organizationId, documentId, versionId, resultFileId,
                     assetFileId, entryPath, asset.path("contentType").asText("application/octet-stream"),
                     Math.max(0L, asset.path("size").asLong(0)));
         }
+        if (candidate) return;
         for (var source : sourceNodes == null ? List.<StructuredDocumentCodec.SourceNodeDraft>of() : sourceNodes) {
             var anchor = source.sourceAnchor();
             UUID sourceResultFileId = uuid(anchor.path("resultFileId").asText(null));

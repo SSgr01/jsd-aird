@@ -9,7 +9,12 @@ import org.springframework.stereotype.Component;
 /** Native/uncooperative computation cannot retain a database connection or spawn unbounded children. */
 @Component
 public final class IsolatedProcessRunner {
-    private final BoundedGate slot=new BoundedGate(1,0);
+    private BoundedGate slot=new BoundedGate(1,0);
+    @org.springframework.beans.factory.annotation.Autowired
+    void configureCapacity(@org.springframework.beans.factory.annotation.Value("${app.worker.document-processes:1}") int processes) {
+        if (processes < 1 || processes > 32) throw new IllegalArgumentException("document-processes must be 1..32");
+        slot = new BoundedGate(processes, 0);
+    }
     private final Set<Path> activeDirectories=ConcurrentHashMap.newKeySet();
     public void run(List<String> command,Path directory,long timeoutMillis){
         var lease=slot.enter(0);Process process=null;List<ProcessHandle> children=List.of();

@@ -22,7 +22,12 @@ public interface DocumentParser {
 
     record ParseContext(UUID organizationId, UUID actorId, UUID sourceFileId,
                         String contentType, long size, OcrMode ocrMode, boolean allowAgentFallback,
-                        UUID documentId, UUID documentVersionId) {
+                        UUID documentId, UUID documentVersionId, String tier) {
+        public ParseContext(UUID organizationId, UUID actorId, UUID sourceFileId,
+                            String contentType, long size, OcrMode ocrMode, boolean allowAgentFallback,
+                            UUID documentId, UUID documentVersionId) {
+            this(organizationId, actorId, sourceFileId, contentType, size, ocrMode, allowAgentFallback, documentId, documentVersionId, null);
+        }
         public ParseContext(UUID organizationId, UUID actorId, UUID sourceFileId,
                             String contentType, long size, OcrMode ocrMode, boolean allowAgentFallback) {
             this(organizationId, actorId, sourceFileId, contentType, size, ocrMode, allowAgentFallback, null, null);

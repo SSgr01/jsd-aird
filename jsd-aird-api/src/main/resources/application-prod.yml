@@ -1,6 +1,40 @@
 spring:
+  datasource:
+    hikari:
+      maximum-pool-size: ${JSD_AIRD_DB_MAXIMUM_POOL_SIZE:32}
   flyway:
     clean-disabled: true
+
+app:
+  capacity:
+    requests: ${JSD_AIRD_CAPACITY_REQUESTS:96}
+    request-queue: ${JSD_AIRD_CAPACITY_REQUEST_QUEUE:128}
+    writes: ${JSD_AIRD_CAPACITY_WRITES:16}
+    heavy: ${JSD_AIRD_CAPACITY_HEAVY:20}
+    heavy-queue: ${JSD_AIRD_CAPACITY_HEAVY_QUEUE:64}
+    streams: ${JSD_AIRD_CAPACITY_STREAMS:48}
+    admission-millis: ${JSD_AIRD_CAPACITY_ADMISSION_MILLIS:2000}
+    heavy-millis: ${JSD_AIRD_CAPACITY_HEAVY_MILLIS:600000}
+    temporary-bytes: ${JSD_AIRD_CAPACITY_TEMPORARY_BYTES:34359738368}
+    pending-jobs: ${JSD_AIRD_CAPACITY_PENDING_JOBS:2000}
+    organization-pending-jobs: ${JSD_AIRD_CAPACITY_ORGANIZATION_PENDING_JOBS:1000}
+  worker:
+    claims-per-poll: ${JSD_AIRD_WORKER_CLAIMS_PER_POLL:16}
+    document-processes: ${JSD_AIRD_WORKER_DOCUMENT_PROCESSES:4}
+    document-process-heap-mib: ${JSD_AIRD_WORKER_DOCUMENT_PROCESS_HEAP_MIB:2048}
+    document-process-direct-mib: ${JSD_AIRD_WORKER_DOCUMENT_PROCESS_DIRECT_MIB:256}
+    document-process-metaspace-mib: ${JSD_AIRD_WORKER_DOCUMENT_PROCESS_METASPACE_MIB:256}
+    document-process-cpus: ${JSD_AIRD_WORKER_DOCUMENT_PROCESS_CPUS:2}
+    document-process-timeout: ${JSD_AIRD_WORKER_DOCUMENT_PROCESS_TIMEOUT:5m}
+    poll-delay: ${JSD_AIRD_WORKER_POLL_DELAY:500ms}
+  ai:
+    mineru:
+      provider: ${JSD_AIRD_MINERU_PROVIDER:self-hosted}
+      base-url: ${JSD_AIRD_MINERU_BASE_URL:http://127.0.0.1:8010}
+      tier: ${JSD_AIRD_MINERU_TIER:advanced}
+      default-ocr-mode: ${JSD_AIRD_MINERU_DEFAULT_OCR_MODE:ON}
+      poll-interval: ${JSD_AIRD_MINERU_POLL_INTERVAL:2s}
+      max-wait: ${JSD_AIRD_MINERU_MAX_WAIT:30m}
 
 logging:
   level:

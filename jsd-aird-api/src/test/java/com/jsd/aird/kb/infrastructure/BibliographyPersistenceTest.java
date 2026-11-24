@@ -37,7 +37,7 @@ class BibliographyPersistenceTest {
         db.table("document","id uuid PRIMARY KEY,organization_id uuid,current_version_no int DEFAULT 1,category_id uuid,created_at timestamptz DEFAULT now(),lifecycle_status text DEFAULT 'ACTIVE'");
         db.table("document_version","id uuid PRIMARY KEY,document_id uuid,file_object_id uuid,extracted_text_sha256 text,version_no int DEFAULT 1");
         db.table("file_object","id uuid PRIMARY KEY,status text");
-        db.table("parse_run","id uuid PRIMARY KEY,document_version_id uuid,status text,run_no int");
+        db.table("parse_run","id uuid PRIMARY KEY,document_version_id uuid,status text,run_no int,candidate_only boolean NOT NULL DEFAULT false");
         db.table("source_node","source_node_key uuid,parse_run_id uuid,node_no int,node_type text,raw_text text,source_anchor_jsonb jsonb");
         db.jdbc.update("INSERT INTO iam.organization VALUES (?)",org);db.jdbc.update("INSERT INTO iam.app_user VALUES (?)",owner);
         try(var conn=db.source.getConnection()) {ScriptUtils.executeSqlScript(conn,new ClassPathResource("db/migration/V99__knowledge_bibliography.sql"));}
@@ -126,7 +126,7 @@ class BibliographyPersistenceTest {
     @Test void workerKeepsHumanFieldsAndUnknownDocumentsLocalAndQuotaResumesWithoutReparsing() throws Exception {
         try(var db=database()) {
             var repo=new JdbcBibliographyRepository(db.jdbc,json);var ids=document(db,1);var doc=ids[0];var version=ids[1];var parse=UUID.randomUUID();
-            db.jdbc.update("INSERT INTO kb.document_parse_run VALUES (?,?,'SUCCEEDED',1)",parse,version);
+            db.jdbc.update("INSERT INTO kb.document_parse_run (id,document_version_id,status,run_no) VALUES (?,?,'SUCCEEDED',1)",parse,version);
             String text="Research Article\nPrecise Hydrogel Experimental Methods\nJane Smith\nPublished online: 2018\nDOI: 10.1234/hydrogel\nAbstract\nA paper.";
             db.jdbc.update("INSERT INTO kb.document_source_node VALUES (?,?,0,'heading',?,?::jsonb)",UUID.randomUUID(),parse,text,"{\"page\":1}");
             var kb=mock(KnowledgeRepository.class);var versionRow=mock(KnowledgeRepository.VersionRow.class);var docRow=mock(KnowledgeRepository.DocumentRow.class);

@@ -31,13 +31,16 @@ public class WorkspaceReviewService {
 
     public State get(String type, UUID id) {
         var actor = ActorContext.required();
-        var updatedAt = resourceUpdatedAt(type, actor.organizationId(), id, false);
-        var rows = jdbc.query("SELECT status, resource_updated_at, submitted_at, approved_at, review_comment FROM ops.workspace_review "
+        resourceUpdatedAt(type, actor.organizationId(), id, false);
+        var rows = jdbc.query("SELECT status, resource_content_hash, submitted_at, approved_at, review_comment, "
+                        + "ops.workspace_review_content_hash(resource_type,organization_id,resource_id) FROM ops.workspace_review "
                         + "WHERE organization_id=? AND resource_type=? AND resource_id=?",
-                (rs, row) -> new Stored(rs.getString(1), rs.getTimestamp(2).toInstant(),
-                        instant(rs.getTimestamp(3)), instant(rs.getTimestamp(4)), rs.getString(5)),
+                (rs, row) -> new Stored(rs.getString(1), rs.getString(2),
+                        instant(rs.getTimestamp(3)), instant(rs.getTimestamp(4)), rs.getString(5), rs.getString(6)),
                 actor.organizationId(), type, id);
-        if (rows.isEmpty() || !updatedAt.equals(rows.getFirst().updatedAt())) return new State("NOT_SUBMITTED", null, null, null);
+        if (rows.isEmpty() || rows.getFirst().contentHash() == null
+                || !rows.getFirst().contentHash().equals(rows.getFirst().currentContentHash()))
+            return new State("NOT_SUBMITTED", null, null, null);
         var row = rows.getFirst();
         return new State(row.status(), row.submittedAt(), row.approvedAt(), row.reviewComment());
     }
@@ -49,11 +52,11 @@ public class WorkspaceReviewService {
         var state = get(type, id);
         if (!"NOT_SUBMITTED".equals(state.status()) && !"REJECTED".equals(state.status()))
             throw new ApiException(ApiErrorCode.REVIEW_STATE_CONFLICT, "当前内容已提交审核");
-        jdbc.update("INSERT INTO ops.workspace_review (organization_id,resource_type,resource_id,status,resource_updated_at,submitted_by,submitted_at,approved_by,approved_at) "
-                        + "VALUES (?,?,?,'SUBMITTED',?,?,now(),null,null) ON CONFLICT (organization_id,resource_type,resource_id) "
-                        + "DO UPDATE SET status='SUBMITTED',resource_updated_at=excluded.resource_updated_at,submitted_by=excluded.submitted_by,"
+        jdbc.update("INSERT INTO ops.workspace_review (organization_id,resource_type,resource_id,status,resource_updated_at,submitted_by,resource_content_hash,submitted_at,approved_by,approved_at) "
+                        + "VALUES (?,?,?,'SUBMITTED',?,?,ops.workspace_review_content_hash(?,?,?),now(),null,null) ON CONFLICT (organization_id,resource_type,resource_id) "
+                        + "DO UPDATE SET status='SUBMITTED',resource_updated_at=excluded.resource_updated_at,resource_content_hash=excluded.resource_content_hash,submitted_by=excluded.submitted_by,"
                         + "submitted_at=now(),approved_by=null,approved_at=null,review_comment=null,rejected_by=null,rejected_at=null",
-                actor.organizationId(), type, id, Timestamp.from(updatedAt), actor.userId());
+                actor.organizationId(), type, id, Timestamp.from(updatedAt), actor.userId(), type, actor.organizationId(), id);
         event(type, id, "SUBMITTED", null);
         return get(type, id);
     }
@@ -93,6 +96,15 @@ public class WorkspaceReviewService {
             throw new ApiException(ApiErrorCode.REVIEW_REQUIRED, "当前内容须审核通过后才能发布");
     }
 
+    /** Called inside the content writer's transaction, before modifying any review content. */
+    public void requireEditable(String type, UUID id) {
+        var actor = ActorContext.required();
+        resourceUpdatedAt(type, actor.organizationId(), id, true);
+        var status = get(type, id).status();
+        if ("SUBMITTED".equals(status) || "APPROVED".equals(status))
+            throw new ApiException(ApiErrorCode.REVIEW_STATE_CONFLICT, "当前版本已提交审核，不能继续修改");
+    }
+
     private void event(String type, UUID id, String action, String comment) {
         var actor = ActorContext.required();
         jdbc.update("INSERT INTO ops.workspace_review_event (id,organization_id,resource_type,resource_id,action,comment,operator_id) VALUES (?,?,?,?,?,?,?)",
@@ -100,11 +112,20 @@ public class WorkspaceReviewService {
     }
 
     private Instant resourceUpdatedAt(String type, UUID organizationId, UUID id, boolean lock) {
+        // Knowledge writers lock the revision before the version. Use the same
+        // order so submission cannot race an in-flight body/table save.
+        if (lock && "KNOWLEDGE_VERSION".equals(type)) {
+            jdbc.query("SELECT r.id FROM kb.document_review_revision r "
+                            + "JOIN kb.document_version v ON v.id=r.document_version_id "
+                            + "JOIN kb.document d ON d.id=v.document_id "
+                            + "WHERE d.organization_id=? AND v.id=? ORDER BY r.revision_no DESC LIMIT 1 FOR UPDATE OF r",
+                    (rs, row) -> rs.getObject(1, UUID.class), organizationId, id);
+        }
         String sql = switch (type) {
             case "PROJECT_DOCUMENT" -> "SELECT d.updated_at FROM mdm.project_document d JOIN mdm.project p ON p.id=d.project_id "
                     + "WHERE p.organization_id=? AND d.id=? AND d.deleted=false AND d.status<>'ARCHIVED'";
             case "QUALITY_RECORD" -> "SELECT updated_at FROM quality.data_record WHERE organization_id=? AND id=? AND deleted=false";
-            case "PRODUCTION_ORDER" -> "SELECT updated_at FROM mfg.production_order WHERE organization_id=? AND id=? AND status='DRAFT'";
+            case "PRODUCTION_ORDER" -> "SELECT updated_at FROM mfg.production_order WHERE organization_id=? AND id=? AND status" + (lock ? "='DRAFT'" : "<>'CANCELLED'");
             case "PRODUCTION_UPLOAD" -> "SELECT updated_at FROM mfg.production_upload WHERE organization_id=? AND id=? AND status" + (lock ? "='SAVED'" : "<>'DELETED'");
             case "KNOWLEDGE_VERSION" -> "SELECT COALESCE((SELECT r.updated_at FROM kb.document_review_revision r "
                     + "WHERE r.document_version_id=v.id ORDER BY r.revision_no DESC LIMIT 1), v.updated_at) "
@@ -119,5 +140,6 @@ public class WorkspaceReviewService {
     }
 
     private static Instant instant(java.sql.Timestamp value) { return value == null ? null : value.toInstant(); }
-    private record Stored(String status, Instant updatedAt, Instant submittedAt, Instant approvedAt, String reviewComment) { }
+    private record Stored(String status, String contentHash, Instant submittedAt, Instant approvedAt, String reviewComment,
+                          String currentContentHash) { }
 }

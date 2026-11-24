@@ -453,7 +453,8 @@ public class JdbcProductionUploadRepository implements ProductionUploadRepositor
                        CASE WHEN pu.status='PUBLISHED' THEN 'PUBLISHED'
                             ELSE COALESCE((SELECT w.status FROM ops.workspace_review w
                                 WHERE w.organization_id=pu.organization_id AND w.resource_type='PRODUCTION_UPLOAD'
-                                  AND w.resource_id=pu.id AND w.resource_updated_at=pu.updated_at), 'NOT_SUBMITTED')
+                                  AND w.resource_id=pu.id AND w.resource_content_hash=
+                                      ops.workspace_review_content_hash('PRODUCTION_UPLOAD',pu.organization_id,pu.id)), 'NOT_SUBMITTED')
                        END workflow_status
                 FROM mfg.production_upload pu
                 JOIN ops.file_object fo ON fo.id = pu.file_id

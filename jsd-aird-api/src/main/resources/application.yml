@@ -6,7 +6,7 @@ spring:
     username: ${JSD_AIRD_DATASOURCE_USERNAME:jsd_aird}
     password: ${JSD_AIRD_DATASOURCE_PASSWORD:jsd_aird_dev}
     hikari:
-      maximum-pool-size: 10
+      maximum-pool-size: ${JSD_AIRD_DB_MAXIMUM_POOL_SIZE:10}
       minimum-idle: ${JSD_AIRD_DB_MINIMUM_IDLE:3}
       connection-timeout: ${JSD_AIRD_DB_CONNECTION_TIMEOUT:3000}
   flyway:
@@ -238,6 +238,12 @@ app:
       max-bytes: ${JSD_AIRD_OCR_MAX_BYTES:20971520}
     mineru:
       enabled: ${JSD_AIRD_MINERU_ENABLED:true}
+      provider: ${JSD_AIRD_MINERU_PROVIDER:cloud}
+      tier: ${JSD_AIRD_MINERU_TIER:advanced}
+      batch-size: ${JSD_AIRD_MINERU_BATCH_SIZE:8}
+      batch-concurrency: ${JSD_AIRD_MINERU_BATCH_CONCURRENCY:2}
+      batch-window: ${JSD_AIRD_MINERU_BATCH_WINDOW:500ms}
+      batch-max-bytes: ${JSD_AIRD_MINERU_BATCH_MAX_BYTES:1073741824}
       base-url: ${JSD_AIRD_MINERU_BASE_URL:https://mineru.net}
       token: ${JSD_AIRD_MINERU_TOKEN:}
       model: ${JSD_AIRD_MINERU_MODEL:vlm}

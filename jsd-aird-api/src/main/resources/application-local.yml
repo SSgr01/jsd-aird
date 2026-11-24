@@ -16,6 +16,8 @@ management:
 
 app:
   ai:
+    mineru:
+      provider: cloud
     harness:
       business-local-access: ${JSD_AIRD_BUSINESS_LOCAL_ACCESS:false}
   worker:

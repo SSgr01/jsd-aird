@@ -25,6 +25,75 @@ import org.junit.jupiter.api.Test;
 
 class MineruDocumentParserContractTest {
 
+    @Test void cloudCoalescesFilesAndMatchesResultsByDataId() throws Exception {
+        var mapper=new ObjectMapper(); var submissions=new AtomicInteger();
+        var submitted=new AtomicReference<com.fasterxml.jackson.databind.JsonNode>();
+        var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        String base="http://127.0.0.1:"+server.getAddress().getPort();
+        server.createContext("/api/v4/file-urls/batch",exchange -> {
+            var request=mapper.readTree(exchange.getRequestBody()); submitted.set(request); submissions.incrementAndGet();
+            assertThat(request.path("files")).hasSize(2);
+            json(exchange,200,"{\"code\":0,\"data\":{\"batch_id\":\"multi\",\"file_urls\":[\""+base+"/upload\",\""+base+"/upload\"]}}");
+        });
+        server.createContext("/upload",exchange -> { exchange.getRequestBody().readAllBytes(); json(exchange,200,"{}"); });
+        server.createContext("/api/v4/extract-results/batch/multi",exchange -> {
+            var root=mapper.createObjectNode().put("code",0); var results=root.putObject("data").putArray("extract_result");
+            for(int index=1;index>=0;index--) {
+                var source=submitted.get().path("files").get(index);
+                results.addObject().put("data_id",source.path("data_id").asText()).put("state","done").put("full_zip_url",base+"/result.zip");
+            }
+            json(exchange,200,root.toString());
+        });
+        server.createContext("/result.zip",exchange -> bytes(exchange,200,resultZip())); server.start();
+        var parser=parser(base,false); parser.configureDeployment("cloud","advanced",8,2,Duration.ofMillis(500),1024);
+        try(var executor=java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var first=executor.submit(() -> parser.parse(new ByteArrayInputStream(new byte[]{1}),"a.pdf"));
+            var second=executor.submit(() -> parser.parse(new ByteArrayInputStream(new byte[]{2}),"b.pdf"));
+            var one=first.get(10,java.util.concurrent.TimeUnit.SECONDS); var two=second.get(10,java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(one.providerTaskId()).isEqualTo("multi"); assertThat(two.providerTaskId()).isEqualTo("multi");
+            assertThat(one.metadata().get("remoteFileId")).isNotEqualTo(two.metadata().get("remoteFileId"));
+            assertThat(one.metadata()).containsEntry("batchFileCount",2); assertThat(submissions).hasValue(1);
+        } finally { parser.shutdownPartExecutor(); server.stop(0); }
+    }
+
+    @Test void selfHostedDoesNotRequireCloudToken() {
+        var parser=new MineruDocumentParser(true,"http://127.0.0.1:8010","","vlm",Duration.ofMillis(1),Duration.ofSeconds(2),
+                Duration.ofSeconds(2),new SystemParsingPolicy("ON",false),new ObjectMapper(),mock(FileStorageFacade.class));
+        parser.configureDeployment("self-hosted","advanced",8,2,Duration.ofMillis(5),1024);
+        try {
+            assertThat(parser.isConfigured()).isTrue(); assertThat(parser.isPreciselyConfigured()).isTrue();
+            assertThat(new MineruImageDocumentParser(parser).isConfigured()).isTrue();
+        } finally { parser.shutdownPartExecutor(); }
+    }
+
+    @Test void archiveRepairReusesPublishedImageAndMarkdownIds() throws Exception {
+        var storage=mock(FileStorageFacade.class); var mapper=new ObjectMapper();
+        var orgId=java.util.UUID.randomUUID(); var actor=java.util.UUID.randomUUID(); var resultId=java.util.UUID.randomUUID();
+        var imageId=java.util.UUID.randomUUID(); var markdownId=java.util.UUID.randomUUID(); var jsonId=java.util.UUID.randomUUID();
+        org.mockito.Mockito.when(storage.stageDerived(org.mockito.ArgumentMatchers.eq(orgId),org.mockito.ArgumentMatchers.eq(actor),
+                org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.eq("application/json"),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new FileStorageFacade.StagedFile(jsonId,"content_list.json","application/json",2,"hash","STAGED"));
+        var path=java.nio.file.Files.createTempFile("repair-assets", ".zip");
+        try(var zip=new ZipOutputStream(java.nio.file.Files.newOutputStream(path))) {
+            zip.putNextEntry(new ZipEntry("content_list.json"));
+            zip.write("[{\"type\":\"image\",\"img_path\":\"images/a.png\",\"image_caption\":[\"caption\"],\"page_idx\":0}]".getBytes(StandardCharsets.UTF_8)); zip.closeEntry();
+            zip.putNextEntry(new ZipEntry("full.md")); zip.write("markdown".getBytes(StandardCharsets.UTF_8)); zip.closeEntry();
+            zip.putNextEntry(new ZipEntry("images/a.png")); zip.write(new byte[]{1,2,3}); zip.closeEntry();
+        }
+        var parser=new MineruDocumentParser(true,"http://127.0.0.1","","vlm",Duration.ofMillis(1),Duration.ofSeconds(2),Duration.ofSeconds(2),
+                new SystemParsingPolicy("ON",false),mapper,storage);
+        try {
+            var parsed=parser.adaptArchive(path,"paper.pdf",resultId,new DocumentParser.ParseContext(orgId,actor,null,"application/pdf",1,OcrMode.ON,false),
+                    java.util.Map.of("tier","standard","markdownFileId",markdownId.toString(),"resultAssets",
+                            java.util.List.of(java.util.Map.of("entryPath","images/a.png","assetFileId",imageId.toString()))));
+            assertThat(parsed.metadata()).containsEntry("tier","standard").containsEntry("markdownFileId",markdownId.toString());
+            assertThat(parsed.blocks().getFirst().attributes()).containsEntry("assetFileId",imageId.toString());
+            org.mockito.Mockito.verify(storage,org.mockito.Mockito.times(1)).stageDerived(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any(),
+                    org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.eq("application/json"),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any());
+            org.mockito.Mockito.verify(storage).activate(jsonId);
+        } finally { parser.shutdownPartExecutor(); java.nio.file.Files.delete(path); }
+    }
+
     @Test
     void reusesPartitionBatchesEvenWhenPdfBoxSerializesPartsAgain() throws Exception {
         var submissions = new AtomicInteger();

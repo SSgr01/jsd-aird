@@ -418,8 +418,16 @@ public class StructuredDocumentCodec {
                 if (!(value instanceof Map<?, ?> cellValue)) continue;
                 var content = cellValue.get("text") == null ? "" : cellValue.get("text").toString();
                 var header = Boolean.TRUE.equals(cellValue.get("header"));
-                cells.add(tableCell(content, header, positiveInt(cellValue.get("rowSpan")),
-                        positiveInt(cellValue.get("columnSpan"))));
+                var cell = tableCell(content, header, positiveInt(cellValue.get("rowSpan")),
+                        positiveInt(cellValue.get("columnSpan")));
+                if (cellValue.get("images") instanceof List<?> images) {
+                    for (var image : images) {
+                        var node = objectMapper.createObjectNode().put("type", "image");
+                        node.set("attrs", objectMapper.valueToTree(image));
+                        ((ArrayNode) cell.path("content")).add(node);
+                    }
+                }
+                cells.add(cell);
             }
         }
         if (cells.isEmpty()) {
@@ -525,6 +533,9 @@ public class StructuredDocumentCodec {
         putIfPresent(result, "ocrText", attributes.get("ocrText"));
         putIfPresent(result, "visualType", attributes.get("visualType"));
         putIfPresent(result, "searchable", attributes.get("searchable"));
+        for (String key : List.of("originalMineruType", "recoveryReason", "extractedChartData", "derivedFromChart",
+                "continues_prev", "continues_next", "sourceBlockIndex", "cells"))
+            putIfPresent(result, key, attributes.get(key));
         if (block.sheetName() != null) {
             result.put("kind", "sheet_range").put("sheetKey", block.sheetName())
                     .put("sheetName", block.sheetName()).put("range", block.cellRange());

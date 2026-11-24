@@ -62,15 +62,34 @@ final class MineruDocumentAdapter {
     Parsed parsePrecise(Path zipPath, String fileName, UUID resultFileId,
                         Map<String, UUID> assetFileIds) {
         try (var archive = inspect(zipPath)) {
-            var contentEntry = selectContentEntry(archive.entries());
+            ZipEntry contentEntry = null;
+            for (String suffix : List.of("middle_json.json", "structured_content.json")) {
+                var candidate = archive.entries().stream().filter(e -> lower(e.getName()).endsWith(suffix)).findFirst().orElse(null);
+                if (candidate != null && MineruModernSchemaAdapter.supports(readJson(archive.zip(), candidate))) {
+                    contentEntry = candidate;
+                    break;
+                }
+            }
+            if (contentEntry == null) contentEntry = selectContentEntry(archive.entries());
             var content = readJson(archive.zip(), contentEntry);
             var layoutEntry = archive.entries().stream()
                     .filter(entry -> lower(entry.getName()).endsWith("layout.json"))
                     .findFirst().orElse(null);
             var layout = layoutEntry == null ? null : readJson(archive.zip(), layoutEntry);
+            MineruModernSchemaAdapter.Result modern = null;
+            if (MineruModernSchemaAdapter.supports(content)) {
+                modern = new MineruModernSchemaAdapter(mapper, contentEntry.getName()).convert(content);
+                layout = modern.layout();
+            }
             var pages = pages(layout);
             var contentListV2 = lower(contentEntry.getName()).endsWith("content_list_v2.json");
-            var items = flattenContent(content, contentListV2);
+            var items = mapper.createArrayNode();
+            if (modern == null) flattenContent(content, contentListV2).forEach(items::add);
+            else items.addAll(modern.items());
+            var recoveryWarnings = new ArrayList<String>();
+            if (modern == null) {
+                MineruModernSchemaAdapter.recoverReferences(items, recoveryWarnings);
+            }
             var blocks = new ArrayList<DocumentParser.TextBlock>();
             var tableIndex = 0;
             for (var item : items) {
@@ -80,7 +99,7 @@ final class MineruDocumentAdapter {
                 var page = page(pageNo, pages);
                 var bbox = normalizedPolygon(item.path("bbox"));
                 if (kind == ContentKind.TABLE) {
-                    tableIndex = appendTable(blocks, item, pageNo, page, bbox, tableIndex);
+                    tableIndex = appendTable(blocks, item, pageNo, page, bbox, tableIndex, assetFileIds);
                     continue;
                 }
                 if (kind == ContentKind.IMAGE || kind == ContentKind.CHART) {
@@ -100,6 +119,8 @@ final class MineruDocumentAdapter {
             metadata.put("pageCount", pages.size());
             metadata.put("pages", pages.stream().map(Page::metadata).toList());
             metadata.put("resultFiles", archive.entries().stream().map(ZipEntry::getName).sorted().toList());
+            if (modern != null) metadata.putAll(modern.metadata());
+            else metadata.put("completenessWarnings", recoveryWarnings);
             if (resultFileId != null) metadata.put("resultFileId", resultFileId.toString());
             return new Parsed(List.copyOf(blocks), metadata);
         } catch (MineruException exception) {
@@ -194,6 +215,7 @@ final class MineruDocumentAdapter {
         };
         var attributes = attributes(pageNo, page, bbox);
         attributes.put("mineruType", type);
+        copyProvenance(item, attributes);
         var subType = firstText(item, "sub_type");
         if (!subType.isBlank()) attributes.put("mineruSubType", subType);
         if (section.startsWith("heading-")) {
@@ -221,6 +243,7 @@ final class MineruDocumentAdapter {
         var attributes = attributes(pageNo, page, bbox);
         attributes.put("mineruType", type);
         attributes.put("visualType", chart ? "CHART" : "IMAGE");
+        copyProvenance(item, attributes);
         var subType = firstText(item, "sub_type");
         if (!subType.isBlank()) attributes.put("mineruSubType", subType);
         attributes.put("caption", caption);
@@ -277,8 +300,23 @@ final class MineruDocumentAdapter {
     }
 
     private int appendTable(List<DocumentParser.TextBlock> blocks, JsonNode item, Integer pageNo, Page page,
-                            List<Double> bbox, int tableIndex) {
-        var parsed = tableParser.parseHtml(firstText(item, "table_body", "html"));
+                            List<Double> bbox, int tableIndex, Map<String, UUID> assetFileIds) {
+        var images = new LinkedHashMap<String, Map<String, Object>>();
+        String html = firstText(item, "table_body", "html");
+        var matcher = java.util.regex.Pattern.compile("(?is)<img\\b[^>]*?\\bsrc\\s*=\\s*['\"]([^'\"]+)['\"][^>]*>").matcher(html);
+        html = matcher.replaceAll(match -> {
+            String path = normalizeEntryPath(match.group(1));
+            if (path.startsWith("/") || path.contains(":") || java.util.Arrays.asList(path.split("/")).contains(".."))
+                throw MineruException.contract("MinerU 表格图片路径无效", null);
+            String marker = "MINERUIMAGE" + images.size() + "END";
+            var image = new LinkedHashMap<String, Object>();
+            image.put("resultEntryPath", path);
+            if (assetFileIds.containsKey(path)) image.put("assetFileId", assetFileIds.get(path).toString());
+            images.put(marker, image);
+            return marker;
+        });
+        html = html.replaceAll("(?is)<eq>(.*?)</eq>", "\\$$1\\$");
+        var parsed = tableParser.parseHtml(html);
         if (parsed.isEmpty()) {
             var plain = normalizeText(firstText(item, "text", "content"));
             if (!plain.isBlank()) {
@@ -299,6 +337,16 @@ final class MineruDocumentAdapter {
         for (var table : parsed) {
             for (var row : table.rows()) {
                 var cells = cells(row, rowIndex == 0);
+                for (var cell : cells) {
+                    String text = String.valueOf(cell.get("text"));
+                    var cellImages = new ArrayList<Map<String, Object>>();
+                    for (var image : images.entrySet()) if (text.contains(image.getKey())) {
+                        text = text.replace(image.getKey(), "[图片]");
+                        cellImages.add(image.getValue());
+                    }
+                    cell.put("text", text);
+                    if (!cellImages.isEmpty()) cell.put("images", cellImages);
+                }
                 var attrs = attributes(pageNo, page, bbox);
                 attrs.put("tableGroup", group);
                 attrs.put("tableRowIndex", rowIndex);
@@ -334,6 +382,13 @@ final class MineruDocumentAdapter {
             result.add(value);
         }
         return result;
+    }
+
+    private void copyProvenance(JsonNode item, Map<String, Object> target) {
+        for (String key : List.of("providerCoordinateSpace", "originalMineruType", "recoveryReason", "listGroup",
+                "ordered", "continues_prev", "continues_next", "sourceBlockIndex", "extractedChartData", "derivedFromChart")) {
+            if (item.hasNonNull(key)) target.put(key, mapper.convertValue(item.get(key), Object.class));
+        }
     }
 
     private Map<String, Object> attributes(Integer pageNo, Page page, List<Double> bbox) {
@@ -627,7 +682,7 @@ final class MineruDocumentAdapter {
 
     private String normalizeText(String source) {
         if (source == null) return "";
-        return source.replace('\u0000', ' ').replaceAll("[\\t\\r]+", " ")
+        return source.replaceAll("[\\x00-\\x09\\x0B-\\x1F\\x7F]", " ")
                 .replaceAll("(?<=[\\p{IsHan}])\\s+(?=[\\p{IsHan}])", "")
                 .replaceAll("[ ]{2,}", " ").strip();
     }

@@ -51,6 +51,14 @@ public class PostgresWorker {
             0,2,30,TimeUnit.SECONDS,new java.util.concurrent.SynchronousQueue<>(),Thread.ofVirtual().name("aird-job-",0).factory(),new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     private com.jsd.aird.shared.resource.BoundedGate executionGate=new com.jsd.aird.shared.resource.BoundedGate(2,0);
     private com.jsd.aird.shared.resource.IsolatedProcessRunner documentProcesses;
+    private java.util.concurrent.ExecutorService dispatchExecutor;
+    private int claimsPerPoll = 5;
+    @Autowired
+    void configureDispatch(@Value("${app.worker.claims-per-poll:16}") int claims) {
+        if (claims < 1 || claims > 128) throw new IllegalArgumentException("Worker claims-per-poll must be 1..128");
+        claimsPerPoll = claims;
+        dispatchExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    }
     @Autowired(required=false)
     public void setDocumentProcesses(com.jsd.aird.shared.resource.IsolatedProcessRunner documentProcesses) { this.documentProcesses = documentProcesses; }
     @Autowired void configureCapacity(com.jsd.aird.shared.resource.CapacityProperties limits,com.jsd.aird.shared.resource.ResourceAdmission admission){
@@ -124,6 +132,7 @@ public class PostgresWorker {
     void shutdownExecutors() {
         heartbeatExecutor.shutdownNow();
         jobExecutor.shutdownNow();
+        if (dispatchExecutor != null) dispatchExecutor.shutdownNow();
         log.info("worker_offline workerId={}", workerId);
     }
 
@@ -136,8 +145,7 @@ public class PostgresWorker {
             }
             process(event.get());
         }
-        for (int index = 0; index < 5; index++) {
-            if(documentProcesses!=null && documentProcesses.active()>0)break;
+        for (int index = 0; index < claimsPerPoll; index++) {
             com.jsd.aird.shared.resource.BoundedGate.Lease slot;
             try{slot=executionGate.enter(0);}catch(com.jsd.aird.shared.error.ApiException busy){break;}
             java.util.Optional<WorkRepository.AsyncJob> job;
@@ -146,7 +154,16 @@ public class PostgresWorker {
                 slot.close();
                 break;
             }
-            process(job.get(),slot);
+            if (dispatchExecutor == null) process(job.get(), slot);
+            else {
+                var claimed = job.get();
+                try { dispatchExecutor.submit(() -> process(claimed, slot)); }
+                catch (java.util.concurrent.RejectedExecutionException shuttingDown) {
+                    slot.close();
+                    workRepository.deferClaimedJob(claimed);
+                    break;
+                }
+            }
         }
     }
 
@@ -252,7 +269,7 @@ public class PostgresWorker {
 
     private Duration timeoutFor(WorkRepository.AsyncJob job) {
         if (Set.of("KB_INGEST_DOCUMENT", "KB_BUILD_KNOWLEDGE_INDEX", "KB_BUILD_KNOWLEDGE_VECTOR",
-                "KB_REBUILD_PUBLISHED_INDEX").contains(job.jobType())) return knowledgeJobTimeout;
+                "KB_REBUILD_PUBLISHED_INDEX", "KB_REPAIR_PARSE").contains(job.jobType())) return knowledgeJobTimeout;
         return Set.of("AI_MODEL_TRAIN_V2", "AI_FORMULA_DESIGN_V2", "AI_EXPERIMENT_OPTIMIZATION_V2")
                 .contains(job.jobType())
                 ? formulaModelBuildTimeout : jobTimeout;

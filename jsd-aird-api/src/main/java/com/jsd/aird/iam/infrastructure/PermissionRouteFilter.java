@@ -600,6 +600,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         }
 
         if (path.startsWith("/api/v1/knowledge")) {
+            if (path.startsWith("/api/v1/knowledge/parse-repairs"))
+                return permission(read ? "knowledge.view" : "knowledge.update", "KNOWLEDGE", read ? "READ" : "WRITE");
             if (path.equals("/api/v1/knowledge/search") || path.equals("/api/v1/knowledge/assistant"))
                 return permission("ai.use", "KNOWLEDGE", "WRITE");
             if (path.startsWith("/api/v1/knowledge/upload-tasks")) {
@@ -819,6 +821,8 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         // scope target.
         if (categoryModule(path) != null) return null;
         if (path.startsWith("/api/v1/crm/")) return null;
+        // Repair ids identify candidates; the service authorizes their underlying document.
+        if (path.startsWith("/api/v1/knowledge/parse-repairs")) return null;
         var customerMatcher = java.util.regex.Pattern.compile("/api/v1/business-partners/([0-9a-fA-F-]{36})(?:/|$)").matcher(path);
         if (customerMatcher.find()) return UUID.fromString(customerMatcher.group(1));
         var dataSourceMatcher = java.util.regex.Pattern.compile("/api/v1/data/sources/([0-9a-fA-F-]{36})(?:/|$)").matcher(path);

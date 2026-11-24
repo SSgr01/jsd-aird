@@ -22,7 +22,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -73,9 +72,40 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
     private final PdfOcrDecider ocrDecider = new PdfOcrDecider();
     private final PdfPartitioner pdfPartitioner = new PdfPartitioner();
     private MineruTaskStore taskStore;
+    private String provider = "cloud", tier = "advanced";
+    private int batchSize = 1, batchConcurrency = 2;
+    private Duration batchWindow = Duration.ofMillis(500), httpTimeout;
+    private long batchBytes = 1024L * 1024 * 1024;
+    private MineruBatcher batcher;
+    @org.springframework.beans.factory.annotation.Autowired
+    void configureDeployment(@Value("${app.ai.mineru.provider:cloud}") String provider,
+            @Value("${app.ai.mineru.tier:advanced}") String tier,
+            @Value("${app.ai.mineru.batch-size:8}") int batchSize,
+            @Value("${app.ai.mineru.batch-concurrency:2}") int concurrency,
+            @Value("${app.ai.mineru.batch-window:500ms}") Duration window,
+            @Value("${app.ai.mineru.batch-max-bytes:1073741824}") long bytes) {
+        if (!Set.of("cloud", "self-hosted").contains(provider) || !Set.of("flash", "basic", "standard", "advanced").contains(tier))
+            throw new IllegalArgumentException("Invalid MinerU provider/tier");
+        if (batchSize < 1 || batchSize > 100 || concurrency < 1 || concurrency > 16 || bytes < 1 || window.isNegative())
+            throw new IllegalArgumentException("Invalid MinerU batch configuration");
+        this.provider = provider; this.tier = tier; this.batchSize = batchSize;
+        this.batchConcurrency = concurrency; this.batchWindow = window; this.batchBytes = bytes;
+        if (selfHosted()) {
+            int parts = Math.min(32, batchSize * concurrency);
+            precisePartExecutor.setMaximumPoolSize(Math.max(2, parts));
+            precisePartExecutor.setCorePoolSize(Math.max(2, parts));
+        }
+    }
+    private boolean selfHosted() { return "self-hosted".equals(provider); }
+    private synchronized MineruBatcher batcher() {
+        if (batcher == null) batcher = new MineruBatcher(batchSize, batchConcurrency, batchWindow,
+                maxWait.plus(httpTimeout.multipliedBy(batchSize + 2L)), batchBytes,
+                selfHosted() ? new MineruTasksClient(baseUrl, mapper, pollInterval, maxWait, httpTimeout, taskStore)::parseBatch : this::parseCloudBatch);
+        return batcher;
+    }
     @org.springframework.beans.factory.annotation.Autowired
     public void setTaskStore(MineruTaskStore taskStore) { this.taskStore = taskStore; }
-    private final ExecutorService precisePartExecutor = Executors.newFixedThreadPool(2,
+    private final java.util.concurrent.ThreadPoolExecutor precisePartExecutor = (java.util.concurrent.ThreadPoolExecutor) Executors.newFixedThreadPool(2,
             Thread.ofPlatform().daemon().name("mineru-part-", 0).factory());
 
     public MineruDocumentParser(
@@ -96,6 +126,7 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
         this.model = StringUtils.hasText(model) ? model.strip() : "vlm";
         this.pollInterval = pollInterval == null ? Duration.ofSeconds(3) : pollInterval;
         this.maxWait = maxWait == null ? Duration.ofMinutes(15) : maxWait;
+        this.httpTimeout = httpTimeout;
         this.systemParsingPolicy = systemParsingPolicy;
         this.mapper = mapper;
         this.storage = storage;
@@ -109,14 +140,14 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
 
     @PostConstruct
     void logConfiguration() {
-        log.info("MinerU configuration: enabled={}, preciseConfigured={}, fallbackCapability={}, defaultOcrMode={}",
-                enabled, StringUtils.hasText(token), systemParsingPolicy.agentFallbackEnabled(),
-                systemParsingPolicy.defaultOcrMode());
+        log.info("MinerU configuration: enabled={} provider={} preciseConfigured={} tier={} batchSize={} batchConcurrency={} defaultOcrMode={}",
+                enabled, provider, isPreciselyConfigured(), tier, batchSize, batchConcurrency, systemParsingPolicy.defaultOcrMode());
     }
 
     @PreDestroy
     void shutdownPartExecutor() {
         precisePartExecutor.shutdownNow();
+        if (batcher != null) batcher.close();
     }
 
     @Override
@@ -128,12 +159,12 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
 
     @Override
     public boolean isConfigured() {
-        return enabled && (StringUtils.hasText(token) || systemParsingPolicy.agentFallbackEnabled());
+        return enabled && (selfHosted() || StringUtils.hasText(token) || systemParsingPolicy.agentFallbackEnabled());
     }
 
     /** Image OCR is always routed through the precise MinerU endpoint; Agent fallback is not used. */
     public boolean isPreciselyConfigured() {
-        return enabled && StringUtils.hasText(token);
+        return enabled && (selfHosted() || StringUtils.hasText(token));
     }
 
     public String preciseUnavailableReason() {
@@ -162,12 +193,12 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
             Files.copy(source, sourceFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             var decision = ocrDecider.decide(sourceFile, policy);
             MineruException preciseFailure = null;
-            if (StringUtils.hasText(token)) {
+            if (isPreciselyConfigured()) {
                 try {
                     return parsePrecise(sourceFile, fileName, context, policy, decision);
                 } catch (MineruException exception) {
                     preciseFailure = exception;
-                    if (!(allowFallback && systemParsingPolicy.agentFallbackEnabled()
+                    if (selfHosted() || !(allowFallback && systemParsingPolicy.agentFallbackEnabled()
                             && exception.fallbackEligible())) throw exception;
                     log.warn("MinerU precise provider unavailable; explicit Agent fallback enabled: fileName={} taskId={} reason={}",
                             fileName, exception.taskId(), safeMessage(exception));
@@ -195,7 +226,7 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
     /** Submit original PPT/PPTX bytes without PDF inspection, splitting, or Agent fallback. */
     ParsedDocument parsePresentation(InputStream source, String fileName, ParseContext context) {
         if (!isPreciselyConfigured()) {
-            throw MineruException.contract("PPT/PPTX 解析需要启用 MinerU 并配置精准接口 Token", null);
+            throw MineruException.contract("PPT/PPTX 解析需要启用 MinerU，并配置自部署服务或云端 Token", null);
         }
         if (context != null && context.size() > MAX_PRESENTATION_BYTES) {
             throw MineruException.contract("PPT/PPTX 超过 MinerU 精准接口 200 MB 限制，请拆分后上传", null);
@@ -250,6 +281,10 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
                         + part.index() + ":" + part.sourceStartPage() + ":" + part.sourceEndPage()).getBytes(StandardCharsets.UTF_8)));
                 return parsePreciseSingle(part.path(), partName, context, requestedMode, decision, partKey);
             }, precisePartExecutor)).toList();
+            // Keep part files alive until every submitted parse has settled, even when
+            // an earlier part fails. Other batches may still be reading their sources.
+            CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new))
+                    .handle((ignored, error) -> null).join();
             var parsedParts = new ArrayList<ParsedDocument>(futures.size());
             for (var future : futures) {
                 try { parsedParts.add(future.join()); }
@@ -280,6 +315,22 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
 
     private ParsedDocument parsePreciseSingle(Path sourceFile, String fileName, ParseContext context,
                                               OcrMode requestedMode, PdfOcrDecider.Decision decision, String key) {
+        if (selfHosted() || batchSize > 1) {
+            boolean nativeDocument = fileName.toLowerCase(Locale.ROOT).matches(".*\\.(ppt|pptx|doc|docx|xls|xlsx)$");
+            String requestedTier = selfHosted() && context != null && context.tier() != null ? context.tier() : tier;
+            String versionKey = MineruTasksClient.fingerprint(key + "|" + provider + "|" + requestedTier + "|" + requestedMode);
+            String resumeGroup = null;
+            if (taskStore != null && context != null && context.documentVersionId() != null) {
+                var saved = taskStore.find(context.organizationId(), context.documentVersionId(), versionKey).orElse(null);
+                String endpoint = MineruTasksClient.fingerprint(selfHosted() ? baseUrl + "/" : baseUrl);
+                if (saved != null && provider.equals(saved.provider()) && endpoint.equals(saved.endpointFingerprint())
+                        && !Set.of("failed", "error", "canceled").contains(saved.state())) resumeGroup = saved.batchId();
+            }
+            var result = batcher().submit(new MineruBatcher.Request(sourceFile, safeFileName(fileName), context,
+                    versionKey, requestedTier, selfHosted() ? requestedMode : (decision.useOcr() ? OcrMode.ON : OcrMode.OFF), nativeDocument, resumeGroup));
+            try { return adaptDownloaded(result, fileName, context, requestedMode, decision); }
+            finally { deleteQuietly(result.zip()); }
+        }
         var durable = taskStore != null && context != null && context.documentVersionId() != null;
         var checkpoint = durable ? taskStore.find(context.organizationId(), context.documentVersionId(), key).orElse(null) : null;
         // Old releases saved a remote id only on timeout. A split PDF's single id cannot identify its parts.
@@ -335,9 +386,9 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
             withRetry(() -> { download(zipUrl, target, batchId); return null; });
             var resultFileId = persistResult(context, fileName, ".mineru.zip", "application/zip",
                     "KB_MINERU_RESULT", resultFile);
-            var adapted = adapter.parsePrecise(resultFile, fileName, resultFileId, Map.of());
             var artifacts = persistZipArtifacts(context, fileName, resultFile, resultFileId);
-            var blocks = attachAssetFileIds(adapted.blocks(), artifacts.assetFileIds());
+            var adapted = adapter.parsePrecise(resultFile, fileName, resultFileId, artifacts.assetFileIds());
+            var blocks = adapted.blocks();
             var metadata = baseMetadata(adapted.metadata(), requestedMode, decision);
             metadata.put("taskId", batchId);
             metadata.put("modelVersion", model);
@@ -350,6 +401,169 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
             throw MineruException.adapter("MinerU 结果临时文件处理失败", exception);
         } finally {
             deleteQuietly(resultFile);
+        }
+    }
+
+    @Override
+    public ParsedDocument adaptArchive(Path zip, String name, UUID resultFileId, ParseContext context,
+                                        Map<String, Object> provenance) {
+        adapter.parsePrecise(zip, name, resultFileId, Map.of());
+        var existingAssets = new LinkedHashMap<String, UUID>();
+        if (provenance.get("resultAssets") instanceof List<?> assets) for (var value : assets) {
+            if (value instanceof Map<?, ?> asset && asset.get("entryPath") != null && asset.get("assetFileId") != null) {
+                try { existingAssets.put(String.valueOf(asset.get("entryPath")), UUID.fromString(String.valueOf(asset.get("assetFileId")))); }
+                catch (IllegalArgumentException ignored) { }
+            }
+        }
+        UUID existingMarkdown = null;
+        try { if (provenance.get("markdownFileId") != null) existingMarkdown = UUID.fromString(String.valueOf(provenance.get("markdownFileId"))); }
+        catch (IllegalArgumentException ignored) { }
+        var artifacts = persistZipArtifacts(context, name, zip, resultFileId, existingAssets, existingMarkdown);
+        var adapted = adapter.parsePrecise(zip, name, resultFileId, artifacts.assetFileIds());
+        var metadata = new LinkedHashMap<String, Object>(provenance);
+        metadata.putAll(adapted.metadata());
+        metadata.put("repairSource", "EXISTING_ZIP");
+        metadata.put("mode", "ARCHIVE_REPAIR");
+        metadata.put("resultAssets", artifacts.assets());
+        if (resultFileId != null) metadata.put("resultFileId", resultFileId.toString());
+        if (artifacts.markdownFileId() != null) metadata.put("markdownFileId", artifacts.markdownFileId().toString());
+        return new ParsedDocument(adapted.blocks(), "mineru-structured-v3", String.valueOf(provenance.getOrDefault("taskId", "archive")), metadata);
+    }
+
+    private ParsedDocument adaptDownloaded(MineruTasksClient.Downloaded result, String name, ParseContext context,
+                                            OcrMode mode, PdfOcrDecider.Decision decision) {
+        var resultFileId = persistResult(context, name, ".mineru.zip", "application/zip", "KB_MINERU_RESULT", result.zip());
+        // Validate the entire ZIP before persisting any embedded artifacts.
+        adapter.parsePrecise(result.zip(), name, resultFileId, Map.of());
+        var artifacts = persistZipArtifacts(context, name, result.zip(), resultFileId);
+        var adapted = adapter.parsePrecise(result.zip(), name, resultFileId, artifacts.assetFileIds());
+        var metadata = baseMetadata(adapted.metadata(), mode, decision);
+        metadata.putAll(result.metadata());
+        metadata.put("taskId", result.taskId()); metadata.put("mode", "PRECISE");
+        if (resultFileId != null) metadata.put("resultFileId", resultFileId.toString());
+        if (artifacts.markdownFileId() != null) metadata.put("markdownFileId", artifacts.markdownFileId().toString());
+        metadata.put("resultAssets", artifacts.assets());
+        return new ParsedDocument(adapted.blocks(), "mineru-structured-v3", result.taskId(), metadata, List.of());
+    }
+
+    private Task batchCheckpoint(MineruBatcher.Item input) {
+        var c = input.request.context();
+        if (taskStore == null || c == null || c.documentVersionId() == null) return null;
+        var saved = taskStore.find(c.organizationId(), c.documentVersionId(), input.request.key()).orElse(null);
+        return saved != null && provider.equals(saved.provider())
+                && MineruTasksClient.fingerprint(baseUrl).equals(saved.endpointFingerprint()) ? saved : null;
+    }
+    private void saveBatchCheckpoint(MineruBatcher.Item input, Task task) {
+        var c = input.request.context();
+        if (taskStore != null && c != null && c.documentVersionId() != null)
+            taskStore.save(c.organizationId(), c.documentVersionId(), input.request.key(), task);
+    }
+    private Task cloudCheckpoint(String id, String uploadUrl, boolean uploaded, String state, String fileId) {
+        return new Task(id, uploadUrl, uploaded, state, "cloud", MineruTasksClient.fingerprint(baseUrl), fileId, Map.of());
+    }
+    private void parseCloudBatch(List<MineruBatcher.Item> inputs) {
+        var fresh = new ArrayList<MineruBatcher.Item>();
+        var groups = new LinkedHashMap<String, List<MineruBatcher.Item>>();
+        var saved = new HashMap<MineruBatcher.Item, Task>();
+        for (var input : inputs) {
+            try {
+                var checkpoint = batchCheckpoint(input);
+                if (checkpoint != null && Set.of("submitting", "submission-unknown").contains(checkpoint.state()))
+                    throw MineruException.contract("上次云端批次提交结果不明确，请核对远程任务后恢复", checkpoint.batchId());
+                if (checkpoint == null || Set.of("failed", "error").contains(checkpoint.state())) { fresh.add(input); continue; }
+                try { ensureOk(get("/api/v4/extract-results/batch/" + checkpoint.batchId(), true, checkpoint.batchId()), "查询云端批次失败", checkpoint.batchId()); }
+                catch (MineruException error) {
+                    if (error.httpStatus() != null && (error.httpStatus() == 404 || error.httpStatus() == 410)) { fresh.add(input); continue; }
+                    throw error;
+                }
+                saved.put(input, checkpoint);
+                groups.computeIfAbsent(checkpoint.batchId(), ignored -> new ArrayList<>()).add(input);
+            } catch (RuntimeException error) { input.fail(error); }
+        }
+        for (var group : groups.entrySet()) {
+            try { pollCloudBatch(group.getKey(), group.getValue(), saved); }
+            catch (RuntimeException error) { group.getValue().forEach(i -> i.fail(error)); }
+        }
+        if (fresh.isEmpty()) return;
+        try {
+            var request = new LinkedHashMap<String, Object>();
+            var files = new ArrayList<Map<String, Object>>();
+            for (var input : fresh) {
+                String dataId = UUID.randomUUID().toString();
+                var checkpoint = cloudCheckpoint("", null, false, "submitting", dataId);
+                saved.put(input, checkpoint); saveBatchCheckpoint(input, checkpoint);
+                files.add(Map.of("name", MineruTasksClient.wireName(input), "data_id", dataId,
+                        "is_ocr", input.request.mode() == OcrMode.ON));
+            }
+            request.put("files", files); request.put("model_version", model); request.put("language", "ch");
+            request.put("enable_formula", true); request.put("enable_table", true);
+            JsonNode submitted;
+            try {
+                // POST has no automatic retry: a lost response can already represent an accepted batch.
+                submitted = post("/api/v4/file-urls/batch", request, true, null);
+                ensureOk(submitted, "MinerU 云端批次提交失败", null);
+            } catch (MineruException error) {
+                String state = error.httpStatus() != null && error.httpStatus() >= 400 && error.httpStatus() < 500 ? "failed" : "submission-unknown";
+                for (var input : fresh) saveBatchCheckpoint(input, cloudCheckpoint("", null, false, state, saved.get(input).remoteFileId()));
+                throw error;
+            }
+            String id = submitted.path("data").path("batch_id").asText();
+            log.info("MinerU cloud batch submitted: batchId={} files={}", id, fresh.size());
+            var urls = submitted.path("data").path("file_urls");
+            if (id.isBlank() || !urls.isArray() || urls.size() != fresh.size()) throw MineruException.contract("云端批次上传地址数量不匹配", id);
+            for (int index = 0; index < fresh.size(); index++) {
+                var input = fresh.get(index);
+                var checkpoint = cloudCheckpoint(id, urls.get(index).asText(), false, "waiting-file", saved.get(input).remoteFileId());
+                saved.put(input, checkpoint); saveBatchCheckpoint(input, checkpoint);
+            }
+            pollCloudBatch(id, fresh, saved);
+        } catch (RuntimeException error) { fresh.forEach(i -> i.fail(error)); }
+    }
+    private void pollCloudBatch(String id, List<MineruBatcher.Item> inputs, Map<MineruBatcher.Item, Task> saved) {
+        var remaining = new ArrayList<MineruBatcher.Item>();
+        for (var input : inputs) {
+            try {
+                var checkpoint = saved.get(input);
+                if (!checkpoint.uploaded()) {
+                    var pending = checkpoint;
+                    withRetry(() -> { upload(pending.uploadUrl(), input.request.file(), id); return null; });
+                    checkpoint = cloudCheckpoint(id, null, true, "pending", checkpoint.remoteFileId());
+                    saved.put(input, checkpoint); saveBatchCheckpoint(input, checkpoint);
+                }
+                remaining.add(input);
+            } catch (RuntimeException error) { input.fail(error); }
+        }
+        long deadline = System.nanoTime() + maxWait.toNanos();
+        while (!remaining.isEmpty()) {
+            var response = withRetry(() -> { var r = get("/api/v4/extract-results/batch/" + id, true, id); ensureOk(r, "云端批次轮询失败", id); return r; });
+            for (var iterator = remaining.iterator(); iterator.hasNext();) {
+                var input = iterator.next();
+                try {
+                    JsonNode found = null;
+                    for (var result : response.path("data").path("extract_result")) {
+                        if (saved.get(input).remoteFileId().equals(result.path("data_id").asText())) {
+                            if (found != null) throw MineruException.contract("云端返回重复 data_id", id);
+                            found = result;
+                        }
+                    }
+                    if (found == null) continue;
+                    String state = found.path("state").asText();
+                    saveBatchCheckpoint(input, cloudCheckpoint(id, null, true, state, saved.get(input).remoteFileId()));
+                    if (Set.of("failed", "error").contains(state)) throw taskFailure("MinerU 文件解析失败：" + found.path("err_msg").asText(), id);
+                    if (!state.equals("done")) continue;
+                    Path zip = Files.createTempFile("mineru-cloud-batch-", ".zip");
+                    String url = found.path("full_zip_url").asText();
+                    try {
+                        withRetry(() -> { download(url, zip, id); return null; });
+                        input.success(new MineruTasksClient.Downloaded(zip, id, Map.of("provider", "cloud", "modelVersion", model,
+                                "batchFileCount", inputs.size(), "remoteFileId", saved.get(input).remoteFileId())));
+                    } catch (Throwable error) { deleteQuietly(zip); throw error; }
+                    iterator.remove();
+                } catch (Exception error) { input.fail(error); iterator.remove(); }
+            }
+            if (remaining.isEmpty()) return;
+            if (System.nanoTime() >= deadline) throw new MineruException("MinerU 云端批次等待超时", null, "TIMEOUT", id, true, false, null);
+            pause();
         }
     }
 
@@ -576,6 +790,10 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
 
     private ZipArtifacts persistZipArtifacts(ParseContext context, String fileName, Path zipPath,
                                              UUID resultFileId) {
+        return persistZipArtifacts(context, fileName, zipPath, resultFileId, Map.of(), null);
+    }
+    private ZipArtifacts persistZipArtifacts(ParseContext context, String fileName, Path zipPath,
+                                             UUID resultFileId, Map<String, UUID> existingAssets, UUID existingMarkdown) {
         if (context == null || context.organizationId() == null || context.actorId() == null) {
             return new ZipArtifacts(Map.of(), null, List.of());
         }
@@ -584,7 +802,7 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
         var seenPaths = new HashSet<String>();
         var totalBytes = 0L;
         var entryCount = 0;
-        UUID markdownFileId = null;
+        UUID markdownFileId = existingMarkdown;
         try (var archive = new ZipFile(zipPath.toFile())) {
             var entries = archive.entries();
             while (entries.hasMoreElements()) {
@@ -608,7 +826,8 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
                     throw MineruException.contract("MinerU 结果压缩比超过安全限制", null);
                 }
                 var lower = path.toLowerCase(Locale.ROOT);
-                if (markdownFileId == null && (lower.equals("full.md") || lower.endsWith("/full.md"))) {
+                if (markdownFileId == null && (lower.equals("full.md") || lower.endsWith("/full.md")
+                        || lower.equals("markdown.md") || lower.endsWith("/markdown.md"))) {
                     try (var input = archive.getInputStream(entry)) {
                         markdownFileId = persistDerivedStream(context, derivedFileName(fileName, ".mineru.full.md"),
                                 "text/markdown", "KB_MINERU_MARKDOWN_RESULT", input).fileId();
@@ -616,21 +835,25 @@ public final class MineruDocumentParser implements com.jsd.aird.kb.api.PreciseDo
                     continue;
                 }
                 var contentType = imageContentType(lower);
+                if (lower.endsWith(".json")) contentType = "application/json";
                 if (contentType == null) continue;
                 if (size > MineruDocumentAdapter.MAX_ENTRY_BYTES) {
                     throw MineruException.contract("MinerU 图片 entry 超过 128 MiB", null);
                 }
-                try (var input = archive.getInputStream(entry)) {
-                    var staged = persistDerivedStream(context,
-                            derivedFileName(fileName, ".mineru." + basename(path)), contentType,
-                            "KB_MINERU_RESULT_ASSET", input);
-                    var assetId = staged.fileId();
+                {
+                    var assetId = existingAssets.get(path);
+                    long storedSize = size;
+                    if (assetId == null) try (var input = archive.getInputStream(entry)) {
+                        var staged = persistDerivedStream(context, derivedFileName(fileName, ".mineru." + basename(path)),
+                                contentType, "KB_MINERU_RESULT_ASSET", input);
+                        assetId = staged.fileId(); storedSize = staged.size();
+                    }
                     assetIds.put(path, assetId);
                     var asset = new LinkedHashMap<String, Object>();
                     asset.put("assetFileId", assetId.toString());
                     asset.put("entryPath", path);
                     asset.put("contentType", contentType);
-                    asset.put("size", staged.size());
+                    asset.put("size", storedSize);
                     if (resultFileId != null) asset.put("resultFileId", resultFileId.toString());
                     assets.add(Map.copyOf(asset));
                 }

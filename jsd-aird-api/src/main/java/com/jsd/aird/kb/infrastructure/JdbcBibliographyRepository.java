@@ -109,7 +109,7 @@ public class JdbcBibliographyRepository implements BibliographyRepository {
             SELECT r.id,v.extracted_text_sha256 FROM kb.document_parse_run r
             JOIN kb.document_version v ON v.id=r.document_version_id
             JOIN kb.document d ON d.id=v.document_id
-            WHERE d.organization_id=? AND d.id=? AND v.id=? AND r.status='SUCCEEDED'
+            WHERE d.organization_id=? AND d.id=? AND v.id=? AND r.status='SUCCEEDED' AND NOT r.candidate_only
             ORDER BY r.run_no DESC LIMIT 1
             """, (rs,n) -> new Source(rs.getObject(1,UUID.class),rs.getString(2),List.of()),org,doc,version);
         if (runs.isEmpty()) return new Source(null,null,List.of());

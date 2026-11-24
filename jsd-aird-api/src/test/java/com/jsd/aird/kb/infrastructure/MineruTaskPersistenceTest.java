@@ -21,6 +21,9 @@ class MineruTaskPersistenceTest {
             db.table("parse_run", "organization_id uuid, document_version_id uuid, provider text, provider_task_id text, error_message text, result_jsonb jsonb DEFAULT '{\"requestedOcrMode\":\"AUTO\"}', created_at timestamptz DEFAULT now()");
             try (var connection = db.source.getConnection()) {
                 ScriptUtils.executeSqlScript(connection, new ClassPathResource("db/migration/V120__mineru_task_checkpoints.sql"));
+                var migration = new ClassPathResource("db/migration/V123__mineru_self_hosted_and_parse_repair.sql").getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+                ScriptUtils.executeSqlScript(connection, new org.springframework.core.io.ByteArrayResource(
+                        migration.substring(0, migration.indexOf("-- A candidate")).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
             }
             var org = UUID.randomUUID(); var version = UUID.randomUUID();
             db.jdbc.update("INSERT INTO iam.organization VALUES (?)", org);

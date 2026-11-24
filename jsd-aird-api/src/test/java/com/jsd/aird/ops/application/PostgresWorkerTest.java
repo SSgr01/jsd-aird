@@ -21,6 +21,25 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 
 class PostgresWorkerTest {
+    @Test void dispatchesIndependentJobsBeforeTheFirstOneFinishes() throws Exception {
+        var repository=mock(WorkRepository.class); var mapper=new ObjectMapper(); var handler=mock(AsyncJobHandler.class);
+        var started=new java.util.concurrent.CountDownLatch(2); var release=new java.util.concurrent.CountDownLatch(1);
+        var first=new WorkRepository.AsyncJob(UUID.randomUUID(),"PARSE",mapper.createObjectNode(),1,5);
+        var second=new WorkRepository.AsyncJob(UUID.randomUUID(),"PARSE",mapper.createObjectNode(),1,5);
+        when(repository.claimOutbox(any(),any())).thenReturn(Optional.empty());
+        when(repository.claimJob(any(),any())).thenReturn(Optional.of(first),Optional.of(second),Optional.empty());
+        when(handler.supports("PARSE")).thenReturn(true);
+        when(handler.handle(any(),any())).thenAnswer(i -> { started.countDown(); release.await(); return mapper.createObjectNode(); });
+        var worker=new PostgresWorker(repository,mock(FileObjectRepository.class),mapper,List.of(handler),"parallel",Duration.ofSeconds(30));
+        worker.configureDispatch(16);
+        try {
+            java.util.concurrent.CompletableFuture.runAsync(worker::poll).get(2,java.util.concurrent.TimeUnit.SECONDS);
+            org.assertj.core.api.Assertions.assertThat(started.await(2,java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            release.countDown();
+            verify(repository,timeout(2000)).completeClaimedJob(org.mockito.ArgumentMatchers.eq(first),any());
+            verify(repository,timeout(2000)).completeClaimedJob(org.mockito.ArgumentMatchers.eq(second),any());
+        } finally { release.countDown(); worker.shutdownExecutors(); }
+    }
     @Test void knowledgeJobsHaveTheirOwnTimeoutWithoutExtendingOtherJobs() {
         var mapper = new ObjectMapper();
         var worker = new PostgresWorker(mock(WorkRepository.class), mock(FileObjectRepository.class), mapper,

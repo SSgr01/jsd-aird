@@ -31,6 +31,7 @@ class IsolatedDocumentTasksTest {
         var space = new TemporarySpace(8L * 1024 * 1024 * 1024, directory);
         var runner = new IsolatedProcessRunner();
         var tasks = new IsolatedDocumentTasks(new ObjectMapper().findAndRegisterModules(), space, runner);
+        tasks.configureProcess(2048, 256, 256, 2, java.time.Duration.ofMinutes(5));
         byte[] bytes;
         try (var document = new XWPFDocument(); var output = new ByteArrayOutputStream()) {
             document.createParagraph().createRun().setText("开发服务 Word 验证");

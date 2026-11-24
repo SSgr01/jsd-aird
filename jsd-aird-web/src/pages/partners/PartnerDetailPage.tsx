@@ -354,7 +354,7 @@ export function PartnerDetailPage() {
         <label>合作状态<Select value={partner.cooperationStatus ?? '潜在客户'} options={cooperationStatuses.map((value) => ({ value }))} onChange={(value) => setPartner({ ...partner, cooperationStatus: value })} /></label>
         <label>所在地区<Input value={partner.address ?? ''} maxLength={30} showCount onChange={(e) => setPartner({ ...partner, address: e.target.value })} /></label>
       </div>
-      <label className="cm-block-field">主营业务<Input.TextArea rows={4} value={partner.mainBusiness ?? ''} maxLength={200} showCount onChange={(e) => setPartner({ ...partner, mainBusiness: e.target.value })} /></label>
+      <label className="cm-full-field">公司介绍<Input.TextArea rows={4} value={partner.mainBusiness ?? ''} maxLength={200} showCount onChange={(e) => setPartner({ ...partner, mainBusiness: e.target.value })} /></label>
       <div className="cm-edit-divider"><span>拓展字段</span></div>
       <div className="cm-custom-fields">
         {extFields.map((field, index) => (

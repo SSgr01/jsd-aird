@@ -301,8 +301,8 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
                 <Input placeholder="请输入所在地区" maxLength={30} showCount />
               </Form.Item>
             </div>
-            <Form.Item name="business" label="主营业务" rules={[{ max: 200, message: '主营业务不能超过200个字' }]}>
-              <Input.TextArea rows={3} placeholder="请输入主营业务" maxLength={200} showCount />
+            <Form.Item name="business" label="公司介绍" rules={[{ max: 200, message: '公司介绍不能超过200个字' }]}>
+              <Input.TextArea rows={3} placeholder="请输入公司介绍" maxLength={200} showCount />
             </Form.Item>
           </Form>
           <CustomFieldEditor fields={partnerFields} onChange={setPartnerFields} />

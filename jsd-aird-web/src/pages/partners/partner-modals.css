@@ -183,6 +183,10 @@
   color: var(--app-text-secondary);
   font-size: 12px;
 }
+.cm-modal-panel > label.cm-full-field {
+  color: inherit;
+  font-size: inherit;
+}
 .cm-modal-panel > label .ant-input,
 .cm-modal-panel > label .ant-select,
 .cm-block-field .ant-input,

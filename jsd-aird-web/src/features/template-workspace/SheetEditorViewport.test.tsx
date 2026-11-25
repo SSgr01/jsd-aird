@@ -13,7 +13,7 @@ describe('shared spreadsheet viewport', () => {
       return <textarea aria-label="单元格" defaultValue="未保存的内容" />;
     }
     const { container } = render(<WorkspaceFrame maximizable><header>实验详情</header>
-      <SheetEditorViewport><Editor /></SheetEditorViewport><aside>字段数据</aside>
+      <SheetEditorViewport fullscreenEnabled><Editor /></SheetEditorViewport><aside>字段数据</aside>
     </WorkspaceFrame>);
     const editor = screen.getByRole('textbox');
     fireEvent.click(screen.getByRole('button', { name: '全屏' }));
@@ -30,5 +30,10 @@ describe('shared spreadsheet viewport', () => {
   it('keeps capture pages free of interactive chrome', () => {
     render(<SheetEditorViewport fullscreenEnabled={false}><div>表格</div></SheetEditorViewport>);
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('hides the additional fullscreen control by default across editor entry points', () => {
+    render(<SheetEditorViewport><div>表格</div></SheetEditorViewport>);
+    expect(screen.queryByRole('button', { name: '全屏' })).not.toBeInTheDocument();
   });
 });

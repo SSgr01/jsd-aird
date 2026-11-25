@@ -90,7 +90,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     onEditorLabel,
     bindings,
     editable = true,
-    fullscreenEnabled = true,
+    fullscreenEnabled = false,
     permissionDialogVisible = true,
     onSelectionChange,
     onUnboundCellChange,

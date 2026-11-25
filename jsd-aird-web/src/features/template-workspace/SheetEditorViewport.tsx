@@ -3,7 +3,7 @@ import { WorkspaceFrame, WorkspaceMaximizeButton } from '@/components/workspace/
 import './sheet-editor-viewport.css';
 
 /** Shared geometry and fullscreen boundary; keep the workbook mounted in place. */
-export function SheetEditorViewport({ children, fullscreenEnabled = true }: {
+export function SheetEditorViewport({ children, fullscreenEnabled = false }: {
   children: ReactNode;
   fullscreenEnabled?: boolean;
 }) {

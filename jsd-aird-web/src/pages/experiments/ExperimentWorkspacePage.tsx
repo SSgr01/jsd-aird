@@ -269,11 +269,11 @@ export function ExperimentWorkspacePage({
       detailRef.current = d;
       setDetail(d);
       setEditModel(nextModel);
-      const review = await (nextModel.templateDataReview?.required ||
+      const review = await (nextModel.importProcessingMode !== 'CONTENT_ONLY' && (nextModel.templateDataReview?.required ||
       (d.summary.sourceType === 'TEMPLATE' && Boolean(d.templateVersionId)) ||
       (['EXCEL_IMPORT', 'OCR_IMPORT'].includes(d.summary.sourceType) &&
         Boolean(nextModel.sourceImportJobId) &&
-        Boolean(d.templateVersionId))
+        Boolean(d.templateVersionId)))
         ? getExperimentTemplateDataReview(id)
         : undefined);
       if (!isCurrent()) return;
@@ -293,7 +293,7 @@ export function ExperimentWorkspacePage({
       const editable = !['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(d.summary.status);
       setSelectedVersion(pinned);
       setView(pinned ? 'versions' : editable && canUpdate ? 'edit' : 'preview');
-      if (!editable && labDefinition(initialSnapshot)) {
+      if (!editable && nextModel.importProcessingMode !== 'CONTENT_ONLY' && labDefinition(initialSnapshot)) {
         const result = await getExperimentPresentation(id, d.summary.revision);
         if (!isCurrent()) return;
         setPresentationSnapshot(result.snapshot);
@@ -1088,9 +1088,9 @@ export function ExperimentWorkspacePage({
   const sourceIsImage = /\.(png|jpe?g|gif|webp|bmp|tiff?)$/i.test(sourceFile?.fileName ?? '');
   const readonly = statusLocked || !canUpdate;
   const editable = !readonly && isDesktop && view === 'edit';
-  const unifiedDefinition = labDefinition(editModel.documentSnapshot ?? snapshot);
   // 无模板导入只编辑原文，不要求单元格或识别字段核对。
   const contentOnlyImport = editModel.importProcessingMode === 'CONTENT_ONLY';
+  const unifiedDefinition = contentOnlyImport ? undefined : labDefinition(editModel.documentSnapshot ?? snapshot);
   const showExcelRecognition =
     !contentOnlyImport &&
     !templateReview &&
@@ -1151,7 +1151,7 @@ export function ExperimentWorkspacePage({
           审核：{pendingFieldCount || pendingRegionCount ? '待确认' : '已确认'}
         </Tag>
       ) : null}
-      {templateReview && !importedData ? (
+      {!contentOnlyImport && templateReview && !importedData ? (
         <Tag color={templateDataConfirmed ? 'success' : 'warning'}>
           数据：{templateDataConfirmed ? '已核对' : '待核对'}
         </Tag>
@@ -1595,7 +1595,7 @@ export function ExperimentWorkspacePage({
             </div>
           ) : null}
           <div
-            className={`template-workspace-grid prototype-workspace-grid ${showExcelRecognition || templateReview || importedData || unifiedDefinition ? 'has-field-bindings' : ''}`}
+            className={`template-workspace-grid prototype-workspace-grid ${!contentOnlyImport && (showExcelRecognition || templateReview || importedData || unifiedDefinition) ? 'has-field-bindings' : ''}`}
           >
             <main className={`workspace-canvas ${view === 'preview' ? 'is-preview' : ''}`}>
               {workspaceCanvas}
@@ -1730,7 +1730,7 @@ export function ExperimentWorkspacePage({
                 ) : null}
               </div>
             ) : null}
-            {templateReview && !importedFromTemplate && !unifiedDefinition ? (
+            {!contentOnlyImport && templateReview && !importedFromTemplate && !unifiedDefinition ? (
               <ExperimentTemplateDataPanel
                     structureEditor={instanceStructureEditor}
                     workbook={currentInstance && !unifiedDefinition ? instanceWorkbookView(editModel.documentSnapshot ?? snapshot, currentInstance, editable) : undefined}

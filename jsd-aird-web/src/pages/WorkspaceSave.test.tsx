@@ -11,7 +11,7 @@ import { ExperimentWorkspacePage } from './experiments/ExperimentWorkspacePage';
 const mocks = vi.hoisted(() => ({
   order: { getEditModel: vi.fn(), downloadSnapshot: vi.fn(), listRevisions: vi.fn(), stageSnapshot: vi.fn(), saveDraft: vi.fn() },
   record: { get: vi.fn(), versions: vi.fn(), saveBatch: vi.fn() },
-  experiment: { getExperiment: vi.fn(), listVersions: vi.fn(), saveExperiment: vi.fn(), actExperiment: vi.fn(), confirmExperimentTemplateData: vi.fn() },
+  experiment: { getExperiment: vi.fn(), getExperimentTemplateDataReview: vi.fn(), listVersions: vi.fn(), saveExperiment: vi.fn(), actExperiment: vi.fn(), confirmExperimentTemplateData: vi.fn() },
   runtime: { revision: 0, reads: vi.fn(), mounts: 0, dirty: () => {}, text: 'before' },
 }));
 vi.mock('@/services/production-orders/production-order-api', () => ({ productionOrderApi: mocks.order }));
@@ -87,14 +87,19 @@ it.each(['EXCEL_IMPORT', 'OCR_IMPORT'])('content-only %s keeps the editor withou
   const draft = {
     ...experiment(),
     summary: { ...experiment().summary, sourceType },
+    templateVersionId: 'legacy-template',
     editModel: {
       ...experiment().editModel,
       documentFormat: 'excel',
       documentSnapshot: {
         ...workbook,
-        sheets: { s: { id: 's', name: '原始实验', cellData: { 0: { 0: { v: '实验人' }, 1: { v: '张三' } } } } },
+        sheets: { s: { id: 's', name: '原始实验', custom: { labTemplate: {
+          version: 1, templateCode: 'legacy', kind: 'experiment', firstSampleColumn: 1,
+          initialLastSampleColumn: 1, fields: {}, regions: [],
+        } }, cellData: { 0: { 0: { v: '实验人' }, 1: { v: '张三' } } } } },
       },
       importProcessingMode: 'CONTENT_ONLY',
+      templateDataReview: { required: true },
       sourceImportJobId: 'legacy-import',
       importDataReview: { confirmed: false },
       recognizedFields: [],
@@ -110,6 +115,7 @@ it.each(['EXCEL_IMPORT', 'OCR_IMPORT'])('content-only %s keeps the editor withou
   expect(screen.queryByText('本次实验数据')).not.toBeInTheDocument();
   expect(screen.queryByText('数据：待核对')).not.toBeInTheDocument();
   expect(screen.queryByText('AI 识别待确认')).not.toBeInTheDocument();
+  expect(mocks.experiment.getExperimentTemplateDataReview).not.toHaveBeenCalled();
   expect(screen.getByTestId('editor').closest('.template-workspace-grid')).not.toHaveClass('has-field-bindings');
   fireEvent.click(submit);
   await waitFor(() => expect(mocks.experiment.actExperiment).toHaveBeenCalledWith('one', 'submit-review', 1));

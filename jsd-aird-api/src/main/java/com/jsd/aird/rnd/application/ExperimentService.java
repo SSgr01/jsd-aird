@@ -174,7 +174,8 @@ public class ExperimentService {
             }
             editModel=com.jsd.aird.shared.lab.LabWorkbook.extract(json,working,editModel,id.toString());
         }
-        if (ExperimentSourceType.EXCEL_IMPORT.name().equals(sourceType)) {
+        if (ExperimentSourceType.EXCEL_IMPORT.name().equals(sourceType)
+                && !"CONTENT_ONLY".equals(editModel.path("importProcessingMode").asText())) {
             editModel.putObject("importDataReview").put("confirmed", false);
         }
         if (command.sourceFileId() != null) {
@@ -283,9 +284,12 @@ public class ExperimentService {
         }
 
         var model = editModels.normalize(object(command.editModel(), "editModel"), id);
+        // Only the server's original-source annotation can relax historical metadata requirements.
+        if(current.editModel().has("sourceMetadataGaps"))model.set("sourceMetadataGaps",current.editModel().path("sourceMetadataGaps").deepCopy());
+        else model.remove("sourceMetadataGaps");
         // Content-only imports retain the source layout, including compact result exports.
         // They have no full template baseline from which to expand a laboratory workbook.
-        var contentOnly = imported && "CONTENT_ONLY".equals(current.editModel().path("importProcessingMode").asText());
+        var contentOnly = isContentOnlyImport(current);
         if (contentOnly) model.put("importProcessingMode", "CONTENT_ONLY");
         if(!contentOnly && com.jsd.aird.shared.lab.LabWorkbook.supported(current.templateSnapshot())) {
             var working=com.jsd.aird.shared.lab.LabWorkbook.prepare(json,model.path("documentSnapshot"),current.templateSnapshot(),id.toString());
@@ -322,7 +326,7 @@ public class ExperimentService {
                 model.set("templateDataReview", marker);
             }
         }
-        if (("EXCEL_IMPORT".equals(current.summary().sourceType()) || isTemplateImport(current)) && !confirmingData) {
+        if (!contentOnly && ("EXCEL_IMPORT".equals(current.summary().sourceType()) || isTemplateImport(current)) && !confirmingData) {
             var previous = current.editModel().path("importDataReview");
             var marker = json.createObjectNode();
             var unchanged = importReviewMatches(previous, model.path("documentSnapshot"))
@@ -381,6 +385,12 @@ public class ExperimentService {
         var actor = ActorContext.required();
         var definition = templates.getVersion(actor.organizationId(), detail.templateVersionId());
         var bindings = templates.getBindings(actor.organizationId(), detail.templateVersionId());
+        var reviewSnapshot=detail.editModel().path("documentSnapshot").deepCopy();
+        var reviewInstance=com.jsd.aird.shared.excel.WorkbookStructure.instance(reviewSnapshot);
+        if(reviewInstance.isObject()&&com.jsd.aird.shared.lab.LabWorkbook.supported(reviewSnapshot)) {
+            var execution=templates.prepareWorkbookReview(actor.organizationId(),detail.templateVersionId(),reviewSnapshot,reviewInstance);
+            definition=execution.definition();bindings=execution.bindings();
+        }
         var values = detail.editModel().path("dynamicValues");
         var marker = detail.editModel().path("templateDataReview");
         var confirmed = templateImport
@@ -410,6 +420,8 @@ public class ExperimentService {
                             .filter(item -> (field.dataPath() != null && field.dataPath().equals(item.dataPath()))
                                     || (field.fieldCode() != null && field.fieldCode().equals(item.fieldCode())))
                             .findFirst().orElse(null);
+                    if(binding!=null&&!hasBoundWorkbookValue(snapshot,binding.locator())
+                            &&com.jsd.aird.shared.lab.LabSourceMetadata.sourceOmitted(current.editModel().path("sourceMetadataGaps"),binding.locator()))continue;
                     if (binding == null || !hasBoundWorkbookValue(snapshot, binding.locator()))
                         throw validation("必填数据尚未填写：" + field.displayName());
                 }
@@ -555,6 +567,12 @@ public class ExperimentService {
         result.set("snapshot",projection.snapshot());result.set("locationMap",projection.locationMap());return result;
     }
 
+    private boolean isContentOnlyImport(Detail detail) {
+        return ("EXCEL_IMPORT".equals(detail.summary().sourceType())
+                    || "OCR_IMPORT".equals(detail.summary().sourceType()))
+                && "CONTENT_ONLY".equals(detail.editModel().path("importProcessingMode").asText());
+    }
+
     private boolean isTemplateImport(Detail detail) {
         return ("EXCEL_IMPORT".equals(detail.summary().sourceType())
                     || "OCR_IMPORT".equals(detail.summary().sourceType()))
@@ -666,7 +684,10 @@ public class ExperimentService {
         if (target == ExperimentStatus.PENDING_REVIEW) {
             var current = detail(id);
             var model = current.editModel();
-            if ("EXCEL_IMPORT".equals(current.summary().sourceType()) || isTemplateImport(current)) {
+            // Content-only imports are edited like blank documents. Old review
+            // markers or recognition results must not add a hidden submit gate.
+            var contentOnly = isContentOnlyImport(current);
+            if (!contentOnly && ("EXCEL_IMPORT".equals(current.summary().sourceType()) || isTemplateImport(current))) {
                 var marker = model.path("importDataReview");
                 if (!importReviewMatches(marker, model.path("documentSnapshot"))) {
                     throw validation("请先确认本次导入的实验数据，再提交审核");
@@ -676,7 +697,7 @@ public class ExperimentService {
                 var review = templateDataReview(id);
                 if (!review.confirmed()) throw validation("请先确认本次实验数据，再提交审核");
             }
-            if (model.path("recognizedFields").isArray()) {
+            if (!contentOnly && model.path("recognizedFields").isArray()) {
                 var fields = model.path("recognizedFields");
                 if (fields.isEmpty()) throw validation("Excel 尚未识别出可绑定字段，请重新识别");
                 for (var field : fields) {

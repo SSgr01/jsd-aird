@@ -106,7 +106,7 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
             String status, String parserVersion, String provider, String providerTaskId, String errorMessage,
             JsonNode diagnosticResult, List<DocumentParser.TextBlock> blocks, List<DocumentParser.SourceTable> sourceTables,
             boolean candidate) {
-        jdbc.queryForList("SELECT id FROM kb.document_version WHERE organization_id=? AND id=? FOR UPDATE", organizationId, versionId);
+        jdbc.queryForList("SELECT v.id FROM kb.document_version v JOIN kb.document d ON d.id=v.document_id WHERE d.organization_id=? AND v.id=? FOR UPDATE OF v", organizationId, versionId);
         var id = UUID.randomUUID();
         var runNo = jdbc.queryForObject("SELECT coalesce(max(run_no), 0) + 1 FROM kb.document_parse_run WHERE document_version_id = ?",
                 Integer.class, versionId);
@@ -742,8 +742,20 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
                     reviewed_at = now(), updated_at = now()
                 FROM kb.document d
                 WHERE v.document_id = d.id AND d.organization_id = ? AND d.id = ? AND v.id = ?
-                  AND v.status IN ('FAILED', 'PENDING_PROVIDER', 'REJECTED')
+                  AND (v.status IN ('FAILED', 'PENDING_PROVIDER', 'REJECTED')
+                       OR (v.status IN ('PROCESSING', 'QUEUED')
+                           AND (SELECT j.status FROM ops.async_job j
+                                WHERE j.organization_id = d.organization_id
+                                  AND j.job_type = 'KB_INGEST_DOCUMENT'
+                                  AND j.payload_jsonb->>'versionId' = v.id::text
+                                ORDER BY j.created_at DESC, j.id DESC LIMIT 1) IN ('FAILED', 'CANCELLED')))
+                  AND v.version_no = d.current_version_no
                   AND v.review_reason IS DISTINCT FROM 'REPARSE_QUEUED'
+                  AND NOT EXISTS (SELECT 1 FROM kb.document_review_revision r WHERE r.document_version_id = v.id)
+                  AND NOT EXISTS (SELECT 1 FROM ops.async_job j
+                                  WHERE j.organization_id = d.organization_id
+                                    AND j.payload_jsonb->>'versionId' = v.id::text
+                                    AND j.status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED'))
                 """, actorId, organizationId, documentId, versionId) > 0;
     }
 

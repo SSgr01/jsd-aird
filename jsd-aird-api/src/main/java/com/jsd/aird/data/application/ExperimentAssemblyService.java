@@ -65,7 +65,7 @@ public class ExperimentAssemblyService {
         requireExperimentCreate(actor.organizationId(),actor.userId());
         var source=repository.load(actor.organizationId(),importJobId);
         var targetCategory=categoryId==null?source.targetExperimentCategoryId():categoryId;
-        experiments.requireActiveCategory(actor.organizationId(),targetCategory);
+        if(targetCategory!=null)experiments.requireActiveCategory(actor.organizationId(),targetCategory);
         var plan=plan(actor.organizationId(),importJobId,actor.userId());
         var links=projects.links(actor,ProjectResourceFacade.ResourceType.DATA_IMPORT_JOB,importJobId);
         var project=links.size()==1?links.getFirst():null;
@@ -95,7 +95,8 @@ public class ExperimentAssemblyService {
                 var payload=json.createObjectNode().put("organizationId",actor.organizationId().toString())
                         .put("actorId",actor.userId().toString()).put("actorName",actor.username())
                         .put("importJobId",importJobId.toString()).put("assemblyKey",candidate.assemblyKey())
-                        .put("planHash",candidate.planHash()).put("categoryId",targetCategory.toString());
+                        .put("planHash",candidate.planHash());
+                if(targetCategory!=null)payload.put("categoryId",targetCategory.toString());
                 if(project!=null){payload.put("projectId",project.projectId().toString());
                     if(project.stageId()!=null)payload.put("stageId",project.stageId().toString());
                     if(project.taskId()!=null)payload.put("taskId",project.taskId().toString());}
@@ -126,7 +127,7 @@ public class ExperimentAssemblyService {
                                                         UUID categoryId,UUID projectId,UUID stageId,UUID taskId,
                                                         ExecutionContext context) {
         requireExperimentCreate(organizationId,actorId);
-        experiments.requireActiveCategory(organizationId,categoryId);
+        if(categoryId!=null)experiments.requireActiveCategory(organizationId,categoryId);
         var already=repository.find(organizationId,importJobId,assemblyKey).orElse(null);
         if(already!=null&&already.experimentId()!=null)return created(already);
         var plan=plan(organizationId,importJobId,actorId);
@@ -159,7 +160,7 @@ public class ExperimentAssemblyService {
         return Objects.requireNonNull(writes.execute(tx->{
             jobs.requireExecution(context,false);
             requireExperimentCreate(organizationId,actorId);
-            experiments.requireActiveCategory(organizationId,categoryId);
+            if(categoryId!=null)experiments.requireActiveCategory(organizationId,categoryId);
             repository.lockAssembly(organizationId,importJobId,assemblyKey);
             var existing=repository.find(organizationId,importJobId,assemblyKey).orElseThrow();
             if(existing.experimentId()!=null)return created(existing);

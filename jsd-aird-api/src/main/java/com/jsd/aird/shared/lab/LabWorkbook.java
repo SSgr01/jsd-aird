@@ -22,7 +22,10 @@ public final class LabWorkbook {
     }
     public static boolean supported(JsonNode snapshot) {return definition(snapshot).path("version").asInt()==1;}
     public static void seedStructure(ObjectMapper json,JsonNode snapshot,ObjectNode instance,boolean fresh) {
-        if(supported(snapshot))LabStructureAdapter.seed(json,snapshot,instance,fresh);
+        if(supported(snapshot)) {
+            if(LabWorkbookSheets.multiple(snapshot))LabWorkbookSheets.seed(json,snapshot,instance,fresh);
+            else LabStructureAdapter.seed(json,snapshot,instance,fresh);
+        }
     }
     public static ObjectNode sheet(JsonNode snapshot) {
         for(var s:snapshot.path("sheets"))if(s.path("custom").path(DEFINITION).isObject())return (ObjectNode)s;
@@ -38,7 +41,8 @@ public final class LabWorkbook {
         var cells=data.path(""+row) instanceof ObjectNode existing?existing:data.putObject(""+row);
         return cells.path(""+col) instanceof ObjectNode existing?existing:cells.putObject(""+col);
     }
-    private static String normalized(String s) {return s.replaceAll("[\\s　]","").replace('：',':');}
+    private static final java.util.regex.Pattern LABEL_WHITESPACE = java.util.regex.Pattern.compile("[\\s　]");
+    private static String normalized(String s) {return LABEL_WHITESPACE.matcher(s).replaceAll("").replace('：',':');}
     public static String id(String seed,String key) {return UUID.nameUUIDFromBytes((seed+":"+key).getBytes(StandardCharsets.UTF_8)).toString();}
     public static String address(int row,int col) {var b=new StringBuilder();for(int n=col+1;n>0;n=(n-1)/26)b.insert(0,(char)('A'+(n-1)%26));return b.append(row+1).toString();}
     private static ObjectNode mark(ObjectNode cell) {return cell.withObject("/custom/lab");}
@@ -46,6 +50,7 @@ public final class LabWorkbook {
 
     /** Rebinds ordinary or compacted Excel by confirmed label/section evidence, never by filename. */
     public static ObjectNode prepare(ObjectMapper json,JsonNode source,JsonNode baseline,String seed) {
+        if(LabWorkbookSheets.multiple(source))return LabWorkbookSheets.prepare(json,source,baseline,seed);
         var copy=(ObjectNode)source.deepCopy();
         LabStructureAdapter.apply(json,copy);
         var authoritative=definition(baseline);
@@ -243,6 +248,7 @@ public final class LabWorkbook {
 
     /** Snapshot is the editing source; all facts are rebuilt together on the server. */
     public static ObjectNode extract(ObjectMapper json,JsonNode snapshot,JsonNode previous,String seed) {
+        if(LabWorkbookSheets.multiple(snapshot))return LabWorkbookSheets.extract(json,snapshot,previous,seed);
         var model=(ObjectNode)previous.deepCopy();var sheet=sheet(snapshot);if(sheet==null)return model;
         var def=definition(snapshot);var fields=def.path("fields");
         var groups=json.createArrayNode();var formula=json.createArrayNode();var processes=json.createArrayNode();var tests=json.createArrayNode();var issues=json.createArrayNode();
@@ -301,7 +307,7 @@ public final class LabWorkbook {
                 if(parsed.path("parseStatus").asText().equals("CONFLICT")||value(sheet,r,c).matches("#(?:REF!|DIV/0!|VALUE!|N/A|NAME\\?|NUM!|SPILL!)"))issues.addObject().put("code","VALUE_CONFLICT").put("address",address(r,c)).put("message","单位冲突或公式错误，请核对原始填写内容");
                 var key=sheet.path("columnData").path(""+c).path("custom").path("lab").path("sampleKey").asText();
                 boolean duplicate=uniqueFields.getOrDefault(code,r)!=r;
-                parsed.put("itemId",id(seed,code+":"+key+(duplicate?":duplicate:"+r:""))).put("sampleKey",key).put("sourceGroupKey",key).put("logicalSampleKey",key).put("sourceContextKey",seed).put("fieldCode",code).put("testItem",field.path("label").asText()).put("operation",field.path("label").asText()).put("testMethod",field.path("method").asText("")).put("testStage",field.path("groupId").asText()).put("trainingEligible",!field.path("local").asBoolean()&&!duplicate&&field.path("trainingEligible").asBoolean(true));
+                parsed.put("itemId",id(seed,code+":"+key+(duplicate?":duplicate:"+r:""))).put("sampleKey",key).put("sourceGroupKey",key).put("logicalSampleKey",key).put("sourceContextKey",seed).put("fieldCode",code).put("testItem",field.path("label").asText()).put("operation",field.path("label").asText()).put("testMethod",field.path("method").asText("")).put("testStage",field.path("groupId").asText()).put("trainingEligible",!field.path("local").asBoolean()&&!duplicate&&field.path("trainingEligible").asBoolean(true)&&!parsed.path("unitStatus").asText().equals("SOURCE_REPORTED_NONSTANDARD"));
                 for(var property:List.of("baseMetric","testCondition","duplicateOf","supplemental"))if(field.has(property))parsed.set(property,field.path(property).deepCopy());
                 // Execution metadata belongs to this sample and version, not to the standard template.
                 var protocol=cell.path("custom").path("measurementProtocol");
@@ -384,6 +390,7 @@ public final class LabWorkbook {
 
     /** Physically compacts a disposable projection. Stored input is never edited. */
     public static Presentation present(ObjectMapper json,JsonNode source) {
+        if(LabWorkbookSheets.multiple(source))return new Presentation(source.deepCopy(),json.createObjectNode());
         if(!supported(source))return new Presentation(source.deepCopy(),json.createObjectNode());
         var out=(ObjectNode)source.deepCopy();var sheet=sheet(out);var def=definition(out);var fields=def.path("fields");
         int first=def.path("firstSampleColumn").asInt(2),end=def.path("lastSampleColumn").asInt(7);

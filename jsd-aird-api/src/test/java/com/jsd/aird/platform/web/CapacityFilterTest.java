@@ -14,6 +14,62 @@ import java.util.concurrent.*;
 import static org.assertj.core.api.Assertions.*;
 
 class CapacityFilterTest {
+    @Test void multiSheetReviewAndPresentationReadsOwnHeavyAdmission() throws Exception {
+        var limits=CapacityProperties.defaults();var metrics=new SimpleMeterRegistry();
+        var filter=new CapacityFilter(limits,new TemporarySpace(limits.temporaryBytes(),directory),new ObjectMapper(),metrics);
+        var base="/api/v1/experiments/"+UUID.randomUUID();
+        for(var action:List.of("data-review","presentation")) {
+            filter.doFilter(new MockHttpServletRequest("GET",base+"/"+action),new MockHttpServletResponse(),(req,res)->{
+                assertThat(OperationBudget.kind()).isEqualTo(OperationBudget.Kind.HEAVY);
+                assertThat(metrics.get("aird.capacity.heavy.active").gauge().value()).isEqualTo(1);
+            });
+            assertThat(metrics.get("aird.capacity.heavy.active").gauge().value()).isZero();
+        }
+        for(var suffix:List.of("","/versions"))filter.doFilter(new MockHttpServletRequest("GET",base+suffix),new MockHttpServletResponse(),(req,res)->
+            assertThat(OperationBudget.kind()).isEqualTo(OperationBudget.Kind.READ));
+    }
+    @Test void experimentReviewCommandsUseTheWorkbookBudget() throws Exception {
+        var filter=filter(Map.of());
+        for(var action:List.of("draft","confirm-data","submit-review","approve","return","publish")) {
+            var path="/api/v1/experiments/"+UUID.randomUUID()+"/"+action;
+            filter.doFilter(new MockHttpServletRequest("POST",path),new MockHttpServletResponse(),(req,res) -> {
+                assertThat(OperationBudget.kind()).isEqualTo(OperationBudget.Kind.HEAVY);
+                assertThat(OperationBudget.transactionMillis(CapacityProperties.defaults()))
+                        .isEqualTo(CapacityProperties.defaults().heavyTransactionMillis());
+            });
+            filter.doFilter(new MockHttpServletRequest("GET",path),new MockHttpServletResponse(),(req,res) ->
+                    assertThat(OperationBudget.kind()).isEqualTo(List.of("draft","publish").contains(action)?OperationBudget.Kind.HEAVY:OperationBudget.Kind.READ));
+        }
+    }
+    @Test void importCommitAndMappingValidationOwnHeavyAdmissionAndTransactionBudget() throws Exception {
+        var limits = CapacityProperties.defaults();
+        var metrics = new SimpleMeterRegistry();
+        var filter = new CapacityFilter(limits,new TemporarySpace(limits.temporaryBytes(),directory),new ObjectMapper(),metrics);
+        for (var owner : List.of("import-jobs","experiment-import-jobs")) {
+            var path = "/api/v1/data/" + owner + "/" + UUID.randomUUID();
+            var response = new MockHttpServletResponse();
+            filter.doFilter(new MockHttpServletRequest("POST",path + "/commit"),response,(req,res) -> {
+                assertThat(OperationBudget.kind()).isEqualTo(OperationBudget.Kind.HEAVY);
+                assertThat(OperationBudget.transactionMillis(limits)).isEqualTo(limits.heavyTransactionMillis());
+                assertThat(metrics.get("aird.capacity.heavy.active").gauge().value()).isEqualTo(1);
+                assertThat(metrics.get("aird.capacity.writes.active").gauge().value()).isZero();
+            });
+            assertThat(response.getStatus()).isEqualTo(200);
+            assertThat(metrics.get("aird.capacity.heavy.active").gauge().value()).isZero();
+            filter.doFilter(new MockHttpServletRequest("GET",path + "/preview"),new MockHttpServletResponse(),(req,res) ->
+                    assertThat(OperationBudget.kind()).isEqualTo(OperationBudget.Kind.HEAVY));
+            filter.doFilter(new MockHttpServletRequest("GET","/api/v1/data/" + owner),new MockHttpServletResponse(),(req,res) ->
+                    assertThat(OperationBudget.kind()).isEqualTo(OperationBudget.Kind.READ));
+            filter.doFilter(new MockHttpServletRequest("PUT",path + "/mappings"),new MockHttpServletResponse(),(req,res) -> {
+                assertThat(OperationBudget.kind()).isEqualTo(OperationBudget.Kind.HEAVY);
+                assertThat(OperationBudget.transactionMillis(limits)).isEqualTo(limits.heavyTransactionMillis());
+            });
+            filter.doFilter(new MockHttpServletRequest("GET",path + "/mappings"),new MockHttpServletResponse(),(req,res) ->
+                    assertThat(OperationBudget.kind()).isEqualTo(OperationBudget.Kind.READ));
+            filter.doFilter(new MockHttpServletRequest("PUT",path + "/other"),new MockHttpServletResponse(),(req,res) ->
+                    assertThat(OperationBudget.kind()).isEqualTo(OperationBudget.Kind.WRITE));
+        }
+    }
     @Test void datasetProjectionUsesHeavyAdmissionButCatalogAndExperimentPagesRemainReads()throws Exception {
         var filter=filter(Map.of());
         var id=UUID.randomUUID();

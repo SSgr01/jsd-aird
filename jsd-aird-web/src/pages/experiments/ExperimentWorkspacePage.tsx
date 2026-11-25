@@ -1,7 +1,9 @@
 import { StatusTag } from '@/components/status/StatusTag';
+import { reviewContentKey } from './review-content';
 import { WorkspaceFrame, WorkspaceMaximizeButton } from '@/components/workspace/WorkspaceFrame';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { instanceWorkbookView } from '@/features/data-workbench/instance-workbook-view';
+import { presentWorkbookFields } from '@/features/data-workbench/field-presentation';
 import { DocsEditor, SheetsEditor } from '@/features/template-workspace/editor-runtime';
 import {
   editorUnchanged,
@@ -628,18 +630,33 @@ export function ExperimentWorkspacePage({
       flushEditorChanges(editor);
       const generation = editGenerationRef.current,
         revision = editor?.getContentRevision?.();
-      const saved = await persistDraft(draftModelRef.current());
+      const draft = draftModelRef.current();
+      const reviewedContent = reviewContentKey(draft);
+      const saved = await persistDraft(draft);
       if (!saved) return;
       if (
         !isCurrent() ||
-        generation !== editGenerationRef.current ||
-        !editorUnchanged(editorRef.current, editor, revision)
+        ((generation !== editGenerationRef.current ||
+          !editorUnchanged(editorRef.current, editor, revision)) &&
+          reviewedContent !== reviewContentKey(draftModelRef.current()))
       )
-        return;
-      await confirmExperimentTemplateData(id, saved.summary.revision);
+        { void message.warning('保存期间实验数据发生变化，请核对最新内容后再次确认'); return; }
+      const confirmed = await confirmExperimentTemplateData(id, saved.summary.revision);
       if (!isCurrent()) return;
+      // Keep the reviewed editor mounted. Reloading the workbook here causes
+      // initialization writes to be mistaken for edits immediately after confirmation.
+      detailRef.current = confirmed;
+      setDetail(confirmed);
+      setEditModel(current => ({
+        ...current,
+        templateDataReview: confirmed.editModel.templateDataReview,
+        importDataReview: confirmed.editModel.importDataReview,
+      }));
+      setTemplateReview(current => current ? { ...current, confirmed: true } : current);
+      savedGenerationRef.current = editGenerationRef.current;
+      savedEditorRef.current = { editor, revision: editor?.getContentRevision?.() };
+      setSaveState('SAVED');
       void message.success('本次实验数据已完成核对');
-      await load();
     } catch (error) {
       if (isCurrent()) void message.error(error instanceof Error ? error.message : '数据确认失败');
     } finally {
@@ -853,6 +870,7 @@ export function ExperimentWorkspacePage({
   const publish = (action: PublishAction) => {
     if (
       action === 'submit-review' &&
+      editModel.importProcessingMode !== 'CONTENT_ONLY' &&
       Array.isArray(editModel.recognizedFields) &&
       (!editModel.recognizedFields.length ||
         editModel.recognizedFields.some((field) => !field.confirmed) ||
@@ -1071,9 +1089,10 @@ export function ExperimentWorkspacePage({
   const readonly = statusLocked || !canUpdate;
   const editable = !readonly && isDesktop && view === 'edit';
   const unifiedDefinition = labDefinition(editModel.documentSnapshot ?? snapshot);
-  // 无模板导入（CONTENT_ONLY）不涉及识别区域与字段绑定，隐藏 Excel 识别审核面板。
+  // 无模板导入只编辑原文，不要求单元格或识别字段核对。
+  const contentOnlyImport = editModel.importProcessingMode === 'CONTENT_ONLY';
   const showExcelRecognition =
-    editModel.importProcessingMode !== 'CONTENT_ONLY' &&
+    !contentOnlyImport &&
     !templateReview &&
     documentFormatOf(editModel, snapshot) === 'excel' &&
     Array.isArray(editModel.recognizedFields);
@@ -1084,8 +1103,9 @@ export function ExperimentWorkspacePage({
     editModel.templateDataReview.confirmedRevision === detail.summary.revision,
   );
   const importedData =
-    detail.summary.sourceType === 'EXCEL_IMPORT' ||
-    (detail.summary.sourceType === 'OCR_IMPORT' && Boolean(editModel.sourceImportJobId));
+    !contentOnlyImport &&
+    (detail.summary.sourceType === 'EXCEL_IMPORT' ||
+      (detail.summary.sourceType === 'OCR_IMPORT' && Boolean(editModel.sourceImportJobId)));
   const importedFromTemplate =
     importedData && Boolean(editModel.sourceImportJobId) && Boolean(templateReview);
   const importDataConfirmed = Boolean(
@@ -1489,6 +1509,11 @@ export function ExperimentWorkspacePage({
   );
   const workspaceContent = (
     <>
+      {!!editModel.sourceMetadataGaps?.length && <Alert type="info" showIcon
+        message={`原资料有 ${editModel.sourceMetadataGaps.length} 处题目、实验人或日期未记录，已按原文留空。`}
+        description={<details><summary>查看缺项和来源位置</summary>
+          {editModel.sourceMetadataGaps.map((gap, index) => <div key={`${gap.sheetName}-${gap.address}-${index}`}>{gap.sheetName} · {gap.address} · {gap.label}：{gap.reason}</div>)}
+        </details>} />}
       {view === 'versions' ? (
         selectedVersion ? (
           <ExperimentHistoricalVersion
@@ -1743,11 +1768,11 @@ export function ExperimentWorkspacePage({
     ).values()];
     const definitionReviews = definitionReviewItems(structureInstance, issues);
     const remainingIssues = issues.filter(issue => !issueRepresentedByDefinition(issue, definitionReviews));
-    const workbook = experimentTemplateWorkbook(
+    const workbook = presentWorkbookFields(experimentTemplateWorkbook(
       visibleSnapshot,
       editable,
       remainingIssues.map(issue => ({ ...issue, address: issue.address ?? '' })),
-    );
+    ), structureInstance);
     const selectField = (field: DataFieldValueView) => {
       if (field.sheetId && field.address)
         editorRef.current?.focusCell?.(field.sheetId, field.address);

@@ -1,0 +1,75 @@
+[
+ {"code":"IR","name":"红外","comparisonKeys":["samplingMode","signalType","sampleState","resolution"],"fields":[
+  {"key":"model","target":"instrument","label":"仪器型号"},
+  {"key":"accessory","target":"instrument","label":"附件"},
+  {"key":"crystal","target":"instrument","label":"ATR 晶体"},
+  {"key":"samplingMode","label":"采样方式","options":["ATR","透射","其他"]},
+  {"key":"signalType","label":"纵轴类型","options":["吸光度","透过率（%T）"]},
+  {"key":"rangeMin","label":"波数下限","unit":"cm⁻¹","kind":"number","min":0},
+  {"key":"rangeMax","label":"波数上限","unit":"cm⁻¹","kind":"number","min":0},
+  {"key":"resolution","label":"分辨率","unit":"cm⁻¹","kind":"number","min":0},
+  {"key":"scans","label":"扫描次数","kind":"integer","min":1},
+  {"key":"sampleState","label":"样品形态","variable":true,"options":["液体","未固化胶","固化膜","粉末","其他"]}
+ ]},
+ {"code":"UV","name":"紫外可见","comparisonKeys":["solvent","concentration","pathLength","signalType","rangeMin","rangeMax"],"fields":[
+  {"key":"model","target":"instrument","label":"仪器型号"},
+  {"key":"signalType","label":"纵轴类型","options":["吸光度","透过率（%T）","反射率"]},
+  {"key":"cuvetteMaterial","label":"比色皿材质"},
+  {"key":"pathLength","label":"光程","unit":"mm","kind":"number","min":0},
+  {"key":"solvent","label":"溶剂／稀释剂","variable":true,"placeholder":"如 PM（全名待补），不要猜测化学名称"},
+  {"key":"concentration","label":"浓度或稀释倍数","variable":true,"placeholder":"如 1 mg/mL 或稀释 100 倍"},
+  {"key":"rangeMin","label":"扫描起始波长","unit":"nm","kind":"number","min":0,"variable":true},
+  {"key":"rangeMax","label":"扫描终止波长","unit":"nm","kind":"number","min":0,"variable":true},
+  {"key":"blankReference","label":"空白参比","variable":true,"placeholder":"与溶剂一致，或填写实际参比"}
+ ]},
+ {"code":"HPLC_GPC","name":"液相／GPC","comparisonKeys":["purpose","column","mobilePhase","flowRate","columnTemperature","calibrant","concentration","injectionVolume"],"fields":[
+  {"key":"model","target":"instrument","label":"仪器型号"},
+  {"key":"detector","target":"instrument","label":"检测器"},
+  {"key":"pump","target":"instrument","label":"输液泵"},
+  {"key":"columnOven","target":"instrument","label":"柱温箱"},
+  {"key":"column","label":"色谱柱（含数量／串联）"},
+  {"key":"mobilePhase","label":"流动相"},
+  {"key":"columnTemperature","label":"柱温","unit":"℃","kind":"number","min":-273.15},
+  {"key":"flowRate","label":"流速","unit":"mL/min","kind":"number","min":0},
+  {"key":"runTime","label":"测试时间","unit":"min","kind":"number","min":0},
+  {"key":"calibrant","label":"标样／校准体系"},
+  {"key":"purpose","label":"测试用途","variable":true,"options":["未确认","GPC／SEC 分子量","HPLC 组分分析"]},
+  {"key":"concentration","label":"样品浓度","variable":true,"placeholder":"填写数值及单位，如 1 mg/mL"},
+  {"key":"injectionVolume","label":"进样量","unit":"μL","kind":"number","min":0,"variable":true}
+ ]},
+ {"code":"PARTICLE_SIZE","name":"纳米粒径","comparisonKeys":["method","medium","concentration","temperature","distributionBasis","dispersionTreatment"],"fields":[
+  {"key":"model","target":"instrument","label":"仪器型号"},
+  {"key":"method","label":"测试方法","options":["DLS","激光衍射","其他","未确认"]},
+  {"key":"temperature","label":"测试温度","unit":"℃","kind":"number","min":-273.15},
+  {"key":"distributionBasis","label":"分布口径","options":["强度","体积","数量","未确认"]},
+  {"key":"medium","label":"分散介质及混合比例","variable":true},
+  {"key":"concentration","label":"浓度或稀释倍数","variable":true,"placeholder":"如 0.1 mg/mL 或稀释 100 倍"},
+  {"key":"dispersionTreatment","label":"分散处理","variable":true,"options":["未处理","搅拌","超声","其他"]},
+  {"key":"sonicationTime","label":"超声时间","unit":"min","kind":"number","min":0,"variable":true,"when":"超声"}
+ ]},
+ {"code":"GC","name":"气相","comparisonKeys":["column","carrierGas","carrierFlow","ovenProgram","injectionVolume","splitMode"],"fields":[
+  {"key":"model","target":"instrument","label":"仪器型号"},
+  {"key":"detector","target":"instrument","label":"检测器"},
+  {"key":"column","label":"色谱柱"},
+  {"key":"carrierGas","label":"载气"},
+  {"key":"carrierFlow","label":"载气流量／控制模式","placeholder":"如恒流，填写数值及单位"},
+  {"key":"ovenProgram","label":"升温程序","kind":"program"},
+  {"key":"runTime","label":"总运行时间","unit":"min","kind":"number","min":0},
+  {"key":"injectionVolume","label":"进样量","unit":"μL","kind":"number","min":0},
+  {"key":"splitMode","label":"分流设置","placeholder":"如不分流，或填写分流比"},
+  {"key":"samplePreparation","label":"样品前处理","variable":true}
+ ]},
+ {"code":"MECHANICAL","name":"拉伸","comparisonKeys":["standard","specimenType","speed","gaugeLength","width","thickness","curing"],"fields":[
+  {"key":"model","target":"instrument","label":"试验机型号"},
+  {"key":"standard","label":"标准及年份","placeholder":"GB/T 528，年份待核对"},
+  {"key":"specimenType","label":"试样类型"},
+  {"key":"speed","label":"拉伸速度","unit":"mm/min","kind":"number","min":0},
+  {"key":"gaugeLength","label":"标距","unit":"mm","kind":"number","min":0},
+  {"key":"temperature","label":"测试温度","unit":"℃","kind":"number","min":-273.15},
+  {"key":"humidity","label":"相对湿度","unit":"%","kind":"number","min":0,"max":100},
+  {"key":"width","label":"实测宽度","unit":"mm","kind":"number","min":0,"variable":true},
+  {"key":"thickness","label":"实测厚度","unit":"mm","kind":"number","min":0,"variable":true},
+  {"key":"curing","label":"制样／固化条件","variable":true},
+  {"key":"specimens","label":"多试样实测尺寸","kind":"specimens","variable":true}
+ ]}
+]

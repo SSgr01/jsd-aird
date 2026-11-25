@@ -29,7 +29,7 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         if(text(q.format())){where.append(" AND ").append(DOCUMENT_FORMAT).append("=?");args.add(q.format());}
         appendScope(where, args, q.scope(), org);
         args.add(q.size()); args.add(Math.max(0,q.page()-1)*q.size());
-        return jdbc.query(BASE+where+" ORDER BY e.updated_at DESC LIMIT ? OFFSET ?", this::summary, args.toArray());
+        return jdbc.query(SUMMARY_BASE+where+" ORDER BY e.updated_at DESC LIMIT ? OFFSET ?", this::summary, args.toArray());
     }
     @Override public long count(UUID org, Search q) {
         var where=new StringBuilder(" WHERE e.organization_id=? AND e.deleted=false");var args=new ArrayList<Object>();args.add(org);
@@ -152,8 +152,22 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         if(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM rnd.experiment WHERE organization_id=? AND experiment_no=? AND id<>? AND deleted=false)",Boolean.class,org,d.experimentNo().trim(),id))) conflict("实验编号 " + d.experimentNo().trim() + " 已存在");
         int n=jdbc.update("UPDATE rnd.experiment SET experiment_no=?,title=?,category_id=?,category_name=?,project_id=?,stage_id=?,task_id=?,owner_name=?,experiment_date=?,revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=? AND deleted=false",
                 d.experimentNo().trim(),d.title(),d.categoryId(),d.categoryName(),d.projectId(),d.stageId(),d.taskId(),d.ownerName(),d.experimentDate(),actor,org,id,revision); lock(n);
-        jdbc.update("UPDATE rnd.experiment_version SET template_version_id=?,template_snapshot_hash=?,template_snapshot_jsonb=?,edit_model_jsonb=? WHERE id=?",d.templateVersionId(),d.templateHash(),pg(d.templateSnapshot()),pg(d.editModel()),old.currentVersionId());
-        audit(org,id,old.currentVersionId(),"DRAFT_SAVED",old.editModel(),d.editModel(),actor,name); return required(org,id);
+        // Keep the previous and saved JSONB inside PostgreSQL. Sending both full
+        // models back to the database for the audit triples large workbook writes.
+        int saved=jdbc.update("""
+                WITH before_state AS MATERIALIZED (
+                    SELECT id,edit_model_jsonb FROM rnd.experiment_version WHERE id=? AND organization_id=?
+                ), saved AS (
+                    UPDATE rnd.experiment_version v
+                    SET template_version_id=?,template_snapshot_hash=?,template_snapshot_jsonb=?,edit_model_jsonb=?
+                    FROM before_state b WHERE v.id=b.id RETURNING v.id,v.edit_model_jsonb
+                )
+                INSERT INTO rnd.experiment_audit(id,organization_id,experiment_id,experiment_version_id,action,before_jsonb,after_jsonb,operator_id,operator_name)
+                SELECT ?,?,?,s.id,'DRAFT_SAVED',b.edit_model_jsonb,s.edit_model_jsonb,?,?
+                FROM before_state b JOIN saved s ON s.id=b.id
+                """,old.currentVersionId(),org,d.templateVersionId(),d.templateHash(),pg(d.templateSnapshot()),pg(d.editModel()),
+                UUID.randomUUID(),org,id,actor,name);
+        lock(saved); return required(org,id);
     }
     @Override @Transactional public void delete(UUID org,UUID id,long revision,UUID actor,String name){var old=required(org,id); requireVersion(old,revision);if(old.summary().status()==ExperimentStatus.COMPLETED)conflict("已完成实验不可删除，请使用作废");int n=jdbc.update("UPDATE rnd.experiment SET deleted=true,revision=revision+1,updated_by=?,updated_at=now() WHERE organization_id=? AND id=? AND revision=? AND deleted=false",actor,org,id,revision);lock(n);audit(org,id,old.currentVersionId(),"DELETED",old.editModel(),null,actor,name);}
     @Override @Transactional public Detail publish(UUID org,UUID id,long revision,UUID actor,String name){
@@ -165,7 +179,7 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         jdbc.update("UPDATE rnd.experiment_version SET status=?,submitted_at=CASE WHEN ?='PENDING_REVIEW' THEN now() ELSE submitted_at END,published_at=CASE WHEN ?='COMPLETED' THEN now() ELSE published_at END WHERE id=?",target.name(),target.name(),target.name(),old.currentVersionId());
         jdbc.update("INSERT INTO rnd.experiment_review(id,organization_id,experiment_id,experiment_version_id,action,comment,operator_id,operator_name) VALUES(?,?,?,?,?,?,?,?)",UUID.randomUUID(),org,id,old.currentVersionId(),target.name(),comment,actor,name);
         String ev=target==ExperimentStatus.PENDING_REVIEW?ExperimentEvents.SUBMITTED:target==ExperimentStatus.COMPLETED?ExperimentEvents.PUBLISHED:target==ExperimentStatus.VOIDED?ExperimentEvents.VOIDED:null;if(ev!=null)event(org,id,ev,old.currentVersionId(),old.summary().versionNo());
-        audit(org,id,old.currentVersionId(),"STATUS_"+target,old.editModel(),old.editModel(),actor,name);return required(org,id);
+        auditVersion(org,id,old.currentVersionId(),"STATUS_"+target,actor,name);return required(org,id);
     }
     @Override public List<Version> versions(UUID org,UUID id){return jdbc.query("SELECT * FROM rnd.experiment_version WHERE organization_id=? AND experiment_id=? AND (status='COMPLETED' OR (status='VOIDED' AND published_at IS NOT NULL)) ORDER BY version_no DESC",this::version,org,id);}
     @Override public Optional<Version> version(UUID org,UUID id,UUID versionId){
@@ -298,10 +312,20 @@ public class JdbcExperimentRepository implements ExperimentRepository {
     private Summary summary(ResultSet r,int n)throws SQLException{return new Summary(r.getObject("id",UUID.class),r.getString("experiment_no"),r.getString("title"),r.getObject("category_id",UUID.class),r.getString("category_name"),r.getString("source_type"),ExperimentStatus.valueOf(r.getString("status")),r.getObject("project_id",UUID.class),r.getString("project_name"),r.getObject("stage_id",UUID.class),r.getString("stage_name"),r.getObject("task_id",UUID.class),r.getString("task_name"),r.getString("owner_name"),r.getObject("experiment_date",LocalDate.class),r.getInt("version_no"),r.getLong("revision"),r.getTimestamp("updated_at").toInstant(),r.getString("document_format"));}
     private Version version(ResultSet r,int n)throws SQLException{return new Version(r.getObject("id",UUID.class),r.getInt("version_no"),r.getString("status"),r.getObject("template_version_id",UUID.class),r.getString("template_snapshot_hash"),node(r,"template_snapshot_jsonb"),node(r,"edit_model_jsonb"),r.getString("revision_reason"),instant(r,"submitted_at"),instant(r,"published_at"),r.getTimestamp("created_at").toInstant(),r.getObject("created_by",UUID.class));}
     private void audit(UUID o,UUID e,UUID v,String a,JsonNode before,JsonNode after,UUID actor,String name){jdbc.update("INSERT INTO rnd.experiment_audit(id,organization_id,experiment_id,experiment_version_id,action,before_jsonb,after_jsonb,operator_id,operator_name) VALUES(?,?,?,?,?,?,?,?,?)",UUID.randomUUID(),o,e,v,a,pg(before),pg(after),actor,name);}
+    private void auditVersion(UUID o,UUID e,UUID v,String a,UUID actor,String name){
+        int inserted=jdbc.update("""
+                INSERT INTO rnd.experiment_audit(id,organization_id,experiment_id,experiment_version_id,action,before_jsonb,after_jsonb,operator_id,operator_name)
+                SELECT ?,?,?,id,?,edit_model_jsonb,edit_model_jsonb,?,?
+                FROM rnd.experiment_version WHERE organization_id=? AND experiment_id=? AND id=?
+                """,UUID.randomUUID(),o,e,a,actor,name,o,e,v);
+        lock(inserted);
+    }
     private void event(UUID o,UUID e,String type,UUID v,int no){var p=json.createObjectNode().put("experimentId",e.toString()).put("versionId",v.toString()).put("versionNo",no);jdbc.update("INSERT INTO rnd.experiment_outbox(id,organization_id,aggregate_id,event_type,payload_jsonb) VALUES(?,?,?,?,?)",UUID.randomUUID(),o,e,type,pg(p));}
     private JsonNode node(ResultSet r,String c)throws SQLException{var value=r.getString(c);if(value==null||value.isBlank())return null;try{return json.readTree(value);}catch(Exception e){throw new SQLException("Invalid JSON in "+c,e);}}private PGobject pg(JsonNode n){if(n==null)return null;try{var p=new PGobject();p.setType("jsonb");p.setValue(json.writeValueAsString(n));return p;}catch(Exception e){throw new IllegalArgumentException(e);}}
     private static List<String> strings(JsonNode value){if(value==null||!value.isArray())return List.of();var result=new ArrayList<String>();value.forEach(item->{var text=item.asText("").trim();if(!text.isEmpty()&&!result.contains(text))result.add(text);});return List.copyOf(result);}
     private static Instant instant(ResultSet r,String c)throws SQLException{var t=r.getTimestamp(c);return t==null?null:t.toInstant();}private static boolean text(String s){return s!=null&&!s.isBlank();}private static void lock(int n){if(n!=1)throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"实验已被其他会话修改，请刷新后重试");}private static void conflict(String m){throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,m);}private static void invalid(String m){throw new ApiException(ApiErrorCode.VALIDATION_ERROR,m);}
     private static final String DOCUMENT_FORMAT="(CASE WHEN v.edit_model_jsonb->'documentSnapshot'->'sheets' IS NOT NULL OR v.template_snapshot_jsonb->'sheets' IS NOT NULL OR upper(v.edit_model_jsonb->>'documentFormat')='EXCEL' OR lower(v.edit_model_jsonb->>'sourceFileName') ~ '\\.(xlsx|xls|csv)$' OR e.source_type='EXCEL_IMPORT' OR (SELECT t.format FROM tpl.template_version tv JOIN tpl.template t ON t.id=tv.template_id WHERE tv.id=v.template_version_id)='XLSX' THEN 'EXCEL' ELSE 'WORD' END)";
+    // Lists and relation pickers need summaries, not the potentially large workbook snapshots.
+    private static final String SUMMARY_BASE="SELECT e.*,p.name AS project_name,s.name AS stage_name,t.name AS task_name,v.version_no,"+DOCUMENT_FORMAT+" AS document_format FROM rnd.experiment e LEFT JOIN mdm.project p ON p.id=e.project_id AND p.deleted=false LEFT JOIN mdm.project_stage s ON s.id=e.stage_id AND s.deleted=false LEFT JOIN mdm.project_task t ON t.id=e.task_id AND t.deleted=false JOIN rnd.experiment_version v ON v.id=e.current_version_id";
     private static final String BASE="SELECT e.*,p.name AS project_name,s.name AS stage_name,t.name AS task_name,v.version_no,v.template_version_id,v.template_snapshot_hash,v.template_snapshot_jsonb,v.edit_model_jsonb,"+DOCUMENT_FORMAT+" AS document_format FROM rnd.experiment e LEFT JOIN mdm.project p ON p.id=e.project_id AND p.deleted=false LEFT JOIN mdm.project_stage s ON s.id=e.stage_id AND s.deleted=false LEFT JOIN mdm.project_task t ON t.id=e.task_id AND t.deleted=false JOIN rnd.experiment_version v ON v.id=e.current_version_id";
 }

@@ -94,6 +94,8 @@ export function DataImportJobPage({
   const [preview, setPreview] = useState<DataPreview>();
   const [workbook, setWorkbook] = useState<DataWorkbookSnapshot>();
   const [loading, setLoading] = useState(true);
+  const [workbookLoading, setWorkbookLoading] = useState(false);
+  const [workbookError, setWorkbookError] = useState<string>();
   const [loadError, setLoadError] = useState<string>();
   const [saving, setSaving] = useState(false);
   const [savingCell, setSavingCell] = useState<string>();
@@ -146,6 +148,7 @@ export function DataImportJobPage({
     setAssemblyPlan(undefined); setAssemblyLinks([]); setLoading(true); structureDirtyRef.current = false; setStructureDirty(false);
     editGeneration.current = 0; structureOperations.current = []; correctionRevision.current = undefined;
     setDocumentCorrections({}); setSaving(false); setSavingCell(undefined);
+    setWorkbookLoading(false); setWorkbookError(undefined);
     setSelectedFieldKey(undefined); setSelectedBindingId(undefined);
   }, [id, workspaceMode]);
   const load = useCallback(async (options: { silent?: boolean; preserveSnapshot?: boolean; skipWorkbook?: boolean } = {}) => {
@@ -159,11 +162,18 @@ export function DataImportJobPage({
       const nextPreview = await dataApi.preview(id, workspaceMode === 'EXPERIMENT');
       if (!isCurrent()) return;
       const stillProcessing = ['PARSING', 'VALIDATING', 'COMMITTING'].includes(nextPreview.job.status);
-      const nextWorkbook = options.skipWorkbook && stillProcessing
+      setPreview(nextPreview);
+      setLoadError(undefined);
+      setLoading(false);
+      setWorkbookError(undefined);
+      setWorkbookLoading(!stillProcessing);
+      const nextWorkbook = stillProcessing
         ? undefined
         : await dataApi.getImportWorkbookSnapshot(id, workspaceMode === 'EXPERIMENT').catch((error: unknown) => {
-          if (stillProcessing || ['DOC', 'DOCX', 'IMAGE'].includes(nextPreview.job.sourceFormat)) return undefined;
-          throw error;
+          if (isCurrent() && !['DOC', 'DOCX', 'IMAGE'].includes(nextPreview.job.sourceFormat)) {
+            setWorkbookError(error instanceof Error ? error.message : '工作簿加载失败');
+          }
+          return undefined;
         });
       if (!isCurrent()) return;
       setPreview(nextPreview);
@@ -190,7 +200,7 @@ export function DataImportJobPage({
     } catch (error) {
       if (isCurrent()) setLoadError(error instanceof Error ? error.message : '导入任务加载失败');
     } finally {
-      if (isCurrent()) setLoading(false);
+      if (isCurrent()) { setLoading(false); setWorkbookLoading(false); }
     }
   }, [id, loads, workspaceMode]);
 
@@ -227,6 +237,8 @@ export function DataImportJobPage({
   usePolling(() => load({ silent: true, skipWorkbook: true }), processing, 1600, id);
 
   const fields = workbook?.fields || [];
+  const workbookUnavailable = !['DOC', 'DOCX', 'IMAGE'].includes(preview?.job.sourceFormat ?? '')
+    && (workbookLoading || Boolean(workbookError) || !workbook);
 
   if (loading && !preview) return <div className="data-workbench-loading"><Spin /></div>;
   if (!preview) return (
@@ -353,7 +365,7 @@ export function DataImportJobPage({
   const retryAssembly = async () => {
     const categoryId = preview?.job.targetExperimentCategoryId;
     const assemblyKeys = assemblyLinks.filter(item => item.status === 'FAILED').map(item => item.assemblyKey);
-    if (!categoryId || assemblyKeys.length === 0) return;
+    if (assemblyKeys.length === 0) return;
     setSaving(true);
     try {
       await dataApi.syncExperiments(id, {
@@ -545,27 +557,24 @@ export function DataImportJobPage({
       navigation={<nav className="workspace-view-tabs data-workspace-view-tabs" aria-label="数据工作台视图"><Tabs activeKey={workspaceView === 'edit' && !canUpdate ? 'preview' : workspaceView} onChange={setWorkspaceView} items={[{ key: 'preview', label: <span><EyeOutlined /> 预览</span> }, ...(canUpdate ? [{ key: 'edit', label: '编辑' }] : []), ...(workspaceMode === 'DATA' ? [{ key: 'versions', label: '版本记录' }] : [])]} /></nav>}
       content={workspaceMode === 'DATA' && workspaceView === 'versions' ? <div ref={setVersionContainer} /> : undefined}
       actions={<>
-        {canUpdate && workbook?.editable && <Button loading={saving} disabled={Boolean(savingCell) || processing} onClick={() => void saveDraft()}>保存草稿</Button>}
+        {canUpdate && workbook?.editable && <Button loading={saving} disabled={Boolean(savingCell) || processing || workbookUnavailable} onClick={() => void saveDraft()}>保存草稿</Button>}
         {workspaceMode === 'DATA' && <DataPublicationPanel jobId={id} refreshKey={preview.job.updatedAt}
           versionContainer={versionContainer}
           canConfirm={!confirmationBlockReason(preview, displayedIssues)}
-          disabled={saving || Boolean(savingCell) || structureDirty || Object.keys(documentCorrections).length > 0}
+          disabled={saving || Boolean(savingCell) || workbookUnavailable || structureDirty || Object.keys(documentCorrections).length > 0}
           onStateChange={setPublication} onChanged={() => void load()} />}
-        <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
+        <Button icon={<ReloadOutlined />} disabled={workbookLoading} onClick={() => void load()}>刷新</Button>
         {canUpdate && !processing && preview.job.status !== 'COMPLETED' && <Button loading={saving} onClick={() => void reExtract()}>重新解析</Button>}
         <Button icon={<EyeOutlined />} onClick={() => setPreviewFile(sourceFile)}>预览原文件</Button>
         {canDownload && <Button icon={<DownloadOutlined />} onClick={() => void downloadPreviewFile(sourceFile)}>下载原文件</Button>}
         {canAssign && canUpdate ? <Button icon={<LinkOutlined />} onClick={() => setRelationOpen(true)}>关联项目</Button> : null}
       </>}
       notice={<>
-        {loadError ? <Alert
+        {workbookError || loadError ? <Alert
           showIcon
-          type="warning"
-          message={loadError.startsWith('草稿保存失败：') ? '草稿保存失败，当前未保存修改仍保留' : '任务数据刷新失败，当前显示的是上一次成功加载的数据'}
-          description={loadError}
-          action={<Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load()}>重试</Button>}
-          closable
-          onClose={() => setLoadError(undefined)}
+          type={workbookError ? 'error' : 'warning'}
+          message={loadError?.startsWith('草稿保存失败：') ? '草稿保存失败，当前修改仍保留' : '加载失败，请重试'}
+          action={<Button icon={<ReloadOutlined />} loading={loading || workbookLoading} onClick={() => void load()}>重试</Button>}
         /> : null}
         <FieldDefinitionReview
           items={definitionReviews}
@@ -592,11 +601,11 @@ export function DataImportJobPage({
         {structureDirty && <Alert type="info" showIcon message="工作簿还有未保存的修改，可继续编辑或点击“保存草稿”。" />}
         {Object.keys(documentCorrections).length > 0 && <Alert type="info" showIcon message="字段修改正在自动保存，也可点击“保存草稿”立即保存。" />}
       </>}
-      canvas={['DOC', 'DOCX', 'IMAGE'].includes(preview.job.sourceFormat) ? <OriginalDocumentCanvas file={sourceFile} /> : <DataWorkbookCanvas
+      canvas={['DOC', 'DOCX', 'IMAGE'].includes(preview.job.sourceFormat) ? <OriginalDocumentCanvas file={sourceFile} /> : workbookError && !workbook ? null : <DataWorkbookCanvas
         ref={editorRef}
         workbook={workbook}
-        loading={!workbook && processing}
-        editable={Boolean(workspaceView === 'edit' && canUpdate && workbook?.editable && workbook.fields.some((field) => field.editable) && !savingCell && !saving)}
+        loading={!workbook && (processing || workbookLoading)}
+        editable={Boolean(workspaceView === 'edit' && canUpdate && !workbookUnavailable && workbook?.editable && workbook.fields.some((field) => field.editable) && !savingCell && !saving)}
         instance={instance}
         onInstanceChange={next => { setInstance(next); markStructureDirty(); }}
         onStructureChange={operation => { structureOperations.current.push(operation); markStructureDirty(); }}
@@ -658,10 +667,10 @@ export function DataImportJobPage({
             confirmed={false}
             busy={saving}
             saving={Boolean(savingCell) || Object.keys(documentCorrections).length > 0}
-            blocked={structureDirty || definitionReviews.length > 0 || blockers.length > 0
+            blocked={workbookUnavailable || processing || structureDirty || definitionReviews.length > 0 || blockers.length > 0
               || Boolean(confirmationBlockReason(preview, displayedIssues))
               || ['INCOMPATIBLE', 'REVIEW_REQUIRED'].includes(compatibility)}
-            blockedHint={structureDirty
+            blockedHint={workbookUnavailable ? '请等待工作簿加载成功后再完成核对' : structureDirty
               ? '左侧工作簿有未保存修改，请先点击顶部“保存草稿”'
               : definitionReviews.length
                 ? '请先确认上方新增字段的类型和单位'
@@ -722,7 +731,7 @@ function WorkbenchNotice({ preview, issues, processing, onIssue }: { preview: Da
   if (!statusNotice && !issues.some(issue => !['RESOLVED', 'IGNORED'].includes(issue.status))) return null;
   return <Space direction="vertical" size={8} style={{ width: '100%' }}>
     {statusNotice}
-    <DataImportQualityNotice issues={issues} sheets={preview.sheets} onLocate={onIssue} />
+    <DataImportQualityNotice issues={issues} sheets={preview.sheets} onLocate={onIssue} experimentDraft={preview.job.importPurpose === 'EXPERIMENT_DRAFT'} />
   </Space>;
 }
 

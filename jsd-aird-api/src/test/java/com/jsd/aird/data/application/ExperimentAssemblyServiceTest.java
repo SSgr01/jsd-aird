@@ -14,6 +14,7 @@ import com.jsd.aird.shared.security.Actor;
 import com.jsd.aird.shared.security.ActorContext;
 import com.jsd.aird.tpl.api.TemplateDataImportFacade;
 import org.junit.jupiter.api.*;
+import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.support.*;
 import org.springframework.transaction.TransactionDefinition;
 import java.time.Instant;
@@ -79,6 +80,19 @@ class ExperimentAssemblyServiceTest {
         verify(jobs).requireExecution(context,false);
         verify(repository).markSynced(org,job,key,created.experimentId(),created.experimentVersionId(),created.experimentNo());
         verify(recognition).linkExperiment(eq(org),eq(job),any(),eq(key),eq(created.experimentId()),eq(created.experimentVersionId()),eq(created.experimentNo()),any(),any(),anyList(),eq("content"),eq(user));
+    }
+    @Test void uncategorizedImportCanQueueAndCreateDraftThroughAsyncHandler(){
+        when(repository.load(org,job)).thenReturn(new ExperimentAssemblyRepository.SourceImport(job,source.sourceFileId(),
+                source.sourceFileName(),source.sourceSha256(),version,9,"contract","COMPLETED","EXPERIMENT_DRAFT",
+                null,user,Instant.EPOCH,List.of()));
+        when(jobs.enqueue(eq(org),eq("DATA_TO_EXPERIMENT_SYNC"),any(),anyString(),eq(40))).thenReturn(UUID.randomUUID());
+        assertThat(service.sync(job,null,List.of(key)).acceptedCount()).isEqualTo(1);
+        var payload=ArgumentCaptor.forClass(com.fasterxml.jackson.databind.JsonNode.class);
+        verify(jobs).enqueue(eq(org),eq("DATA_TO_EXPERIMENT_SYNC"),payload.capture(),anyString(),eq(40));
+        assertThat(payload.getValue().hasNonNull("categoryId")).isFalse();
+        new DataToExperimentJobHandler(service,json).handle(payload.getValue(),context);
+        verify(experiments).createImportedDraft(argThat(command->command.categoryId()==null));
+        verify(experiments,never()).requireActiveCategory(any(),any());
     }
     @Test void fileFailureKeepsOriginalErrorAndDoesNotStartWriting(){
         var error=new ApiException(ApiErrorCode.FILE_NOT_READY,"原文件暂不可读取");

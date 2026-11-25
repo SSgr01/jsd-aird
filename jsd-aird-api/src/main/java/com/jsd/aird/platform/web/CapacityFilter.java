@@ -48,9 +48,21 @@ public class CapacityFilter extends OncePerRequestFilter {
                     || path.matches("/api/v1/ai/rnd/modeling-workbench/datasets/[0-9a-fA-F-]+(?:/selection)?");
             boolean researchSubmission=path.equals("/api/v1/ai/rnd/experiment-optimizations") && !read
                     || path.equals("/api/v1/ai/rnd/modeling-workbench/runs") && !read;
-            boolean expensive=upload || workspaceCommand || datasetProjection || researchSubmission || path.endsWith("/re-extract") || path.endsWith("/publish") || path.endsWith("/export") || path.endsWith("/rollback");
+            boolean importValidation=path.matches("/api/v1/data/(?:experiment-import-jobs|import-jobs)/[0-9a-fA-F-]+/(?:commit|mappings)")
+                    && (request.getMethod().equals("POST") && path.endsWith("/commit")
+                        || request.getMethod().equals("PUT") && path.endsWith("/mappings"));
+            boolean importPreview=read
+                    && path.matches("/api/v1/data/(?:experiment-import-jobs|import-jobs)/[0-9a-fA-F-]+/preview");
+            boolean experimentReview=request.getMethod().equals("POST")
+                    && path.matches("/api/v1/experiments/[0-9a-fA-F-]+/(?:confirm-data|submit-review|approve|return)");
+            boolean experimentWorkbookReview=read
+                    && path.matches("/api/v1/experiments/[0-9a-fA-F-]+/(?:data-review|presentation)");
+            boolean expensive=upload || workspaceCommand || datasetProjection || researchSubmission || importValidation || importPreview || experimentReview || experimentWorkbookReview || path.endsWith("/re-extract") || path.endsWith("/publish") || path.endsWith("/export") || path.endsWith("/rollback");
             leases.add((stream?streams:requests).enter(limits.admissionMillis()));
-            if(!read || upload || expensive)leases.add((expensive?heavy:writes).enter(limits.admissionMillis()));
+            // Import preview reads staged database metadata; it does not parse documents.
+            // Keep its large-response budget, but do not block opening other records
+            // behind workbook parsing jobs occupying the document-operation slots.
+            if(!read || upload || (expensive && !importPreview))leases.add((expensive?heavy:writes).enter(limits.admissionMillis()));
             if(upload)leases.add(temporary.reserve(545259520L));
             long maximum=workspaceCommand?limits.workspaceJsonBytes():limits.jsonBytes();
             if(!upload && !read && request.getContentLengthLong()>maximum)throw new ApiException(ApiErrorCode.PAYLOAD_TOO_LARGE);

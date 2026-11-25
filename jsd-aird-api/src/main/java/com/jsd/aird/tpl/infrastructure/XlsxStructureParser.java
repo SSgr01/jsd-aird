@@ -65,7 +65,17 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
     @Override
     public ParseResult parse(InputStream input) {
         if(isolated!=null)return isolated.execute("xlsx",input,null,ParseResult.class);
-        try (var workbook = new XSSFWorkbook(input)) {
+        return parseLocal(input,true);
+    }
+
+    @Override
+    public com.fasterxml.jackson.databind.JsonNode parseSnapshot(InputStream input) {
+        if(isolated!=null)return isolated.execute("xlsx-snapshot",input,null,com.fasterxml.jackson.databind.JsonNode.class);
+        return parseLocal(input,false).initialEditorSnapshot();
+    }
+
+    private ParseResult parseLocal(InputStream input,boolean includeFacts) {
+        try (var workbook = com.jsd.aird.shared.office.IsoDateXlsxReader.open(input)) {
             var summary = objectMapper.createObjectNode();
             var sheets = objectMapper.createArrayNode();
             var snapshot = objectMapper.createObjectNode();
@@ -89,7 +99,7 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
                 var mergedRanges = objectMapper.createArrayNode();
                 var mergeData = objectMapper.createArrayNode();
                 var mergeAddresses = new ArrayList<CellRangeAddress>();
-                var dataValidations = validationSummaries(sheetId, sheet.getSheetName(), sheet);
+                var dataValidations = includeFacts ? validationSummaries(sheetId, sheet.getSheetName(), sheet) : objectMapper.createArrayNode();
                 for (var validation : dataValidations) allDataValidations.add(validation.deepCopy());
                 for (int index = 0; index < sheet.getNumMergedRegions(); index++) {
                     var region = sheet.getMergedRegion(index);
@@ -113,7 +123,7 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
                     var cells = objectMapper.createObjectNode();
                     for (var cell : row) {
                         var cellJson = cellData(workbook, cell);
-                        var candidate = candidateCell(workbook, cell, cellJson, sheetId, sheet.getSheetName(), mergeAddresses);
+                        var candidate = includeFacts ? candidateCell(workbook, cell, cellJson, sheetId, sheet.getSheetName(), mergeAddresses) : null;
                         if (candidate != null) {
                             sheetCandidates.add(candidate);
                             allCandidates.add(candidate.deepCopy());
@@ -134,6 +144,7 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
                     columnData.set(String.valueOf(column), data);
                 }
 
+                if(includeFacts) {
                 var sheetSummary = objectMapper.createObjectNode()
                         .put("id", sheetId)
                         .put("name", sheet.getSheetName())
@@ -164,6 +175,7 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
                 sheetSummary.set("dataValidationRules", dataValidations);
                 sheetSummary.put("structureFingerprint", structureFingerprint(sheet, fingerprintFormatter));
                 sheets.add(sheetSummary);
+                }
                 sheetOrder.add(sheetId);
 
                 var snapshotSheet = objectMapper.createObjectNode();
@@ -202,8 +214,8 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
             summary.set("candidateCells", allCandidates);
             summary.set("mergedRanges", allMergedRanges);
             summary.set("dataValidations", allDataValidations);
-            new WorkbookPhysicalFactsBuilder(objectMapper).enrich(summary);
-            if (!workbook.getAllNames().isEmpty()) {
+            if(includeFacts) new WorkbookPhysicalFactsBuilder(objectMapper).enrich(summary);
+            if (includeFacts && !workbook.getAllNames().isEmpty()) {
                 var names = objectMapper.createArrayNode();
                 workbook.getAllNames().forEach(name -> names.add(objectMapper.createObjectNode()
                         .put("name", name.getNameName())
@@ -249,7 +261,7 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
                 }
             }
             case NUMERIC -> {
-                result.put("v", cell.getNumericCellValue());
+                result.put("v", snapshotNumber(workbook, cell, cell.getNumericCellValue()));
                 result.put("t", 2);
             }
             case BOOLEAN -> {
@@ -265,7 +277,7 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
                         result.put("t", 1);
                     }
                     case NUMERIC -> {
-                        result.put("v", cell.getNumericCellValue());
+                        result.put("v", snapshotNumber(workbook, cell, cell.getNumericCellValue()));
                         result.put("t", 2);
                     }
                     case BOOLEAN -> {
@@ -288,6 +300,16 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
         var style = univerStyle(workbook, cell);
         if (!style.isEmpty()) result.set("s", style);
         return result;
+    }
+
+    private double snapshotNumber(XSSFWorkbook workbook, Cell cell, double value) {
+        // Univer snapshots use the 1900 epoch even when the source uses 1904.
+        // Time-only formats must keep their fractional day, including midnight.
+        if (!workbook.isDate1904() || !org.apache.poi.ss.usermodel.DateUtil.isCellDateFormatted(cell)) return value;
+        var format = cell.getCellStyle().getDataFormatString();
+        var datePart = format == null ? "" : format.replaceAll("\"[^\"]*\"|\\\\.|\\[[^\\]]*\\]", "");
+        return datePart.toLowerCase(Locale.ROOT).matches(".*[yd].*")
+                ? value + 1462 : value;
     }
 
     private void canonicalizeCellStyle(

@@ -11,7 +11,7 @@ import { ExperimentWorkspacePage } from './experiments/ExperimentWorkspacePage';
 const mocks = vi.hoisted(() => ({
   order: { getEditModel: vi.fn(), downloadSnapshot: vi.fn(), listRevisions: vi.fn(), stageSnapshot: vi.fn(), saveDraft: vi.fn() },
   record: { get: vi.fn(), versions: vi.fn(), saveBatch: vi.fn() },
-  experiment: { getExperiment: vi.fn(), listVersions: vi.fn(), saveExperiment: vi.fn() },
+  experiment: { getExperiment: vi.fn(), listVersions: vi.fn(), saveExperiment: vi.fn(), actExperiment: vi.fn(), confirmExperimentTemplateData: vi.fn() },
   runtime: { revision: 0, reads: vi.fn(), mounts: 0, dirty: () => {}, text: 'before' },
 }));
 vi.mock('@/services/production-orders/production-order-api', () => ({ productionOrderApi: mocks.order }));
@@ -54,6 +54,65 @@ beforeEach(() => {
   mocks.order.downloadSnapshot.mockResolvedValue(workbook); mocks.order.listRevisions.mockResolvedValue([]); mocks.order.stageSnapshot.mockResolvedValue({ fileId: 'staged', sha256: 'hash' }); mocks.order.saveDraft.mockResolvedValue({ lockVersion: 2 });
   mocks.record.get.mockImplementation((id: string) => Promise.resolve({ ...record(id), lockVersion: id === 'one' && mocks.record.saveBatch.mock.calls.length ? 2 : 1 })); mocks.record.versions.mockResolvedValue([]); mocks.record.saveBatch.mockResolvedValue({});
   mocks.experiment.getExperiment.mockImplementation((id: string) => Promise.resolve(experiment(id))); mocks.experiment.listVersions.mockResolvedValue([]); mocks.experiment.saveExperiment.mockResolvedValue(experiment());
+  mocks.experiment.actExperiment.mockResolvedValue(undefined);
+});
+
+it('adopts data confirmation without reloading the workbook or resetting the editor', async () => {
+  const draft = { ...experiment(), summary: { ...experiment().summary, sourceType: 'EXCEL_IMPORT' },
+    editModel: { title: 'one', documentFormat: 'excel', documentSnapshot: { ...workbook,
+      sheets: { s: { id: 's', name: '实验', cellData: { 0: { 0: { v: '样品' } } } } } },
+      importDataReview: { confirmed: false } } };
+  mocks.experiment.getExperiment.mockResolvedValue(draft);
+  mocks.experiment.saveExperiment.mockImplementation(async () => {
+    // Calculation/rendering can advance the editor counter without changing reviewed values.
+    mocks.runtime.revision++;
+    return { ...draft, summary: { ...draft.summary, revision: 2 } };
+  });
+  mocks.experiment.confirmExperimentTemplateData.mockResolvedValue({ ...draft,
+    summary: { ...draft.summary, revision: 3 }, editModel: { ...draft.editModel,
+      importDataReview: { confirmed: true, confirmedRevision: 3 } } });
+  open('experiment');
+  await screen.findByTestId('editor');
+  const confirm = await screen.findByRole('button', { name: '完成数据核对' });
+  await waitFor(() => expect(confirm).toBeEnabled());
+  fireEvent.click(confirm);
+  await waitFor(() => expect(mocks.experiment.confirmExperimentTemplateData).toHaveBeenCalledWith('one', 2));
+  await waitFor(() => expect(screen.getAllByText('已核对').length).toBeGreaterThan(0));
+  expect(mocks.experiment.getExperiment).toHaveBeenCalledTimes(1);
+  expect(mocks.runtime.mounts).toBe(1);
+  expect(confirm).toBeDisabled();
+});
+
+it.each(['EXCEL_IMPORT', 'OCR_IMPORT'])('content-only %s keeps the editor without review panels and can submit', async (sourceType) => {
+  const draft = {
+    ...experiment(),
+    summary: { ...experiment().summary, sourceType },
+    editModel: {
+      ...experiment().editModel,
+      documentFormat: 'excel',
+      documentSnapshot: {
+        ...workbook,
+        sheets: { s: { id: 's', name: '原始实验', cellData: { 0: { 0: { v: '实验人' }, 1: { v: '张三' } } } } },
+      },
+      importProcessingMode: 'CONTENT_ONLY',
+      sourceImportJobId: 'legacy-import',
+      importDataReview: { confirmed: false },
+      recognizedFields: [],
+      recognizedRegions: [],
+    },
+  };
+  mocks.experiment.getExperiment.mockResolvedValue(draft);
+  open('experiment');
+  await screen.findByTestId('editor');
+  const submit = await screen.findByRole('button', { name: '提交审核' });
+  await waitFor(() => expect(submit).toBeEnabled());
+  expect(screen.queryByRole('complementary', { name: '字段数据核对' })).not.toBeInTheDocument();
+  expect(screen.queryByText('本次实验数据')).not.toBeInTheDocument();
+  expect(screen.queryByText('数据：待核对')).not.toBeInTheDocument();
+  expect(screen.queryByText('AI 识别待确认')).not.toBeInTheDocument();
+  expect(screen.getByTestId('editor').closest('.template-workspace-grid')).not.toHaveClass('has-field-bindings');
+  fireEvent.click(submit);
+  await waitFor(() => expect(mocks.experiment.actExperiment).toHaveBeenCalledWith('one', 'submit-review', 1));
 });
 
 for (const kind of ['production', 'upload', 'experiment'] as const) describe(`${kind} save lifecycle`, () => {

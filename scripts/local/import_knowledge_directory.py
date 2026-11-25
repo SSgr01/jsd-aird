@@ -272,7 +272,11 @@ class ApiClient:
             args += ["--data-binary", "@-"]
             body = json.dumps(value, ensure_ascii=False).encode("utf-8")
         args.append(self._url(path))
-        return self._run(args, body)
+        try:
+            return self._run(args, body)
+        except ApiHttpError as error:
+            error.args = (f"{method} {path.split('?', 1)[0]} — {error}",)
+            raise
 
     def login(self, username: str, password: str) -> None:
         csrf = self._run(["--request", "GET", self._url("/api/v1/auth/csrf")])
@@ -623,6 +627,12 @@ def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_s
                                          + "；修复原因后可使用 --retry-failed 重试发布")
         if revision.get("status") in {"DRAFT", "FAILED"}:
             ensure_publication_review(api, version_id, auto_approve=auto_approve, retry_failed=retry_failed)
+            # Approval may update the revision lock; publish the reviewed state.
+            refreshed_review = api.json("GET", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/review")
+            refreshed_revision = refreshed_review.get("reviewRevision") or {}
+            if refreshed_revision.get("id") != revision.get("id"):
+                raise ImportErrorWithMessage("审核期间校对版本发生变化，请核对后续跑")
+            revision = refreshed_revision
             queue_api_call(api, lambda: api.json(
                 "POST", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/publish", {
                     "reviewRevisionId": revision["id"],
@@ -764,9 +774,14 @@ def enrich_existing(args: argparse.Namespace) -> int:
 
 def collect_files(source: Path, manifest: Path, included: list[str] | None = None) -> list[Path]:
     """An explicit selection stays inside the source directory and never follows links."""
+    def importable(path: Path) -> bool:
+        return (not path.name.startswith("~$")
+                and path.suffix.lower() not in {".crdownload", ".part", ".partial", ".tmp", ".short"}
+                and not (path.name.startswith(".knowledge-import") and path.suffix.lower() == ".jsonl"))
+
     if included is None:
         return sorted(path for path in source.rglob("*")
-                      if path.is_file() and not path.is_symlink() and path.resolve() != manifest.resolve())
+                      if path.is_file() and not path.is_symlink() and path.resolve() != manifest.resolve() and importable(path))
     selected: set[Path] = set()
     for name in included:
         relative = Path(name)
@@ -778,7 +793,8 @@ def collect_files(source: Path, manifest: Path, included: list[str] | None = Non
         resolved = path.resolve(strict=True)
         if not resolved.is_relative_to(source) or not resolved.is_file() or resolved == manifest.resolve():
             raise ImportErrorWithMessage("选择的文件不是来源目录内的普通文件")
-        selected.add(path)
+        if importable(path):
+            selected.add(path)
     return sorted(selected)
 
 

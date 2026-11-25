@@ -196,7 +196,7 @@ public class AgentHostService {
                 request.set("ref", record.path("ref")); request.put("section", "page");
                 result = mapper.createObjectNode(); var candidates = result.putArray("candidates");
                 var presentation = result.putObject("spectrum");
-                for (var field : List.of("title", "sampleName", "batchNo", "testConditions", "originalName", "pageCount"))
+                for (var field : List.of("title", "sampleName", "batchNo", "testConditions", "testMethodSnapshot", "conditionWarnings", "originalName", "pageCount"))
                     if (body.has(field)) presentation.set(field, body.get(field));
                 var seen = new HashSet<Integer>();
                 for (var page : ref.path("pages")) {

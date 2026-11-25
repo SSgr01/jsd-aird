@@ -378,10 +378,10 @@ public class JdbcDataRepository implements DataRepository {
         jdbc.update("DELETE FROM data.import_sheet WHERE import_job_id = ?", importJobId);
         jdbc.update("DELETE FROM data.import_mapping WHERE import_job_id = ?", importJobId);
         jdbc.update("DELETE FROM data.staging_row WHERE import_job_id = ?", importJobId);
-        var sheetIds = new ArrayList<UUID>();
+        var sheetIds = new java.util.HashMap<String,UUID>();
         for (Sheet sheet : sheets) {
             var id = sheet.id() == null ? UUID.randomUUID() : sheet.id();
-            sheetIds.add(id);
+            sheetIds.put(sheet.sheetId(),id);
             jdbc.update("""
                     INSERT INTO data.import_sheet (
                         id, import_job_id, sheet_id, sheet_name, sheet_order, selected,
@@ -391,29 +391,32 @@ public class JdbcDataRepository implements DataRepository {
                     pgJson(objectMapper.valueToTree(sheet.headerRows())), sheet.dataStartRow(), sheet.dataEndRow(),
                     pgJson(sheet.structure()), sheet.confirmationStatus());
         }
+        var mappingBatch=new ArrayList<Object[]>();
         for (Mapping mapping : mappings) {
-            jdbc.update("""
+            mappingBatch.add(new Object[]{mapping.id() == null ? UUID.randomUUID() : mapping.id(), importJobId,
+                    sheetIds.get(mapping.sheetId()),mapping.sourceColumn(),mapping.sourceHeader(),mapping.fieldCode(),
+                    mapping.fieldName(),mapping.action(),mapping.valueType(),mapping.sourceUnit(),mapping.standardUnit(),
+                    pgJson(mapping.detail()),mapping.status()});
+        }
+        batchInsert("""
                     INSERT INTO data.import_mapping (
                         id, import_job_id, import_sheet_id, source_column, source_header, field_code,
                         field_name, action, value_type, source_unit, standard_unit, mapping_jsonb, status
-                    ) VALUES (?, ?, (SELECT id FROM data.import_sheet WHERE import_job_id = ? AND sheet_id = ?),
-                              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, mapping.id() == null ? UUID.randomUUID() : mapping.id(), importJobId, importJobId,
-                    mapping.sheetId(), mapping.sourceColumn(), mapping.sourceHeader(), mapping.fieldCode(),
-                    mapping.fieldName(), mapping.action(), mapping.valueType(), mapping.sourceUnit(), mapping.standardUnit(),
-                    pgJson(mapping.detail()), mapping.status());
-        }
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,mappingBatch);
+        var rowBatch=new ArrayList<Object[]>();
         for (Row row : rows) {
-            jdbc.update("""
+            rowBatch.add(new Object[]{row.id() == null ? UUID.randomUUID() : row.id(),importJobId,sheetIds.get(row.sheetId()),
+                    row.rowNumber(),pgJson(row.rawValues()),pgJson(row.normalizedValues()),pgJson(row.correctedValues()),
+                    pgJson(row.sourceMetadata()),hash(row.rawValues()),row.status(),row.excluded(),row.exclusionReason()});
+        }
+        batchInsert("""
                     INSERT INTO data.staging_row (
                         id, import_job_id, import_sheet_id, source_row_number, raw_values_jsonb,
-                        normalized_values_jsonb, corrected_values_jsonb, source_metadata_jsonb, row_hash, status
-                    ) VALUES (?, ?, (SELECT id FROM data.import_sheet WHERE import_job_id = ? AND sheet_id = ?),
-                              ?, ?, ?, ?, ?, ?, ?)
-                    """, row.id() == null ? UUID.randomUUID() : row.id(), importJobId, importJobId, row.sheetId(),
-                    row.rowNumber(), pgJson(row.rawValues()), pgJson(row.normalizedValues()), pgJson(row.correctedValues()),
-                    pgJson(row.sourceMetadata()), hash(row.rawValues()), row.status());
-        }
+                        normalized_values_jsonb, corrected_values_jsonb, source_metadata_jsonb, row_hash, status,
+                        excluded,exclusion_reason
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,rowBatch);
         jdbc.update("""
                 UPDATE data.import_job SET parser_version = ?, status = 'WAITING_MAPPING', progress = 100,
                     current_stage = 'WAITING_MAPPING', updated_at = now()
@@ -597,25 +600,34 @@ public class JdbcDataRepository implements DataRepository {
     @Transactional
     public void replaceValidation(UUID organizationId, UUID importJobId, List<Row> rows, List<Issue> issues, String status) {
         jdbc.update("DELETE FROM data.import_issue WHERE import_job_id = ?", importJobId);
+        var rowBatch=new ArrayList<Object[]>();
         for (Row row : rows) {
-            jdbc.update("""
-                UPDATE data.staging_row SET normalized_values_jsonb = ?, corrected_values_jsonb = ?,
-                        source_metadata_jsonb = ?, status = ?, excluded = ?, exclusion_reason = ?, updated_at = now()
-                    WHERE id = ? AND import_job_id = ?
-                    """, pgJson(row.normalizedValues()), pgJson(row.correctedValues()), pgJson(row.sourceMetadata()),
-                    row.status(), row.excluded(), row.exclusionReason(), row.id(), importJobId);
+            rowBatch.add(new Object[]{row.id(),importJobId,pgJson(row.normalizedValues()),pgJson(row.correctedValues()),
+                    pgJson(row.sourceMetadata()),row.status(),row.excluded(),row.exclusionReason()});
         }
+        batchInsert("""
+                UPDATE data.staging_row AS target SET normalized_values_jsonb=source.normalized,
+                    corrected_values_jsonb=source.corrected,source_metadata_jsonb=source.metadata,
+                    status=source.status,excluded=source.excluded,exclusion_reason=source.reason,updated_at=now()
+                FROM (VALUES (?::uuid,?::uuid,?::jsonb,?::jsonb,?::jsonb,?::text,?::boolean,?::text))
+                    AS source(id,import_job_id,normalized,corrected,metadata,status,excluded,reason)
+                WHERE target.id=source.id AND target.import_job_id=source.import_job_id
+                """,rowBatch);
+        var issueBatch=new ArrayList<Object[]>();
         for (Issue issue : issues) {
-            jdbc.update("""
+            issueBatch.add(new Object[]{UUID.randomUUID(),importJobId,issue.sheetId(),issue.fieldCode(),issue.severity(),
+                    issue.issueType(),issue.rowNumber(),issue.column(),issue.address(),issue.message(),pgJson(issue.detail()),issue.status()});
+        }
+        batchInsert("""
                     INSERT INTO data.import_issue (
                         id, import_job_id, import_sheet_id, field_code, severity, issue_type,
                         source_row_number, source_column, source_address, message, detail_jsonb, status
-                    ) VALUES (?, ?, (SELECT id FROM data.import_sheet WHERE import_job_id = ? AND sheet_id = ?),
-                              ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, UUID.randomUUID(), importJobId, importJobId, issue.sheetId(), issue.fieldCode(), issue.severity(),
-                    issue.issueType(), issue.rowNumber(), issue.column(), issue.address(), issue.message(), pgJson(issue.detail()),
-                    issue.status());
-        }
+                    ) SELECT source.id,source.import_job_id,sheet.id,source.field_code,source.severity,source.issue_type,
+                        source.row_number,source.source_column,source.address,source.message,source.detail,source.status
+                    FROM (VALUES (?::uuid,?::uuid,?::text,?::text,?::text,?::text,?::integer,?::text,?::text,?::text,?::jsonb,?::text))
+                        AS source(id,import_job_id,sheet_id,field_code,severity,issue_type,row_number,source_column,address,message,detail,status)
+                    LEFT JOIN data.import_sheet sheet ON sheet.import_job_id=source.import_job_id AND sheet.sheet_id=source.sheet_id
+                    """,issueBatch);
         updateJobStatus(organizationId, importJobId, status, 100,
                 "WAITING_CONFIRM".equals(status) ? "WAITING_CONFIRM" : "VALIDATING", null);
     }
@@ -765,6 +777,9 @@ public class JdbcDataRepository implements DataRepository {
         jdbc.update("DELETE FROM data.data_record WHERE organization_id = ? AND import_job_id = ?",
                 organizationId, importJobId);
         var recordIndex = 0;
+        var recordBatch = new ArrayList<Object[]>();
+        var anchorBatch = new ArrayList<Object[]>();
+        var valueBatch = new ArrayList<Object[]>();
         for (CommittedRow row : rows) {
             var identity = row.sheetId() + "|" + row.recordKey();
             var occurrence = occurrences.merge(identity, 1, Integer::sum);
@@ -773,43 +788,62 @@ public class JdbcDataRepository implements DataRepository {
                     : UUID.nameUUIDFromBytes((importJobId + "|" + identity + "|" + occurrence)
                             .getBytes(java.nio.charset.StandardCharsets.UTF_8));
             var dataHash = hash(row.normalized());
-            jdbc.update("""
+            recordBatch.add(new Object[] {recordId, organizationId, importJobId, row.recordKey(), ++recordIndex,
+                    row.sheetId(), row.sheetName(), row.rowNumber(), pgJson(row.raw()),
+                    pgJson(row.normalized()), pgJson(row.corrected()), pgJson(row.normalized()),
+                    row.recordKey().startsWith("IMPORT:")});
+            var anchorIds = new HashMap<String, UUID>();
+            for (Anchor anchor : row.anchors()) {
+                var anchorId = UUID.randomUUID();
+                anchorBatch.add(new Object[] {anchorId, recordId, importJobId, anchor.fieldCode(), anchor.bindingId(),
+                        anchor.valuePath(), anchor.labelPath(), anchor.valueSource(), anchor.valueStatus(),
+                        job.sourceFileId(), anchor.sheetId(), anchor.sheetName(), anchor.rowNumber(),
+                        anchor.columnNumber(), anchor.columnName(), anchor.address(), pgJson(anchor.rawValue())});
+                anchorIds.put(anchorKey(anchor.fieldCode(), anchor.bindingId(), anchor.valuePath()), anchorId);
+            }
+            valueBatch.addAll(searchValues(organizationId, recordId, row.normalized(), anchorIds));
+            committedRecords.add(new CommittedRecord(recordId, row.recordKey(), dataHash));
+        }
+        // Batch across logical records as well as fields: many small groups
+        // otherwise each incur three database round trips inside one transaction.
+        batchInsert("""
                     INSERT INTO data.data_record (
                         id, organization_id, import_job_id, record_key, record_index,
                         sheet_id, sheet_name, source_row_number, raw_data_jsonb,
                         normalized_data_jsonb, corrected_data_jsonb, effective_data_jsonb,
                         quality_status, synthetic_key
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'VALID', ?)
-                    """, recordId, organizationId, importJobId, row.recordKey(), ++recordIndex,
-                    row.sheetId(), row.sheetName(), row.rowNumber(), pgJson(row.raw()),
-                    pgJson(row.normalized()), pgJson(row.corrected()), pgJson(row.normalized()),
-                    row.recordKey().startsWith("IMPORT:"));
-            var anchorIds = new HashMap<String, UUID>();
-            for (Anchor anchor : row.anchors()) {
-                var anchorId = UUID.randomUUID();
-                jdbc.update("""
+                    """, recordBatch);
+        batchInsert("""
                     INSERT INTO data.source_anchor (
                             id, record_id, import_job_id, field_code, binding_id, value_path,
                             label_path, value_source, value_status, file_id, sheet_id, sheet_name,
                             row_number, column_number, column_name, cell_address, raw_value_jsonb
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, anchorId, recordId, importJobId, anchor.fieldCode(), anchor.bindingId(),
-                        anchor.valuePath(), anchor.labelPath(), anchor.valueSource(), anchor.valueStatus(),
-                        job.sourceFileId(), anchor.sheetId(), anchor.sheetName(), anchor.rowNumber(),
-                        anchor.columnNumber(), anchor.columnName(), anchor.address(), pgJson(anchor.rawValue()));
-                anchorIds.put(anchorKey(anchor.fieldCode(), anchor.bindingId(), anchor.valuePath()), anchorId);
-            }
-            insertSearchValues(organizationId, recordId, row.normalized(), anchorIds);
-            committedRecords.add(new CommittedRecord(recordId, row.recordKey(), dataHash));
-        }
+                        """, anchorBatch);
+        batchInsert("""
+                    INSERT INTO data.data_value(
+                        id, organization_id, record_id, field_code, binding_id, value_path, data_path, value_jsonb,
+                        value_text, normalized_unit, source_anchor_id, training_eligible)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(record_id, binding_id, value_path)
+                        WHERE binding_id IS NOT NULL AND value_path IS NOT NULL DO UPDATE SET
+                        data_path=excluded.data_path,
+                        value_jsonb=excluded.value_jsonb,
+                        value_text=excluded.value_text,
+                        normalized_unit=excluded.normalized_unit,
+                        source_anchor_id=excluded.source_anchor_id,
+                        training_eligible=excluded.training_eligible
+                    """, valueBatch);
         updateJobStatus(organizationId, importJobId, "COMPLETED", 100, "COMPLETED", null);
         return new CommitResult(List.copyOf(committedRecords), rows.size());
     }
 
     /** Keep the value-oriented assistant index in sync with the committed JSON snapshot. */
-    private void insertSearchValues(UUID organizationId, UUID recordId, JsonNode normalized,
+    private List<Object[]> searchValues(UUID organizationId, UUID recordId, JsonNode normalized,
                                     Map<String, UUID> anchorIds) {
-        if (normalized == null || !normalized.isObject()) return;
+        if (normalized == null || !normalized.isObject()) return List.of();
+        var valueBatch = new ArrayList<Object[]>();
         var entries = normalized.fields();
         while (entries.hasNext()) {
             var entry = entries.next();
@@ -824,22 +858,45 @@ public class JdbcDataRepository implements DataRepository {
                 valueJson = objectMapper.getNodeFactory().textNode(value);
             }
             var anchorId = anchorIds.get(anchorKey(fieldCode, bindingId, valuePath));
-            jdbc.update("""
-                    INSERT INTO data.data_value(
-                        id, organization_id, record_id, field_code, binding_id, value_path, data_path, value_jsonb,
-                        value_text, normalized_unit, source_anchor_id, training_eligible)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-                    ON CONFLICT(record_id, binding_id, value_path)
-                        WHERE binding_id IS NOT NULL AND value_path IS NOT NULL DO UPDATE SET
-                        data_path=excluded.data_path,
-                        value_jsonb=excluded.value_jsonb,
-                        value_text=excluded.value_text,
-                        normalized_unit=excluded.normalized_unit,
-                        source_anchor_id=excluded.source_anchor_id,
-                        training_eligible=excluded.training_eligible
-                    """, UUID.randomUUID(), organizationId, recordId, fieldCode, bindingId, valuePath, valuePath,
+            valueBatch.add(new Object[] {UUID.randomUUID(), organizationId, recordId, fieldCode, bindingId, valuePath, valuePath,
                     pgJson(valueJson), value, blankToNull(wrapper.path("normalizedUnit").asText("")), anchorId,
-                    wrapper.path("trainingEligible").asBoolean(true));
+                    wrapper.path("trainingEligible").asBoolean(true)});
+        }
+        return valueBatch;
+    }
+
+    /** Bound driver buffers while keeping records, provenance and index values in one transaction. */
+    private void batchInsert(String sql, List<Object[]> parameters) {
+        if (parameters.isEmpty()) return;
+        int valuesStart = sql.indexOf('(', sql.indexOf("VALUES"));
+        int valuesEnd = sql.indexOf(')', valuesStart) + 1;
+        var values = sql.substring(valuesStart, valuesEnd);
+        for (int start = 0; start < parameters.size();) {
+            int end = Math.min(start + 256, parameters.size());
+            if (sql.contains("ON CONFLICT")) {
+                // PostgreSQL rejects two updates of the same key in one INSERT.
+                // Preserve the previous ordered upsert behavior across batches.
+                var keys = new java.util.HashSet<List<Object>>();
+                for (int index = start; index < end; index++) {
+                    var row = parameters.get(index);
+                    if (row[4] != null && row[5] != null && !keys.add(List.of(row[2], row[4], row[5]))) {
+                        end = index;
+                        break;
+                    }
+                }
+            }
+            var arguments = new Object[(end - start) * parameters.get(start).length];
+            int offset = 0;
+            for (var row : parameters.subList(start, end)) {
+                System.arraycopy(row, 0, arguments, offset, row.length);
+                offset += row.length;
+            }
+            // A JDBC batch still executes one server statement per field unless
+            // driver rewriting is enabled. Use a bounded multi-row INSERT directly.
+            jdbc.update(sql.substring(0, valuesStart)
+                    + String.join(",", java.util.Collections.nCopies(end - start, values))
+                    + sql.substring(valuesEnd), arguments);
+            start = end;
         }
     }
 

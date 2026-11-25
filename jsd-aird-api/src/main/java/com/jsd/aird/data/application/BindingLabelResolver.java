@@ -3,6 +3,7 @@ package com.jsd.aird.data.application;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -35,6 +36,8 @@ final class BindingLabelResolver {
         fields.forEach(field -> definitions.put(field.fieldCode(), field));
         var executable = new ArrayList<TemplateDataImportFacade.ImportBinding>();
         var results = mapper.createArrayNode();
+        var sheetCells = new IdentityHashMap<TemplateDataImportFacade.ParsedSheet, List<CellValue>>();
+        var sheetMerges = new IdentityHashMap<TemplateDataImportFacade.ParsedSheet, List<Range>>();
         for (var binding : bindings) {
             var locator = binding.locator();
             var labelRange = first(locator, "labelRange", "labelAddress");
@@ -54,15 +57,15 @@ final class BindingLabelResolver {
                 executable.add(binding);
                 continue;
             }
-            var cells = cells(sheet);
-            var originalMatches = cells.stream().filter(cell -> atOriginalLabel(cell, original, sheet))
-                    .filter(cell -> expected.contains(normalizeLabel(cell.value()))).toList();
+            var cells = sheetCells.computeIfAbsent(sheet, this::cells);
+            var merges = sheetMerges.computeIfAbsent(sheet, this::merges);
+            var matches = cells.stream().filter(cell -> expected.contains(cell.normalizedLabel())).toList();
+            var originalMatches = matches.stream().filter(cell -> atOriginalLabel(cell, original, merges)).toList();
             if (!originalMatches.isEmpty()) {
                 results.add(result(binding, locator, "ORIGINAL", labelRange, labelRange, List.of(), "LABEL_AT_ORIGINAL_POSITION"));
                 executable.add(binding);
                 continue;
             }
-            var matches = cells.stream().filter(cell -> expected.contains(normalizeLabel(cell.value()))).toList();
             if (matches.size() == 1) {
                 var match = matches.get(0);
                 int rowDelta = match.row() - original.startRow();
@@ -81,15 +84,22 @@ final class BindingLabelResolver {
         return new Resolution(List.copyOf(executable), results);
     }
 
-    private boolean atOriginalLabel(CellValue cell, Range original, TemplateDataImportFacade.ParsedSheet sheet) {
+    private List<Range> merges(TemplateDataImportFacade.ParsedSheet sheet) {
+        var result = new ArrayList<Range>();
+        if (sheet.layoutIr() != null) for (var value : sheet.layoutIr().path("merges")) {
+            var range = parseRange(value.asText());
+            if (range != null) result.add(range);
+        }
+        return result;
+    }
+
+    private boolean atOriginalLabel(CellValue cell, Range original, List<Range> merges) {
         if (original.contains(cell.row(), cell.column())) return true;
-        if (sheet.layoutIr() == null) return false;
         // Excel stores a merged label's text at its top-left anchor. A locator
         // inside that same merged label has not moved; translating all result
         // columns to the anchor would silently drop the final comparison group.
-        for (var value : sheet.layoutIr().path("merges")) {
-            var merge = parseRange(value.asText());
-            if (merge != null && cell.row() == merge.startRow() && cell.column() == merge.startColumn()
+        for (var merge : merges) {
+            if (cell.row() == merge.startRow() && cell.column() == merge.startColumn()
                     && merge.contains(original.startRow(), original.startColumn())
                     && merge.contains(original.endRow(), original.endColumn())) return true;
         }
@@ -152,7 +162,7 @@ final class BindingLabelResolver {
                 if (parsed != null) {
                     var address = address(parsed.startRow(), parsed.startColumn());
                     byAddress.put(address, new CellValue(address, parsed.startRow(), parsed.startColumn(),
-                            cell.path("displayValue").asText(cell.path("value").asText(""))));
+                            normalizeLabel(cell.path("displayValue").asText(cell.path("value").asText("")))));
                 }
             });
         }
@@ -162,7 +172,7 @@ final class BindingLabelResolver {
                 int rowNo = sheet.firstRow() + r;
                 int columnNo = sheet.firstColumn() + c;
                 var address = address(rowNo, columnNo);
-                byAddress.putIfAbsent(address, new CellValue(address, rowNo, columnNo, row.get(c)));
+                byAddress.putIfAbsent(address, new CellValue(address, rowNo, columnNo, normalizeLabel(row.get(c))));
             }
         }
         return new ArrayList<>(byAddress.values());
@@ -238,7 +248,7 @@ final class BindingLabelResolver {
     }
 
     record Resolution(List<TemplateDataImportFacade.ImportBinding> executableBindings, ArrayNode fieldResolutions) {}
-    private record CellValue(String address, int row, int column, String value) {}
+    private record CellValue(String address, int row, int column, String normalizedLabel) {}
     private record Position(int row, int column) {}
     private record Range(int startRow, int endRow, int startColumn, int endColumn) {
         boolean contains(int row, int column) {

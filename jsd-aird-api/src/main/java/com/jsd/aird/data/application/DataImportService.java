@@ -47,6 +47,11 @@ public class DataImportService {
     private final ProjectResourceFacade projectResources;
     private AuthorizationService authorization;
     private com.jsd.aird.shared.excel.WorkbookFieldDefinitionReviews fieldDefinitionReviews;
+    private org.springframework.transaction.support.TransactionTemplate workbookWrites;
+    @Autowired
+    public void setWorkbookTransactions(org.springframework.transaction.PlatformTransactionManager transactions) {
+        this.workbookWrites = new org.springframework.transaction.support.TransactionTemplate(transactions);
+    }
     @Autowired
     public void setFieldDefinitionReviews(com.jsd.aird.shared.excel.WorkbookFieldDefinitionReviews reviews) { this.fieldDefinitionReviews = reviews; }
 
@@ -142,9 +147,6 @@ public class DataImportService {
                     || !"EXPERIMENT_DATA".equals(template.importContract().path("templateUsage").asText())) {
                 throw new ApiException(ApiErrorCode.VALIDATION_ERROR,
                         "生成实验草稿需选择已发布且导入契约版本为 V9、用途为实验数据（EXPERIMENT_DATA）的模板；V9 指导入契约版本，不是模板版本号");
-            }
-            if (command.targetExperimentCategoryId() == null) {
-                throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "生成实验草稿必须选择实验分类");
             }
         }
         var file = files.find(actor.organizationId(), command.sourceFileId())
@@ -389,11 +391,34 @@ public class DataImportService {
     public DataRepository.Job reanchorAtRevision(UUID id,String revision,String componentId,String sheetId,String sourceRange,String reason) {
         requireJobRevision(ActorContext.required().organizationId(),id,revision); reanchorComponent(id,componentId,sheetId,sourceRange,reason); return get(id);
     }
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public DataRepository.Job parseAtRevision(UUID id,String revision,boolean force) {
-        requireJobRevision(ActorContext.required().organizationId(),id,revision);
-        if(force) reExtract(id); else parse(id);
-        return get(id);
+        var organizationId=ActorContext.required().organizationId();
+        var job=requireJob(organizationId,id);
+        com.jsd.aird.shared.json.RevisionToken.require(revision,job.getRevision());
+        var alreadyParsed=!force && List.of("WAITING_MAPPING","VALIDATING","WAITING_CONFIRM","COMPLETED").contains(job.status());
+        // Office/document parsing must finish before taking a database lock.
+        var prepared=alreadyParsed?null:prepareSourceImport(organizationId,job);
+        var plan=alreadyParsed?null:prepareParsedImport(organizationId,id,force,prepared,null);
+        return java.util.Objects.requireNonNull(workbookWrites.execute(tx -> {
+            requireJobRevision(organizationId,id,revision);
+            beforeEdit(organizationId,id);
+            if(plan!=null) persistParsedImport(organizationId,id,force,plan);
+            return get(id);
+        }));
+    }
+
+    private TemplateDataImportFacade.ImportExecution prepareSourceImport(UUID organizationId,DataRepository.Job job) {
+        var draft=repository.findWorkbookDraft(organizationId,job.id()).orElse(null);
+        if(draft!=null) return templates.prepareWorkbookImport(organizationId,job.templateVersionId(),draft.snapshot(),draft.instance());
+        if(Set.of("DOC","DOCX","IMAGE").contains(job.sourceFormat())) {
+            var definition=templates.getVersion(organizationId,job.templateVersionId());
+            var parsed=documentParser!=null
+                    ?documentParser.parse(organizationId,job.sourceFileId(),job.sourceFileName(),job.sourceSha256(),job.sourceFormat(),definition.fields())
+                    :templates.parse(organizationId,job.templateVersionId(),job.sourceFileId());
+            return new TemplateDataImportFacade.ImportExecution(definition,templates.getBindings(organizationId,job.templateVersionId()),parsed);
+        }
+        return templates.prepareImport(organizationId,job.templateVersionId(),job.sourceFileId());
     }
 
     public TemplateDataImportFacade.FieldRequest requestField(UUID importJobId, FieldRequestCommand command) {
@@ -404,32 +429,40 @@ public class DataImportService {
                 command.fieldId(), command.displayName(), command.valueType(), command.uiType(), command.groupCode(), command.description()));
     }
 
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public DataRepository.Job saveWorkbookDraft(UUID id,String revision,JsonNode source,JsonNode provided,JsonNode operations) {
         var actor=ActorContext.required();
-        requireJobRevision(actor.organizationId(),id,revision);
-        var job=repository.findJobForUpdate(actor.organizationId(),id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"导入任务不存在"));
+        var job=requireJob(actor.organizationId(),id);
+        com.jsd.aird.shared.json.RevisionToken.require(revision, job.getRevision());
         if(!Set.of("WAITING_MAPPING","WAITING_CONFIRM","COMPLETED").contains(job.status())||!Set.of("XLSX","XLS","CSV").contains(job.sourceFormat()))throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"当前导入任务不能修改工作簿结构");
-        beforeEdit(actor.organizationId(),id);
         if(source==null||!source.path("sheets").isObject())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"工作簿草稿无效");
         var snapshot=source.deepCopy();
         var instance=com.jsd.aird.shared.excel.WorkbookStructure.validate(objectMapper,snapshot,provided);
-        if (fieldDefinitionReviews != null) fieldDefinitionReviews.remember(actor.organizationId(), job.templateVersionId(), instance, actor.userId());
         if(operations!=null&&!operations.isArray())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"结构操作记录无效");
-        repository.saveWorkbookDraft(actor.organizationId(),id,snapshot,instance,operations==null?objectMapper.createArrayNode():operations,actor.userId());
-        parseInternal(actor.organizationId(),id,true);
-        auditLog.append(actor.organizationId(),actor.userId(),"DATA_IMPORT_WORKBOOK_DRAFT","DATA_IMPORT_JOB",id,objectMapper.createObjectNode().put("structureVersion",2));
-        return get(id);
+        // Exporting and parsing can involve an isolated Office process. Keep it
+        // outside the write transaction; recheck the revision under lock before
+        // atomically replacing the draft and its extracted data.
+        var prepared=templates.prepareWorkbookImport(actor.organizationId(),job.templateVersionId(),snapshot,instance);
+        var plan=prepareParsedImport(actor.organizationId(),id,true,prepared,
+                new DataRepository.WorkbookDraft(snapshot,instance,operations==null?objectMapper.createArrayNode():operations));
+        return java.util.Objects.requireNonNull(workbookWrites.execute(tx -> {
+            requireJobRevision(actor.organizationId(),id,revision);
+            beforeEdit(actor.organizationId(),id);
+            if (fieldDefinitionReviews != null) fieldDefinitionReviews.remember(actor.organizationId(), job.templateVersionId(), instance, actor.userId());
+            repository.saveWorkbookDraft(actor.organizationId(),id,snapshot,instance,operations==null?objectMapper.createArrayNode():operations,actor.userId());
+            persistParsedImport(actor.organizationId(),id,true,plan);
+            auditLog.append(actor.organizationId(),actor.userId(),"DATA_IMPORT_WORKBOOK_DRAFT","DATA_IMPORT_JOB",id,objectMapper.createObjectNode().put("structureVersion",2));
+            return get(id);
+        }));
     }
 
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public void parse(UUID importJobId) {
         var actor = ActorContext.required();
-        beforeEdit(actor.organizationId(), importJobId);
-        parseInternal(actor.organizationId(), importJobId);
+        parseAtRevision(importJobId,requireJob(actor.organizationId(),importJobId).getRevision(),false);
     }
 
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public DataRepository.Job saveExperimentWorkbookDraft(UUID id,String revision,JsonNode source,JsonNode provided,JsonNode operations) {
         var actor=ActorContext.required();
         if(!"EXPERIMENT".equals(repository.findSourceOwner(actor.organizationId(),id).orElse("")))throw new ApiException(ApiErrorCode.OPERATION_FORBIDDEN,"此任务不属于实验文件导入");
@@ -440,35 +473,67 @@ public class DataImportService {
         parseInternal(organizationId, importJobId, false);
     }
 
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public void reExtract(UUID importJobId) {
         var actor = ActorContext.required();
-        beforeEdit(actor.organizationId(), importJobId);
-        requireJob(actor.organizationId(), importJobId);
-        parseInternal(actor.organizationId(), importJobId, true);
+        parseAtRevision(importJobId,requireJob(actor.organizationId(),importJobId).getRevision(),true);
     }
 
     private void parseInternal(UUID organizationId, UUID importJobId, boolean force) {
+        parseInternal(organizationId, importJobId, force, null);
+    }
+
+    private void parseInternal(UUID organizationId, UUID importJobId, boolean force, TemplateDataImportFacade.ImportExecution prepared) {
+        try {
+            var plan=prepareParsedImport(organizationId,importJobId,force,prepared,null);
+            if(plan!=null)persistParsedImport(organizationId,importJobId,force,plan);
+        } catch(RuntimeException exception) {
+            if(!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
+                repository.updateJobStatus(organizationId,importJobId,"FAILED",0,"FAILED",safeMessage(exception));
+            throw exception;
+        }
+    }
+
+    private record ParsedImportPlan(TemplateDataImportFacade.DataTemplateDefinition definition,String parserVersion,
+            List<DataRepository.Sheet> sheets,List<DataRepository.Mapping> mappings,List<DataRepository.Row> rows,
+            String compatibilityStatus,JsonNode compatibilityReport,boolean documentSource) { }
+
+    private void persistParsedImport(UUID organizationId,UUID importJobId,boolean force,ParsedImportPlan plan) {
+        repository.saveCompatibilityReport(organizationId,importJobId,plan.compatibilityStatus(),plan.compatibilityReport());
+        if(force)repository.clearParsed(organizationId,importJobId);
+        repository.updateJobStatus(organizationId,importJobId,"PARSING",95,"SAVING_PARSED_DATA",null);
+        repository.saveParsed(importJobId,plan.parserVersion(),plan.sheets(),plan.mappings(),plan.rows(),importJobId);
+        if(!plan.documentSource()) {
+            repository.updateJobStatus(organizationId,importJobId,"VALIDATING",95,"VALIDATING",null);
+            validateInternal(organizationId,importJobId,plan.definition());
+        }
+    }
+
+    /** Computes geometry, extraction and correction matching without retaining a write lock. */
+    private ParsedImportPlan prepareParsedImport(UUID organizationId,UUID importJobId,boolean force,
+            TemplateDataImportFacade.ImportExecution prepared,DataRepository.WorkbookDraft providedDraft) {
         var job = repository.findJob(organizationId, importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
-        if (!force && List.of("WAITING_MAPPING", "VALIDATING", "WAITING_CONFIRM", "COMPLETED").contains(job.status())) return;
-        repository.updateJobStatus(organizationId, importJobId, "PARSING", 10, "READING_SOURCE", null);
-        try {
+        if (!force && List.of("WAITING_MAPPING", "VALIDATING", "WAITING_CONFIRM", "COMPLETED").contains(job.status())) return null;
             var originalDefinition = templates.getVersion(organizationId, job.templateVersionId());
             var experimentV9 = originalDefinition.importContractVersion() >= 9
                     && "EXPERIMENT_DATA".equals(originalDefinition.importContract().path("templateUsage").asText(""));
             var documentSource = Set.of("DOC", "DOCX", "IMAGE").contains(job.sourceFormat());
-            var workbookDraft=repository.findWorkbookDraft(organizationId,importJobId).orElse(null);
-            var labExecution=workbookDraft!=null?templates.prepareWorkbookImport(organizationId,job.templateVersionId(),workbookDraft.snapshot(),workbookDraft.instance())
+            var workbookDraft=providedDraft!=null?providedDraft:repository.findWorkbookDraft(organizationId,importJobId).orElse(null);
+            var labExecution=prepared!=null?prepared:workbookDraft!=null?templates.prepareWorkbookImport(organizationId,job.templateVersionId(),workbookDraft.snapshot(),workbookDraft.instance())
                     :!documentSource
                     ?templates.prepareImport(organizationId,job.templateVersionId(),job.sourceFileId()):null;
-            var definition=labExecution==null?originalDefinition:labExecution.definition();
-            var parsed = documentSource && documentParser != null
+            var initialDefinition=labExecution==null?originalDefinition:labExecution.definition();
+            var parsed = prepared!=null ? prepared.parsed() : documentSource && documentParser != null
                     ? documentParser.parse(organizationId, job.sourceFileId(), job.sourceFileName(),
-                            job.sourceSha256(), job.sourceFormat(), definition.fields())
+                            job.sourceSha256(), job.sourceFormat(), initialDefinition.fields())
                     : labExecution==null?templates.parse(organizationId, job.templateVersionId(), job.sourceFileId()):labExecution.parsed();
-            repository.updateJobStatus(organizationId, importJobId, "PARSING", 45, "ANALYZING_STRUCTURE", null);
             var originalBindings = labExecution==null?templates.getBindings(organizationId, job.templateVersionId()):labExecution.bindings();
+            var repeated = experimentV9 && !documentSource
+                    ? RepeatedSheetTemplate.expand(objectMapper, initialDefinition, originalBindings, parsed)
+                    : new TemplateDataImportFacade.ImportExecution(initialDefinition, originalBindings, parsed);
+            var definition = repeated.definition();
+            originalBindings = repeated.bindings();
             var overrides = repository.listComponentOverrides(organizationId, importJobId);
             var bindings = applyComponentOverrides(originalBindings, overrides, definition.importContract());
             var labelResolution = documentSource ? null : new BindingLabelResolver(objectMapper)
@@ -483,16 +548,21 @@ public class DataImportService {
                     ? objectMapper.createArrayNode() : compatibility.componentMatches().deepCopy());
             compatibilityReport.set("fieldResolutions", documentSource
                     ? objectMapper.createArrayNode() : labelResolution.fieldResolutions().deepCopy());
-            repository.saveCompatibilityReport(organizationId, importJobId,
-                    documentSource ? "COMPATIBLE" : compatibility.status(), compatibilityReport);
+            // Persist the server-resolved contract with its parsed rows. Saving
+            // mappings must validate those same sheet-specific fields, rather
+            // than reverting to the published single-sheet vocabulary.
+            compatibilityReport.set("executionContract",objectMapper.valueToTree(new TemplateContract(
+                    definition.importContractVersion(),definition.layoutStructureVersion(),definition.contractHash(),
+                    definition.importContract(),definition.fields(),bindings)));
             var configured = repository.listSheets(organizationId, importJobId).stream()
                     .collect(java.util.stream.Collectors.toMap(DataRepository.Sheet::sheetId, item -> item, (left, right) -> left));
             var previousRows = force && workbookDraft==null ? repository.listRows(organizationId, importJobId) : List.<DataRepository.Row>of();
-            if (force) repository.clearParsed(organizationId, importJobId);
             var sheets = new ArrayList<DataRepository.Sheet>();
             var mappings = new ArrayList<DataRepository.Mapping>();
             var rows = new ArrayList<DataRepository.Row>();
-            repository.updateJobStatus(organizationId, importJobId, "PARSING", 65, "EXTRACTING_DATA", null);
+            var matchesBySheet=new HashMap<String,List<JsonNode>>();
+            if(!documentSource)for(var match:compatibility.componentMatches())
+                matchesBySheet.computeIfAbsent(match.path("sheetId").asText(),ignored->new ArrayList<>()).add(match);
             for (var parsedSheet : parsed.sheets()) {
                 var previous = configured.get(parsedSheet.sheetId());
                 var selected = previous == null || previous.selected();
@@ -517,10 +587,15 @@ public class DataImportService {
                         .put("sheetName", parsedSheet.sheetName())
                         .put("structureFingerprint", parsedSheet.structureFingerprint() == null ? "" : parsedSheet.structureFingerprint());
                 structure.set("rows", objectMapper.valueToTree(parsedSheet.rows()));
-                if(labExecution!=null&&labExecution.issues()!=null)structure.set("labParseIssues",labExecution.issues().deepCopy());
+                if(labExecution!=null&&labExecution.issues()!=null) {
+                    var sheetIssues=objectMapper.createArrayNode();
+                    for(var issue:labExecution.issues())if(issue.path("sheetId").asText().isBlank()||parsedSheet.sheetId().equals(issue.path("sheetId").asText()))sheetIssues.add(issue.deepCopy());
+                    structure.set("labParseIssues",sheetIssues);
+                }
                 if (parsedSheet.layoutIr() != null) structure.set("layoutIr", parsedSheet.layoutIr().deepCopy());
-                structure.set("componentMatches", documentSource
-                        ? objectMapper.createArrayNode() : compatibility.componentMatches().deepCopy());
+                var sheetMatches=objectMapper.createArrayNode();
+                for(var match:matchesBySheet.getOrDefault(parsedSheet.sheetId(),List.of()))sheetMatches.add(match.deepCopy());
+                structure.set("componentMatches",sheetMatches);
                 sheets.add(new DataRepository.Sheet(
                         UUID.randomUUID(), parsedSheet.sheetId(), parsedSheet.sheetName(), parsedSheet.sheetOrder(), selected,
                         headerRows, dataStart, dataEnd, structure, selected ? "PENDING" : "IGNORED"));
@@ -679,16 +754,8 @@ public class DataImportService {
                 throw new ApiException(ApiErrorCode.VALIDATION_ERROR,
                         "文件中没有可导入的实验数据；请填写本次实验数据后重传，或使用在线新建");
             }
-            repository.updateJobStatus(organizationId, importJobId, "PARSING", 95, "SAVING_PARSED_DATA", null);
-            repository.saveParsed(importJobId, parsed.parserVersion(), sheets, mappings, restoreCorrections(rows, previousRows), importJobId);
-            // Template bindings already identify the fields. Expose editable, validated values immediately;
-            // unresolved mappings remain blockers instead of requiring an extra confirmation for every import.
-            if (!documentSource)
-                validateInternal(organizationId, importJobId);
-        } catch (RuntimeException exception) {
-            repository.updateJobStatus(organizationId, importJobId, "FAILED", 0, "FAILED", safeMessage(exception));
-            throw exception;
-        }
+            return new ParsedImportPlan(definition,parsed.parserVersion(),sheets,mappings,restoreCorrections(rows,previousRows),
+                    documentSource?"COMPATIBLE":compatibility.status(),compatibilityReport,documentSource);
     }
 
     List<DataRepository.Row> restoreCorrections(List<DataRepository.Row> extracted, List<DataRepository.Row> previous) {
@@ -753,9 +820,13 @@ public class DataImportService {
     }
 
     public void validateInternal(UUID organizationId, UUID importJobId) {
+        validateInternal(organizationId, importJobId, null);
+    }
+
+    private void validateInternal(UUID organizationId, UUID importJobId, TemplateDataImportFacade.DataTemplateDefinition preparedDefinition) {
         var job = requireJob(organizationId, importJobId);
         var draft=repository.findWorkbookDraft(organizationId,importJobId).orElse(null);
-        var definition = draft==null?templates.getVersion(organizationId, job.templateVersionId()):templates.prepareWorkbookImport(organizationId,job.templateVersionId(),draft.snapshot(),draft.instance()).definition();
+        var definition = preparedDefinition!=null?preparedDefinition:draft==null?stagedDefinition(organizationId,job):templates.prepareWorkbookReview(organizationId,job.templateVersionId(),draft.snapshot(),draft.instance()).definition();
         var mappings = repository.listMappings(organizationId, importJobId);
         var rows = repository.listRows(organizationId, importJobId);
         var sourceSheets = repository.listSheets(organizationId, importJobId);
@@ -788,10 +859,21 @@ public class DataImportService {
         for (var mapping : mappings) mappingByColumn.put(mappingKey(mapping.sheetId(), mappingComponentId(mapping),
                 mapping.sourceColumn()), mapping);
         var mappedSheetsByField = new HashMap<String, Set<String>>();
+        var componentsByField=new HashMap<String,Set<String>>();
+        var requiredMappings=new HashMap<String,DataRepository.Mapping>();
         for (var mapping : mappings) {
             if (!"MAP".equals(mapping.action()) || mapping.fieldCode() == null || mapping.fieldCode().isBlank()) continue;
+            componentsByField.computeIfAbsent(mapping.fieldCode(),ignored->new java.util.HashSet<>()).add(mappingComponentId(mapping));
+            requiredMappings.put(mapping.sheetId()+"|"+mappingComponentId(mapping)+"|"+mapping.fieldCode(),mapping);
             mappedSheetsByField.computeIfAbsent(mappingComponentId(mapping) + "|" + mapping.fieldCode(),
                     ignored -> new java.util.HashSet<>()).add(mapping.sheetId());
+        }
+        var requiredByComponent=new HashMap<String,List<TemplateDataImportFacade.FieldDefinition>>();
+        var missingRequired=new ArrayList<TemplateDataImportFacade.FieldDefinition>();
+        for(var field:definition.fields())if(field.required()) {
+            var assigned=componentsByField.getOrDefault(field.fieldCode(),Set.of());
+            if(assigned.isEmpty())missingRequired.add(field);
+            else for(var component:assigned)requiredByComponent.computeIfAbsent(component,ignored->new ArrayList<>()).add(field);
         }
         var normalizedRows = new ArrayList<DataRepository.Row>();
         for (var row : rows) {
@@ -800,6 +882,7 @@ public class DataImportService {
                 continue;
             }
             var normalized = objectMapper.createObjectNode();
+            int rowIssueStart=issues.size();
             var rowBlocked = false;
             var rowComponentId = row.sourceMetadata() == null ? ""
                     : row.sourceMetadata().path("componentId").asText("");
@@ -900,25 +983,20 @@ public class DataImportService {
                 }
             }
             var corrected = correctedValues(normalized, row.correctedValues());
-            for (var field : definition.fields()) {
-                if (!field.required()) continue;
-                var assignedComponents = mappings.stream()
-                        .filter(item -> field.fieldCode().equals(item.fieldCode()))
-                        .map(this::mappingComponentId).filter(value -> !value.isBlank()).distinct().toList();
-                if (!assignedComponents.isEmpty() && !assignedComponents.contains(rowComponentId)) continue;
+            var requiredFields=new ArrayList<>(requiredByComponent.getOrDefault(rowComponentId,List.of()));
+            requiredFields.addAll(missingRequired);
+            for (var field : requiredFields) {
                 var mappedSheets = mappedSheetsByField.getOrDefault(rowComponentId + "|" + field.fieldCode(), Set.of());
                 if (mappedSheets.isEmpty()) {
                     issues.add(issue(row, null, "BLOCKER", "REQUIRED_MAPPING_MISSING", "模板必填字段尚未映射：" + field.displayName()));
                     rowBlocked = true;
                 } else if (mappedSheets.contains(row.sheetId())
                         && !hasEffectiveField(corrected, field.fieldCode())) {
-                    var mapping = mappings.stream().filter(item -> row.sheetId().equals(item.sheetId())
-                            && rowComponentId.equals(mappingComponentId(item))
-                            && field.fieldCode().equals(item.fieldCode())).findFirst().orElse(null);
+                    var mapping = requiredMappings.get(row.sheetId()+"|"+rowComponentId+"|"+field.fieldCode());
                     issues.add(issue(row, mapping, "WARNING", "REQUIRED_MISSING", "必填字段未填写，可稍后补充"));
                 }
             }
-            rowBlocked |= issues.stream().anyMatch(item -> "BLOCKER".equals(item.severity()) && row.id().equals(issueRecordId(item)));
+            rowBlocked |= issues.subList(rowIssueStart,issues.size()).stream().anyMatch(item -> "BLOCKER".equals(item.severity()) && row.id().equals(issueRecordId(item)));
             normalizedRows.add(new DataRepository.Row(row.id(), row.sheetId(), row.rowNumber(), row.rawValues(), normalized,
                     corrected, rowBlocked ? "BLOCKED" : "VALID",
                     row.sourceMetadata(), false, null));
@@ -978,15 +1056,35 @@ public class DataImportService {
         var actor = ActorContext.required();
         var job = requireJob(actor.organizationId(), importJobId);
         var definition = templates.getVersion(actor.organizationId(), job.templateVersionId());
+        var report=repository.findCompatibilityReport(actor.organizationId(),importJobId);
+        var execution=stagedContract(report);
+        var contract=execution!=null?execution:new TemplateContract(definition.importContractVersion(),definition.layoutStructureVersion(),
+                definition.contractHash(),definition.importContract(),definition.fields(),templates.getBindings(actor.organizationId(),job.templateVersionId()));
+        if(report instanceof ObjectNode object) {
+            report=object.deepCopy();((ObjectNode)report).remove("executionContract");
+        }
         return new Preview(job, repository.listSheets(actor.organizationId(), importJobId),
                 repository.listMappings(actor.organizationId(), importJobId), repository.listRows(actor.organizationId(), importJobId),
                 repository.listIssues(actor.organizationId(), importJobId),
-                new TemplateContract(definition.importContractVersion(), definition.layoutStructureVersion(),
-                        definition.contractHash(), definition.importContract(), definition.fields(),
-                        templates.getBindings(actor.organizationId(), job.templateVersionId())),
+                contract,
                 new ProjectionSummary(null, "NOT_COMMITTED", 0, 0, 0),
-                repository.findCompatibilityReport(actor.organizationId(), importJobId),
+                report,
                 repository.listComponentOverrides(actor.organizationId(), importJobId));
+    }
+
+    private TemplateContract stagedContract(JsonNode report) {
+        if(report==null||!report.path("executionContract").isObject())return null;
+        try{return objectMapper.treeToValue(report.path("executionContract"),TemplateContract.class);}
+        catch(com.fasterxml.jackson.core.JsonProcessingException ex){throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"已解析的字段定义损坏，请重新解析原文件");}
+    }
+
+    private TemplateDataImportFacade.DataTemplateDefinition stagedDefinition(UUID organizationId,DataRepository.Job job) {
+        var original=templates.getVersion(organizationId,job.templateVersionId());
+        var contract=stagedContract(repository.findCompatibilityReport(organizationId,job.id()));
+        if(contract==null)return original;
+        return new TemplateDataImportFacade.DataTemplateDefinition(original.templateId(),original.versionId(),original.templateCode(),
+                original.name(),original.category(),original.versionNo(),original.format(),original.schema(),original.mappings(),
+                contract.fields(),contract.importContractVersion(),contract.layoutStructureVersion(),contract.contractHash(),contract.contract());
     }
 
     @Transactional

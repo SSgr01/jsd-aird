@@ -52,6 +52,7 @@ public final class OfficeProcessMain {
             }
             case "normalize"->json.writeValue(output.toFile(),new com.jsd.aird.tpl.application.TemplateFileNormalizationService(null,argument.path("executable").asText("soffice"),java.time.Duration.ofMillis(argument.path("timeout").asLong(90000))).normalize(argument.path("name").asText(),argument.path("contentType").asText(),Files.readAllBytes(source),argument.path("lenient").asBoolean()));
             case "xlsx"->{try(var input=Files.newInputStream(source)){json.writeValue(output.toFile(),new XlsxStructureParser(json).parse(input));}}
+            case "xlsx-snapshot"->{try(var input=Files.newInputStream(source)){json.writeValue(output.toFile(),new XlsxStructureParser(json).parseSnapshot(input));}}
             case "tabular"->{try(var input=Files.newInputStream(source)){json.writeValue(output.toFile(),new GenericTabularStructureParser().parse(input,argument.asText()));}}
             case "knowledge-office"->{try(var input=Files.newInputStream(source)){json.writeValue(output.toFile(),new com.jsd.aird.kb.infrastructure.OfficeDocumentParser().parse(input,argument.asText()));}}
             case "docx-workbook"->json.writeValue(output.toFile(),new com.jsd.aird.mfg.upload.infrastructure.DocxTableWorkbookConverter(json).convert(Files.readAllBytes(source),argument.asText()));

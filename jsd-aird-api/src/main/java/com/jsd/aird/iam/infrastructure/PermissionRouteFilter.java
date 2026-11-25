@@ -75,6 +75,12 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             return;
         }
         var permission = permission(request);
+        // The preset service checks the union of upload/view grants and restricts
+        // writes to organization dictionary administrators itself.
+        if (request.getRequestURI().matches("/api/v1/spc/method-presets(/[0-9a-fA-F-]{36})?")) {
+            chain.doFilter(request, response);
+            return;
+        }
         if (permission == null) {
             writeError(request, response, ApiErrorCode.PERMISSION_DENIED);
             return;

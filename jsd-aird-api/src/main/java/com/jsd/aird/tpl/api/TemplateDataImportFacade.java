@@ -62,6 +62,16 @@ public interface TemplateDataImportFacade {
         throw new UnsupportedOperationException("Workbook instance extraction is unavailable");
     }
 
+    /** Resolve review metadata without exporting/reparsing rows already staged by the import worker. */
+    default ImportExecution prepareWorkbookReview(UUID organizationId, UUID templateVersionId, JsonNode snapshot, JsonNode instance) {
+        return prepareWorkbookImport(organizationId, templateVersionId, snapshot, instance);
+    }
+
+    /** Read metadata from a laboratory snapshot just prepared by the caller. */
+    default ImportExecution describePreparedWorkbook(UUID organizationId, UUID templateVersionId, JsonNode snapshot, JsonNode instance) {
+        return prepareWorkbookReview(organizationId, templateVersionId, snapshot, instance);
+    }
+
     FieldRequest requestField(UUID organizationId, UUID templateVersionId, FieldRequestCommand command);
 
     /**

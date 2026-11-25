@@ -57,6 +57,12 @@ public final class LabValues {
             return out;
         }
         var normalized=Normalizer.normalize(text,Normalizer.Form.NFKC).replace('µ','μ').strip();
+        // Historical gloss reports sometimes use a degree mark as their result notation.
+        // Retain that reported text and unit without pretending it is a GU measurement.
+        if(field.path("fieldCode").asText().matches("optical[.]gloss(?:20|60|85)")
+                &&normalized.matches("[<>≤≥]?[ ]*\\d+(?:[.]\\d+)?(?:[ ]*[-~～—][ ]*\\d+(?:[.]\\d+)?)?[ ]*°"))
+            return out.put("value",text).put("rawUnit","°").put("unit","°").put("parseStatus","TEXT_ONLY")
+                    .put("unitStatus","SOURCE_REPORTED_NONSTANDARD").put("unitNote","原报告使用°记号，原值保留，未换算为GU").put("trainingEligible",false);
         if(field.path("parser").asText().equals("CURVATURE")) {
             var direction=normalized.startsWith("反翘")?"REVERSE":normalized.startsWith("正翘")?"FORWARD":"";
             if(!direction.isBlank()) {out.put("direction",direction);normalized=normalized.substring(2).strip();}

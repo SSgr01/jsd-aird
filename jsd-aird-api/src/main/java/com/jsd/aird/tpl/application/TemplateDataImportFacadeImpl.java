@@ -379,7 +379,7 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
             if(workbookInstanceParser!=null) {
                 var file=files.find(organizationId,fileId).orElseThrow(()->new ApiException(ApiErrorCode.FILE_NOT_READY,"数据源文件不存在"));
                 if(file.originalName().toLowerCase(java.util.Locale.ROOT).endsWith(".xlsx"))try(var stored=storage.get(file.objectKey())) {
-                    var snapshot=workbookInstanceParser.parseInstance(stored.stream()).snapshot();
+                    var snapshot=workbookInstanceParser.parseSnapshot(stored.stream());
                     var instance=com.jsd.aird.shared.excel.WorkbookStructure.instance(snapshot);
                     if(instance instanceof ObjectNode importedInstance) {
                         // An exported workbook can be extended in Excel before it is
@@ -399,7 +399,7 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
         }
         var file=files.find(organizationId,fileId).orElseThrow(()->new ApiException(ApiErrorCode.FILE_NOT_READY,"数据源文件不存在"));
         try(var stored=storage.get(file.objectKey())) {
-            var source=workbookInstanceParser.parseInstance(stored.stream()).snapshot();
+            var source=workbookInstanceParser.parseSnapshot(stored.stream());
             var prepared=com.jsd.aird.shared.lab.LabWorkbook.prepare(objectMapper,source,readSnapshot(organizationId,workspace),fileId.toString());
             // Recompute mass totals from the raw g inputs. POI cannot evaluate all of
             // Univer's array formulas, and an uploaded formula cache is not evidence.
@@ -413,20 +413,16 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
                 pack = new UnifiedLabTemplateCatalog(objectMapper).describe(workspace.templateCode(), prepared, objectMapper.createObjectNode()).payload();
             }
             var fields=new LinkedHashMap<String,FieldDefinition>();collectSchemaFields(pack.path("schema"),fields);
+            // The embedded lab definition describes one sheet's vocabulary.
+            // Executable instance fields carry the distinct physical sheet keys.
+            applyInstanceFields(fields,pack.path("schema").path("x-jsd-field-model").path("fields"));
             var contract=pack.path("contract");
             var definition=new DataTemplateDefinition(workspace.templateId(),versionId,workspace.templateCode(),workspace.name(),null,workspace.versionNo(),"XLSX",pack.path("schema"),pack.path("mapping"),List.copyOf(fields.values()),9,contract.path("layoutStructureVersion").asInt(),contract.path("contractHash").asText(),contract);
             var tabularSnapshot=prepared.deepCopy();
-            var totalRow=com.jsd.aird.shared.lab.LabWorkbook.definition(prepared).path("formulaTotalRow").asInt();
-            var totalSheet=com.jsd.aird.shared.lab.LabWorkbook.sheet(tabularSnapshot);
-            for(var cell:totalSheet.path("cellData").path(""+totalRow))if(cell instanceof ObjectNode object)object.remove("f");
+            removeLabTotalFormulas(tabularSnapshot);
             var bytes=workbookExporter.export(tabularSnapshot,objectMapper.createArrayNode(),objectMapper.createObjectNode(),null).content();
             var parsed=parser.parse(new java.io.ByteArrayInputStream(bytes),"experiment.xlsx");
-            for(var sheet:parsed.sheets())for(var cell:sheet.layoutIr().path("cells")) {
-                if(cell.path("row").asInt()!=totalRow+1||cell.path("column").asInt()<3)continue;
-                if(!com.jsd.aird.shared.lab.LabWorkbook.sheet(prepared).path("cellData").path(""+totalRow).path(""+(cell.path("column").asInt()-1)).hasNonNull("f"))continue;
-                ((ObjectNode)cell).put("valueSource","FORMULA").put("calculationSource","UNIFIED_LAB_RECALCULATED")
-                        .put("calculationStatus","VALID").put("formulaTrustStatus","TRUSTED_RECALCULATED");
-            }
+            markLabTotals(parsed,prepared);
             parsed=instanceParsedSheets(parsed,prepared);
             return new ImportExecution(definition,bindings(contractBindings(contract),contract),parsed,labModel.path("templateInstance").path("issues"));
         }catch(ApiException ex){throw ex;}catch(Exception ex){throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"实验文件解析失败："+ex.getMessage());}
@@ -443,15 +439,34 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
 
     @Override
     public ImportExecution prepareWorkbookImport(UUID organizationId,UUID versionId,JsonNode source,JsonNode provided) {
+        return prepareWorkbook(organizationId, versionId, source, provided, true);
+    }
+
+    @Override
+    public ImportExecution prepareWorkbookReview(UUID organizationId,UUID versionId,JsonNode source,JsonNode provided) {
+        return prepareWorkbook(organizationId, versionId, source, provided, false);
+    }
+
+    private ImportExecution prepareWorkbook(UUID organizationId,UUID versionId,JsonNode source,JsonNode provided,boolean extractRows) {
+        return prepareWorkbook(organizationId,versionId,source,provided,extractRows,false);
+    }
+
+    @Override
+    public ImportExecution describePreparedWorkbook(UUID organizationId,UUID versionId,JsonNode source,JsonNode provided) {
+        return prepareWorkbook(organizationId,versionId,source,provided,false,true);
+    }
+
+    private ImportExecution prepareWorkbook(UUID organizationId,UUID versionId,JsonNode source,JsonNode provided,boolean extractRows,boolean prepared) {
         var workspace=repository.findWorkspace(organizationId,versionId).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"模板版本不存在"));
         var snapshot=(ObjectNode)source.deepCopy();
-        var instance=com.jsd.aird.shared.excel.WorkbookStructure.validate(objectMapper,snapshot,provided);
+        var instance=prepared?(ObjectNode)provided.deepCopy():com.jsd.aird.shared.excel.WorkbookStructure.validate(objectMapper,snapshot,provided);
         if (fieldDefinitionReviews != null && fieldDefinitionReviews.apply(organizationId, versionId, instance)) {
             instance = com.jsd.aird.shared.excel.WorkbookStructure.validate(objectMapper, snapshot, instance);
         }
         JsonNode labIssues=instance.path("issues");
-        if(com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot)) {
+        if(!prepared && com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot)) {
             snapshot=com.jsd.aird.shared.lab.LabWorkbook.prepare(objectMapper,snapshot,readSnapshot(organizationId,workspace),versionId.toString());
+            com.jsd.aird.shared.excel.WorkbookStructure.seed(objectMapper,snapshot,workspace.schema(),workspace.mapping(),versionId.toString());
             instance=com.jsd.aird.shared.excel.WorkbookStructure.validate(objectMapper,snapshot,com.jsd.aird.shared.excel.WorkbookStructure.instance(snapshot));
             var labModel=com.jsd.aird.shared.lab.LabWorkbook.extract(objectMapper,snapshot,objectMapper.createObjectNode(),versionId.toString());
             labIssues=labModel.path("templateInstance").path("issues");
@@ -459,20 +474,24 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
         var schema=(ObjectNode)workspace.schema().deepCopy();schema.set("x-jsd-field-model",instance.path("model").deepCopy());schema.set("x-jsd-workbook-instance",instance.deepCopy());
         if(instance.path("execution").isObject())schema.set("x-jsd-experiment-import",instance.path("execution").deepCopy());
         var mappings=objectMapper.createArrayNode();var valid=new java.util.HashSet<String>();
+        var fieldsByBinding=new java.util.HashMap<String,JsonNode>();
+        for(var field:instance.path("model").path("fields"))fieldsByBinding.put(field.path("bindingId").asText(),field);
+        var publicBindings=new java.util.HashSet<String>();
+        if(workspace.mapping()!=null)for(var standard:workspace.mapping())publicBindings.add(standard.path("bindingId").asText()+"|"+standard.path("fieldCode").asText());
         for(var binding:instance.path("mapping")) {
             var locator=binding.path("locator");
             if(!"VALID".equals(binding.path("bindingStatus").asText())||com.jsd.aird.shared.excel.WorkbookStructure.first(locator,"valueRange","address","dataRange","range").isBlank())continue;
             boolean pending=false;
-            for(var field:instance.path("model").path("fields"))if(field.path("bindingId").equals(binding.path("bindingId"))&&(java.util.Set.of("NEEDS_CONFIRMATION","ISSUE").contains(field.path("reviewStatus").asText())||(instance.path("execution").path("templateUsage").asText().equals("EXPERIMENT_DATA")&&field.path("experimentSemanticStatus").asText().equals("NEEDS_REVIEW")))){pending=true;break;}
+            var field=fieldsByBinding.get(binding.path("bindingId").asText());
+            if(field!=null&&(java.util.Set.of("NEEDS_CONFIRMATION","ISSUE").contains(field.path("reviewStatus").asText())||(instance.path("execution").path("templateUsage").asText().equals("EXPERIMENT_DATA")&&field.path("experimentSemanticStatus").asText().equals("NEEDS_REVIEW"))))pending=true;
             // Instance-local experimental observations remain visible and
             // reviewable even before their semantic meaning is confirmed.
             if(pending&&!com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot))continue;
             var copy=(ObjectNode)binding.deepCopy();
-            for(var field:instance.path("model").path("fields"))if(field.path("bindingId").asText().equals(binding.path("bindingId").asText())) {
+            if(field!=null) {
                 copy.put("unit",field.path("unit").asText()).put("valueType",field.path("valueType").asText("string")).put("required",field.path("required").asBoolean());
                 if(field.path("experimentField").isObject())copy.set("experimentField",field.path("experimentField").deepCopy());
-                boolean publicField=false;
-                if(workspace.mapping()!=null)for(var standard:workspace.mapping())if(standard.path("bindingId").equals(binding.path("bindingId"))&&standard.path("fieldCode").equals(binding.path("fieldCode"))){publicField=true;break;}
+                boolean publicField=publicBindings.contains(binding.path("bindingId").asText()+"|"+binding.path("fieldCode").asText());
                 if(!publicField||"INSTANCE_LOCAL".equals(field.path("fieldOrigin").asText()))copy.put("trainingEligible",false).put("trainingRole","EXCLUDE");
                 copy.withObject("/diagnostic").put("displayName",field.path("name").asText());
             }
@@ -486,25 +505,39 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
         var fields=new LinkedHashMap<String,FieldDefinition>();collectSchemaFields(schema,fields);
         // Current instance properties override legacy schema properties and
         // parent-column copies, which may still retain the field's initial name.
-        for(var field:executableFields) {
-            var code=field.path("fieldCode").asText();if(code.isBlank()||field.path("displayRole").asText().equals("REGION"))continue;
-            fields.put(code,new FieldDefinition(code,field.path("name").asText(code),field.path("valueType").asText("string"),field.path("unit").asText(""),field.path("required").asBoolean(),field.path("identity").asBoolean(),strings(field.path("aliases")),field.path("dataPath").asText(code)));
-        }
+        applyInstanceFields(fields,executableFields);
         var definition=new DataTemplateDefinition(workspace.templateId(),versionId,workspace.templateCode(),workspace.name(),null,workspace.versionNo(),"XLSX",schema,mappings,List.copyOf(fields.values()),compiled.importContractVersion(),compiled.layoutStructureVersion(),compiled.contractHash(),compiled.contract());
+        if (!extractRows) return new ImportExecution(definition,bindings(contractBindings(compiled.contract()),compiled.contract()),null,labIssues);
         var tabular=snapshot.deepCopy();
-        int totalRow=-1;
-        if(com.jsd.aird.shared.lab.LabWorkbook.supported(tabular)) {
-            totalRow=com.jsd.aird.shared.lab.LabWorkbook.definition(tabular).path("formulaTotalRow").asInt();
-            for(var cell:com.jsd.aird.shared.lab.LabWorkbook.sheet(tabular).path("cellData").path(""+totalRow))if(cell instanceof ObjectNode object)object.remove("f");
-        }
+        removeLabTotalFormulas(tabular);
         try {
             var bytes=workbookExporter.export(tabular,objectMapper.createArrayNode(),objectMapper.createObjectNode(),null).content();
             var parsed=parser.parse(new java.io.ByteArrayInputStream(bytes),"workbook.xlsx");
-            for(var sheet:parsed.sheets())for(var cell:sheet.layoutIr().path("cells"))if(totalRow>=0&&cell.path("row").asInt()==totalRow+1&&cell.path("column").asInt()>=3&&cell instanceof ObjectNode object)
-                if(com.jsd.aird.shared.lab.LabWorkbook.sheet(snapshot).path("cellData").path(""+totalRow).path(""+(cell.path("column").asInt()-1)).hasNonNull("f"))object.put("valueSource","FORMULA").put("calculationSource","UNIFIED_LAB_RECALCULATED").put("calculationStatus","VALID").put("formulaTrustStatus","TRUSTED_RECALCULATED");
+            markLabTotals(parsed,snapshot);
             parsed=instanceParsedSheets(parsed,snapshot);
             return new ImportExecution(definition,bindings(contractBindings(compiled.contract()),compiled.contract()),parsed,labIssues);
         }catch(Exception ex){if(ex instanceof ApiException api)throw api;throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"工作簿草稿解析失败："+ex.getMessage());}
+    }
+
+    private void removeLabTotalFormulas(JsonNode snapshot) {
+        for(var sheet:com.jsd.aird.shared.lab.LabWorkbookSheets.businessSheets(snapshot)) {
+            var def=sheet.path("custom").path(com.jsd.aird.shared.lab.LabWorkbook.DEFINITION);
+            if(!def.has("formulaTotalRow"))continue;
+            for(var cell:sheet.path("cellData").path(""+def.path("formulaTotalRow").asInt()))if(cell instanceof ObjectNode object)object.remove("f");
+        }
+    }
+
+    private void markLabTotals(ParsedTabularFile parsed,JsonNode snapshot) {
+        var byName=new java.util.HashMap<String,JsonNode>();
+        for(var sheet:com.jsd.aird.shared.lab.LabWorkbookSheets.businessSheets(snapshot))byName.put(sheet.path("name").asText(),sheet);
+        for(var parsedSheet:parsed.sheets()) {
+            var original=byName.get(parsedSheet.sheetName());if(original==null)continue;
+            var def=original.path("custom").path(com.jsd.aird.shared.lab.LabWorkbook.DEFINITION);
+            if(!def.has("formulaTotalRow"))continue;
+            int totalRow=def.path("formulaTotalRow").asInt();
+            for(var cell:parsedSheet.layoutIr().path("cells"))if(cell.path("row").asInt()==totalRow+1&&cell.path("column").asInt()>=3&&cell instanceof ObjectNode object)
+                if(original.path("cellData").path(""+totalRow).path(""+(cell.path("column").asInt()-1)).hasNonNull("f"))object.put("valueSource","FORMULA").put("calculationSource","UNIFIED_LAB_RECALCULATED").put("calculationStatus","VALID").put("formulaTrustStatus","TRUSTED_RECALCULATED");
+        }
     }
 
     private ParsedTabularFile instanceParsedSheets(ParsedTabularFile parsed,JsonNode snapshot) {
@@ -586,6 +619,17 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
     private void requireCurrentLabTemplate(String code) {
         if(!com.jsd.aird.shared.lab.UnifiedLabTemplateCodes.contains(code))
             throw new ApiException(ApiErrorCode.EXPERIMENT_TEMPLATE_REQUIRED,"新实验请使用统一测试实验或合成实验模板；历史记录仍可按原版本查看");
+    }
+
+    private void applyInstanceFields(LinkedHashMap<String,FieldDefinition> fields,JsonNode executableFields) {
+        var executableCodes=new java.util.HashSet<String>();
+        for(var field:executableFields)executableCodes.add(field.path("fieldCode").asText());
+        fields.keySet().retainAll(executableCodes);
+        for(var field:executableFields) {
+            var code=field.path("fieldCode").asText();
+            if(code.isBlank()||field.path("displayRole").asText().equals("REGION"))continue;
+            fields.put(code,new FieldDefinition(code,field.path("name").asText(code),field.path("valueType").asText("string"),field.path("unit").asText(""),field.path("required").asBoolean(),field.path("identity").asBoolean(),strings(field.path("aliases")),field.path("dataPath").asText(code)));
+        }
     }
 
     private void collectSchemaFields(JsonNode schema, LinkedHashMap<String, FieldDefinition> fields) {

@@ -10,6 +10,9 @@ public interface WorkbookInstanceParser {
 
     ParsedWorkbook parseInstance(InputStream input);
 
+    /** Read an editable workbook without building the template-recognition summary. */
+    default JsonNode parseSnapshot(InputStream input) { return parseInstance(input).snapshot(); }
+
     record ParsedWorkbook(JsonNode structureSummary, JsonNode snapshot, List<Issue> issues) {
     }
 

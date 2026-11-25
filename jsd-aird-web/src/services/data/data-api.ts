@@ -55,7 +55,7 @@ export interface ExperimentSyncStatus { plan: ExperimentAssemblyPlan; links: Exp
 
 export interface ExperimentConversion {
   id: string; batchId: string; sourceFileId: string; sourceName: string; sourceSha256: string;
-  templateVersionId: string; categoryId: string; kind: 'test' | 'synthesis';
+  templateVersionId: string; categoryId?: string; kind: 'test' | 'synthesis';
   status: 'QUEUED' | 'WAITING_REVIEW' | 'FAILED'; importJobId?: string;
   resultArtifactId?: string; planArtifactId?: string; reportArtifactId?: string;
   report?: { status: string; human_review: string; unplaced?: unknown[]; source_conflicts?: unknown[]; limitations?: string };
@@ -63,7 +63,7 @@ export interface ExperimentConversion {
 }
 
 export const dataApi = {
-  async createConversion(input: { batchId: string; sourceFileId: string; templateVersionId: string; categoryId: string }) {
+  async createConversion(input: { batchId: string; sourceFileId: string; templateVersionId: string; categoryId?: string }) {
     const response = await httpClient.post<ApiResponse<ExperimentConversion>>('/api/v1/data/experiment-conversions', input); return response.data.data;
   },
   async conversions(batchId?: string) {
@@ -101,7 +101,7 @@ export const dataApi = {
   async createJob(input: { sourceFileId: string; templateVersionId: string; categoryId?: string; duplicateOverride?: boolean; projectRelations?: ProjectRelationTarget[]; importPurpose?: 'DATA_ONLY' | 'EXPERIMENT_DRAFT'; targetExperimentCategoryId?: string }) {
     const response = await httpClient.post<ApiResponse<DataJob>>('/api/v1/data/import-jobs', input); return response.data.data;
   },
-  async createExperimentJob(input: { sourceFileId: string; templateVersionId: string; categoryId?: string; duplicateOverride?: boolean; projectRelations?: ProjectRelationTarget[]; importPurpose: 'EXPERIMENT_DRAFT'; targetExperimentCategoryId: string }) {
+  async createExperimentJob(input: { sourceFileId: string; templateVersionId: string; categoryId?: string; duplicateOverride?: boolean; projectRelations?: ProjectRelationTarget[]; importPurpose: 'EXPERIMENT_DRAFT'; targetExperimentCategoryId?: string }) {
     const response = await httpClient.post<ApiResponse<DataJob>>('/api/v1/data/experiment-import-jobs', input); return response.data.data;
   },
   async getJob(id: string) { const response = await httpClient.get<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}`); return response.data.data; },
@@ -127,19 +127,19 @@ export const dataApi = {
   },
   async parse(id: string, revision: string) { const response = await httpClient.post<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/parse`, { revision }); return response.data.data; },
   async reExtract(id: string, revision: string) { const response = await httpClient.post<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/re-extract`, { revision }, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; },
-  async preview(id: string, experiment = false) { const response = await httpClient.get<ApiResponse<DataPreview>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/preview`); return response.data.data; },
+  async preview(id: string, experiment = false) { const response = await httpClient.get<ApiResponse<DataPreview>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/preview`, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; },
   async saveWorkbookDraft(id: string, input: { revision: string; snapshot: Record<string, unknown>; templateInstance: WorkbookTemplateInstance; structureOperations: unknown[] }, experiment = false) { const response = await httpClient.put<ApiResponse<{ job: DataJob; workbook: DataWorkbookSnapshot }>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/workbook-draft`, input, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; },
   async getImportWorkbookSnapshot(id: string, experiment = false) { const response = await httpClient.get<ApiResponse<DataWorkbookSnapshot>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/workbook-snapshot`, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; },
   async saveSheets(id: string, revision: string, items: Array<Pick<DataSheet, 'sheetId' | 'selected' | 'headerRows' | 'dataStartRow' | 'dataEndRow' | 'confirmationStatus'>>) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/sheets`, { revision, items }); return response.data.data; },
-  async saveMappings(id: string, revision: string, items: DataMapping[]) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/mappings`, { revision, items }); return response.data.data; },
+  async saveMappings(id: string, revision: string, items: DataMapping[]) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/mappings`, { revision, items }, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; },
   async resolveIssue(id: string, revision: string, issueId: string, status: 'IGNORED', reason: string) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/issues/${issueId}`, { revision, status, reason }); return response.data.data; },
   async correctValue(id: string, recordId: string, input: { revision: string; bindingId: string; valuePath: string; correctedValue: unknown; reason: string }) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/records/${recordId}/values`, input); return response.data.data; },
   async excludeRecord(id: string, revision: string, recordId: string, excluded: boolean, reason?: string) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/records/${recordId}/exclusion`, { revision, excluded, reason }); return response.data.data; },
   async reanchorComponent(id: string, componentId: string, input: { revision: string; sheetId: string; sourceRange: string; reason: string }) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/components/${encodeURIComponent(componentId)}/anchor`, input); return response.data.data; },
   async requestField(id: string, input: { fieldId?: string; displayName: string; valueType?: string; uiType?: string; groupCode?: string; description?: string }) { const response = await httpClient.post<ApiResponse<{ id: string; status: string }>>(`/api/v1/data/import-jobs/${id}/field-requests`, input); return response.data.data; },
-  async commit(id: string, experiment = false) { const response = await httpClient.post<ApiResponse<DataJob>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/commit`); return response.data.data; },
+  async commit(id: string, experiment = false) { const response = await httpClient.post<ApiResponse<DataJob>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/commit`, undefined, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; },
   async experimentPlan(id: string) { const response = await httpClient.get<ApiResponse<ExperimentAssemblyPlan>>(`/api/v1/data/experiment-import-jobs/${id}/experiments`); return response.data.data; },
-  async syncExperiments(id: string, input: { categoryId: string; assemblyKeys?: string[] }) { const response = await httpClient.post<ApiResponse<{ acceptedCount: number; jobIds: string[] }>>(`/api/v1/data/experiment-import-jobs/${id}/experiment-sync`, input); return response.data.data; },
+  async syncExperiments(id: string, input: { categoryId?: string; assemblyKeys?: string[] }) { const response = await httpClient.post<ApiResponse<{ acceptedCount: number; jobIds: string[] }>>(`/api/v1/data/experiment-import-jobs/${id}/experiment-sync`, input); return response.data.data; },
   async experimentSyncStatus(id: string) { const response = await httpClient.get<ApiResponse<ExperimentSyncStatus>>(`/api/v1/data/experiment-import-jobs/${id}/experiment-sync-status`); return response.data.data; },
   async listSourceFiles(params: { categoryId?: string; uncategorized?: boolean; status?: string; keyword?: string; projectId?: string; page?: number; size?: number } = {}, signal?: AbortSignal) { const response = await httpClient.get<ApiResponse<PageResponse<DataSourceFile>>>('/api/v1/data/sources', { params, signal }); return response.data.data; },
   async listCategories(signal?: AbortSignal) { const response = await httpClient.get<ApiResponse<DataCategory[]>>('/api/v1/data/categories', { signal }); return response.data.data; },

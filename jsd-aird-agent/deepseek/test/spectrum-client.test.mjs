@@ -63,9 +63,10 @@ test('source panel shows the original page and useful sample fields without dump
   const React = require('react'), {renderToStaticMarkup} = require('react-dom/server');
   const url = '/api/v1/agents/business/images/SPECTRUM/'+id+'?ref=pinned&page=2#page=2';
   const html = renderToStaticMarkup(React.createElement(SpectrumResourceBody,{React,value:{ref,title:'样品图谱 · 第2页',
-    spectrum:{title:'样品图谱',sampleName:'UA-338',batchNo:'B01',testConditions:'25°C',originalName:'原始图谱.PDF',sha256:'internal-hash'},
+    spectrum:{title:'样品图谱',sampleName:'UA-338',batchNo:'B01',testConditions:'25°C',originalName:'原始图谱.PDF',sha256:'internal-hash',
+      testMethodSnapshot:{presetName:'历史方法预设',presetRevision:'1'},conditionWarnings:['尚缺实测厚度，暂不能换算强度']},
     candidates:[{text:'fileObjectId: internal-id; page_read_hint: tool instructions',source:{anchor:{page_no:2,read_path:url}}}]}}));
-  for (const label of ['样品图谱','UA-338','B01','25°C','原图第 2 页','放大查看','<img']) assert.ok(html.includes(label));
+  for (const label of ['样品图谱','UA-338','B01','25°C','原图第 2 页','放大查看','<img','当次条件快照','历史方法预设','V1','尚缺实测厚度，暂不能换算强度']) assert.ok(html.includes(label));
   for (const hidden of ['固定版本','fileObjectId','page_read_hint','internal-hash','tool instructions']) assert.ok(!html.includes(hidden));
 });
 

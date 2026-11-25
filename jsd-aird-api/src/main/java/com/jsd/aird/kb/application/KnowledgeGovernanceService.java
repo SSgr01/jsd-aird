@@ -200,10 +200,11 @@ public class KnowledgeGovernanceService {
                 || !java.util.Objects.equals(review.reviewRevision().basePublicationId(), basePublicationId)) {
             optimisticConflict(documentId, versionId);
         }
-        validatePublish(review);
         var projection = documents.project(review.reviewRevision().confirmedDocument(),
                 review.reviewRevision().excludedReviewNodeIds());
-        var tableText = governance.largeTableRows(actor.organizationId(), reviewRevisionId).stream()
+        var tableRows = governance.largeTableRows(actor.organizationId(), reviewRevisionId);
+        validatePublish(review, projection.confirmedText(), !tableRows.isEmpty());
+        var tableText = tableRows.stream()
                 .map(KnowledgeGovernanceRepository.LargeTableRow::projectedText)
                 .collect(java.util.stream.Collectors.joining("\n\n"));
         var confirmedText = projection.confirmedText();
@@ -474,7 +475,8 @@ public class KnowledgeGovernanceService {
                 normalizeIssueActions(issueActions));
     }
 
-    private void validatePublish(KnowledgeGovernanceRepository.ReviewView review) {
+    private void validatePublish(KnowledgeGovernanceRepository.ReviewView review,
+                                 String confirmedText, boolean hasTableRows) {
         var reasons = new ArrayList<String>();
         if (!"READY".equals(review.processingStatus())) reasons.add("解析未完成");
         if (review.categoryId() == null) reasons.add("分类为空");
@@ -482,10 +484,7 @@ public class KnowledgeGovernanceService {
                 || review.reviewRevision() == null || !Set.of("DRAFT", "FAILED").contains(review.reviewRevision().status())) {
             reasons.add("没有可发布的校对内容");
         }
-        if (review.reviewRevision() == null || (!StringUtils.hasText(documents.project(
-                review.reviewRevision().confirmedDocument(), review.reviewRevision().excludedReviewNodeIds()).confirmedText())
-                && governance.largeTableRows(ActorContext.required().organizationId(),
-                review.reviewRevision().id()).isEmpty())) {
+        if (!StringUtils.hasText(confirmedText) && !hasTableRows) {
             reasons.add("确认文本不能为空");
         }
         if (review.issues().stream().anyMatch(issue -> "BLOCKER".equals(issue.severity()) && "OPEN".equals(issue.status()))) {

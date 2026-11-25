@@ -44,7 +44,9 @@ final class MineruTasksClient {
         this.wait = wait;
         this.timeout = timeout;
         this.store = store;
-        http = HttpClient.newBuilder().connectTimeout(timeout).followRedirects(HttpClient.Redirect.NEVER).build();
+        // Uvicorn serves HTTP/1.1; avoid cleartext HTTP/2 upgrade negotiation.
+        http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(timeout).followRedirects(HttpClient.Redirect.NEVER).build();
     }
 
     void parseBatch(java.util.List<MineruBatcher.Item> inputs) {
@@ -68,6 +70,10 @@ final class MineruTasksClient {
                     snapshots.put(checkpoint.batchId(), snapshot);
                 }
                 saved.put(input, checkpoint);
+                // Partition identity is derived from immutable source bytes and page range.
+                // PDFBox serialization (including generated IDs) may differ on a retry.
+                input.resumedPartition = checkpoint.uploaded()
+                        && input.request.fileName().matches("(?i).*\\.part-[0-9]+\\.pdf$");
                 resumed.computeIfAbsent(checkpoint.batchId(), ignored -> new java.util.ArrayList<>()).add(input);
             } catch (RuntimeException error) { input.fail(error); }
         }
@@ -127,9 +133,12 @@ final class MineruTasksClient {
                 try {
                     var checkpoint = saved.get(input);
                     var item = file(task, input, checkpoint == null ? null : checkpoint.remoteFileId());
-                    if (item.has("bytes") && item.path("bytes").asLong(-1) != input.bytes)
-                        throw MineruException.contract("MinerU 远程文件大小与提交不匹配", id);
                     String status = item.path("status").asText();
+                    // waiting-file may expose zero received bytes before PUT completes.
+                    if (!status.equals("waiting-file") && !input.resumedPartition
+                            && item.hasNonNull("bytes") && item.path("bytes").asLong(-1) != input.bytes)
+                        throw MineruException.contract("MinerU 远程文件大小与提交不匹配：local="
+                                + input.bytes + ", remote=" + item.path("bytes").asLong(-1), id);
                     if (status.equals("completed")) {
                         save(input, descriptor(item, id, true));
                         var metadata = new LinkedHashMap<String, Object>();

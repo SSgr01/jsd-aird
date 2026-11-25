@@ -1,8 +1,11 @@
 import { FormModal } from '@/components/form-dialog/FormModal';
-import { App, Form, Input, Select, Typography } from 'antd';
+import { App, Collapse, Form, Input, Select, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { getExperiment, listExperiments, type ExperimentSummary } from '@/services/experiments/experiment-api';
 import { spectrumApi, type SpectrumCategory, type SpectrumChart } from '@/services/spectrum';
+import { SpectrumTestConditions } from './SpectrumTestConditions';
+import type { SpectrumTestMethodSnapshot } from '@/services/spectrum/spectrum-api';
+import { isLegacyMethodCondition } from './spectrum-test-conditions';
 
 type ChartValues = {
   title: string;
@@ -23,6 +26,8 @@ export function SpectrumChartEditor({ item, categories, onCancel, onSaved }: {
   const [experiments, setExperiments] = useState<ExperimentSummary[]>([]);
   const [loadingExperiments, setLoadingExperiments] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [methodSnapshot, setMethodSnapshot] = useState<SpectrumTestMethodSnapshot | undefined>(item.metadata.testMethodSnapshot as SpectrumTestMethodSnapshot | undefined);
+  const [legacyConditions, setLegacyConditions] = useState(item.testConditions ?? '');
 
   useEffect(() => {
     let active = true;
@@ -49,8 +54,8 @@ export function SpectrumChartEditor({ item, categories, onCancel, onSaved }: {
         revision: item.revision,
         title: values.title.trim(), categoryId: values.categoryId,
         sampleName: values.sampleName?.trim() || '', batchNo: values.batchNo?.trim() || '',
-        testConditions: values.testConditions?.trim() || '',
-        metadata: { ...item.metadata, ...values.metadata },
+        testConditions: legacyConditions,
+        metadata: { ...item.metadata, ...values.metadata, ...(methodSnapshot ? { testMethodSnapshot: methodSnapshot } : {}) },
       });
       void message.success('图谱信息已保存');
       onSaved();
@@ -69,8 +74,13 @@ export function SpectrumChartEditor({ item, categories, onCancel, onSaved }: {
       <Form.Item name="sampleName" label="样品名称"><Input maxLength={260} placeholder="可选，如竞品 A、单峰参考 01" /></Form.Item>
       <Form.Item name="batchNo" label="批号"><Input maxLength={160} placeholder="可选" /></Form.Item>
       <Form.Item name={['metadata', 'experimentId']} label="关联 ELN 实验"><Select allowClear showSearch loading={loadingExperiments} optionFilterProp="label" placeholder="可选，选择实验后形成稳定关联" options={experiments.map((value) => ({ value: value.id, label: `${value.experimentNo} · ${value.title}` }))} /></Form.Item>
-      <Form.Item name="testConditions" label="测试条件"><Input.TextArea rows={2} maxLength={10000} placeholder="仪器、范围、溶剂、倍率等，已知则填写" /></Form.Item>
-      {category?.fields.map((field) => <Form.Item key={field.key} name={['metadata', field.key]} label={field.label}><Input placeholder="可选" /></Form.Item>)}
+      <SpectrumTestConditions categoryCode={category?.code} value={methodSnapshot} onChange={setMethodSnapshot}
+        legacyText={item.metadata.testMethodSnapshot ? undefined : legacyConditions} onLegacyTextChange={setLegacyConditions} />
+      {category?.fields.filter(field => !isLegacyMethodCondition(category.code, field.key)).map((field) => <Form.Item key={field.key} name={['metadata', field.key]} label={field.label}><Input placeholder="可选" /></Form.Item>)}
+      {category?.fields.some(field => isLegacyMethodCondition(category.code, field.key) && item.metadata[field.key]) && <Collapse items={[{ key: 'legacy-category', label: '历史分类条件（原文保留）', children: <>
+        <Typography.Paragraph type="secondary">历史值保留用于核对，不自动拆解；本次采用的条件请填写在上方。</Typography.Paragraph>
+        {category.fields.filter(field => isLegacyMethodCondition(category.code, field.key) && item.metadata[field.key]).map(field => <Form.Item key={field.key} label={field.label}><Input readOnly value={typeof item.metadata[field.key] === 'string' ? item.metadata[field.key] as string : JSON.stringify(item.metadata[field.key])} /></Form.Item>)}
+      </> }]} />}
       {category?.analysisHint && <Typography.Paragraph type="secondary">当前分类分析提示：{category.analysisHint}</Typography.Paragraph>}
     </Form>
   </FormModal>;

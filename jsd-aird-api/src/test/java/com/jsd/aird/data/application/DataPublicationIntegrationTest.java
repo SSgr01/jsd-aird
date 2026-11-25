@@ -151,7 +151,9 @@ class DataPublicationIntegrationTest {
                         new TemplateDataImportFacade.ParsedSheet("resin-a","树脂甲",0,1,2,1,1,List.of(1),1,2,List.of(List.of("黏度"),List.of("100"))),
                         new TemplateDataImportFacade.ParsedSheet("resin-b","树脂乙",1,1,2,1,1,List.of(1),1,2,List.of(List.of("黏度"),List.of("200"))));
                 when(templates.parse(org,version,file)).thenReturn(new TemplateDataImportFacade.ParsedTabularFile("XLSX","workbook",sheets));
+                when(templates.prepareImport(org,version,file)).thenCallRealMethod();
                 var imports=new DataImportService(repo,mock(FileObjectRepository.class),templates,json,mock(AuditLogFacade.class),mock(OpsAsyncFacade.class));
+                imports.setWorkbookTransactions(new DataSourceTransactionManager(source));
                 imports.parseInternal(org,job);
                 assertThat(repo.findJob(org,job).orElseThrow().status()).isEqualTo("WAITING_CONFIRM");
                 assertThat(repo.listRows(org,job)).hasSize(2).allSatisfy(row -> assertThat(row.status()).isEqualTo("VALID"));

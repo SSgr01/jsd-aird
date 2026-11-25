@@ -17,7 +17,7 @@ import java.util.UUID;
 public class ExperimentConversionController {
     private final ExperimentConversionService service;
     public ExperimentConversionController(ExperimentConversionService service){this.service=service;}
-    public record Create(@NotNull UUID batchId,@NotNull UUID sourceFileId,@NotNull UUID templateVersionId,@NotNull UUID categoryId){}
+    public record Create(@NotNull UUID batchId,@NotNull UUID sourceFileId,@NotNull UUID templateVersionId,UUID categoryId){}
     @PostMapping public ApiResponse<JsonNode> create(@Valid @RequestBody Create request){
         return success(service.create(request.batchId(),request.sourceFileId(),request.templateVersionId(),request.categoryId()));
     }

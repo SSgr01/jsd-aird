@@ -113,6 +113,8 @@ export function SpectrumResourceBody({React, value}) {
   return h('article', {className:'jsd-resource jsd-spectrum-source'}, h('h2', null, facts.title || value.title),
     h('p', {className:'jsd-spectrum-hint'}, '分析引用的原始图谱，可核对页面内容与测试条件。'),
     fields.length > 0 && h('dl', {className:'jsd-spectrum-facts'}, fields.flatMap(([label, text]) => [h('dt',{key:label},label),h('dd',{key:label+'-value'},text)])),
+    facts.testMethodSnapshot && h('p', {className:'jsd-spectrum-hint'}, '当次条件快照' + (facts.testMethodSnapshot.presetName ? ' · ' + facts.testMethodSnapshot.presetName + ' · V' + facts.testMethodSnapshot.presetRevision : ' · 手工登记')),
+    Array.isArray(facts.conditionWarnings) && facts.conditionWarnings.filter(text => typeof text === 'string').map((text, index) => h('p', {key:'condition-warning-' + index, className:'jsd-spectrum-hint'}, text)),
     (value.candidates || []).map(item => h(Page, {key:item.source.anchor.page_no, item})),
     h('a', {href:'/spectrum/view?chartId=' + value.ref.resource_id, target:'_blank', rel:'noopener'}, '在图谱中心查看'));
 }

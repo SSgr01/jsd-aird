@@ -18,7 +18,7 @@ public class DataToExperimentJobHandler implements AsyncJobHandler {
     }
     @Override public JsonNode handle(JsonNode p,ExecutionContext context){
         var created=service.execute(uuid(p,"organizationId"),uuid(p,"actorId"),p.path("actorName").asText(),
-                uuid(p,"importJobId"),p.path("assemblyKey").asText(),p.path("planHash").asText(),uuid(p,"categoryId"),
+                uuid(p,"importJobId"),p.path("assemblyKey").asText(),p.path("planHash").asText(),optional(p,"categoryId"),
                 optional(p,"projectId"),optional(p,"stageId"),optional(p,"taskId"),context);
         return json.createObjectNode().put("status","SYNCED").put("experimentId",created.experimentId().toString())
                 .put("experimentVersionId",created.experimentVersionId().toString()).put("experimentNo",created.experimentNo());

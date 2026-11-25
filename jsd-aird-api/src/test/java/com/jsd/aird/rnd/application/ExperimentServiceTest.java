@@ -29,6 +29,8 @@ import com.jsd.aird.tpl.api.TemplateDataImportFacade;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 
 class ExperimentServiceTest {
@@ -70,6 +72,53 @@ class ExperimentServiceTest {
         verify(repository).create(captor.capture());
         assertThat(captor.getValue().editModel().path("documentSnapshot")).isEqualTo(snapshot);
         assertThat(captor.getValue().editModel().path("importProcessingMode").asText()).isEqualTo("CONTENT_ONLY");
+        assertThat(captor.getValue().editModel().has("importDataReview")).isFalse();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"EXCEL_IMPORT,false", "EXCEL_IMPORT,true", "OCR_IMPORT,false", "OCR_IMPORT,true"})
+    void contentOnlyImportsCanSaveSubmitAndPublishWithoutDataConfirmation(String sourceType, boolean legacyField) {
+        var id = UUID.randomUUID();
+        var version = UUID.randomUUID();
+        java.util.function.BiFunction<ExperimentStatus, Long, Summary> summaryFor = (status, revision) ->
+                new Summary(id, "EXP-CONTENT", "原始实验记录", null, null, sourceType, status,
+                        null, null, null, null, null, null, "creator", LocalDate.of(2026, 11, 24), 1, revision, Instant.now());
+        var model = mapper.createObjectNode().put("importProcessingMode", "CONTENT_ONLY");
+        model.withObject("/documentSnapshot/sheets/s/cellData/0/0").put("v", "原始实验内容");
+        model.withObject("importDataReview").put("confirmed", false);
+        var fields = model.putArray("recognizedFields");
+        if (legacyField) fields.addObject().put("name", "旧识别字段").put("confirmed", false);
+        model.putArray("recognizedRegions").addObject().put("confirmed", false);
+        var state = new java.util.concurrent.atomic.AtomicReference<>(new Detail(summaryFor.apply(ExperimentStatus.DRAFT, 1L),
+                version, null, null, null, mapper.createObjectNode(), model, List.of(), List.of()));
+        when(repository.detail(ORGANIZATION_ID, id)).thenAnswer(invocation -> Optional.of(state.get()));
+        when(repository.saveDraft(any(), any(), any(Long.class), any(), any(), any())).thenAnswer(invocation -> {
+            var draft = invocation.<ExperimentRepository.Draft>getArgument(3);
+            var next = new Detail(summaryFor.apply(ExperimentStatus.DRAFT, 2L), version, null, null, null,
+                    mapper.createObjectNode(), draft.editModel(), List.of(), List.of());
+            state.set(next);
+            return next;
+        });
+        when(repository.transition(any(), any(), any(Long.class), any(), any(), any(), any())).thenAnswer(invocation -> {
+            var current = state.get();
+            var next = new Detail(summaryFor.apply(invocation.getArgument(3), current.summary().revision() + 1),
+                    version, null, null, null, mapper.createObjectNode(), current.editModel(), List.of(), List.of());
+            state.set(next);
+            return next;
+        });
+        var edits = model.deepCopy();
+        edits.remove(List.of("importProcessingMode", "importDataReview"));
+        edits.withObject("/documentSnapshot/sheets/s/cellData/0/0").put("v", "修正后的实验内容");
+        var saved = service.save(id, 1, new ExperimentService.DraftCommand("EXP-CONTENT", "原始实验记录",
+                null, null, null, null, null, "creator", LocalDate.of(2026, 11, 24), null, null,
+                mapper.createObjectNode(), edits));
+        assertThat(saved.editModel().path("importProcessingMode").asText()).isEqualTo("CONTENT_ONLY");
+        assertThat(saved.editModel().has("importDataReview")).isFalse();
+        assertThat(saved.editModel().at("/documentSnapshot/sheets/s/cellData/0/0/v").asText()).isEqualTo("修正后的实验内容");
+        assertThat(service.transition(id, 2, ExperimentStatus.PENDING_REVIEW, null).summary().status())
+                .isEqualTo(ExperimentStatus.PENDING_REVIEW);
+        assertThat(service.transition(id, 3, ExperimentStatus.COMPLETED, null).summary().status())
+                .isEqualTo(ExperimentStatus.COMPLETED);
     }
 
     @Test
@@ -339,6 +388,36 @@ class ExperimentServiceTest {
                 });
         var confirmed = importService.confirmTemplateData(id, 1);
         assertThat(confirmed.editModel().path("importDataReview").path("confirmed").asBoolean()).isTrue();
+    }
+
+    @Test
+    void confirmsARecordedHistoricalMetadataGapWithoutFillingTheSourceCell() {
+        var id=UUID.randomUUID();var version=UUID.randomUUID();var template=UUID.randomUUID();
+        var workbook=mapper.createObjectNode();
+        workbook.withObject("/sheets/s/cellData/0/0").put("v","原实验数据");
+        workbook.withObject("/sheets/s/cellData/1/1").put("v","");
+        var model=mapper.createObjectNode().put("sourceImportJobId",UUID.randomUUID().toString());
+        model.set("documentSnapshot",workbook);
+        var summary=new Summary(id,"EXP-HISTORY","历史实验",null,null,"EXCEL_IMPORT",ExperimentStatus.DRAFT,null,null,null,null,null,null,null,null,1,1,Instant.now());
+        var current=new Detail(summary,version,null,template,null,mapper.createObjectNode(),model,List.of(),List.of());
+        when(repository.detail(ORGANIZATION_ID,id)).thenReturn(Optional.of(current));
+        when(repository.saveDraft(any(),any(),any(Long.class),any(),any(),any())).thenAnswer(invocation->{
+            var draft=invocation.<ExperimentRepository.Draft>getArgument(3);
+            return new Detail(summary,version,null,template,null,mapper.createObjectNode(),draft.editModel(),List.of(),List.of());
+        });
+        var templates=mock(TemplateDataImportFacade.class);
+        var field=new TemplateDataImportFacade.FieldDefinition("basic.date","日期","DATE",null,true,false,List.of(),"/fields/basic.date");
+        var binding=new TemplateDataImportFacade.ImportBinding("date","basic.date","/fields/basic.date","SCALAR",null,null,1,1,1,
+                mapper.createObjectNode(),mapper.createObjectNode().put("sheetId","s").put("address","B2"),true,false,true,"SOURCE","DATE",null);
+        when(templates.getVersion(ORGANIZATION_ID,template)).thenReturn(new TemplateDataImportFacade.DataTemplateDefinition(null,template,"V9","历史实验",null,1,"XLSX",mapper.createObjectNode(),mapper.createObjectNode(),List.of(field)));
+        when(templates.getBindings(ORGANIZATION_ID,template)).thenReturn(List.of(binding));
+        var imported=new ExperimentService(repository,mapper,files,new ExperimentEditModelNormalizer(mapper),null,templates,new JsonCanonicalizer(mapper));
+        assertThatThrownBy(()->imported.confirmTemplateData(id,1)).hasMessageContaining("必填数据尚未填写");
+        model.putArray("sourceMetadataGaps").addObject().put("semantic","EXPERIMENT_DATE").put("status","NOT_RECORDED").put("originalValue","").put("sheetId","s").put("address","B2");
+        var confirmed=imported.confirmTemplateData(id,1);
+        assertThat(confirmed.editModel().at("/documentSnapshot/sheets/s/cellData/1/1/v").asText()).isEmpty();
+        assertThat(confirmed.editModel().path("sourceMetadataGaps")).hasSize(1);
+        assertThat(confirmed.editModel().at("/importDataReview/confirmed").asBoolean()).isTrue();
     }
 
     @Test

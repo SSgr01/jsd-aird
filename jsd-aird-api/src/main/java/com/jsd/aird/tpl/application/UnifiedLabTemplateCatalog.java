@@ -68,6 +68,7 @@ public final class UnifiedLabTemplateCatalog {
         return describe(code,prepared,parsed.structureSummary());
     }
     public Package describe(String code,JsonNode source,JsonNode physicalLayout) {
+        if(com.jsd.aird.shared.lab.LabWorkbookSheets.multiple(source))return describeSheets(code,source,physicalLayout);
         boolean test=code.equals(TEST);
         var prepared=(ObjectNode)LabWorkbook.blank(source);
         var sheet=LabWorkbook.sheet(prepared);var def=(ObjectNode)LabWorkbook.definition(prepared);
@@ -115,6 +116,28 @@ public final class UnifiedLabTemplateCatalog {
         var canon=new JsonCanonicalizer(json);var contract=new TemplateImportContractCompiler(json,canon).compile(layout,schema,mapping);
         var payload=json.createObjectNode().put("templateCode",code).put("versionNo",PACKAGE_VERSION).put("name",test?"测试实验":"合成实验");payload.set("snapshot",prepared);payload.set("schema",schema);payload.set("mapping",mapping);payload.set("layout",layout);payload.set("contract",contract.contract());
         return new Package(code,payload,canon.hash(prepared),canon.hash(payload));
+    }
+
+    private Package describeSheets(String code,JsonNode source,JsonNode physicalLayout) {
+        var locals=new ArrayList<JsonNode>();
+        for(var sheet:com.jsd.aird.shared.lab.LabWorkbookSheets.businessSheets(source)) {
+            var single=com.jsd.aird.shared.lab.LabWorkbookSheets.single(json,source,sheet);
+            var pack=describe(code,single,json.createObjectNode()).payload();
+            locals.add(com.jsd.aird.shared.excel.WorkbookStructure.seed(json,single,pack.path("schema"),pack.path("mapping"),sheet.path("id").asText()));
+        }
+        var instance=com.jsd.aird.shared.lab.LabWorkbookSheets.combine(json,locals);
+        var schema=json.createObjectNode().put("type","object");
+        schema.set("x-jsd-lab-template",LabWorkbook.definition(source).deepCopy());
+        schema.set("x-jsd-field-model",instance.path("model").deepCopy());
+        schema.set("x-jsd-workbook-instance",instance.deepCopy());
+        schema.set("x-jsd-experiment-import",instance.path("execution").deepCopy());
+        var mapping=instance.path("mapping").deepCopy();
+        var canon=new JsonCanonicalizer(json);
+        var layout=json.createObjectNode().put("structureVersion",7);
+        var contract=new TemplateImportContractCompiler(json,canon).compile(layout,schema,mapping);
+        var payload=json.createObjectNode().put("templateCode",code).put("versionNo",PACKAGE_VERSION).put("name",code.equals(TEST)?"测试实验":"合成实验");
+        payload.set("snapshot",source.deepCopy());payload.set("schema",schema);payload.set("mapping",mapping);payload.set("layout",layout);payload.set("contract",contract.contract());
+        return new Package(code,payload,canon.hash(source),canon.hash(payload));
     }
     private void region(ArrayNode regions,String id,String label,int first,int last){regions.addObject().put("id",id).put("label",label).put("startRow",first).put("endRow",last);}
     private ObjectNode global(ObjectNode fields,ObjectNode sheet,String code,int row,int column,String label,String semantic,boolean required){

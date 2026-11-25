@@ -22,6 +22,8 @@ final class MineruBatcher implements AutoCloseable {
         final Request request;
         final CompletableFuture<MineruTasksClient.Downloaded> future = new CompletableFuture<>();
         final long bytes;
+        final CompletableFuture<Void> dispatched = new CompletableFuture<>();
+        boolean resumedPartition;
         Item(Request request, long bytes) { this.request = request; this.bytes = bytes; }
         void success(MineruTasksClient.Downloaded result) {
             if (!future.complete(result)) delete(result.zip());
@@ -58,7 +60,13 @@ final class MineruBatcher implements AutoCloseable {
             long bytes = Files.size(request.file());
             if (bytes > byteLimit) throw MineruException.contract("MinerU 单文件超过批次字节上限", null);
             synchronized (this) {
-                if (closed || outstanding >= capacity) throw new MineruException("MinerU 批量等待队列已满", null, "BATCH_BUSY", null, true, false, null);
+                long admissionDeadline = System.nanoTime() + deadline.toNanos();
+                while (!closed && outstanding >= capacity) {
+                    long left = admissionDeadline - System.nanoTime();
+                    if (left <= 0) throw new MineruException("MinerU 批量队列等待超时", null, "BATCH_BUSY", null, true, false, null);
+                    TimeUnit.NANOSECONDS.timedWait(this, left);
+                }
+                if (closed) throw new IllegalStateException("MinerU batcher closed");
                 outstanding++;
             }
             try {
@@ -72,11 +80,13 @@ final class MineruBatcher implements AutoCloseable {
                     pending.computeIfAbsent(group, ignored -> new ArrayDeque<>()).add(item);
                 }
             } catch (Throwable error) {
-                synchronized (this) { outstanding--; }
+                synchronized (this) { outstanding--; notifyAll(); }
                 delete(owned);
                 throw error;
             }
             dispatch(false);
+            // Queue admission and remote execution have independent deadlines.
+            item.dispatched.get(deadline.toMillis(), TimeUnit.MILLISECONDS);
             return item.future.get(deadline.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException error) {
             if (item != null) item.future.cancel(false);
@@ -103,18 +113,19 @@ final class MineruBatcher implements AutoCloseable {
                 Item next = queue.peek();
                 if (!batch.isEmpty() && bytes + next.bytes > byteLimit) break;
                 queue.remove();
-                if (next.future.isCancelled()) { delete(next.request.file()); outstanding--; continue; }
+                if (next.future.isCancelled()) { delete(next.request.file()); outstanding--; notifyAll(); continue; }
                 batch.add(next); bytes += next.bytes;
             }
             if (queue.isEmpty()) groups.remove();
             if (batch.isEmpty()) continue;
             active++;
             workers.submit(() -> {
+                batch.forEach(item -> item.dispatched.complete(null));
                 try { handler.accept(List.copyOf(batch)); }
                 catch (Throwable error) { batch.forEach(item -> item.fail(error)); }
                 finally {
                     batch.forEach(item -> { item.fail(new IllegalStateException("MinerU 未返回单文件结果")); delete(item.request.file()); });
-                    synchronized (this) { active--; outstanding -= batch.size(); }
+                    synchronized (this) { active--; outstanding -= batch.size(); notifyAll(); }
                     dispatch(true);
                 }
             });
@@ -122,8 +133,10 @@ final class MineruBatcher implements AutoCloseable {
     }
     @Override public synchronized void close() {
         closed = true;
+        notifyAll();
         timer.shutdownNow(); workers.shutdownNow();
         pending.values().forEach(queue -> queue.forEach(item -> {
+            item.dispatched.completeExceptionally(new IllegalStateException("MinerU Worker 正在停止"));
             item.fail(new IllegalStateException("MinerU Worker 正在停止")); delete(item.request.file());
         }));
         pending.clear();

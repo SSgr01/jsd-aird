@@ -52,8 +52,8 @@ public class ExperimentConversionService implements com.jsd.aird.data.api.Experi
             case "EXP_SYNTHESIS_UNIFIED" -> "synthesis";
             default -> throw invalid("专家转换仅支持公司测试实验和合成实验标准模板");
         };
-        if(template.importContractVersion()!=9 || categoryId==null) throw invalid("请选择已发布的实验模板和实验分类");
-        experiments.requireActiveCategory(actor.organizationId(),categoryId);
+        if(template.importContractVersion()!=9) throw invalid("请选择已发布的实验模板");
+        if(categoryId!=null)experiments.requireActiveCategory(actor.organizationId(),categoryId);
         var owned=jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM ops.file_object WHERE organization_id=? AND id=? AND created_by=? AND status IN ('STAGED','ACTIVE'))",
                 Boolean.class,actor.organizationId(),fileId,actor.userId());
         if(!Boolean.TRUE.equals(owned)) throw new ApiException(ApiErrorCode.NOT_FOUND,"本人上传的原文件不存在");
@@ -115,7 +115,7 @@ public class ExperimentConversionService implements com.jsd.aird.data.api.Experi
         validateResult(task,plan,report,resultSha);
         ((ObjectNode)report).put("human_review","pending");
         var job=imports.createExperiment(new DataImportService.CreateCommand(resultFileId,uuid(task,"templateVersionId"),null,false,List.of(),
-                "EXPERIMENT_DRAFT",uuid(task,"categoryId")));
+                "EXPERIMENT_DRAFT",task.hasNonNull("categoryId")?uuid(task,"categoryId"):null));
         var actor=ActorContext.required();
         jdbc.update("UPDATE data.experiment_conversion SET status='WAITING_REVIEW',result_artifact_id=?,plan_artifact_id=?,report_artifact_id=?,import_job_id=?,report=?::jsonb,error_message=NULL,updated_at=now() WHERE organization_id=? AND id=?",
                 artifactId,planId,reportId,job.id(),report.toString(),actor.organizationId(),id);

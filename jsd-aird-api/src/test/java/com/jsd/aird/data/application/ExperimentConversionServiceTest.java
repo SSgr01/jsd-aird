@@ -7,6 +7,16 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ExperimentConversionServiceTest {
     private final ObjectMapper json=new ObjectMapper();
+    @Test void importEndpointsAcceptEmptyCategoryAndStillRequireSourceAndTemplate() {
+        try(var factory=jakarta.validation.Validation.buildDefaultValidatorFactory()) {
+            var validator=factory.getValidator();
+            var id=java.util.UUID.randomUUID();
+            assertTrue(validator.validate(new com.jsd.aird.data.adapter.in.web.ExperimentConversionController.Create(id,id,id,null)).isEmpty());
+            assertTrue(validator.validate(new com.jsd.aird.data.adapter.in.web.DataController.ExperimentSyncRequest(null,java.util.List.of())).isEmpty());
+            var invalid=validator.validate(new com.jsd.aird.data.adapter.in.web.ExperimentConversionController.Create(id,null,null,null));
+            assertEquals(java.util.Set.of("sourceFileId","templateVersionId"),invalid.stream().map(v->v.getPropertyPath().toString()).collect(java.util.stream.Collectors.toSet()));
+        }
+    }
     @Test void validMachineResultAndConflictDraftBothRemainEligibleOnlyForHumanReview() {
         var task=json.createObjectNode().put("sourceSha256","source").put("kind","test");
         var plan=json.createObjectNode().put("source_sha256","source").put("kind","test");

@@ -19,7 +19,7 @@ export function ChangePasswordPage() {
     try {
       await changePassword(values.currentPassword, values.newPassword);
       message.success('密码修改成功');
-      navigate('/assistant', { replace: true });
+      navigate('/dashboard', { replace: true });
     } catch (error) {
       message.error(error instanceof HttpError ? error.message : '密码修改失败');
     } finally {

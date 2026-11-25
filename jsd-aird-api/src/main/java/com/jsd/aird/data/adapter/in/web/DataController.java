@@ -408,7 +408,7 @@ public class DataController {
     public record ExcludeRecordRequest(@NotBlank String revision,boolean excluded, String reason) {}
     public record ComponentAnchorRequest(@NotBlank String revision,@NotBlank String sheetId, @NotBlank String sourceRange,
                                          @NotBlank @Size(max = 500) String reason) {}
-    public record ExperimentSyncRequest(@NotNull UUID categoryId, List<String> assemblyKeys) {}
+    public record ExperimentSyncRequest(UUID categoryId, List<String> assemblyKeys) {}
     public record FieldRequest(String fieldId, @NotBlank String displayName, String valueType,
                                String uiType, String groupCode, String description) {}
 }

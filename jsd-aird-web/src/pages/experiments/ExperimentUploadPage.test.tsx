@@ -29,6 +29,7 @@ vi.mock('@/utils/uuid', async importOriginal => {
 vi.mock('@/components/project-relations/ProjectRelationPicker', () => ({ ProjectRelationPicker: () => null }));
 vi.mock('@/components/upload-workspace', () => ({
   UploadWorkspace: (props: ComponentProps<typeof UploadWorkspace>) => <div>
+    <span>导入记录数：{props.rightCount}</span>
     <button onClick={() => props.onFilesChange([{
       uid: 'file', name: '实验.xlsx', originFileObj: Object.assign(new File(['data'], '实验.xlsx'), {
         uid: 'file', lastModifiedDate: new Date(),
@@ -64,7 +65,7 @@ it('submits experimental files on LAN HTTP without crypto.randomUUID', async () 
   await prepare();
   fireEvent.click(screen.getByRole('button', { name: '开始上传' }));
   await waitFor(() => expect(api.create).toHaveBeenCalledWith(expect.objectContaining({
-    sourceFileId: 'staged', templateVersionId: 'template', targetExperimentCategoryId: 'category',
+    sourceFileId: 'staged', templateVersionId: 'template', targetExperimentCategoryId: undefined,
   })));
   await waitFor(() => expect(screen.getByRole('button', { name: '开始上传' })).toBeEnabled());
 });
@@ -78,4 +79,12 @@ it('reports initialization errors and releases the upload button for retry', asy
   expect(screen.getByRole('button', { name: '开始上传' })).toBeEnabled();
   fireEvent.click(screen.getByRole('button', { name: '开始上传' }));
   await waitFor(() => expect(api.create).toHaveBeenCalledOnce());
+});
+
+it('keeps other import histories visible when one source fails', async () => {
+  api.conversions.mockRejectedValue(new Error('转换记录暂不可用'));
+  api.imports.mockResolvedValue([{ id: 'own-import', sourceFileName: '本人实验.xlsx', status: 'PARSING', createdAt: new Date().toISOString() }]);
+  render(<App><MemoryRouter><ExperimentUploadPage /></MemoryRouter></App>);
+  expect(await screen.findByText('导入记录数：1')).toBeInTheDocument();
+  expect(await screen.findByText('部分导入记录加载失败，请刷新重试')).toBeInTheDocument();
 });

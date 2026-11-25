@@ -614,7 +614,46 @@ def execute(root, plan_path, output=None):
             for item in spec.get("writes", []):
                 r, c = coordinate_to_tuple(item["dst"])
                 dst = f"{get_column_letter(c)}{map_row(r)}"
-                if 'composition_parts' in item:
+                if 'process_conditions' in item:
+                    allowed_row = 49 if kind == 'test' else 36
+                    if (set(item) - {'dst','process_conditions','source_texts'} or r != allowed_row
+                        or not info['first_col'] <= c < info['first_col']+len(groups)
+                        or not isinstance(item['process_conditions'],list) or not item['process_conditions']):
+                        raise ValueError('分阶段工艺条件只能逐项引用来源并写本组方案/工艺简介')
+                    parts=[];evidence=[]
+                    for stage in item['process_conditions']:
+                        if (not isinstance(stage,dict) or set(stage) not in ({'operation','parameters'},{'operation','value'})
+                            or not isinstance(stage['operation'],str)):
+                            raise ValueError('工艺阶段必须有真实操作标签及参数来源')
+                        operation=get(stage['operation'])
+                        if not isinstance(operation,str) or not operation.strip():
+                            raise ValueError('工艺阶段原标签必须是非空文字')
+                        parameters=stage.get('parameters',[{'value':stage.get('value')}])
+                        if not isinstance(parameters,list) or not parameters:
+                            raise ValueError('工艺阶段参数为空')
+                        rendered=[];sources=[]
+                        for binding in parameters:
+                            allowed={'label','value'} if 'parameters' in stage else {'value'}
+                            if not isinstance(binding,dict) or set(binding)!=allowed or any(not isinstance(v,str) for v in binding.values()):
+                                raise ValueError('工艺参数只接受原标签和值的来源坐标')
+                            raw=get(binding['value'])
+                            label=get(binding['label']) if 'label' in binding else ''
+                            if ('label' in binding and (not isinstance(label,str) or not label.strip())
+                                or isinstance(raw,bool) or not isinstance(raw,(str,int,float)) or raw==''
+                                or isinstance(raw,float) and not math.isfinite(raw)):
+                                raise ValueError('工艺参数必须有非空原值和明确原标签')
+                            rendered.append((label+'：' if label else '')+str(raw))
+                            sources.append({**binding,'raw_label':label,'raw_value':raw})
+                        parts.append(operation+'；'+'；'.join(rendered))
+                        evidence.append({'operation':stage['operation'],'raw_operation':operation,'parameters':sources})
+                    for ref in item.get('source_texts',[]):
+                        raw=get(ref)
+                        if not isinstance(raw,str):raise ValueError('工艺附加原文须为文字，不能折叠数值观测')
+                        parts.append(raw)
+                    value='\n'.join(parts)
+                    derived_fields.append({'source':'process_conditions','target':dst,
+                        'domain':'SOURCE_PROCESS_CONDITIONS','stages':evidence,'source_texts':item.get('source_texts',[])})
+                elif 'composition_parts' in item:
                     if (set(item) != {'dst','composition_parts'} or kind!='test' or r!=20
                         or not info['first_col'] <= c < info['first_col']+len(groups)
                         or not isinstance(item['composition_parts'],list) or not item['composition_parts']):
@@ -646,6 +685,8 @@ def execute(root, plan_path, output=None):
                     value=item['join'].join(values)
                 else:value = converted(item['src'],item.get('transform'))
                 put(dst, value)
+            if 'unlabelled_numeric_series' in spec:
+                raise ValueError('指标或单位含义未确认的数列只能放客户核对附件，不能生成实验指标；请按具体来源列为未落位项')
             for item in spec.get("structural", []):
                 if not item.get("reason"):
                     raise ValueError("结构性字段需要 reason")

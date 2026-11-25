@@ -61,16 +61,22 @@ public class DataWorkbookService {
         var draft=repository.findWorkbookDraft(actor.organizationId(),importJobId).orElse(null);
         var snapshot = draft==null?prepareLabSnapshot(actor.organizationId(),job,sourceSnapshot(file, job.sourceFormat(), sheets),definition):draft.snapshot().deepCopy();
         if(draft!=null)com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot,draft.instance());
-        else if("XLSX".equalsIgnoreCase(job.sourceFormat())) {
-            var execution=templates.prepareImport(actor.organizationId(),job.templateVersionId(),job.sourceFileId());
-            if(execution!=null&&execution.definition()!=null&&execution.definition().schema()!=null) {
-                var resolved=execution.definition().schema().path("x-jsd-workbook-instance");
-                if(resolved.path("version").asInt()==2)com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot,resolved);
-            }
+        else if(needsSourceResolution(job, snapshot)) {
+            // This is a review read: reuse the source already parsed above. prepareImport
+            // reopens, exports and extracts the whole file, duplicating the worker's work.
+            var resolved=com.jsd.aird.shared.excel.WorkbookStructure.seed(objectMapper,snapshot,
+                    definition.schema(),definition.mappings(),job.sourceFileId().toString());
+            if(resolved instanceof ObjectNode importedInstance)
+                com.jsd.aird.shared.excel.WorkbookStructure.expandImportedRegions(objectMapper,snapshot,
+                        importedInstance,job.sourceFileId().toString());
         }
-        var effectiveInstance=com.jsd.aird.shared.excel.WorkbookStructure.seed(objectMapper,snapshot,definition.schema(),definition.mappings(),importJobId.toString());
+        var preparedInstance=com.jsd.aird.shared.excel.WorkbookStructure.instance(snapshot);
+        var effectiveInstance=draft==null && com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot) && preparedInstance.isObject()
+                ?preparedInstance:com.jsd.aird.shared.excel.WorkbookStructure.seed(objectMapper,snapshot,definition.schema(),definition.mappings(),importJobId.toString());
         if(effectiveInstance.isObject()) {
-            var execution=templates.prepareWorkbookImport(actor.organizationId(),job.templateVersionId(),snapshot,effectiveInstance);
+            var execution=draft==null && com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot)
+                    ?templates.describePreparedWorkbook(actor.organizationId(),job.templateVersionId(),snapshot,effectiveInstance)
+                    :templates.prepareWorkbookReview(actor.organizationId(),job.templateVersionId(),snapshot,effectiveInstance);
             definition=execution.definition();bindings=execution.bindings();
             com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot, definition.schema().path("x-jsd-workbook-instance"));
         }
@@ -96,7 +102,7 @@ public class DataWorkbookService {
                 : sourceSnapshot(file, job.sourceFormat(), repository.listSheets(organizationId, importJobId));
         var definition=templates.getVersion(organizationId,job.templateVersionId());
         var snapshot=prepareLabSnapshot(organizationId,job,source,definition);
-        if(draft==null&&"XLSX".equalsIgnoreCase(job.sourceFormat())) {
+        if(draft==null&&needsSourceResolution(job, snapshot)) {
             var execution=templates.prepareImport(organizationId,job.templateVersionId(),job.sourceFileId());
             if(execution!=null&&execution.definition()!=null&&execution.definition().schema()!=null) {
                 var resolved=execution.definition().schema().path("x-jsd-workbook-instance");
@@ -108,6 +114,13 @@ public class DataWorkbookService {
             throw new ApiException(ApiErrorCode.FILE_NOT_READY, "导入文件缺少可编辑工作簿快照");
         }
         return snapshot.deepCopy();
+    }
+
+    private boolean needsSourceResolution(DataRepository.Job job, JsonNode snapshot) {
+        // Lab preparation and embedded workbook instances have already resolved their source coordinates.
+        return "XLSX".equalsIgnoreCase(job.sourceFormat())
+                && !com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot)
+                && com.jsd.aird.shared.excel.WorkbookStructure.instance(snapshot).path("version").asInt() != 2;
     }
 
     private JsonNode prepareLabSnapshot(UUID organizationId,DataRepository.Job job,JsonNode source,TemplateDataImportFacade.DataTemplateDefinition definition) {
@@ -145,7 +158,7 @@ public class DataWorkbookService {
         var format = sourceFormat == null ? "" : sourceFormat.toUpperCase(Locale.ROOT);
         if ("XLSX".equals(format)) {
             try (var stored = storage.get(file.objectKey())) {
-                return workbookParser.parseInstance(stored.stream()).snapshot().deepCopy();
+                return workbookParser.parseSnapshot(stored.stream()).deepCopy();
             } catch (ApiException exception) {
                 throw exception;
             } catch (Exception exception) {
@@ -206,7 +219,9 @@ public class DataWorkbookService {
         var sheetNames = new LinkedHashMap<String, String>();
         sheets.forEach(item -> sheetNames.put(item.sheetId(), item.sheetName()));
         var result = new ArrayList<FieldValue>();
+        var mappingsBySheet = mappings.stream().collect(java.util.stream.Collectors.groupingBy(DataRepository.Mapping::sheetId));
         for (var row : rows) {
+            var sheetMappings = mappingsBySheet.getOrDefault(row.sheetId(), List.of());
             var normalized = row.normalizedValues();
             var corrected = row.correctedValues();
             var entries = normalized.fields();
@@ -218,7 +233,7 @@ public class DataWorkbookService {
                 // structured value wrapper.  Treating a text node as that wrapper exposed the internal key as
                 // the field name and discarded its source address and value in the workbench.
                 var wrapped = value != null && value.isObject();
-                var sourceMapping = wrapped ? null : mappingBySource(mappings, row.sheetId(), entry.getKey());
+                var sourceMapping = wrapped ? null : mappingBySource(sheetMappings, row.sheetId(), entry.getKey());
                 var fieldCode = wrapped
                         ? value.path("fieldCode").asText(entry.getKey())
                         : sourceMapping != null && sourceMapping.fieldCode() != null
@@ -228,7 +243,7 @@ public class DataWorkbookService {
                         ? value.path("valuePath").asText(value.path("dataPath").asText("/" + fieldCode))
                         : "/" + fieldCode;
                 var mapping = sourceMapping == null
-                        ? mapping(mappings, row.sheetId(), fieldCode, provisionalBindingId, provisionalValuePath)
+                        ? mapping(sheetMappings, row.sheetId(), fieldCode, provisionalBindingId, provisionalValuePath)
                         : sourceMapping;
                 var sourceColumn = wrapped
                         ? value.path("sourceColumn").asText(mapping == null ? "" : mapping.sourceColumn())
@@ -470,19 +485,23 @@ public class DataWorkbookService {
             if (item.sheetId() != null && item.sheetName() != null) sheetNames.put(item.sheetId(), item.sheetName());
         });
         var result = new LinkedHashMap<String, FieldDefinitionView>();
+        var valuesByBinding = new LinkedHashMap<String, FieldValue>();
+        var valuesByCode = new LinkedHashMap<String, List<FieldValue>>();
+        for (var item : values) {
+            valuesByBinding.putIfAbsent(item.bindingId(), item);
+            valuesByCode.computeIfAbsent(item.fieldCode(), key -> new ArrayList<>()).add(item);
+        }
         for (var binding : bindings == null ? List.<TemplateDataImportFacade.ImportBinding>of() : bindings) {
             if (isRegionBinding(binding)) continue;
             var bindingId = firstNonBlank(binding.bindingId(), binding.fieldCode(), binding.dataPath());
             if (bindingId.isBlank() || result.containsKey(bindingId)) continue;
             var locator = binding.locator() == null ? JsonNodeFactory.instance.missingNode() : binding.locator();
-            var value = values.stream().filter(item -> bindingId.equals(item.bindingId())).findFirst().orElse(null);
+            var value = valuesByBinding.get(bindingId);
             var componentId = firstNonBlank(value == null ? "" : value.componentId(), components.get(bindingId),
                     components.get(binding.parentBindingId()), locator.path("componentId").asText(""),
                      binding.parentBindingId());
             if (value == null) {
-                var sameCode = values.stream()
-                        .filter(item -> binding.fieldCode() != null && binding.fieldCode().equals(item.fieldCode()))
-                        .toList();
+                var sameCode = binding.fieldCode() == null ? List.<FieldValue>of() : valuesByCode.getOrDefault(binding.fieldCode(), List.of());
                 var matchingComponents = sameCode.stream().map(FieldValue::componentId)
                         .filter(item -> item != null && !item.isBlank()).distinct().toList();
                 if (matchingComponents.size() == 1 && !sameCode.isEmpty()) value = sameCode.getFirst();
@@ -579,14 +598,18 @@ public class DataWorkbookService {
         sheets.forEach(item -> sheetNames.put(item.sheetId(), item.sheetName()));
         var components = definition == null || definition.importContract() == null
                 ? JsonNodeFactory.instance.arrayNode() : definition.importContract().path("components");
+        var fieldsByComponent = new LinkedHashMap<String, List<FieldValue>>();
+        for (var field : fields) fieldsByComponent.computeIfAbsent(field.componentId(), key -> new ArrayList<>()).add(field);
+        var definitionsByComponent = new LinkedHashMap<String, List<FieldDefinitionView>>();
+        for (var field : fieldDefinitions) definitionsByComponent.computeIfAbsent(field.componentId(), key -> new ArrayList<>()).add(field);
+        var templateNames = templateComponentNames(definition);
         for (var component : components) {
             var componentId = component.path("componentId").asText("");
             if (componentId.isBlank()) continue;
             if (known.contains(componentId)) continue;
             known.add(componentId);
-            var componentFields = fields.stream().filter(item -> componentId.equals(item.componentId())).toList();
-            var definitions = fieldDefinitions.stream()
-                    .filter(item -> componentId.equals(item.componentId())).toList();
+            var componentFields = fieldsByComponent.getOrDefault(componentId, List.of());
+            var definitions = definitionsByComponent.getOrDefault(componentId, List.of());
             // Region-only contract nodes are execution scaffolding. When no
             // field definition or imported value belongs to the node, showing
             // it creates an empty duplicate region in the customer workbench.
@@ -594,15 +617,14 @@ public class DataWorkbookService {
             if (componentFields.isEmpty() && !definitions.isEmpty()
                     && definitions.stream().allMatch(item -> item.sourceRange() == null
                     || item.sourceRange().isBlank())) continue;
-            result.add(region(componentId, component, definitions, componentFields, definition, sheetNames));
+            result.add(region(componentId, component, definitions, componentFields, definition, sheetNames, templateNames));
         }
         var definitionComponentIds = fieldDefinitions.stream().map(FieldDefinitionView::componentId).toList();
         java.util.stream.Stream.concat(definitionComponentIds.stream(), fields.stream().map(FieldValue::componentId))
                 .filter(value -> value != null && !value.isBlank())
                 .filter(value -> !known.contains(value)).distinct().forEach(componentId -> {
-                    var componentFields = fields.stream().filter(item -> componentId.equals(item.componentId())).toList();
-                    var definitions = fieldDefinitions.stream()
-                            .filter(item -> componentId.equals(item.componentId())).toList();
+                    var componentFields = fieldsByComponent.getOrDefault(componentId, List.of());
+                    var definitions = definitionsByComponent.getOrDefault(componentId, List.of());
                     var seed = objectMapper.createObjectNode()
                             .put("componentId", componentId)
                             .put("sheetId", !definitions.isEmpty() ? definitions.getFirst().sheetId()
@@ -611,14 +633,14 @@ public class DataWorkbookService {
                                     : componentFields.isEmpty() ? "SCALAR" : componentFields.getFirst().mappingKind())
                             .put("repeatAxis", !definitions.isEmpty() ? definitions.getFirst().repeatAxis()
                                     : componentFields.isEmpty() ? "" : componentFields.getFirst().repeatAxis());
-                    result.add(region(componentId, seed, definitions, componentFields, definition, sheetNames));
+                    result.add(region(componentId, seed, definitions, componentFields, definition, sheetNames, templateNames));
                 });
         if (result.isEmpty() && !fields.isEmpty()) {
             var first = fields.getFirst();
             var seed = objectMapper.createObjectNode().put("componentId", first.sheetId() + ":data")
                     .put("sheetId", first.sheetId()).put("structureType", "SCALAR");
             result.add(region(seed.path("componentId").asText(), seed, fieldDefinitions,
-                    fields, definition, sheetNames));
+                    fields, definition, sheetNames, templateNames));
         }
         return List.copyOf(result);
     }
@@ -626,7 +648,7 @@ public class DataWorkbookService {
     private WorkbookRegion region(String componentId, JsonNode component,
                                   List<FieldDefinitionView> definitions, List<FieldValue> fields,
                                   TemplateDataImportFacade.DataTemplateDefinition definition,
-                                  Map<String, String> sheetNames) {
+                                  Map<String, String> sheetNames, Map<String, String> templateNames) {
         var sheetId = firstNonBlank(component.path("sheetId").asText(""),
                 definitions.isEmpty() ? "" : definitions.getFirst().sheetId(),
                 fields.isEmpty() ? "" : fields.getFirst().sheetId());
@@ -637,7 +659,7 @@ public class DataWorkbookService {
                 definitions.isEmpty() ? "" : definitions.getFirst().repeatAxis(),
                 fields.isEmpty() ? "" : fields.getFirst().repeatAxis());
         var name = regionName(componentId, component, definitions, definition,
-                sheetNames.getOrDefault(sheetId, sheetId), structureType);
+                sheetNames.getOrDefault(sheetId, sheetId), structureType, templateNames);
         var groups = definitions.stream().map(FieldDefinitionView::groupPath)
                 .filter(value -> value != null && !value.isBlank())
                 .distinct().map(group -> new WorkbookFieldGroup(group, group,
@@ -653,7 +675,7 @@ public class DataWorkbookService {
 
     private String regionName(String componentId, JsonNode component, List<FieldDefinitionView> definitions,
                               TemplateDataImportFacade.DataTemplateDefinition definition,
-                              String sheetName, String structureType) {
+                              String sheetName, String structureType, Map<String, String> templateNames) {
         // A business region name declared by the published template is more
         // authoritative than a coincidental single child field. Otherwise a
         // one-column region such as "操作步骤" or "配方明细" is renamed after
@@ -666,7 +688,7 @@ public class DataWorkbookService {
                 break;
             }
         }
-        var templateFieldName = templateComponentName(definition, componentId);
+        var templateFieldName = templateNames.getOrDefault(componentId, "");
         templateFieldName = normalizeBusinessRegionName(templateFieldName);
         if (isGenericRegionName(contractName) && !definitions.isEmpty()
                 && definitions.stream().allMatch(item -> item.displayName() != null
@@ -707,29 +729,33 @@ public class DataWorkbookService {
         return structureTypeLabel(structureType);
     }
 
-    private String templateComponentName(TemplateDataImportFacade.DataTemplateDefinition definition,
-                                         String componentId) {
-        if (definition == null || componentId == null || componentId.isBlank()) return "";
-        var fieldId = "";
-        var fieldCode = "";
-        if (definition.mappings() != null && definition.mappings().isArray()) {
-            for (var mapping : definition.mappings()) {
-                if (!componentId.equals(mapping.path("bindingId").asText(""))) continue;
-                fieldId = mapping.path("fieldId").asText("");
-                fieldCode = mapping.path("fieldCode").asText("");
-                break;
-            }
-        }
+    private Map<String, String> templateComponentNames(TemplateDataImportFacade.DataTemplateDefinition definition) {
+        var result = new LinkedHashMap<String, String>();
+        if (definition == null) return result;
+        record NamedField(int order, String name) {}
+        var byId = new LinkedHashMap<String, NamedField>();
+        var byCode = new LinkedHashMap<String, NamedField>();
+        int order = 0;
         var fields = definition.schema() == null ? JsonNodeFactory.instance.arrayNode()
                 : definition.schema().path("x-jsd-field-model").path("fields");
         for (var field : fields) {
-            if ((!fieldId.isBlank() && fieldId.equals(field.path("fieldId").asText(field.path("id").asText(""))))
-                    || (!fieldCode.isBlank() && fieldCode.equals(field.path("fieldCode").asText("")))) {
-                var name = userLabelPath(field.path("name").asText(""));
-                if (!name.isBlank()) return name;
-            }
+            var name = userLabelPath(field.path("name").asText(""));
+            if (name.isBlank()) continue;
+            var named = new NamedField(order++, name);
+            var id = field.path("fieldId").asText(field.path("id").asText(""));
+            var code = field.path("fieldCode").asText("");
+            if (!id.isBlank()) byId.putIfAbsent(id, named);
+            if (!code.isBlank()) byCode.putIfAbsent(code, named);
         }
-        return "";
+        if (definition.mappings() != null) for (var mapping : definition.mappings()) {
+            var binding = mapping.path("bindingId").asText("");
+            if (result.containsKey(binding)) continue;
+            var id = byId.get(mapping.path("fieldId").asText(""));
+            var code = byCode.get(mapping.path("fieldCode").asText(""));
+            var selected = id == null ? code : code == null || id.order() < code.order() ? id : code;
+            result.put(binding, selected == null ? "" : selected.name());
+        }
+        return result;
     }
 
     private boolean isRepeatedStructure(String value) {
@@ -775,13 +801,18 @@ public class DataWorkbookService {
 
     private List<WorkbookRecord> workbookRecords(List<WorkbookRegion> regions, List<FieldValue> fields) {
         var result = new ArrayList<WorkbookRecord>();
+        var byComponent = new LinkedHashMap<String, LinkedHashMap<String, List<FieldValue>>>();
+        for (var field : fields) {
+            if (field.recordGroupId() == null || field.recordGroupId().isBlank()) continue;
+            byComponent.computeIfAbsent(field.componentId(), key -> new LinkedHashMap<>())
+                    .computeIfAbsent(field.recordGroupId(), key -> new ArrayList<>()).add(field);
+        }
         for (var region : regions) {
-            var recordIds = fields.stream().filter(item -> region.regionId().equals(item.componentId()))
-                    .map(FieldValue::recordGroupId).filter(value -> value != null && !value.isBlank()).distinct().toList();
+            var grouped = byComponent.getOrDefault(region.regionId(), new LinkedHashMap<>());
+            var recordIds = List.copyOf(grouped.keySet());
             for (int index = 0; index < recordIds.size(); index++) {
                 var recordId = recordIds.get(index);
-                var recordFields = fields.stream().filter(item -> region.regionId().equals(item.componentId())
-                        && recordId.equals(item.recordGroupId())).toList();
+                var recordFields = grouped.get(recordId);
                 var identity = recordFields.stream().filter(FieldValue::identity)
                         .map(FieldValue::effectiveValue).filter(value -> value != null && !value.isNull())
                         .map(JsonNode::asText).filter(value -> !value.isBlank()).findFirst().orElse("");

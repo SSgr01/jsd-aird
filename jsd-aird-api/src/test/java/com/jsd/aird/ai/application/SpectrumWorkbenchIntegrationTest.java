@@ -59,7 +59,7 @@ class SpectrumWorkbenchIntegrationTest {
     }
     @AfterEach void clear() { ActorContext.clear(); }
     private SpectrumRepository.ChartRow row(String title, String sha) {
-        return new SpectrumRepository.ChartRow(chartId,org,categoryId,"IR","红外",UUID.nameUUIDFromBytes("original".getBytes()),title,"native.pdf","application/pdf",original.length,sha,"A","B01","25°C","{\"concentration\":0}",2,"READY",Instant.EPOCH,Instant.EPOCH);
+        return new SpectrumRepository.ChartRow(chartId,org,categoryId,"IR","红外",UUID.nameUUIDFromBytes("original".getBytes()),title,"native.pdf","application/pdf",original.length,sha,"A","B01","25°C","{\"concentration\":0,\"testMethodSnapshot\":{\"schemaVersion\":1,\"methodType\":\"IR\",\"instrument\":{\"model\":\"IRXross\"},\"conditions\":{\"samplingMode\":\"ATR\"},\"presetRevision\":\"1\"}}",2,"READY",Instant.EPOCH,Instant.EPOCH);
     }
     private ObjectNode ref() { return data.read(BusinessViews.ref("SPECTRUM",chartId)).ref(); }
     private ObjectNode readPage(ObjectNode ref, int page) {
@@ -107,6 +107,9 @@ class SpectrumWorkbenchIntegrationTest {
         assertThat(result.path("title").asText()).contains("第 2 页");
         assertThat(result.path("spectrum").path("sampleName").asText()).isEqualTo("A");
         assertThat(result.path("spectrum").path("testConditions").asText()).isEqualTo("25°C");
+        assertThat(result.path("spectrum").path("testMethodSnapshot").path("conditions").path("samplingMode").asText()).isEqualTo("ATR");
+        assertThat(result.path("spectrum").path("conditionWarnings").toString()).contains("纵轴类型");
+        assertThat(result.path("candidates").path(0).path("text").asText()).contains("testMethodSnapshot", "ATR", "conditionAnalysisHint");
         assertThat(result.path("spectrum").has("fileObjectId")).isFalse();
         assertThat(result.path("spectrum").has("page_read_hint")).isFalse();
         selected.put("version_id","0".repeat(64));

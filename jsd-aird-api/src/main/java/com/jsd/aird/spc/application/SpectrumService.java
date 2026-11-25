@@ -164,7 +164,7 @@ public class SpectrumService {
             var chart = repository.insertChart(new SpectrumRepository.NewChart(
                     UUID.randomUUID(), actor.organizationId(), category.id(), fileId, title, file.originalName(),
                     file.contentType(), file.size(), file.sha256(), trim(command.sampleName()), trim(command.batchNo()),
-                    trim(command.testConditions()), validJsonObject(command.metadata()), pageCount, requestId, actor.userId()));
+                    SpectrumTestMethods.summary(command.metadata(), trim(command.testConditions())), validJsonObject(SpectrumTestMethods.normalizeMetadata(command.metadata())), pageCount, requestId, actor.userId()));
             storage.activate(fileId);
             repository.recordUploadAttempt(new SpectrumRepository.NewUploadAttempt(actor.organizationId(), requestId,
                     category.id(), chart.id(), fileId, file.originalName(), file.size(), "SUCCEEDED", null, null,
@@ -212,7 +212,7 @@ public class SpectrumService {
         requireChartRevision(actor.organizationId(),chartId,revision);
         if (command.categoryId() != null) assignChartCategory(chartId, command.categoryId(), revision);
         repository.updateChart(actor.organizationId(), chartId, required(command.title(), "图谱名称不能为空"),
-                trim(command.sampleName()), trim(command.batchNo()), trim(command.testConditions()), validJsonObject(command.metadata()));
+                trim(command.sampleName()), trim(command.batchNo()), SpectrumTestMethods.summary(command.metadata(), trim(command.testConditions())), validJsonObject(SpectrumTestMethods.normalizeMetadata(command.metadata())));
         audit(actor, "SPECTRUM_CHART_UPDATED", "SPECTRUM_CHART", chartId, command.title());
         return chart(chartId);
     }

@@ -95,7 +95,7 @@ public class CapacityConfiguration {
             try {
                 var connection=DataSourceUtils.getConnection(obtainDataSource());
                 try(var statement=connection.prepareStatement("SELECT set_config('lock_timeout',?,true),set_config('statement_timeout',?,true),set_config('idle_in_transaction_session_timeout',?,true)")){
-                    statement.setString(1,limits.lockMillis()+"ms");statement.setString(2,OperationBudget.sqlMillis(limits)+"ms");statement.setString(3,Math.min(millis,10000)+"ms");statement.execute();
+                    statement.setString(1,limits.lockMillis()+"ms");statement.setString(2,OperationBudget.sqlMillis(limits)+"ms");statement.setString(3,millis+"ms");statement.execute();
                 }
                 if(connection.getMetaData().getDatabaseMajorVersion()>=17){
                     try(var statement=connection.prepareStatement("SELECT set_config('transaction_timeout',?,true)")){statement.setString(1,millis+"ms");statement.execute();}

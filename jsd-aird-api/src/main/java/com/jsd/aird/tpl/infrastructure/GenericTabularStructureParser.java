@@ -46,7 +46,7 @@ public class GenericTabularStructureParser implements TabularStructureParser {
     }
 
     private TemplateDataImportFacade.ParsedTabularFile parseWorkbook(InputStream input, boolean xlsx) {
-        try (Workbook workbook = WorkbookFactory.create(input)) {
+        try (Workbook workbook = xlsx ? com.jsd.aird.shared.office.IsoDateXlsxReader.open(input) : WorkbookFactory.create(input)) {
             var formatter = new DataFormatter();
             var evaluator = workbook.getCreationHelper().createFormulaEvaluator();
             var sheets = new ArrayList<TemplateDataImportFacade.ParsedSheet>();

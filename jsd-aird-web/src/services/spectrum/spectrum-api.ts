@@ -6,6 +6,33 @@ export interface SpectrumFieldDefinition {
   key: string;
   label: string;
 }
+export interface SpectrumTestMethodSnapshot {
+  schemaVersion: 1;
+  methodType: string;
+  presetId?: string;
+  presetRevision?: string;
+  presetName?: string;
+  instrument: Record<string, unknown>;
+  conditions: Record<string, unknown>;
+  notes?: string;
+  legacyText?: string;
+}
+export interface SpectrumMethodField {
+  key: string; label: string; target?: 'instrument' | 'conditions';
+  kind?: 'number' | 'integer' | 'program' | 'specimens';
+  unit?: string; min?: number; max?: number; variable?: boolean; options?: string[];
+  placeholder?: string; when?: string;
+}
+export interface SpectrumMethodSchema {
+  code: string; name: string; fields: SpectrumMethodField[]; comparisonKeys: string[];
+}
+export interface SpectrumMethodPreset {
+  id: string; revision: string; name: string; methodType: string; version: number;
+  active: boolean; snapshot: SpectrumTestMethodSnapshot;
+}
+export interface SpectrumMethodCatalog {
+  methods: SpectrumMethodSchema[]; presets: SpectrumMethodPreset[]; canManage: boolean;
+}
 export interface SpectrumCategory {
   revision: string;
   id: string;
@@ -60,6 +87,15 @@ export interface SpectrumPage {
   pageCount: number;
 }
 export const spectrumApi = {
+  async methodPresets() {
+    return (await httpClient.get<ApiResponse<SpectrumMethodCatalog>>('/api/v1/spc/method-presets')).data.data;
+  },
+  async saveMethodPreset(input: { name: string; snapshot: SpectrumTestMethodSnapshot; active?: boolean; revision?: string }, id?: string) {
+    const response = id
+      ? await httpClient.put<ApiResponse<SpectrumMethodPreset>>(`/api/v1/spc/method-presets/${id}`, input)
+      : await httpClient.post<ApiResponse<SpectrumMethodPreset>>('/api/v1/spc/method-presets', input);
+    return response.data.data;
+  },
   async categories() {
     const response =
       await httpClient.get<ApiResponse<SpectrumCategory[]>>('/api/v1/spc/categories');

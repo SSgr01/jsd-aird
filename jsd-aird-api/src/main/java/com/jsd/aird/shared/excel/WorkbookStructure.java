@@ -184,6 +184,15 @@ public final class WorkbookStructure {
     public static ObjectNode validate(ObjectMapper json, JsonNode snapshot, JsonNode provided) {
         var source = provided != null && provided.path("version").asInt() == 2 ? provided : instance(snapshot);
         if (!source.isObject()) throw invalid("工作簿缺少实例结构定义");
+        if(source.path("labMultiSheet").asBoolean()&&com.jsd.aird.shared.lab.LabWorkbookSheets.multiple(snapshot)) {
+            var ids=new HashSet<String>();var codes=new HashSet<String>();var bindingIds=new HashSet<String>();
+            for(var field:source.path("model").path("fields")) {
+                if(!ids.add(field.path("id").asText()))throw invalid("字段ID重复");
+                if(!field.path("displayRole").asText().equals("REGION")&&!field.path("fieldCode").asText().isBlank()&&!codes.add(field.path("fieldCode").asText()))throw invalid("字段编码重复");
+            }
+            for(var binding:source.path("mapping"))if(!bindingIds.add(binding.path("bindingId").asText()))throw invalid("字段绑定ID重复或为空");
+            return com.jsd.aird.shared.lab.LabWorkbookSheets.validate(json,snapshot,source);
+        }
         var out = (ObjectNode) source.deepCopy();
         if (!out.path("model").path("fields").isArray() || !out.path("mapping").isArray()) throw invalid("实例字段与绑定定义无效");
         var sheetIds = new HashSet<String>();

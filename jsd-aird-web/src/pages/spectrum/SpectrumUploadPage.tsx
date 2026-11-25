@@ -4,7 +4,7 @@ import {
   MessageOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
-import { App, Button, Form, Input, Select, Space, Typography } from 'antd';
+import { App, Button, Collapse, Form, Input, Modal, Select, Space, Typography } from 'antd';
 import type { UploadFile } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -21,6 +21,9 @@ import { spectrumApi, type SpectrumCategory, type SpectrumChart, type SpectrumUp
 import { listExperiments, type ExperimentSummary } from '@/services/experiments/experiment-api';
 import { projectResourceApi, type ProjectRelationTarget } from '@/services/project/project-resource-api';
 import { generateUUID } from '@/utils/uuid';
+import { SpectrumTestConditions } from './SpectrumTestConditions';
+import { isLegacyMethodCondition } from './spectrum-test-conditions';
+import type { SpectrumTestMethodSnapshot } from '@/services/spectrum/spectrum-api';
 
 const attemptStatusLabels: Record<SpectrumUploadAttempt['status'], [string, string]> = {
   SUCCEEDED: ['已保存', 'success'],
@@ -42,6 +45,10 @@ export function SpectrumUploadPage() {
   const [sampleName, setSampleName] = useState('');
   const [batchNo, setBatchNo] = useState('');
   const [testConditions, setTestConditions] = useState('');
+  const [batchReset, setBatchReset] = useState(0);
+  const [fileConditions, setFileConditions] = useState<Record<string, SpectrumTestMethodSnapshot>>({});
+  const [editingFile, setEditingFile] = useState<string>();
+  const [fileDraft, setFileDraft] = useState<SpectrumTestMethodSnapshot>();
   const [metadata, setMetadata] = useState<Record<string, unknown>>({});
   const [referenceTargets, setReferenceTargets] = useState<ProjectRelationTarget[]>([]);
   const [experiments, setExperiments] = useState<ExperimentSummary[]>([]);
@@ -134,12 +141,15 @@ export function SpectrumUploadPage() {
     try {
       for (const file of files) {
         const requestId = generateUUID();
+        const queued = fileList.find(item => item.originFileObj === file);
+        const currentMetadata = queued && fileConditions[queued.uid]
+          ? { ...metadata, testMethodSnapshot: fileConditions[queued.uid] } : metadata;
         const uploadContext = {
           title: file.name.replace(/\.[^.]+$/, '').slice(0, 260),
           sampleName: sampleName.trim() || undefined,
           batchNo: batchNo.trim() || undefined,
           testConditions: testConditions.trim() || undefined,
-          metadata,
+          metadata: currentMetadata,
           referenceTargets: selectedReferenceTargets,
         };
         if (stopUploadRef.current) {
@@ -168,7 +178,7 @@ export function SpectrumUploadPage() {
             sampleName: sampleName.trim() || undefined,
             batchNo: batchNo.trim() || undefined,
             testConditions: testConditions.trim() || undefined,
-            metadata,
+            metadata: currentMetadata,
             originalName: file.name,
             size: file.size || 0,
             uploadContext,
@@ -201,6 +211,8 @@ export function SpectrumUploadPage() {
         }
       }
       setFileList([]);
+      setFileConditions({});
+      if (succeeded) setBatchReset(value => value + 1);
       await Promise.all([loadAttempts(), spectrumApi.categories().then(setCategories)]);
       if (referenceFailures.length) {
         void message.error(`${referenceFailures.length} 个图谱已上传，但未加入项目参考资料：${referenceFailures[0]}`);
@@ -384,7 +396,7 @@ export function SpectrumUploadPage() {
       },
       actions: (
         attempt.chartId ? <Button type="link" icon={<MessageOutlined />}
-          onClick={() => { window.location.assign(`/agent/?spectrum=${attempt.chartId}`); }}>图谱分析助理</Button> : null
+          href={`/agent/?spectrum=${attempt.chartId}`} target="_blank" rel="noopener">图谱分析助理</Button> : null
       ),
     };
   });
@@ -408,6 +420,7 @@ export function SpectrumUploadPage() {
                 onChange={(value) => {
                   setCategoryId(value);
                   setMetadata({});
+                  setFileConditions({});
                 }}
                 placeholder="选择 IR / UV / HPLC 等分类"
                 options={categories.map((item) => ({ value: item.id, label: item.name }))}
@@ -454,16 +467,28 @@ export function SpectrumUploadPage() {
                 removeText="移除参考资料"
               />
             </Form.Item>
-            <Form.Item label="测试条件">
-              <Input.TextArea
-                maxLength={10000}
-                rows={2}
-                value={testConditions}
-                onChange={(event) => setTestConditions(event.target.value)}
-                placeholder="仪器、范围、溶剂、倍率等，已知则填写"
-              />
-            </Form.Item>
-            {selectedCategory?.fields.map((field) => (
+            <SpectrumTestConditions categoryCode={selectedCategory?.code}
+              value={metadata.testMethodSnapshot as SpectrumTestMethodSnapshot | undefined}
+              legacyText={testConditions} onLegacyTextChange={setTestConditions} resetToken={batchReset}
+              onChange={snapshot => setMetadata(current => ({ ...current, testMethodSnapshot: snapshot }))} />
+            {fileList.length > 0 && <Collapse style={{ marginTop: 12 }} items={[{
+              key: 'files', label: '逐文件调整测试条件（默认采用上方条件）', children: fileList.map(file => <div key={file.uid} style={{ marginBottom: 8 }}>
+                <Typography.Text>{file.name} </Typography.Text>
+                <Button size="small" onClick={() => {
+                  setFileDraft(structuredClone(fileConditions[file.uid] ?? metadata.testMethodSnapshot as SpectrumTestMethodSnapshot | undefined));
+                  setEditingFile(file.uid);
+                }}>{fileConditions[file.uid] ? '修改独立条件' : '调整条件'}</Button>
+                {fileConditions[file.uid] && <Button size="small" type="link" onClick={() => setFileConditions(current => { const next = { ...current }; delete next[file.uid]; return next; })}>恢复统一条件</Button>}
+              </div>),
+            }]} />}
+            <Modal open={Boolean(editingFile)} title={`当次条件 · ${fileList.find(file => file.uid === editingFile)?.name ?? ''}`} width={760}
+              onCancel={() => setEditingFile(undefined)} onOk={() => {
+                if (editingFile && fileDraft) setFileConditions(current => ({ ...current, [editingFile]: fileDraft }));
+                setEditingFile(undefined);
+              }} destroyOnHidden>
+              {editingFile && <Form layout="vertical" component={false}><SpectrumTestConditions categoryCode={selectedCategory?.code} value={fileDraft} legacyText={testConditions} onChange={setFileDraft} /></Form>}
+            </Modal>
+            {selectedCategory?.fields.filter(field => !isLegacyMethodCondition(selectedCategory.code, field.key)).map((field) => (
               <Form.Item key={field.key} label={field.label}>
                 <Input
                   value={metadataValue(field.key)}

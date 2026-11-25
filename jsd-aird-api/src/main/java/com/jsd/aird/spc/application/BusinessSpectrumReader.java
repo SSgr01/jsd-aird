@@ -29,6 +29,14 @@ public class BusinessSpectrumReader implements BusinessReadPort {
         var actor = ActorContext.required(); var id = id(request); var type = request.path("type").asText();
         var row = spectra.findChart(actor.organizationId(), id).orElseThrow(BusinessViews::missing);
         var body = facts(json, row, "title", "categoryId", "originalName", "sampleName", "batchNo", "testConditions", "metadataJson", "pageCount", "status", "fileObjectId", "sha256");
+        try {
+            var snapshot = json.readTree(row.metadataJson() == null ? "{}" : row.metadataJson()).path("testMethodSnapshot");
+            if (snapshot.isObject()) {
+                body.set("testMethodSnapshot", snapshot);
+                body.set("conditionWarnings", SpectrumTestMethods.warnings(snapshot));
+            }
+        } catch (java.io.IOException ignored) { /* Legacy metadata remains available verbatim. */ }
+        body.put("conditionAnalysisHint", "先读取当次测试条件快照，再结合原始页。登记值、报告明示值、用户补充值分别标明来源；冲突须并列说明。ATR/透射、浓度/光程、GPC校准、粒径介质/分布口径、GC温程、拉伸截面积/速度的差异按问题限制比较；缺项不是相同，不猜常用值。拉伸缺实测宽度或厚度时，只给公式和缺项，不代入假设尺寸举出MPa数值；标准版本或原文未提供，不引用记忆中的标准尺寸或判定合规。预设带入是登记条件，不证明仪器实际执行。图片没有原始数值时不自行积分或建立校准曲线。");
         body.put("measurement_data", "原文件及页面；未提供可直接计算峰面积的原始数值曲线");
         body.put("original_path", "/api/v1/spc/charts/" + id + "/content");
         body.put("file_read_hint", "business_read设置include_file=true可把完整原文件交给原生文件读取；按原生PDF页码选择页面");

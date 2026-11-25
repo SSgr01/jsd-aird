@@ -30,7 +30,7 @@ const workbook: DataWorkbookSnapshot = { fileName: '配方.xlsx', format: 'XLSX'
 function preview(id = 'one', revision = '1'): DataPreview {
   return { job: { id, revision, sourceFileId: id, sourceSha256: '', sourceFileName: `${id}.xlsx`, sourceFormat: 'XLSX', status: 'COMPLETED', progress: 100, createdAt: '', updatedAt: '' }, sheets: [], mappings: [], rows: [], issues: [] };
 }
-function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
+function deferred<T>() { let resolve!: (value: T) => void; let reject!: (error: Error) => void; const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; }); return { promise, resolve, reject }; }
 function mount() {
   render(<App><MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/one']}><Link to="/two">切换记录</Link><Routes><Route path="/:id" element={<DataImportJobPage />} /></Routes></MemoryRouter></App>);
 }
@@ -42,6 +42,45 @@ beforeEach(() => {
   api.saveWorkbookDraft.mockResolvedValue({ job: preview('one', '2').job, workbook });
 });
 const dirtyNotice = '工作簿还有未保存的修改，可继续编辑或点击“保存草稿”。';
+
+it('shows task information while the workbook is still loading', async () => {
+  const delayed = deferred<DataWorkbookSnapshot>();
+  api.getImportWorkbookSnapshot.mockReturnValueOnce(delayed.promise);
+  mount();
+  await screen.findByRole('heading', { name: 'one.xlsx' });
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '保存草稿' })).not.toBeInTheDocument();
+  await act(() => { delayed.resolve(workbook); return Promise.resolve(); });
+  await screen.findByRole('button', { name: '保存草稿' });
+});
+
+it('keeps task information visible on snapshot failure and retries the workbook', async () => {
+  api.getImportWorkbookSnapshot.mockRejectedValueOnce(new Error('读取超时'));
+  mount();
+  await screen.findByText('加载失败，请重试');
+  expect(screen.getByRole('heading', { name: 'one.xlsx' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /重试/ }));
+  await screen.findByRole('button', { name: '保存草稿' });
+  expect(screen.queryByText('加载失败，请重试')).not.toBeInTheDocument();
+});
+
+it('does not load a full workbook while the import is parsing', async () => {
+  api.preview.mockResolvedValue({ ...preview(), job: { ...preview().job, status: 'PARSING' } });
+  mount();
+  await screen.findByRole('heading', { name: 'one.xlsx' });
+  expect(api.getImportWorkbookSnapshot).not.toHaveBeenCalled();
+});
+
+it('ignores a stale workbook after navigating to another record', async () => {
+  const delayed = deferred<DataWorkbookSnapshot>();
+  api.getImportWorkbookSnapshot.mockReturnValueOnce(delayed.promise);
+  mount(); await screen.findByRole('heading', { name: 'one.xlsx' });
+  fireEvent.click(screen.getByRole('link', { name: '切换记录' }));
+  await screen.findByRole('button', { name: '保存草稿' });
+  await act(() => { delayed.reject(new Error('旧工作簿读取超时')); return Promise.resolve(); });
+  expect(screen.getByRole('heading', { name: 'two.xlsx' })).toBeInTheDocument();
+  expect(screen.queryByText('旧工作簿读取超时')).not.toBeInTheDocument();
+});
 
 it('ignores an old preview after navigating to another record', async () => {
   const delayed = deferred<DataPreview>(); api.preview.mockReturnValueOnce(delayed.promise);
@@ -84,7 +123,7 @@ it('preserves the unsaved workbook after a failed save and allows retry', async 
   api.saveWorkbookDraft.mockRejectedValueOnce(new Error('网络暂不可用'));
   mount(); await screen.findByRole('heading', { name: 'one.xlsx' });
   fireEvent.click(screen.getByRole('button', { name: '修改表格' })); fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
-  await screen.findByText('草稿保存失败，当前未保存修改仍保留');
+  await screen.findByText('草稿保存失败，当前修改仍保留');
   expect(screen.getByText(dirtyNotice)).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
   await waitFor(() => expect(screen.queryByText(dirtyNotice)).not.toBeInTheDocument());

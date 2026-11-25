@@ -38,6 +38,38 @@ class JdbcExperimentRepositoryTest {
     private final JdbcExperimentRepository repository = new JdbcExperimentRepository(jdbc, mapper);
 
     @Test
+    void savesOneModelParameterAndAuditsBothDatabaseSnapshotsAtomically() {
+        var current=detail(ExperimentStatus.DRAFT);givenDetail(current);
+        when(jdbc.update(anyString(), any(Object[].class))).thenReturn(1);
+        var model=mapper.createObjectNode().put("purpose","after");
+        repository.saveDraft(ORGANIZATION_ID,current.summary().id(),0,
+                new ExperimentRepository.Draft("EXP-001","实验",null,null,null,null,null,"owner",LocalDate.now(),
+                        null,null,mapper.createObjectNode(),model),USER_ID,"editor");
+        var sql=ArgumentCaptor.forClass(String.class);var args=ArgumentCaptor.forClass(Object[].class);
+        verify(jdbc,org.mockito.Mockito.times(2)).update(sql.capture(),args.capture());
+        assertThat(sql.getAllValues().get(1)).contains("before_state AS MATERIALIZED","RETURNING v.id,v.edit_model_jsonb",
+                "b.edit_model_jsonb,s.edit_model_jsonb","DRAFT_SAVED");
+        var payloads=java.util.Arrays.stream(args.getAllValues().get(1))
+                .filter(org.postgresql.util.PGobject.class::isInstance).map(org.postgresql.util.PGobject.class::cast).toList();
+        assertThat(payloads).hasSize(2); // template and new model; no retransmitted old/audit models
+        assertThat(payloads.get(1).getValue()).isEqualTo(model.toString());
+    }
+
+    @Test
+    void lifecycleAuditKeepsBothFullSnapshotsWithoutSerializingThemAgain() {
+        var current=detail(ExperimentStatus.PENDING_REVIEW);givenDetail(current);
+        when(jdbc.update(anyString(), any(Object[].class))).thenReturn(1);
+        repository.publish(ORGANIZATION_ID,current.summary().id(),0,USER_ID,"reviewer");
+        var sql=ArgumentCaptor.forClass(String.class);var args=ArgumentCaptor.forClass(Object[].class);
+        verify(jdbc,atLeastOnce()).update(sql.capture(),args.capture());
+        int audit=-1;
+        for(int i=0;i<sql.getAllValues().size();i++)if(sql.getAllValues().get(i).contains("INSERT INTO rnd.experiment_audit"))audit=i;
+        assertThat(audit).isGreaterThanOrEqualTo(0);
+        assertThat(sql.getAllValues().get(audit)).contains("edit_model_jsonb,edit_model_jsonb","organization_id=? AND experiment_id=? AND id=?");
+        assertThat(java.util.Arrays.stream(args.getAllValues().get(audit)).noneMatch(org.postgresql.util.PGobject.class::isInstance)).isTrue();
+    }
+
+    @Test
     void legacyPublishCannotSkipReview() {
         givenDetail(detail(ExperimentStatus.DRAFT));
         assertThatThrownBy(() -> repository.publish(ORGANIZATION_ID, UUID.randomUUID(), 0, USER_ID, "editor"))

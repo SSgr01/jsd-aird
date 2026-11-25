@@ -27,6 +27,28 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 class DataImportValidationTest {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void savingMappingsRetainsTheParsedSheetContractAndStillRequiresItsFields(boolean removeMapping) {
+        givenJob();ActorContext.set(new com.jsd.aird.shared.security.Actor(ORGANIZATION_ID,USER_ID,"developer"));
+        when(templates.getVersion(ORGANIZATION_ID,templateVersionId)).thenReturn(definition(true));
+        var field=new TemplateDataImportFacade.FieldDefinition("sheet1.title","实验题目","TEXT","",true,false,List.of(),"/fields/sheet1.title");
+        var contract=new DataImportService.TemplateContract(9,7,"source-contract",mapper.createObjectNode(),List.of(field),List.of());
+        var report=mapper.createObjectNode().put("status","COMPATIBLE");report.set("executionContract",mapper.valueToTree(contract));
+        when(repository.findCompatibilityReport(ORGANIZATION_ID,jobId)).thenReturn(report);
+        var detail=mapper.createObjectNode().put("bindingId","title").put("dataPath","/fields/sheet1.title");
+        when(repository.listMappings(ORGANIZATION_ID,jobId)).thenReturn(removeMapping?List.of():List.of(mapping("A","sheet1.title","实验题目",detail)));
+        when(repository.listRows(ORGANIZATION_ID,jobId)).thenReturn(List.of(row("A","原题目")));
+        service.saveMappings(jobId,removeMapping?List.of():List.of(new DataImportService.MappingCommand("sheet-1","A","实验题目","sheet1.title","实验题目","MAP","TEXT",null,null,detail)));
+        var issues=ArgumentCaptor.forClass(List.class);
+        verify(repository).replaceValidation(eq(ORGANIZATION_ID),eq(jobId),any(),issues.capture(),eq(removeMapping?"WAITING_MAPPING":"WAITING_CONFIRM"));
+        if(removeMapping)assertThat(issues.getValue()).anyMatch(i->((DataRepository.Issue)i).issueType().equals("REQUIRED_MAPPING_MISSING"));
+        else assertThat(issues.getValue()).isEmpty();
+        var preview=service.preview(jobId);
+        assertThat(preview.templateContract().fields()).containsExactly(field);
+        assertThat(preview.compatibilityReport().has("executionContract")).isFalse();
+        assertThat(report.has("executionContract")).isTrue();
+    }
     @Test void emptyRequiredValuesRemainSubmittableWarnings() {
         givenJob();
         when(templates.getVersion(ORGANIZATION_ID,templateVersionId)).thenReturn(definition(true));
@@ -46,7 +68,7 @@ class DataImportValidationTest {
         var pending=instance.putArray("issues").addObject().put("code","UNBOUND_VALUE").put("sheetId","sheet-1").put("address","H8").put("message","未绑定");
         var structure=mapper.createObjectNode();structure.putArray("labParseIssues").add(pending.deepCopy());
         var snapshot=mapper.createObjectNode();when(repository.findWorkbookDraft(ORGANIZATION_ID,jobId)).thenReturn(Optional.of(new DataRepository.WorkbookDraft(snapshot,instance,mapper.createArrayNode())));
-        when(templates.prepareWorkbookImport(ORGANIZATION_ID,templateVersionId,snapshot,instance)).thenReturn(new TemplateDataImportFacade.ImportExecution(definition,List.of(),null));
+        when(templates.prepareWorkbookReview(ORGANIZATION_ID,templateVersionId,snapshot,instance)).thenReturn(new TemplateDataImportFacade.ImportExecution(definition,List.of(),null));
         when(repository.listSheets(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Sheet(UUID.randomUUID(),"sheet-1","sheet",0,true,List.of(1),2,2,structure,"CONFIRMED")));
         when(repository.listMappings(ORGANIZATION_ID,jobId)).thenReturn(List.of(mapping("A",mapper.createObjectNode().put("bindingId","a").put("dataPath","/a"))));
         when(repository.listRows(ORGANIZATION_ID,jobId)).thenReturn(List.of(row("A","ok")));
@@ -62,7 +84,7 @@ class DataImportValidationTest {
         var generic=instance.putArray("issues").addObject().put("code","FIELD_UNCONFIRMED").put("fieldId","local").put("message","字段含义待确认");
         var structure=mapper.createObjectNode();var parsed=structure.putArray("labParseIssues");parsed.add(generic.deepCopy());parsed.addObject().put("code","FIELD_UNCONFIRMED").put("address","B19").put("message","新增测试项目待确认类型和单位");
         var snapshot=mapper.createObjectNode();when(repository.findWorkbookDraft(ORGANIZATION_ID,jobId)).thenReturn(Optional.of(new DataRepository.WorkbookDraft(snapshot,instance,mapper.createArrayNode())));
-        when(templates.prepareWorkbookImport(ORGANIZATION_ID,templateVersionId,snapshot,instance)).thenReturn(new TemplateDataImportFacade.ImportExecution(definition,List.of(),null));
+        when(templates.prepareWorkbookReview(ORGANIZATION_ID,templateVersionId,snapshot,instance)).thenReturn(new TemplateDataImportFacade.ImportExecution(definition,List.of(),null));
         when(repository.listSheets(ORGANIZATION_ID,jobId)).thenReturn(List.of(new DataRepository.Sheet(UUID.randomUUID(),"sheet-1","sheet",0,true,List.of(1),2,2,structure,"CONFIRMED")));
         when(repository.listMappings(ORGANIZATION_ID,jobId)).thenReturn(List.of(mapping("A",mapper.createObjectNode().put("bindingId","a").put("dataPath","/a"))));
         when(repository.listRows(ORGANIZATION_ID,jobId)).thenReturn(List.of(row("A","ok")));

@@ -72,16 +72,18 @@ export function ExperimentUploadPage() {
     const isCurrent = loads.begin();
     if (!silent) setLoading(true);
     try {
-      const [free, allTemplateJobs, conversionJobs] = await Promise.all([
+      const [free, allTemplateJobs, conversionJobs] = await Promise.allSettled([
         listExperimentImports(),
         loadAllPages((page, size) => dataApi.listExperimentJobs({ page, size })),
         dataApi.conversions(),
       ]);
       if (!isCurrent()) return;
-      setFreeJobs(free);
-      setConversions(conversionJobs);
-      setTemplateJobs(allTemplateJobs
+      if (free.status === 'fulfilled') setFreeJobs(free.value);
+      if (conversionJobs.status === 'fulfilled') setConversions(conversionJobs.value);
+      if (allTemplateJobs.status === 'fulfilled') setTemplateJobs(allTemplateJobs.value
         .filter((item) => item.importPurpose === 'EXPERIMENT_DRAFT'));
+      const failures = [free, allTemplateJobs, conversionJobs].filter(item => item.status === 'rejected');
+      if (failures.length && !silent) void message.error('部分导入记录加载失败，请刷新重试');
     } catch (error) {
       if (isCurrent() && !silent) void message.error(error instanceof Error ? error.message : '实验上传记录加载失败');
     } finally {
@@ -97,7 +99,6 @@ export function ExperimentUploadPage() {
       ? [
         listCategories().then((items) => {
           setCategories(items);
-          setExperimentCategoryId((current) => current ?? items[0]?.id);
         }).catch((error) => void message.error(error instanceof Error ? error.message : '实验分类加载失败')),
         dataApi.listTemplates().then((result) => {
           const experimentTemplates = result.filter(
@@ -143,7 +144,6 @@ export function ExperimentUploadPage() {
     const sourceFiles = files.flatMap((item) => (item.originFileObj ? [item.originFileObj] : []));
     if (!sourceFiles.length) { void message.warning('请先选择实验文件'); return; }
     if (mode === 'CONVERSION' && (!canAI || sourceFiles.length > 100)) { void message.warning('专家转换需要 AI 使用权限，每批最多 100 个文件'); return; }
-    if (!experimentCategoryId) { void message.warning('请选择实验分类'); return; }
     if (mode !== 'CONTENT_ONLY' && !chosenTemplate) {
       void message.warning(templates.length
         ? '请选择可用于实验导入的已发布模板'
@@ -269,8 +269,8 @@ export function ExperimentUploadPage() {
 
         <Row gutter={12}>
           <Col span={12}>
-            <Form.Item label="实验分类" required>
-              <Select value={experimentCategoryId} onChange={setExperimentCategoryId} options={categories.map((item) => ({ value: item.id, label: item.name }))} placeholder="请选择实验分类" />
+            <Form.Item label="实验分类">
+              <Select allowClear value={experimentCategoryId} onChange={setExperimentCategoryId} options={categories.map((item) => ({ value: item.id, label: item.name }))} placeholder="未分类" />
             </Form.Item>
           </Col>
         </Row>
@@ -294,7 +294,7 @@ export function ExperimentUploadPage() {
       submitIcon={<CloudUploadOutlined />}
       onSubmit={() => void submit()}
       submitting={uploading}
-      submitDisabled={!experimentCategoryId || (mode === 'TEMPLATE' && !chosenTemplate)}
+      submitDisabled={mode !== 'CONTENT_ONLY' && !chosenTemplate}
       rightTitle="导入历史"
       rightCount={jobs.length}
       rightFilters={[{ key: 'ALL', label: '全部' }, { key: 'PARSING', label: '处理中' }, { key: 'WAITING_MAPPING', label: '待核对' }, { key: 'COMPLETED', label: '导入完成' }, { key: 'FAILED', label: '失败' }]}

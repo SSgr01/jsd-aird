@@ -5,6 +5,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.Map;
+import java.util.HashMap;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -30,19 +32,24 @@ final class ImportCompatibilityEvaluator {
         }
         var matches = objectMapper.createArrayNode();
         var statuses = new ArrayList<String>();
+        var evidence=sheets.stream().map(sheet->new SheetEvidence(sheet,cellValues(sheet),new HashMap<>(),formulaAddresses(sheet))).toList();
+        var fieldsByComponent=new HashMap<String,List<JsonNode>>();
+        if(fieldResolutions!=null)for(var field:fieldResolutions)
+            fieldsByComponent.computeIfAbsent(field.path("componentId").asText(),ignored->new ArrayList<>()).add(field);
         for (var component : contract.path("components")) {
             // A region-only binding describes layout scaffolding, not a value
             // anchor. It must not block an otherwise compatible upload.
             if (!hasExecutableBinding(component)) continue;
             var required = component.path("requiredComponent").asBoolean(false);
-            var best = sheets.stream().map(sheet -> score(component, sheet))
+            var best = evidence.stream()
+                    .filter(sheet -> !component.path("sheetScoped").asBoolean()
+                            || component.path("sheetId").asText().equals(sheet.sheet().sheetId()))
+                    .map(sheet -> score(component, sheet))
                     .max(java.util.Comparator.comparingDouble(ComponentScore::score)).orElse(null);
             var status = componentStatus(component, best, required);
             var componentId = component.path("componentId").asText("");
             var resolvedFields = objectMapper.createArrayNode();
-            if (fieldResolutions != null && fieldResolutions.isArray()) fieldResolutions.forEach(field -> {
-                if (componentId.equals(field.path("componentId").asText(""))) resolvedFields.add(field.deepCopy());
-            });
+            for(var field:fieldsByComponent.getOrDefault(componentId,List.of()))resolvedFields.add(field.deepCopy());
             if (hasStatus(resolvedFields, "MISSING_REQUIRED")) status = "INCOMPATIBLE";
             else if (hasStatus(resolvedFields, "AMBIGUOUS") && !"INCOMPATIBLE".equals(status)) status = "REVIEW_REQUIRED";
             else if ((hasStatus(resolvedFields, "RELOCATED") || hasStatus(resolvedFields, "MISSING_OPTIONAL"))
@@ -82,16 +89,20 @@ final class ImportCompatibilityEvaluator {
         return false;
     }
 
-    private ComponentScore score(JsonNode component, TemplateDataImportFacade.ParsedSheet sheet) {
-        var labels = labels(component, sheet);
-        var values = cellValues(sheet);
+    private record SheetEvidence(TemplateDataImportFacade.ParsedSheet sheet,Set<String> values,
+                                 Map<String,Set<String>> labelValues,Set<String> formulaAddresses) {}
+
+    private ComponentScore score(JsonNode component, SheetEvidence evidence) {
+        var sheet=evidence.sheet();
+        var labels = labels(component, evidence);
+        var values = evidence.values();
         long found = labels.stream().filter(candidates -> candidates.stream().anyMatch(values::contains)).count();
         double coverage = labels.isEmpty() ? 1 : (double) found / labels.size();
         var expectedSheet = component.path("sheetId").asText("");
         boolean sameSheet = expectedSheet.isBlank() || expectedSheet.equalsIgnoreCase(sheet.sheetId())
                 || expectedSheet.equalsIgnoreCase(sheet.sheetName());
         boolean geometry = geometryCompatible(component, sheet);
-        boolean formula = formulaRoleCompatible(component, sheet);
+        boolean formula = formulaRoleCompatible(component, sheet,evidence.formulaAddresses());
         var expectedFingerprint = component.path("sheetStructureFingerprint")
                 .asText(component.path("structureFingerprint").asText(""));
         boolean fingerprintExact = !expectedFingerprint.isBlank()
@@ -126,7 +137,7 @@ final class ImportCompatibilityEvaluator {
         return result;
     }
 
-    private List<Set<String>> labels(JsonNode component, TemplateDataImportFacade.ParsedSheet sheet) {
+    private List<Set<String>> labels(JsonNode component, SheetEvidence evidence) {
         var result = new ArrayList<Set<String>>();
         component.path("bindings").forEach(binding -> {
             if (isRegionOnlyBinding(binding)) return;
@@ -134,7 +145,7 @@ final class ImportCompatibilityEvaluator {
             var locator = binding.path("locator");
             var labelRange = firstRange(locator, "labelRange", "labelAddress");
             if (!labelRange.isBlank()) {
-                candidates.addAll(cellValuesAt(sheet, labelRange));
+                candidates.addAll(evidence.labelValues().computeIfAbsent(labelRange,range->cellValuesAt(evidence.sheet(),range)));
             }
             // Older contracts may not have a physical label range. Keep their
             // logical label path as the fallback, while preferring the actual
@@ -209,13 +220,17 @@ final class ImportCompatibilityEvaluator {
         return binding.path("mappingKind").asText("").toUpperCase(Locale.ROOT).endsWith("_REGION");
     }
 
-    private boolean formulaRoleCompatible(JsonNode component, TemplateDataImportFacade.ParsedSheet sheet) {
+    private Set<String> formulaAddresses(TemplateDataImportFacade.ParsedSheet sheet) {
         var formulaAddresses = new HashSet<String>();
         if (sheet.layoutIr() != null) sheet.layoutIr().path("cells").forEach(cell -> {
             if ("FORMULA".equals(cell.path("valueSource").asText())) {
                 formulaAddresses.add(cell.path("address").asText(""));
             }
         });
+        return formulaAddresses;
+    }
+
+    private boolean formulaRoleCompatible(JsonNode component, TemplateDataImportFacade.ParsedSheet sheet,Set<String> formulaAddresses) {
         for (var binding : component.path("bindings")) {
             if (!"FORMULA".equalsIgnoreCase(binding.path("valueSource").asText("INPUT"))) continue;
             var locator = binding.path("locator");

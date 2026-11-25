@@ -50,7 +50,7 @@ public class ExperimentDraftApplicationFacade implements ExperimentDraftFacade {
         if (command.title() == null || command.title().isBlank()) {
             throw validation("实验名称不能为空");
         }
-        var category = requireActiveCategory(command.organizationId(), command.categoryId());
+        var category = command.categoryId() == null ? null : requireActiveCategory(command.organizationId(), command.categoryId());
         var id = UUID.randomUUID();
         var versionId = UUID.randomUUID();
         var editModel = editModels.normalize(
@@ -59,11 +59,12 @@ public class ExperimentDraftApplicationFacade implements ExperimentDraftFacade {
             var workbook = com.jsd.aird.shared.lab.LabWorkbook.prepare(json, editModel.path("documentSnapshot"),
                     command.templateSnapshot(), id.toString());
             editModel = com.jsd.aird.shared.lab.LabWorkbook.extract(json, workbook, editModel, id.toString());
+            if(editModel.hasNonNull("sourceFileId"))editModel.set("sourceMetadataGaps",com.jsd.aird.shared.lab.LabSourceMetadata.gaps(json,workbook));
             editModel.putObject("templateDataReview").put("required", true).put("confirmed", false);
         }
         var sourceType = ExperimentSourceType.fromNullable(command.sourceType()).name();
         var result = repository.create(new ExperimentRepository.Create(
-                id, command.organizationId(), null, command.title().strip(), category.id(), category.name(),
+                id, command.organizationId(), null, command.title().strip(), category == null ? null : category.id(), category == null ? null : category.name(),
                 sourceType, ExperimentStatus.DRAFT, command.projectId(), command.stageId(), command.taskId(),
                 null, blankToNull(command.ownerName()), command.experimentDate(), versionId,
                 command.templateVersionId(), blankToNull(command.templateSnapshotHash()),

@@ -29,8 +29,8 @@ class WorkbookContextInstanceTest {
         when(templates.getExperimentTemplateVersion(org,version)).thenReturn(new TemplateDataImportFacade.PublishedExperimentTemplate(definition.templateId(),version,"EXP_TEST_UNIFIED","测试实验",1,"hash",pack.path("snapshot"),pack.path("mapping"),pack.path("contract")));
         when(files.find(org,fileId)).thenReturn(Optional.of(new FileObjectRepository.FileObject(fileId,org,"qa","test.xlsx","application/octet-stream",1,"hash","ACTIVE")));
         when(storage.get("qa")).thenAnswer(call->new ObjectStorage.StoredObject(new ByteArrayInputStream(new byte[0]),0,"application/octet-stream"));
-        when(workbookParser.parseInstance(any())).thenReturn(source);
-        when(templates.prepareWorkbookImport(eq(org),eq(version),any(),any())).thenAnswer(call->{
+        when(workbookParser.parseSnapshot(any())).thenReturn(source.snapshot());
+        when(templates.prepareWorkbookReview(eq(org),eq(version),any(),any())).thenAnswer(call->{
             var instance=(com.fasterxml.jackson.databind.JsonNode)call.getArgument(3);
             assertThat(instance.path("model").path("groups")).hasSize(9);
             assertThat(instance.path("records")).hasSize(6);
@@ -42,6 +42,9 @@ class WorkbookContextInstanceTest {
             assertThat(context.templateInstance().path("model").path("groups")).isEqualTo(pack.at("/schema/x-jsd-field-model/groups"));
             verify(templates).getVersion(org,version);
             verify(templates,never()).getPublishedExperimentTemplate(any(),any());
+            verify(templates,never()).prepareImport(any(),any(),any());
+            verify(templates,never()).prepareWorkbookImport(any(),any(),any(),any());
+            verify(workbookParser).parseSnapshot(any());
         }finally{ActorContext.clear();}
     }
     @Test void sourceWorkbookInstanceIsUsedBeforeTheFirstDraftSave()throws Exception {
@@ -54,13 +57,14 @@ class WorkbookContextInstanceTest {
         when(repository.findJob(org,jobId)).thenReturn(Optional.of(job));when(templates.getVersion(org,version)).thenReturn(original);
         when(files.find(org,fileId)).thenReturn(Optional.of(new FileObjectRepository.FileObject(fileId,org,"qa","qa.xlsx","application/octet-stream",1,"hash","ACTIVE")));
         when(storage.get("qa")).thenAnswer(call->new ObjectStorage.StoredObject(new ByteArrayInputStream(new byte[0]),0,"application/octet-stream"));
-        when(parser.parseInstance(any())).thenReturn(new WorkbookInstanceParser.ParsedWorkbook(json.createObjectNode(),snapshot,List.of()));
-        when(templates.prepareWorkbookImport(eq(org),eq(version),any(),eq(instance))).thenReturn(new TemplateDataImportFacade.ImportExecution(original,List.of(),null));
+        when(parser.parseSnapshot(any())).thenReturn(snapshot);
+        when(templates.prepareWorkbookReview(eq(org),eq(version),any(),eq(instance))).thenReturn(new TemplateDataImportFacade.ImportExecution(original,List.of(),null));
         ActorContext.set(new Actor(org,UUID.randomUUID(),"tester"));
         try {
             var context=new DataWorkbookService(repository,files,storage,parser,templates,json).importJob(jobId);
             assertThat(context.templateInstance()).isEqualTo(instance);
-            verify(templates).prepareWorkbookImport(eq(org),eq(version),any(),eq(instance));
+            verify(templates).prepareWorkbookReview(eq(org),eq(version),any(),eq(instance));
+            verify(templates,never()).prepareImport(any(),any(),any());
         } finally {ActorContext.clear();}
     }
 }

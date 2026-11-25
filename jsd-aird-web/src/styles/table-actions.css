@@ -12,6 +12,21 @@
 .app-shell thead .table-action-column { z-index: 4; }
 .app-shell tbody tr:hover > .table-action-column { background: var(--app-surface-subtle); }
 .app-shell .ant-table-cell-fix-right { white-space: nowrap; }
+/* Fixed cells and Ant Design's scroll-edge overlays must not cast stacked shadows. */
+.app-shell .ant-table-wrapper :is(.ant-table-cell-fix-left, .ant-table-cell-fix-right) {
+  box-shadow: none;
+}
+.app-shell .ant-table-wrapper .ant-table-container :is(
+  .ant-table-cell-fix-left-first,
+  .ant-table-cell-fix-left-last,
+  .ant-table-cell-fix-right-first,
+  .ant-table-cell-fix-right-last
+)::after {
+  box-shadow: none;
+}
+.app-shell .ant-table-wrapper .ant-table-cell-fix-right-first {
+  border-inline-start: 1px solid var(--app-border);
+}
 @media (max-width: 1023px) {
   .app-shell .table-action-column { padding-inline: 10px; }
 }

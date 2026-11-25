@@ -234,7 +234,7 @@ export function FilePreviewModal({ open, file, onClose, showSpreadsheetMerges = 
             onClick={() => setMaximized(value => !value)}>{maximized ? '还原' : '全屏'}</Button>
         </Tooltip>
       </div>}
-      width="min(960px, calc(100vw - 32px))"
+      width="min(1280px, calc(100vw - 32px))"
       footer={<Button icon={<DownloadOutlined />} onClick={() => void download()} disabled={!file}>下载原文件</Button>}
       destroyOnHidden
       onCancel={onClose}

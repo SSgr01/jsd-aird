@@ -135,8 +135,11 @@ final class StructuredDataExtractor {
         // beside a structured region is the explicit common-context exception
         // above, including templates that declare component ids.
         var mergedCommonForm = !results.isEmpty() && formResults.size() == 1;
+        var hasSourceData=!results.isEmpty()||formResults.values().stream().flatMap(form->form.rows().stream())
+                .anyMatch(row->{for(var value:row.rawValues())if(!value.asText().isBlank())return true;return false;});
         for (var entry : formResults.entrySet()) {
             if (mergedCommonForm) break;
+            if(!hasSourceData)continue;
             var usedAsContext = components.entrySet().stream().anyMatch(component ->
                     entry.getKey().equals(formContextId(component.getKey(), component.getValue())));
             if (!usedAsContext) results.add(entry.getValue());
@@ -250,7 +253,7 @@ final class StructuredDataExtractor {
                 nonBlank |= !valueCell.value().isBlank();
                 if (isIdentityBinding(binding, v9Experiment) && !valueCell.value().isBlank()) identity = valueCell.value();
             }
-            if (!nonBlank) continue;
+            if (!nonBlank && !(v9Experiment&&!repeat&&fields.stream().anyMatch(TemplateDataImportFacade.ImportBinding::required))) continue;
             putRecordIdentity(metadata, sheet.sheetId(), componentId, "FORM", block + 1,
                     identity, identityRule, v9Experiment);
             rows.add(row(raw, metadata, sheet.sheetId(), regionRange.get().startRow() + block * stride));

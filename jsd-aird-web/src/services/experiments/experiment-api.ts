@@ -1,6 +1,7 @@
-import { httpClient } from '@/services/http/client';
+import { httpClient, LARGE_PAYLOAD_TIMEOUT } from '@/services/http/client';
 import type { ApiResponse } from '@/types/api';
 import type { ImportBinding, TemplateFieldDefinition } from '@/services/data/data-api';
+import type { WorkbookTemplateInstance } from '@/features/template-workspace/workbook-instance';
 
 export type ExperimentStatus =
   'DRAFT' | 'PENDING' | 'IN_PROGRESS' | 'PENDING_REVIEW' | 'RETURNED' | 'COMPLETED' | 'VOIDED';
@@ -92,6 +93,7 @@ export interface ExperimentModel extends Record<string, unknown> {
   title?: string;
   sourceFileId?: string;
   sourceFileName?: string;
+  sourceMetadataGaps?: Array<{ label: string; sheetName: string; address: string; status: 'NOT_RECORDED'; reason: string }>;
   purpose?: string;
   plan?: string;
   documentFormat?: 'word' | 'excel';
@@ -164,7 +166,7 @@ export interface ExperimentDetail {
   attachments: Array<Record<string, unknown>>;
 }
 export interface ExperimentTemplateDataReview {
-  templateInstance?: import('@/features/template-workspace/workbook-instance').WorkbookTemplateInstance;
+  templateInstance?: WorkbookTemplateInstance;
   templateVersionId: string;
   contractHash: string;
   fields: TemplateFieldDefinition[];
@@ -225,13 +227,14 @@ export async function listProjectExperiments(
 }
 export async function getExperiment(id: string) {
   return data(
-    await httpClient.get<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/edit-model`),
+    await httpClient.get<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/edit-model`, { timeout: LARGE_PAYLOAD_TIMEOUT }),
   );
 }
 export async function getExperimentTemplateDataReview(id: string) {
   return data(
     await httpClient.get<ApiResponse<ExperimentTemplateDataReview>>(
       `/api/v1/experiments/${id}/data-review`,
+      { timeout: LARGE_PAYLOAD_TIMEOUT },
     ),
   );
 }
@@ -239,7 +242,7 @@ export async function confirmExperimentTemplateData(id: string, revision: number
   return data(
     await httpClient.post<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/confirm-data`, {
       revision,
-    }),
+    }, { timeout: LARGE_PAYLOAD_TIMEOUT }),
   );
 }
 export async function getExperimentPresentation(id: string, revision: number) {
@@ -250,7 +253,7 @@ export async function getExperimentPresentation(id: string, revision: number) {
         snapshot: Record<string, unknown>;
         locationMap: Record<string, unknown>;
       }>
-    >(`/api/v1/experiments/${id}/presentation`, { params: { revision } }),
+    >(`/api/v1/experiments/${id}/presentation`, { params: { revision }, timeout: LARGE_PAYLOAD_TIMEOUT }),
   );
 }
 export async function exportExperiment(id: string, view: 'RESULT' | 'BLANK' = 'RESULT') {
@@ -283,7 +286,7 @@ export async function saveExperiment(id: string, input: Record<string, unknown>)
     await httpClient.post<ApiResponse<ExperimentDetail>>(
       `/api/v1/experiments/${id}/draft`,
       JSON.stringify(input),
-      { headers: { 'Content-Type': 'application/json' } },
+      { headers: { 'Content-Type': 'application/json' }, timeout: LARGE_PAYLOAD_TIMEOUT },
     ),
   );
 }
@@ -306,7 +309,7 @@ export async function publishExperiment(id: string, revision: number) {
   return data(
     await httpClient.post<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/publish`, {
       revision,
-    }),
+    }, { timeout: LARGE_PAYLOAD_TIMEOUT }),
   );
 }
 export async function actExperiment(
@@ -319,7 +322,7 @@ export async function actExperiment(
     await httpClient.post<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/${action}`, {
       revision,
       comment,
-    }),
+    }, { timeout: LARGE_PAYLOAD_TIMEOUT }),
   );
 }
 export async function listVersions(id: string) {

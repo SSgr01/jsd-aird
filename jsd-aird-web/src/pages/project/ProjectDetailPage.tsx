@@ -3,7 +3,6 @@ import {
   ArrowLeftOutlined,
   BookOutlined,
   DeleteOutlined,
-  FileTextOutlined,
   FolderOpenOutlined,
   HistoryOutlined,
   InfoCircleOutlined,
@@ -44,7 +43,6 @@ import { getProjectRequirements } from '@/services/partners/crm-api';
 
 import './project-detail.css';
 import '@/styles/management-list.css';
-import { CustomerRequirementTab } from './CustomerRequirementTab';
 import { MeetingMinutesTab } from './MeetingMinutesTab';
 import { ProjectMaterialsTab } from './ProjectMaterialsTab';
 import { ReferenceMaterialsTab } from './ReferenceMaterialsTab';
@@ -67,7 +65,6 @@ interface InfoFormValues {
 export function ProjectDetailPage() {
   const canViewInfo = usePermission('project.list.view');
   const canViewDocuments = usePermission('project.document.view');
-  const canViewRequirements = usePermission('project.customer-needs.view');
   const canViewReferences = usePermission('project.reference.view');
   const canViewMeetings = usePermission('project.meeting.view');
   const canViewLogs = usePermission('project.log.view');
@@ -338,9 +335,8 @@ export function ProjectDetailPage() {
   );
 
   const tabs = [
-    canViewDocuments && { key: 'documents', label: <><FolderOpenOutlined /> 项目文档</>, children: <ProjectDocumentsTab projectId={id ?? project.id} projectCode={project.projectCode} projectName={project.name} /> },
     canViewInfo && { key: 'info', label: <><InfoCircleOutlined /> 项目信息</>, children: infoForm },
-    canViewRequirements && { key: 'requirements', label: <><FileTextOutlined /> 客户需求</>, children: <CustomerRequirementTab projectId={id ?? project.id} projectName={project.name} partnerId={project.partnerId} /> },
+    canViewDocuments && { key: 'documents', label: <><FolderOpenOutlined /> 项目文档</>, children: <ProjectDocumentsTab projectId={id ?? project.id} projectCode={project.projectCode} projectName={project.name} /> },
     canViewReferences && { key: 'references', label: <><BookOutlined /> 资料参考</>, children: <ReferenceMaterialsTab projectId={id ?? project.id} /> },
     canViewMeetings && { key: 'meetings', label: <><TeamOutlined /> 会议纪要</>, children: <MeetingMinutesTab projectId={id ?? project.id} /> },
     canViewLogs && { key: 'logs', label: <><HistoryOutlined /> 日志</>, children: <ProjectLogsTab projectId={id ?? project.id} /> },

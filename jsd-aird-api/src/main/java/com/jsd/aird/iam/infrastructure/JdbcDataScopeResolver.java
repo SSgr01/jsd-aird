@@ -27,7 +27,10 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
         if (check.resourceId() == null) {
             return switch (scope) {
                 case "SELECTED", "PROJECT", "CATEGORY" -> binding.targetIds().isEmpty()
-                        ? ResolvedDataScope.deny(scope, "EMPTY_SCOPE")
+                        ? ("SELECTED".equals(scope) && Set.of("QUALITY", "QUALITY_UPLOAD").contains(
+                                check.resourceType() == null ? "" : check.resourceType().toUpperCase(Locale.ROOT))
+                                ? ResolvedDataScope.allow(scope, Set.of())
+                                : ResolvedDataScope.deny(scope, "EMPTY_SCOPE"))
                         : ResolvedDataScope.allow(scope, Set.copyOf(binding.targetIds()));
                 case "SELF", "ASSIGNED", "CREATOR", "DEPARTMENT", "OWNER", "MANAGER", "PARTICIPANT", "PROJECT_GROUP"
                         -> ResolvedDataScope.allow(scope);
@@ -85,7 +88,12 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
                 default -> null;
             };
             if (projectScopedTable != null) {
-                if (binding.targetIds().isEmpty()) return ResolvedDataScope.deny(scope, "EMPTY_SCOPE");
+                if (binding.targetIds().isEmpty()) {
+                    if (!"QUALITY".equalsIgnoreCase(check.resourceType())) return ResolvedDataScope.deny(scope, "EMPTY_SCOPE");
+                    return exists("SELECT EXISTS (SELECT 1 FROM quality.data_record WHERE organization_id = ? " +
+                                    "AND id = ? AND deleted = false AND created_by = ?)",
+                            new Object[]{check.organizationId(), check.resourceId(), check.userId()}, scope, "NOT_CREATOR");
+                }
                 var placeholders = String.join(",", binding.targetIds().stream().map(id -> "?").toList());
                 var args = new java.util.ArrayList<Object>();
                 args.add(check.organizationId());
@@ -171,6 +179,27 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
         var table = scopedTable(resourceType);
         if (table == null)
             return ResolvedDataScope.deny("DEPARTMENT", "RESOURCE_SCOPE_UNSUPPORTED");
+        if ("QUALITY_UPLOAD".equals(resourceType)) {
+            return exists("""
+                    SELECT EXISTS (SELECT 1 FROM quality.upload_file p
+                      JOIN iam.app_user creator ON creator.id=p.created_by AND creator.organization_id=p.organization_id
+                      JOIN iam.app_user viewer ON viewer.id=? AND viewer.organization_id=p.organization_id
+                      WHERE p.id=? AND p.organization_id=? AND p.deleted=false
+                        AND (p.created_by=? OR (creator.department_id IS NOT NULL
+                          AND creator.department_id=viewer.department_id)))
+                    """, new Object[]{check.userId(), check.resourceId(), check.organizationId(), check.userId()},
+                    "DEPARTMENT", "NOT_IN_DEPARTMENT");
+        }
+        if ("QUALITY".equals(resourceType)) {
+            return exists("""
+                    SELECT EXISTS (SELECT 1 FROM quality.data_record p
+                      JOIN iam.app_user viewer ON viewer.id=? AND viewer.organization_id=p.organization_id
+                      WHERE p.id=? AND p.organization_id=? AND p.deleted=false
+                        AND (p.created_by=? OR (p.department_id IS NOT NULL
+                          AND p.department_id=viewer.department_id)))
+                    """, new Object[]{check.userId(), check.resourceId(), check.organizationId(), check.userId()},
+                    "DEPARTMENT", "NOT_IN_DEPARTMENT");
+        }
         return exists("""
                 SELECT EXISTS (SELECT 1 FROM %s p
                   JOIN iam.app_user u ON u.id = ? AND u.organization_id = p.organization_id
@@ -215,7 +244,7 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
         String sql;
         switch (resourceType) {
             case "CUSTOMER" -> {
-                sql = "SELECT EXISTS (SELECT 1 FROM mdm.business_partner WHERE organization_id = ? AND created_by::text = ? AND id = ? AND deleted = false)";
+                sql = "SELECT EXISTS (SELECT 1 FROM mdm.business_partner WHERE organization_id = ? AND created_by = ? AND id = ? AND deleted = false)";
                 args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
             }
             case "TEMPLATE" -> {
@@ -293,8 +322,8 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
                 args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
             }
             case "PROJECT" -> {
-                sql = "SELECT EXISTS (SELECT 1 FROM mdm.project p JOIN iam.app_user u ON u.organization_id=p.organization_id AND u.id=? WHERE p.organization_id=? AND p.id=? AND p.deleted=false AND (p.created_by=u.username OR p.created_by=u.id::text))";
-                args = new Object[]{check.userId(),check.organizationId(),check.resourceId()};
+                sql = "SELECT EXISTS (SELECT 1 FROM mdm.project WHERE organization_id=? AND id=? AND deleted=false AND created_by=?)";
+                args = new Object[]{check.organizationId(),check.resourceId(),check.userId()};
             }
             case "QUOTATION" -> {
                 // 上传任务与报价记录共用报价权限：重试/删除上传记录时资源 id 是导入任务 id。

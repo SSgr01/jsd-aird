@@ -85,7 +85,6 @@ type CustomerValues = {
   business?: string;
 };
 type FollowupValues = {
-  name: string;
   time: Dayjs;
   method: string;
   owner?: string;
@@ -396,26 +395,14 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
                     </label>
                   </div>
                   <label>
-                    团队成员
-                    <Select
-                      mode="tags"
-                      placeholder="输入姓名后按回车"
-                      tokenSeparators={[',', '，', '\n']}
-                      style={{ width: '100%' }}
-                      allowClear
-                      value={person.manualTeamMembers ?? []}
-                      onChange={(value) => {
-                        const manual = (value as string[]) ?? [];
-                        updatePerson(index, { manualTeamMembers: manual });
-                      }}
-                    />
-                  </label>
-                  <label>
                     负责项目（可多选）
                     <Select
                       mode="multiple"
                       allowClear
                       showSearch
+                      optionFilterProp="label"
+                      filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+                      popupMatchSelectWidth={false}
                       placeholder="搜索并选择项目"
                       value={person.projectIds}
                       onChange={(value) => {
@@ -428,7 +415,21 @@ function CustomerModal({ partner, open, onClose, onSaved }: Omit<Props, 'mode'>)
                         });
                       }}
                       options={projectOptions}
-                      optionFilterProp="label"
+                    />
+                  </label>
+                  <label>
+                    团队成员
+                    <Select
+                      mode="tags"
+                      placeholder="输入姓名后按回车"
+                      tokenSeparators={[',', '，', '\n']}
+                      style={{ width: '100%' }}
+                      allowClear
+                      value={person.manualTeamMembers ?? []}
+                      onChange={(value) => {
+                        const manual = (value as string[]) ?? [];
+                        updatePerson(index, { manualTeamMembers: manual });
+                      }}
                     />
                   </label>
                   <CustomFieldEditor
@@ -455,7 +456,6 @@ function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<
     if (!open) return;
     if (communication) {
       form.setFieldsValue({
-        name: communication.name,
         time: communication.communicatedAt ? dayjs(communication.communicatedAt) : dayjs(),
         method: communication.communicationMethod,
         owner: communication.internalParticipants,
@@ -463,10 +463,10 @@ function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<
       });
     } else {
       form.resetFields();
-      form.setFieldsValue({ time: dayjs(), method: '微信', owner: partner?.name });
+      form.setFieldsValue({ time: dayjs(), method: '微信' });
     }
     setFollowupCustomFields(toCustomFieldList(communication?.customFields));
-  }, [form, open, communication, partner?.name]);
+  }, [form, open, communication]);
   const save = async () => {
     if (savingRef.current) return;
     savingRef.current = true;
@@ -476,7 +476,6 @@ function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<
       if (!partner) return;
       const payload: CommunicationInput = {
         partnerId: partner.id,
-        name: v.name.trim(),
         communicatedAt: v.time.toISOString(),
         communicationMethod: v.method,
         internalParticipants: v.owner,
@@ -488,11 +487,11 @@ function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<
       if (communication) await updateCommunication(communication.id, payload);
       else await createCommunication(payload);
       form.resetFields();
-      message.success(communication ? '跟进记录已更新' : '跟进记录已创建');
+      message.success(communication ? '沟通记录已更新' : '沟通记录已创建');
       onSaved();
       onClose();
     } catch (e) {
-      message.error(errorMessage(e, '跟进记录保存失败'));
+      message.error(errorMessage(e, '沟通记录保存失败'));
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -504,34 +503,29 @@ function FollowupModal({ partner, communication, open, onClose, onSaved }: Omit<
       width={820}
       open={open}
       onCancel={onClose}
-      title={communication ? '编辑跟进' : '添加跟进'}
+      title={communication ? '编辑沟通记录' : '添加沟通记录'}
       onOk={() => save()} confirmLoading={saving} okText="保存" cancelText="取消"
     >
       <Form form={form} layout="vertical">
         <Row className="cm-form-row" gutter={24}>
-          <Col span={6}>
-            <Form.Item name="name" label="跟进名称" rules={[{ required: true, whitespace: true, message: '请输入跟进名称' }]}>
-              <Input placeholder="请输入跟进名称" />
-            </Form.Item>
-          </Col>
-          <Col span={6}>
-            <Form.Item name="time" label="跟进时间" rules={[{ required: true }]}>
+          <Col span={8}>
+            <Form.Item name="time" label="沟通时间" rules={[{ required: true }]}>
               <DatePicker showTime format="YYYY/MM/DD HH:mm" style={{ width: '100%' }} />
             </Form.Item>
           </Col>
-          <Col span={6}>
-            <Form.Item name="method" label="跟进方式">
+          <Col span={8}>
+            <Form.Item name="method" label="沟通方式">
               <Select options={['微信', '电话', '邮件', '会议', '现场拜访', '样品寄送'].map((value) => ({ value }))} />
             </Form.Item>
           </Col>
-          <Col span={6}>
-            <Form.Item name="owner" label="跟进人">
-              <Input placeholder="请输入跟进人" />
+          <Col span={8}>
+            <Form.Item name="owner" label="沟通人">
+              <Input placeholder="请输入沟通人" />
             </Form.Item>
           </Col>
         </Row>
-        <Form.Item name="content" label="跟进内容" rules={[{ required: true }]}>
-          <Input.TextArea rows={4} placeholder="请输入跟进内容" />
+        <Form.Item name="content" label="沟通内容" rules={[{ required: true }]}>
+          <Input.TextArea rows={4} placeholder="请输入沟通内容" />
         </Form.Item>
         <div className="cm-edit-divider"><span>自定义字段</span></div>
         <div className="cm-custom-fields">

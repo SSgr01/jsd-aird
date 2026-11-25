@@ -49,8 +49,8 @@ const projectStatusTagClasses: Record<string, string> = {
   CANCELLED: 'status-cancelled',
 };
 const followupStatusLabels: Record<Communication['status'], string> = {
-  OPEN: '待跟进',
-  FOLLOWING: '跟进中',
+  OPEN: '待沟通',
+  FOLLOWING: '沟通中',
   CLOSED: '已完成',
 };
 
@@ -215,7 +215,7 @@ export function PartnerDetailPage() {
   const tabLabelMap: Record<string, string> = {
     overview: '公司概览',
     projects: '关联项目',
-    meetings: '跟进记录',
+    meetings: '沟通记录',
     audit: '操作记录',
   };
 
@@ -404,6 +404,17 @@ export function PartnerDetailPage() {
               <label>微信<Input value={person.wechat ?? ''} onChange={(e) => setField('wechat', e.target.value)} /></label>
               <label>邮箱<Input value={person.email ?? ''} onChange={(e) => setField('email', e.target.value)} /></label>
             </div>
+            <label>负责项目（可多选）
+              <Select mode="multiple" allowClear showSearch optionFilterProp="label" filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())} popupMatchSelectWidth={false} value={person.assignedProjectIds ?? []} options={projectOptions}
+                onChange={(value) => {
+                  const ids = (value as string[]) ?? [];
+                  const fromProjects = [...new Set(allProjects.filter((p) => ids.includes(String(p.id))).flatMap((p) => p.teamMembers ?? []))];
+                  const manual = [...new Set([...(person.manualTeamMembers ?? []), ...fromProjects])];
+                  const members = mergeProjectMembers(manual, ids, allProjects);
+                  setPartner({ ...partner, contacts: partner.contacts.map((c) => c.id === person.id ? { ...c, assignedProjectIds: ids, manualTeamMembers: manual, members } : c) });
+                }}
+              />
+            </label>
             <label>团队成员
               <Select
                 mode="tags"
@@ -424,17 +435,6 @@ export function PartnerDetailPage() {
                   const manual = [...new Set(((value as string[]) ?? []).map((item) => item.trim()).filter(Boolean))];
                   const members = mergeProjectMembers(manual, person.assignedProjectIds ?? [], allProjects);
                   setPartner({ ...partner, contacts: partner.contacts.map((c) => c.id === person.id ? { ...c, manualTeamMembers: manual, members } : c) });
-                }}
-              />
-            </label>
-            <label>负责项目（可多选）
-              <Select mode="multiple" allowClear showSearch optionFilterProp="label" value={person.assignedProjectIds ?? []} options={projectOptions}
-                onChange={(value) => {
-                  const ids = (value as string[]) ?? [];
-                  const fromProjects = [...new Set(allProjects.filter((p) => ids.includes(String(p.id))).flatMap((p) => p.teamMembers ?? []))];
-                  const manual = [...new Set([...(person.manualTeamMembers ?? []), ...fromProjects])];
-                  const members = mergeProjectMembers(manual, ids, allProjects);
-                  setPartner({ ...partner, contacts: partner.contacts.map((c) => c.id === person.id ? { ...c, assignedProjectIds: ids, manualTeamMembers: manual, members } : c) });
                 }}
               />
             </label>
@@ -525,13 +525,13 @@ export function PartnerDetailPage() {
       },
       {
         key: 'meetings',
-        label: '跟进记录',
+        label: '沟通记录',
         children: (
           <div className="cm-tab-body">
             <div className="cm-section-title">
-              <h5>跟进记录 <small>{communications.length} 条</small></h5>
+              <h5>沟通记录 <small>{communications.length} 条</small></h5>
               <Space size={8}>
-                {can('followup', 'create') && <Button type="primary" icon={<PlusOutlined />} onClick={() => setBusinessModal({ mode: 'followup' })}>新建跟进记录</Button>}
+                {can('followup', 'create') && <Button type="primary" icon={<PlusOutlined />} onClick={() => setBusinessModal({ mode: 'followup' })}>新建沟通记录</Button>}
                 <Space.Compact>
                   <Tooltip title="竖版视图">
                     <Button
@@ -557,20 +557,18 @@ export function PartnerDetailPage() {
                 <div className="cm-table-wrap">
                   <table className="cm-table cm-followup-list">
                     <thead>
-                      <tr><th>跟进编号</th><th>跟进名称</th><th>跟进时间</th><th>跟进方式</th><th>跟进人</th><th className="table-action-column">操作</th></tr>
+                      <tr><th>沟通时间</th><th>沟通方式</th><th>沟通人</th><th className="table-action-column">操作</th></tr>
                     </thead>
                     <tbody>
                       {communications.map((row) => (
                         <tr key={row.id}>
-                          <td>{row.recordCode}</td>
-                          <td>{row.name}</td>
                           <td>{fmtTime(row.communicatedAt)}</td>
                           <td>{row.communicationMethod || '—'}</td>
                           <td>{row.internalParticipants || '—'}</td>
                           <td className="table-action-column">
                             <div className="cm-row-actions management-table-actions">
                               {can('followup', 'update') && <button className="cm-link-button" onClick={() => setBusinessModal({ mode: 'followup', edit: row })}>编辑</button>}
-                              {can('followup', 'delete') && <Popconfirm title="删除该跟进记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('跟进记录已删除'); await load(); })()}>
+                              {can('followup', 'delete') && <Popconfirm title="删除该沟通记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('沟通记录已删除'); await load(); })()}>
                                 <Button danger type="text" onClick={(e) => e.stopPropagation()}>删除</Button>
                               </Popconfirm>}
                             </div>
@@ -595,18 +593,14 @@ export function PartnerDetailPage() {
                             <span className="cm-timeline-time">{fmtTime(row.communicatedAt)}</span>
                             <Tag color="blue">{followupStatusLabels[row.status] ?? row.status}</Tag>
                           </div>
-                          <div className="cm-timeline-title">
-                            <span className="cm-timeline-code">{row.recordCode}</span>
-                            <span className="cm-timeline-name">{row.name}</span>
-                          </div>
                           <div className="cm-timeline-meta">
-                            <span className="cm-timeline-method"><span className="cm-timeline-label">跟进方式</span>{row.communicationMethod || '—'}</span>
-                            <span className="cm-timeline-owner"><span className="cm-timeline-label">跟进人</span>{row.internalParticipants || '—'}</span>
+                            <span className="cm-timeline-method"><span className="cm-timeline-label">沟通方式</span>{row.communicationMethod || '—'}</span>
+                            <span className="cm-timeline-owner"><span className="cm-timeline-label">沟通人</span>{row.internalParticipants || '—'}</span>
                           </div>
                           {row.content && <div className="cm-timeline-text">{row.content}</div>}
                           <div className="cm-timeline-actions">
                             {can('followup', 'update') && <button className="cm-link-button cm-followup-edit" onClick={() => setBusinessModal({ mode: 'followup', edit: row })}>编辑</button>}
-                            {can('followup', 'delete') && <Popconfirm title="删除该跟进记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('跟进记录已删除'); await load(); })()}>
+                            {can('followup', 'delete') && <Popconfirm title="删除该沟通记录？" description="历史业务关联将继续保留。" onConfirm={() => void (async () => { await deleteCommunication(row.id, row.version); msg.success('沟通记录已删除'); await load(); })()}>
                               <Button danger type="text" size="small">删除</Button>
                             </Popconfirm>}
                           </div>
@@ -615,7 +609,7 @@ export function PartnerDetailPage() {
                     ))}
                 </div>
               )}
-              {!communicationsLoading && !communications.length && <Empty className="cm-empty" description="暂无跟进记录" />}
+              {!communicationsLoading && !communications.length && <Empty className="cm-empty" description="暂无沟通记录" />}
             </div>
           </div>
         ),

@@ -66,7 +66,7 @@ public class CommunicationRecordController {
     }
 
     public record CommunicationRequest(@NotNull UUID partnerId,
-                                       @NotBlank @Size(max = 200) String name,
+                                       @Size(max = 200) String name,
                                        @NotNull Instant communicatedAt,
                                        @Size(max = 500) String internalParticipants,
                                        @NotBlank @Size(max = 30) String communicationMethod,
@@ -74,7 +74,7 @@ public class CommunicationRecordController {
                                        JsonNode customFields,
                                        @PositiveOrZero Long version) {
         CommunicationRecord toDomain() {
-            return new CommunicationRecord(null, null, name, partnerId, communicatedAt, internalParticipants, communicationMethod, content, status == null ? CommunicationRecord.CommunicationStatus.OPEN : status, customFields, version == null ? 0 : version, null, null);
+            return new CommunicationRecord(null, null, name == null || name.isBlank() ? null : name.trim(), partnerId, communicatedAt, internalParticipants, communicationMethod, content, status == null ? CommunicationRecord.CommunicationStatus.OPEN : status, customFields, version == null ? 0 : version, null, null);
         }
     }
 }

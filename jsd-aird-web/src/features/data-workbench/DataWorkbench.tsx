@@ -126,6 +126,7 @@ export const DataWorkbookCanvas = forwardRef<EditorHandle, CanvasProps>(function
     <Suspense fallback={<div className="data-workbook-state"><Spin indicator={<LoadingOutlined spin />} /></div>}>
       <SheetsEditor
         ref={ref}
+        fullscreenEnabled={false}
         ariaLabel={editorLabel}
         snapshot={workbook.snapshot}
         bindings={instance?.mapping ?? []}

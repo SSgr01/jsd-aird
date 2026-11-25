@@ -23,7 +23,7 @@
 }
 /* Sheet workspaces use the editor's control, not the surrounding page control.
    Document/knowledge workspaces keep their existing fullscreen behavior. */
-.workspace-frame:has(.sheet-editor-viewport) > :is(.workspace-header, .data-workbench-header) .workspace-maximize-button {
+.workspace-frame:has(.sheet-editor-viewport[data-fullscreen-enabled='true']) > :is(.workspace-header, .data-workbench-header) .workspace-maximize-button {
   display: none;
 }
 /* On short windows, tall page notices must not squeeze the canvas to zero.

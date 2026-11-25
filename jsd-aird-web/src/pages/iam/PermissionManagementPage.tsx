@@ -174,7 +174,7 @@ const isCategoryMenu = (menuKey: string) => categoryMenus.has(menuKey);
 // Functional rows that only expose a single operation.
 const viewOnlyMenus = new Set(['ai.search', 'ai.qa']);
 const queryOnlyMenus = new Set(['customer.projects']);
-const menusWithoutUpdate = new Set(['project.reference', 'eln.upload', 'knowledge.upload', 'data.upload']);
+const menusWithoutUpdate = new Set(['eln.upload', 'knowledge.upload', 'data.upload']);
 // 研发/生产库存台账只支持冲销，不提供删除动作，权限矩阵不再展示「删除」。
 const menusWithoutDelete = new Set(['inventory.rnd', 'inventory.production']);
 const submitReviewMenus = new Set([
@@ -448,7 +448,7 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
           .map(withoutSelectedScope).map(withoutOwnProjectTargets),
       });
       await loadUserModel(false);
-      await useAuthStore.getState().load();
+      await useAuthStore.getState().load(true);
       message.success(`${activeUser?.displayName || '用户'}的个人权限已保存`);
     } catch (error) {
       message.error(error instanceof HttpError ? error.message : '保存失败，可能已被其他管理员修改');
@@ -464,7 +464,7 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
       const result = await iamApi.saveRoleMenus(activeRoleId, roleVersion, roleMenus);
       setRoleVersion(result.version);
       setRoleMenuBaselines((current) => ({ ...current, [activeRoleId]: roleMenus }));
-      await useAuthStore.getState().load();
+      await useAuthStore.getState().load(true);
       message.success('业务角色菜单已保存');
     } catch (error) {
       message.error(error instanceof HttpError ? error.message : '保存失败，请刷新后重试');
@@ -481,7 +481,7 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
         Object.values(levelBindings).map(withoutDataScope).map(withoutSelectedScope).map(withoutOwnProjectTargets));
       setLevelVersion(result.version);
       await loadLevelBindings();
-      await useAuthStore.getState().load();
+      await useAuthStore.getState().load(true);
       message.success('权限等级已保存，已分配该等级的用户重新登录后生效');
     } catch (error) {
       message.error(error instanceof HttpError ? error.message : '保存失败，请刷新后重试');

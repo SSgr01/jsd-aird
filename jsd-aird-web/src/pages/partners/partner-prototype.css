@@ -156,7 +156,7 @@
   background: var(--app-surface);
 }
 
-/* 跟进记录竖版时间轴视图 */
+/* 沟通记录竖版时间轴视图 */
 .cm-followup-timeline {
   padding: 18px 20px 8px;
 }
@@ -215,22 +215,6 @@
 }
 .cm-timeline-head .ant-tag {
   margin-inline-end: 0;
-}
-.cm-timeline-title {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-bottom: 4px;
-}
-.cm-timeline-code {
-  color: var(--app-text-secondary);
-  font-size: 12px;
-  white-space: nowrap;
-}
-.cm-timeline-name {
-  color: var(--app-text);
-  font-weight: 600;
-  font-size: 14px;
 }
 .cm-timeline-meta {
   display: flex;

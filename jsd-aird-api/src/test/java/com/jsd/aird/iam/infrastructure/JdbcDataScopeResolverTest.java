@@ -54,8 +54,22 @@ class JdbcDataScopeResolverTest {
         when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
         assertThat(resolver.resolve(check("CUSTOMER"),
                 new Binding("customer.view", "ALLOW", "CREATOR", List.of())).allowed()).isTrue();
+        verify(jdbc, org.mockito.Mockito.atLeastOnce()).queryForObject(
+                contains("mdm.business_partner WHERE organization_id = ? AND created_by = ?"),
+                eq(Boolean.class), eq(organizationId), eq(userId), eq(resourceId));
         assertThat(resolver.resolve(check("CUSTOMER"),
                 new Binding("customer.view", "ALLOW", "DEPARTMENT", List.of())).allowed()).isTrue();
+    }
+
+    @Test
+    void projectCreatorComparisonUsesUuidColumn() {
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+
+        assertThat(resolver.resolve(check("PROJECT"),
+                new Binding("project.view", "ALLOW", "CREATOR", List.of())).allowed()).isTrue();
+        verify(jdbc).queryForObject(
+                contains("mdm.project WHERE organization_id=? AND id=? AND deleted=false AND created_by=?"),
+                eq(Boolean.class), eq(organizationId), eq(resourceId), eq(userId));
     }
 
     @Test
@@ -78,6 +92,28 @@ class JdbcDataScopeResolverTest {
     }
 
     @Test
+    void qualitySelectedScopeWithNoTargetsStillAllowsCreatorRecords() {
+        var recordBinding = new Binding("quality.view.view", "ALLOW", "SELECTED", List.of());
+        var uploadBinding = new Binding("quality.upload.view", "ALLOW", "SELECTED", List.of());
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+
+        assertThat(resolver.resolve(check("QUALITY", null), recordBinding).allowed()).isTrue();
+        assertThat(resolver.resolve(check("QUALITY_UPLOAD", null), uploadBinding).allowed()).isTrue();
+        assertThat(resolver.resolve(check("QUALITY"), recordBinding).allowed()).isTrue();
+        assertThat(resolver.resolve(check("QUALITY_UPLOAD"), uploadBinding).allowed()).isTrue();
+    }
+
+    @Test
+    void qualityDepartmentScopeUsesUploadCreatorDepartmentAndKeepsOwnRecordVisible() {
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+        var binding = new Binding("quality.upload.view", "ALLOW", "DEPARTMENT", List.of());
+
+        assertThat(resolver.resolve(check("QUALITY_UPLOAD"), binding).allowed()).isTrue();
+        verify(jdbc).queryForObject(contains("creator.department_id=viewer.department_id"),
+                eq(Boolean.class), eq(userId), eq(resourceId), eq(organizationId), eq(userId));
+    }
+
+    @Test
     void selectedCustomerScopeAlsoChecksRecordsCreatedByTheUser() {
         var binding = new Binding("customer.list.view", "ALLOW", "SELECTED", List.of(resourceId));
         var createdCustomer = UUID.randomUUID();
@@ -85,7 +121,7 @@ class JdbcDataScopeResolverTest {
 
         assertThat(resolver.resolve(check("CUSTOMER", createdCustomer), binding).allowed()).isTrue();
         verify(jdbc).queryForObject(contains("created_by = ? OR ?"), eq(Boolean.class),
-                eq(createdCustomer), any(), any(), eq(false));
+                eq(createdCustomer), eq(organizationId), eq(userId), eq(false));
     }
 
     @Test

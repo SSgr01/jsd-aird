@@ -215,7 +215,7 @@ export function PartnerListPage() {
           customFields: partner.customFields,
         });
       }));
-      msg.success(`已复制 ${selectedPartners.length} 个客户，复制结果未继承原客户的项目和跟进关系`);
+      msg.success(`已复制 ${selectedPartners.length} 个客户，复制结果未继承原客户的项目和沟通关系`);
       setSelectedIds([]);
       setSelectedPartnersById({});
       await load();
@@ -260,7 +260,7 @@ export function PartnerListPage() {
         负责人: (x.ownerNames ?? []).join('、'),
         合作状态: x.cooperationStatus || '',
         关联项目: x.projectCount ?? 0,
-        最近跟进: x.latestFollowUpAt
+        最近沟通: x.latestFollowUpAt
           ? dayjs(x.latestFollowUpAt).format('YYYY-MM-DD HH:mm')
           : '',
       }));
@@ -281,7 +281,7 @@ export function PartnerListPage() {
       <div className="page-heading cm-customer-page-heading">
         <div>
           <Typography.Title level={2}>客户列表</Typography.Title>
-          <Typography.Text type="secondary">统一管理公司档案、关联项目及跟进记录。</Typography.Text>
+          <Typography.Text type="secondary">统一管理公司档案、关联项目及沟通记录。</Typography.Text>
         </div>
         <div className="cm-customer-page-actions">
           <Typography.Text type="secondary">已选 {selectedIds.length} 项</Typography.Text>
@@ -407,7 +407,7 @@ export function PartnerListPage() {
                   <th>负责人</th>
                   <th>合作状态</th>
                   <th>关联项目</th>
-                  <th>最近跟进</th>
+                  <th>最近沟通</th>
                   <th className="table-action-column">操作</th>
                 </tr>
               </thead>
@@ -513,7 +513,7 @@ export function PartnerListPage() {
                     </div>
                     <div className="cm-customer-card-foot">
                       <span className="cm-muted">
-                        最近跟进：{x.latestFollowUpAt ? dayjs(x.latestFollowUpAt).format('YYYY-MM-DD HH:mm') : '—'}
+                        最近沟通：{x.latestFollowUpAt ? dayjs(x.latestFollowUpAt).format('YYYY-MM-DD HH:mm') : '—'}
                       </span>
                       <Space size={8}>
                         {can('view') && <Link className="cm-link-button" to={`/partners/${x.id}`}>查看</Link>}

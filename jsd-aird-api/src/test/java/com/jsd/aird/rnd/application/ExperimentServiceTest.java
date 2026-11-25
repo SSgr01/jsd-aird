@@ -252,7 +252,9 @@ class ExperimentServiceTest {
                     return new Detail(savedSummary, versionId, null, null, null,
                             mapper.createObjectNode(), draft.editModel(), List.of(), List.of());
                 });
+        org.mockito.Mockito.clearInvocations(repository);
         var confirmed = importService.confirmTemplateData(id, 1);
+        verify(repository, org.mockito.Mockito.times(1)).detail(ORGANIZATION_ID, id);
         assertThat(confirmed.editModel().path("importDataReview").path("confirmed").asBoolean()).isTrue();
         assertThat(confirmed.editModel().path("importDataReview").path("confirmedRevision").asLong()).isEqualTo(2);
 

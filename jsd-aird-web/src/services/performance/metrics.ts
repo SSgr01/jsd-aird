@@ -1,4 +1,33 @@
 let routeDataRecorded = false;
+let activeOperations = 0;
+export function operationMetricActive() { return activeOperations > 0; }
+
+/** A button is finished after React has committed its unlocked state and painted. */
+export function startOperationMetric(operation: string) {
+  const startedAt = performance.now();
+  activeOperations++;
+  let finished = false;
+  return () => {
+    if (finished) return;
+    finished = true;
+    activeOperations--;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const name = `aird:operation:${operation}`;
+      if (performance.getEntriesByName(name).length >= 30) performance.clearMeasures(name);
+      performance.measure(name, { start: startedAt, end: performance.now() });
+    }));
+  };
+}
+
+export function measureProcessing<T>(phase: string, work: () => T): T {
+  const start = performance.now();
+  try { return work(); }
+  finally {
+    const name = `aird:processing:${phase}`;
+    if (performance.getEntriesByName(name).length >= 30) performance.clearMeasures(name);
+    performance.measure(name, { start, end: performance.now() });
+  }
+}
 
 /** Names only: no URL parameters, document IDs, credentials or document content. */
 export function markPerformance(name: string) {

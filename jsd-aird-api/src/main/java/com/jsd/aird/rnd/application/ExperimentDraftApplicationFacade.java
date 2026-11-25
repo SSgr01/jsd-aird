@@ -47,13 +47,18 @@ public class ExperimentDraftApplicationFacade implements ExperimentDraftFacade {
     @Override
     @Transactional
     public ImportedDraft createImportedDraft(ImportedDraftCommand command) {
+        return createPreparedImportedDraft(prepareImportedDraft(command));
+    }
+
+    @Override
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    public PreparedImportedDraft prepareImportedDraft(ImportedDraftCommand command) {
         if (command == null || command.organizationId() == null || command.actorId() == null) {
             throw validation("创建导入实验草稿缺少组织或操作人");
         }
         if (command.title() == null || command.title().isBlank()) {
             throw validation("实验名称不能为空");
         }
-        var category = command.categoryId() == null ? null : requireActiveCategory(command.organizationId(), command.categoryId());
         var id = UUID.randomUUID();
         var versionId = UUID.randomUUID();
         var proof=command.importConfirmation();
@@ -79,6 +84,18 @@ public class ExperimentDraftApplicationFacade implements ExperimentDraftFacade {
             marker.put("confirmed",true).put("confirmedRevision",1).put("hashVersion",2)
                     .put("dataHash",canonicalizer.hash(com.jsd.aird.shared.excel.WorkbookReviewContent.workbook(json,editModel.path("documentSnapshot"))));
         }
+        ExperimentSourceType.fromNullable(command.sourceType());
+        return new PreparedImportedDraft(id, versionId, command, editModel);
+    }
+
+    @Override
+    @Transactional
+    public ImportedDraft createPreparedImportedDraft(PreparedImportedDraft prepared) {
+        var command = prepared.command();
+        var category = command.categoryId() == null ? null : requireActiveCategory(command.organizationId(), command.categoryId());
+        var id = prepared.experimentId();
+        var versionId = prepared.versionId();
+        var editModel = prepared.editModel();
         var sourceType = ExperimentSourceType.fromNullable(command.sourceType()).name();
         var result = repository.create(new ExperimentRepository.Create(
                 id, command.organizationId(), null, command.title().strip(), category == null ? null : category.id(), category == null ? null : category.name(),

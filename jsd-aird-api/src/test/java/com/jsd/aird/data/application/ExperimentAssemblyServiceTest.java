@@ -63,7 +63,12 @@ class ExperimentAssemblyServiceTest {
             assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
             return new TemplateDataImportFacade.PublishedExperimentTemplate(version,version,"EXP_TEST_UNIFIED","性能记录",1,"template",json.createObjectNode().put("id","blank"),json.createArrayNode(),contract);
         });
-        when(experiments.createImportedDraft(any())).thenAnswer(call->{
+        doAnswer(call->{
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            var command=call.<ExperimentDraftFacade.ImportedDraftCommand>getArgument(0);
+            return new ExperimentDraftFacade.PreparedImportedDraft(UUID.randomUUID(),UUID.randomUUID(),command,command.editModel());
+        }).when(experiments).prepareImportedDraft(any());
+        when(experiments.createPreparedImportedDraft(any())).thenAnswer(call->{
             assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isTrue();
             return new ExperimentDraftFacade.ImportedDraft(UUID.randomUUID(),UUID.randomUUID(),"RD261101","透明硬化液 性能记录");
         });
@@ -105,7 +110,8 @@ class ExperimentAssemblyServiceTest {
         verify(jobs).enqueue(eq(org),eq("DATA_TO_EXPERIMENT_SYNC"),payload.capture(),anyString(),eq(40));
         assertThat(payload.getValue().hasNonNull("categoryId")).isFalse();
         new DataToExperimentJobHandler(service,json).handle(payload.getValue(),context);
-        verify(experiments).createImportedDraft(argThat(command->command.categoryId()==null));
+        verify(experiments).prepareImportedDraft(argThat(command->command.categoryId()==null));
+        verify(experiments).createPreparedImportedDraft(argThat(prepared->prepared.command().categoryId()==null));
         verify(experiments,never()).requireActiveCategory(any(),any());
     }
     @Test void fileFailureKeepsOriginalErrorAndDoesNotStartWriting(){
@@ -125,6 +131,20 @@ class ExperimentAssemblyServiceTest {
         });
         assertThatThrownBy(this::execute).hasMessageContaining("读取文件期间导入资料已变化");
         verify(experiments,never()).createImportedDraft(any());
+        verify(experiments,never()).createPreparedImportedDraft(any());
+    }
+    @Test void aNewSourceRevisionCannotReusePreparedWorkbookEvenWhenValuesMatch(){
+        var latest=new AtomicReference<>(source);
+        when(repository.load(org,job)).thenAnswer(call->latest.get());
+        doAnswer(call->{
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            latest.set(new ExperimentAssemblyRepository.SourceImport(job,source.sourceFileId(),source.sourceFileName(),source.sourceSha256(),
+                    version,9,"contract","COMPLETED","EXPERIMENT_DRAFT",category,user,Instant.EPOCH,List.of(),"new-revision"));
+            var command=call.<ExperimentDraftFacade.ImportedDraftCommand>getArgument(0);
+            return new ExperimentDraftFacade.PreparedImportedDraft(UUID.randomUUID(),UUID.randomUUID(),command,command.editModel());
+        }).when(experiments).prepareImportedDraft(any());
+        assertThatThrownBy(this::execute).hasMessageContaining("读取文件期间导入资料已变化");
+        verify(experiments,never()).createPreparedImportedDraft(any());
     }
     @Test void completedDraftReturnsItsIdentityWithoutReadingOrCreatingAgain(){
         var existing=link("SYNCED",UUID.randomUUID());when(repository.find(org,job,key)).thenReturn(Optional.of(existing));
@@ -140,6 +160,8 @@ class ExperimentAssemblyServiceTest {
     @Test void failedJobIsVisibleEvenWhenDomainCallbackWasMissed(){
         when(jobs.findLatestJob(eq(org),anyString())).thenReturn(Optional.of(async(UUID.randomUUID(),"FAILED")));
         var state=service.status(job);
+        verify(repository,never()).upsertPlan(any(),any(),any(),any());
+        verify(repository,never()).supersedeOtherPlans(any(),any(),any());
         assertThat(state.plan().candidates().getFirst().status()).isEqualTo("FAILED");
         assertThat(state.links().getFirst().status()).isEqualTo("FAILED");
         assertThat(state.links().getFirst().errorMessage()).contains("实验草稿生成失败");

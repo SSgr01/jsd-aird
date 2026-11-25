@@ -1,4 +1,5 @@
 import { httpClient, LARGE_PAYLOAD_TIMEOUT } from '@/services/http/client';
+import { sharedRead } from '@/services/http/inflight-reads';
 import type { ApiResponse } from '@/types/api';
 import type { ImportBinding, TemplateFieldDefinition } from '@/services/data/data-api';
 import type { WorkbookTemplateInstance } from '@/features/template-workspace/workbook-instance';
@@ -225,18 +226,22 @@ export async function listProjectExperiments(
     ),
   );
 }
-export async function getExperiment(id: string) {
+export function getExperiment(id: string) {
+  return sharedRead(`experiment:${id}`, async () => {
   return data(
     await httpClient.get<ApiResponse<ExperimentDetail>>(`/api/v1/experiments/${id}/edit-model`, { timeout: LARGE_PAYLOAD_TIMEOUT }),
   );
+  });
 }
-export async function getExperimentTemplateDataReview(id: string) {
+export function getExperimentTemplateDataReview(id: string) {
+  return sharedRead(`experiment-review:${id}`, async () => {
   return data(
     await httpClient.get<ApiResponse<ExperimentTemplateDataReview>>(
       `/api/v1/experiments/${id}/data-review`,
       { timeout: LARGE_PAYLOAD_TIMEOUT },
     ),
   );
+  });
 }
 export async function confirmExperimentTemplateData(id: string, revision: number) {
   return data(
@@ -245,7 +250,8 @@ export async function confirmExperimentTemplateData(id: string, revision: number
     }, { timeout: LARGE_PAYLOAD_TIMEOUT }),
   );
 }
-export async function getExperimentPresentation(id: string, revision: number) {
+export function getExperimentPresentation(id: string, revision: number) {
+  return sharedRead(`experiment-presentation:${id}:${revision}`, async () => {
   return data(
     await httpClient.get<
       ApiResponse<{
@@ -255,6 +261,7 @@ export async function getExperimentPresentation(id: string, revision: number) {
       }>
     >(`/api/v1/experiments/${id}/presentation`, { params: { revision }, timeout: LARGE_PAYLOAD_TIMEOUT }),
   );
+  });
 }
 export async function exportExperiment(id: string, view: 'RESULT' | 'BLANK' = 'RESULT') {
   const response = await httpClient.get<Blob>(`/api/v1/experiments/${id}/export`, {
@@ -325,10 +332,12 @@ export async function actExperiment(
     }, { timeout: LARGE_PAYLOAD_TIMEOUT }),
   );
 }
-export async function listVersions(id: string) {
+export function listVersions(id: string) {
+  return sharedRead(`experiment-versions:${id}`, async () => {
   return data(
     await httpClient.get<ApiResponse<ExperimentVersion[]>>(`/api/v1/experiments/${id}/versions`),
   );
+  });
 }
 export async function compareVersions(id: string, from: number, to: number) {
   return data(

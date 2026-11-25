@@ -1,6 +1,7 @@
 import type { WorkbookTemplateInstance } from '@/features/template-workspace/workbook-instance';
 import type { ApiResponse, PageResponse } from '@/types/api';
 import { httpClient, LARGE_PAYLOAD_TIMEOUT } from '@/services/http/client';
+import { sharedRead } from '@/services/http/inflight-reads';
 import { fetchFileBlob, fetchFilePreviewBlob } from '@/services/files';
 import type { ProjectRelationTarget, RelatedProjectView } from '@/services/project/project-resource-api';
 
@@ -127,9 +128,9 @@ export const dataApi = {
   },
   async parse(id: string, revision: string) { const response = await httpClient.post<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/parse`, { revision }); return response.data.data; },
   async reExtract(id: string, revision: string) { const response = await httpClient.post<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/re-extract`, { revision }, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; },
-  async preview(id: string, experiment = false) { const response = await httpClient.get<ApiResponse<DataPreview>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/preview`, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; },
+  preview(id: string, experiment = false) { return sharedRead(`import-preview:${experiment}:${id}`, async () => { const response = await httpClient.get<ApiResponse<DataPreview>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/preview`, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; }); },
   async saveWorkbookDraft(id: string, input: { revision: string; snapshot: Record<string, unknown>; templateInstance: WorkbookTemplateInstance; structureOperations: unknown[] }, experiment = false) { const response = await httpClient.put<ApiResponse<{ job: DataJob; workbook: DataWorkbookSnapshot }>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/workbook-draft`, input, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; },
-  async getImportWorkbookSnapshot(id: string, experiment = false) { const response = await httpClient.get<ApiResponse<DataWorkbookSnapshot>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/workbook-snapshot`, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; },
+  getImportWorkbookSnapshot(id: string, experiment = false) { return sharedRead(`import-workbook:${experiment}:${id}`, async () => { const response = await httpClient.get<ApiResponse<DataWorkbookSnapshot>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/workbook-snapshot`, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; }); },
   async saveSheets(id: string, revision: string, items: Array<Pick<DataSheet, 'sheetId' | 'selected' | 'headerRows' | 'dataStartRow' | 'dataEndRow' | 'confirmationStatus'>>) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/sheets`, { revision, items }); return response.data.data; },
   async saveMappings(id: string, revision: string, items: DataMapping[]) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/mappings`, { revision, items }, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; },
   async resolveIssue(id: string, revision: string, issueId: string, status: 'IGNORED', reason: string) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/issues/${issueId}`, { revision, status, reason }); return response.data.data; },

@@ -110,6 +110,9 @@ export function primaryDomainForRequest(url: string): string | undefined {
 
 export function domainsForRequest(url: string): string[] {
   if (/\/auth\//.test(url)) return [];
+  // Confirmation changes the experiment's review marker only. It cannot change
+  // project membership or the source import's parsing/publication status.
+  if (/\/api\/v1\/experiments\/[^/]+\/confirm-data(?:\?|$)/.test(url)) return ['experiments'];
   if (/\/project|\/tasks|\/stages/.test(url)) return ['projects', 'tasks', 'experiments', 'knowledge', 'data'];
   if (/\/experiment/.test(url)) return ['experiments', 'projects', 'data'];
   if (/\/knowledge|\/kb\//.test(url)) return ['knowledge'];

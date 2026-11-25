@@ -28,14 +28,14 @@ public class JdbcExperimentAssemblyRepository implements ExperimentAssemblyRepos
         var jobs = jdbc.query("""
                 SELECT id, source_file_id, source_file_name, source_sha256, template_version_id,
                        coalesce(import_contract_version, 0) import_contract_version, contract_hash,
-                       status, import_purpose, target_experiment_category_id, created_by, created_at
+                       status, import_purpose, target_experiment_category_id, created_by, created_at, revision::text
                   FROM data.import_job WHERE organization_id=? AND id=?
                 """, (rs, n) -> new Object[]{rs.getObject("id", UUID.class), rs.getObject("source_file_id", UUID.class),
                 rs.getString("source_file_name"), rs.getString("source_sha256"),
                 rs.getObject("template_version_id", UUID.class), rs.getInt("import_contract_version"),
                 rs.getString("contract_hash"), rs.getString("status"), rs.getString("import_purpose"),
                 rs.getObject("target_experiment_category_id", UUID.class), rs.getObject("created_by", UUID.class),
-                rs.getTimestamp("created_at").toInstant()}, organizationId, importJobId);
+                rs.getTimestamp("created_at").toInstant(),rs.getString("revision")}, organizationId, importJobId);
         if (jobs.isEmpty()) throw new ApiException(ApiErrorCode.NOT_FOUND, "数据导入任务不存在");
         var anchors = jdbc.query("""
                 SELECT record_id, field_code, binding_id, value_path, label_path, sheet_id, sheet_name,
@@ -56,7 +56,7 @@ public class JdbcExperimentAssemblyRepository implements ExperimentAssemblyRepos
         var j = jobs.getFirst();
         return new SourceImport((UUID) j[0], (UUID) j[1], (String) j[2], (String) j[3], (UUID) j[4],
                 (Integer) j[5], (String) j[6], (String) j[7], (String) j[8], (UUID) j[9], (UUID) j[10],
-                (java.time.Instant) j[11], List.copyOf(records));
+                (java.time.Instant) j[11], List.copyOf(records), (String) j[12]);
     }
 
     @Override public List<Link> links(UUID org, UUID job) {
@@ -107,6 +107,9 @@ public class JdbcExperimentAssemblyRepository implements ExperimentAssemblyRepos
     @Override public void lockAssembly(UUID org, UUID job, String assemblyKey) {
         jdbc.queryForObject("SELECT pg_advisory_xact_lock(hashtextextended(?,0))",Object.class,
                 org + ":" + job + ":" + assemblyKey);
+    }
+    @Override public void lockSource(UUID org, UUID job) {
+        jdbc.queryForObject("SELECT id FROM data.import_job WHERE organization_id=? AND id=? FOR UPDATE",UUID.class,org,job);
     }
     @Override public boolean markRunning(UUID org,UUID job,String key){return jdbc.update("""
             UPDATE data.import_experiment_link SET status='RUNNING',error_message=NULL,updated_at=now()

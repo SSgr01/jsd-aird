@@ -67,6 +67,8 @@ import {
   type FieldDefinitionReviewItem,
 } from '@/features/data-workbench/field-definition-review';
 import { updateWorkbookField } from '@/features/template-workspace/workbook-instance';
+import { refreshFieldResults } from '@/features/data-workbench/refresh-field-results';
+import { startOperationMetric } from '@/services/performance/metrics';
 
 type PanelTab = 'data' | 'structure' | 'properties';
 
@@ -135,13 +137,14 @@ export function DataImportJobPage({
   const [versionContainer, setVersionContainer] = useState<HTMLDivElement | null>(null);
   const hasUpdatePermission = usePermission(workspaceMode === 'EXPERIMENT' ? 'eln.upload.create' : 'data.upload.create');
   const canAssign = usePermission('project.assign');
-  const canGenerateExperiment = usePermission('experiment.create');
   const canCreate = usePermission(workspaceMode === 'EXPERIMENT' ? 'eln.upload.create' : 'data.upload.create');
   const canUpdate = (hasUpdatePermission || (workspaceMode === 'EXPERIMENT' && canCreate))
     && !['PENDING_REVIEW', 'APPROVED', 'PUBLISHED', 'DISABLED'].includes(publication?.status || '');
   const canDownload = usePermission(workspaceMode === 'EXPERIMENT' ? 'eln.upload.download' : 'data.upload.download');
 
   const loads = useLatestRequest(`${workspaceMode}:${id}`);
+  const workbookRef = useRef(workbook);
+  workbookRef.current = workbook;
   const assemblyLoads = useLatestRequest(`${workspaceMode}:${id}`);
   useEffect(() => {
     setPreview(undefined); setWorkbook(undefined); setInstance(undefined); setPublication(undefined);
@@ -154,6 +157,7 @@ export function DataImportJobPage({
   const load = useCallback(async (options: { silent?: boolean; preserveSnapshot?: boolean; skipWorkbook?: boolean } = {}) => {
     if (!loads.isActive()) return;
     const isCurrent = loads.begin();
+    const generation = editGeneration.current;
     if (!options.silent) {
       setLoading(true);
       setLoadError(undefined);
@@ -165,6 +169,12 @@ export function DataImportJobPage({
       setPreview(nextPreview);
       setLoadError(undefined);
       setLoading(false);
+      if (options.skipWorkbook && (stillProcessing || workbookRef.current)) {
+        if (!stillProcessing && !structureDirtyRef.current && generation === editGeneration.current) setWorkbook(current => current ? {
+          ...current, fields: refreshFieldResults(current.fields, nextPreview.rows),
+        } : current);
+        return;
+      }
       setWorkbookError(undefined);
       setWorkbookLoading(!stillProcessing);
       const nextWorkbook = stillProcessing
@@ -219,7 +229,7 @@ export function DataImportJobPage({
       setAssemblyPlan(sync.plan); setAssemblyLinks(sync.links);
     } catch {
     }
-  }, [id, assemblyLoads, message, preview]);
+  }, [id, assemblyLoads, preview?.job.status, preview?.templateContract?.importContractVersion]);
   useEffect(() => { void loadAssembly(); }, [loadAssembly]);
   useEffect(() => {
     const refresh = () => { if (document.visibilityState !== 'hidden') void loadAssembly(); };
@@ -337,7 +347,7 @@ export function DataImportJobPage({
           ? { ...item, correctedValue: displayedValue, effectiveValue: displayedValue }
           : item),
       } : current);
-      await load({ silent: true, preserveSnapshot: true });
+      await load({ silent: true, preserveSnapshot: true, skipWorkbook: true });
       void message.success('修正值已保存并重新校验');
     } catch (error) {
       if (!loads.isActive()) return;
@@ -350,21 +360,21 @@ export function DataImportJobPage({
   };
 
   const commit = async () => {
+    const finishMetric = startOperationMetric('import-confirm');
     setSaving(true);
     try {
       if (structureDirtyRef.current) throw new Error('请先保存工作簿草稿，再完成数据核对');
       loads.invalidate();
       await dataApi.commit(id, workspaceMode === 'EXPERIMENT');
       if (!loads.isActive()) return;
-      await load();
-      if (workspaceMode === 'EXPERIMENT') await loadAssembly();
+      await load({ silent: true, skipWorkbook: true });
       if (!loads.isActive()) return;
       void message.success(workspaceMode === 'EXPERIMENT'
         ? '导入数据已完成核对，实验草稿生成状态已更新'
         : '数据已完成核对，可以提交审核');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '正式数据提交失败');
-    } finally { if (loads.isActive()) setSaving(false); }
+    } finally { if (loads.isActive()) setSaving(false); finishMetric(); }
   };
 
   const reExtract = async () => {
@@ -386,6 +396,7 @@ export function DataImportJobPage({
     const generation = editGeneration.current;
     const sentOperations = [...structureOperations.current];
     const editor = editorRef.current;
+    const finishMetric = startOperationMetric('import-save');
     setSaving(true);
     setLoadError(undefined);
     try {
@@ -409,7 +420,7 @@ export function DataImportJobPage({
         // Refresh extraction results without replaying normalized metadata as a new user edit.
         if (unchanged) setInstance(editor?.getTemplateInstance?.() ?? saved.workbook.templateInstance ?? instance);
         setWorkbook(current => unchanged || !current ? { ...saved.workbook, snapshot: current?.snapshot ?? saved.workbook.snapshot } : current);
-        await load({ silent: true, preserveSnapshot: true });
+        await load({ silent: true, preserveSnapshot: true, skipWorkbook: true });
         if (!silent) void message.success('工作簿草稿已保存并重新校验');
         return true;
       }
@@ -431,7 +442,7 @@ export function DataImportJobPage({
       if (!silent) void message.success('导入草稿已保存');
       return true;
     } catch (error) { if (!loads.isActive()) return false; const reason=error instanceof Error ? error.message : '未保存内容仍保留'; setLoadError(`草稿保存失败：${reason}`); void message.error(reason); return false; }
-    finally { if (loads.isActive()) setSaving(false); }
+    finally { if (loads.isActive()) setSaving(false); finishMetric(); }
   };
 
   const changeFieldCorrection = (field: DataFieldValueView, value: string) => {
@@ -474,7 +485,7 @@ export function DataImportJobPage({
         if (!Object.keys(next).length) correctionRevision.current = undefined;
         return next;
       });
-      await load({ silent: true });
+      await load({ silent: true, preserveSnapshot: true, skipWorkbook: true });
     } catch (error) {
       if (!loads.isActive()) return;
       void message.error(error instanceof Error ? error.message : '修改保存失败，当前内容仍保留');

@@ -97,8 +97,11 @@ public class ExperimentService {
     public Detail detail(UUID id) {
         var actor = ActorContext.required();
         requireView(id);
-        return normalize(repository.detail(actor.organizationId(), id)
-                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验不存在")));
+        try (var timing = new com.jsd.aird.shared.observability.OperationTiming("experiment-read")) {
+            var loaded = timing.phase("database-read", () -> repository.detail(actor.organizationId(), id)
+                    .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "实验不存在")));
+            return timing.phase("normalize", () -> normalize(loaded));
+        }
     }
 
     public List<ExperimentRepository.SourceReference> sourceReferences(UUID id) {
@@ -266,6 +269,17 @@ public class ExperimentService {
     }
 
     private Detail saveInternal(UUID id, long revision, DraftCommand command, boolean confirmingData) {
+        return saveInternal(id, revision, command, confirmingData, null);
+    }
+
+    private Detail saveInternal(UUID id, long revision, DraftCommand command, boolean confirmingData, Detail loaded) {
+        try (var timing = new com.jsd.aird.shared.observability.OperationTiming(confirmingData ? "experiment-confirm" : "experiment-save")) {
+            return saveInternal(id, revision, command, confirmingData, loaded, timing);
+        }
+    }
+
+    private Detail saveInternal(UUID id, long revision, DraftCommand command, boolean confirmingData, Detail loaded,
+            com.jsd.aird.shared.observability.OperationTiming timing) {
         var actor = ActorContext.required();
         if (command == null || command.experimentNo() == null || command.experimentNo().isBlank()) {
             throw validation("实验编号不能为空");
@@ -273,7 +287,10 @@ public class ExperimentService {
         if (command.title() == null || command.title().isBlank()) {
             throw validation("实验名称不能为空");
         }
-        var current = detail(id);
+        var current = loaded == null ? detail(id) : loaded;
+        timing.checkpoint("read");
+        if (current.summary().revision() != revision)
+            throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT, "实验已被其他会话修改，请刷新后重试");
         var imported = "EXCEL_IMPORT".equals(current.summary().sourceType())
                 || "OCR_IMPORT".equals(current.summary().sourceType());
         if (!imported && (command.ownerName() == null || command.ownerName().isBlank())) {
@@ -283,7 +300,10 @@ public class ExperimentService {
             throw validation("实验日期不能为空");
         }
 
-        var model = editModels.normalize(object(command.editModel(), "editModel"), id);
+        // A confirmation only annotates the authoritative normalized model we
+        // just validated. Do not prepare/project its workbook a second time.
+        var model = confirmingData ? (ObjectNode) object(command.editModel(), "editModel").deepCopy()
+                : editModels.normalize(object(command.editModel(), "editModel"), id);
         // Only the server's original-source annotation can relax historical metadata requirements.
         if(current.editModel().has("sourceMetadataGaps"))model.set("sourceMetadataGaps",current.editModel().path("sourceMetadataGaps").deepCopy());
         else model.remove("sourceMetadataGaps");
@@ -291,12 +311,12 @@ public class ExperimentService {
         // They have no full template baseline from which to expand a laboratory workbook.
         var contentOnly = isContentOnlyImport(current);
         if (contentOnly) model.put("importProcessingMode", "CONTENT_ONLY");
-        if(!contentOnly && com.jsd.aird.shared.lab.LabWorkbook.supported(current.templateSnapshot())) {
+        if(!confirmingData && !contentOnly && com.jsd.aird.shared.lab.LabWorkbook.supported(current.templateSnapshot())) {
             var working=ExperimentWorkbookPreparation.prepare(json,templates,actor.organizationId(),current.templateVersionId(),
                     current.templateSnapshot(),model.path("documentSnapshot"),id);
             model=com.jsd.aird.shared.lab.LabWorkbook.extract(json,working,model,id.toString());
         }
-        if(com.jsd.aird.shared.excel.WorkbookStructure.instance(model.path("documentSnapshot")).isObject())
+        if(!confirmingData && com.jsd.aird.shared.excel.WorkbookStructure.instance(model.path("documentSnapshot")).isObject())
             model=com.jsd.aird.shared.excel.WorkbookStructure.project(json,model.path("documentSnapshot"),model);
         var templateVersionId = command.templateVersionId();
         var templateSnapshotHash = command.templateSnapshotHash();
@@ -347,7 +367,8 @@ public class ExperimentService {
         }
         if (fieldDefinitionReviews != null) fieldDefinitionReviews.remember(actor.organizationId(), current.templateVersionId(),
                 com.jsd.aird.shared.excel.WorkbookStructure.instance(model.path("documentSnapshot")), actor.userId());
-        var result = normalize(repository.saveDraft(
+        timing.checkpoint("prepare");
+        var saved = repository.saveDraft(
                 actor.organizationId(),
                 id,
                 revision,
@@ -368,12 +389,19 @@ public class ExperimentService {
                 ),
                 actor.userId(),
                 actor.username()
-        ));
+        );
+        timing.checkpoint("database-write");
+        var result = normalize(saved);
+        timing.checkpoint("acknowledge");
         return result;
     }
 
     public TemplateDataReview templateDataReview(UUID id) {
-        var detail = detail(id);
+        return templateDataReview(detail(id));
+    }
+
+    private TemplateDataReview templateDataReview(Detail detail) {
+        var id = detail.summary().id();
         var templateImport = isTemplateImport(detail);
         if (detail.templateVersionId() == null || templates == null
                 || (!templateImport && !isOnlineTemplate(detail))) {
@@ -385,7 +413,10 @@ public class ExperimentService {
         var reviewSnapshot=detail.editModel().path("documentSnapshot").deepCopy();
         var reviewInstance=com.jsd.aird.shared.excel.WorkbookStructure.instance(reviewSnapshot);
         if(reviewInstance.isObject()&&com.jsd.aird.shared.lab.LabWorkbook.supported(reviewSnapshot)) {
-            var execution=templates.prepareWorkbookReview(actor.organizationId(),detail.templateVersionId(),reviewSnapshot,reviewInstance);
+            // Saved unified workbooks already use the published structure. Keep
+            // validation, but avoid reopening/rebinding/extracting that workbook.
+            reviewInstance=com.jsd.aird.shared.excel.WorkbookStructure.validate(json,reviewSnapshot,reviewInstance);
+            var execution=templates.describePreparedWorkbook(actor.organizationId(),detail.templateVersionId(),reviewSnapshot,reviewInstance);
             definition=execution.definition();bindings=execution.bindings();
         }
         var values = detail.editModel().path("dynamicValues");
@@ -395,7 +426,8 @@ public class ExperimentService {
                 : templateReviewMatches(marker, detail.templateVersionId(), detail.editModel());
         return new TemplateDataReview(detail.templateVersionId(), definition.contractHash(), definition.fields(),
                 bindings, values.deepCopy(), confirmed,
-                com.jsd.aird.shared.excel.WorkbookStructure.seed(json,detail.editModel().path("documentSnapshot").deepCopy(),definition.schema(),definition.mappings(),id.toString()));
+                reviewInstance.path("version").asInt()==2 ? reviewInstance.deepCopy() :
+                com.jsd.aird.shared.excel.WorkbookStructure.seed(json,reviewSnapshot,definition.schema(),definition.mappings(),id.toString()));
     }
 
     public Detail confirmTemplateData(UUID id, long revision) {
@@ -408,7 +440,7 @@ public class ExperimentService {
             if (!hasWorkbookData(snapshot))
                 throw validation("导入实验没有可确认的工作表数据");
             if (isTemplateImport(current)) {
-                var review = templateDataReview(id);
+                var review = templateDataReview(current);
                 if (review.fields().isEmpty() || review.bindings().isEmpty())
                     throw validation("实验模板没有可确认的字段绑定");
                 for (var field : review.fields()) {
@@ -424,15 +456,14 @@ public class ExperimentService {
                 }
             }
             model.withObject("importDataReview").put("confirmed", true)
-                    .put("confirmedRevision", revision + 1)
-                    .put("dataHash", importDataHash(snapshot));
+                    .put("confirmedRevision", revision + 1);
             var summary = current.summary();
             return saveInternal(id, revision, new DraftCommand(summary.experimentNo(), summary.title(),
                     summary.categoryId(), summary.categoryName(), summary.projectId(), summary.stageId(),
                     summary.taskId(), summary.ownerName(), summary.experimentDate(), current.templateVersionId(),
-                    current.templateSnapshotHash(), current.templateSnapshot(), model), true);
+                    current.templateSnapshotHash(), current.templateSnapshot(), model), true, current);
         }
-        var review = templateDataReview(id);
+        var review = templateDataReview(current);
         for (var field : review.fields()) {
             var value = valueAt(review.values(), field);
             if (field.required() && !hasRequiredValue(value))
@@ -444,13 +475,12 @@ public class ExperimentService {
         }
         var model = (ObjectNode) current.editModel().deepCopy();
         model.withObject("templateDataReview").put("required", true).put("confirmed", true)
-                .put("confirmedRevision", revision + 1)
-                .put("dataHash", dataHash(review.templateVersionId(), reviewData(current.editModel())));
+                .put("confirmedRevision", revision + 1);
         var summary = current.summary();
         return saveInternal(id, revision, new DraftCommand(summary.experimentNo(), summary.title(),
                 summary.categoryId(), summary.categoryName(), summary.projectId(), summary.stageId(),
                 summary.taskId(), summary.ownerName(), summary.experimentDate(), current.templateVersionId(),
-                current.templateSnapshotHash(), current.templateSnapshot(), model), true);
+                current.templateSnapshotHash(), current.templateSnapshot(), model), true, current);
     }
 
     private JsonNode valueAt(JsonNode values, TemplateDataImportFacade.FieldDefinition field) {
@@ -691,7 +721,7 @@ public class ExperimentService {
                 }
             }
             if (isOnlineTemplate(current)) {
-                var review = templateDataReview(id);
+                var review = templateDataReview(current);
                 if (!review.confirmed()) throw validation("请先确认本次实验数据，再提交审核");
             }
             if (!contentOnly && model.path("recognizedFields").isArray()) {

@@ -13,6 +13,7 @@ public interface ExperimentAssemblyRepository {
     void upsertPlan(UUID organizationId, UUID importJobId, PlanRow row, UUID actorId);
     void supersedeOtherPlans(UUID organizationId, UUID importJobId, String activeAssemblyKey);
     void lockAssembly(UUID organizationId, UUID importJobId, String assemblyKey);
+    default void lockSource(UUID organizationId, UUID importJobId) {}
     Optional<Link> find(UUID organizationId, UUID importJobId, String assemblyKey);
     boolean markRunning(UUID organizationId, UUID importJobId, String assemblyKey);
     boolean prepareRetry(UUID organizationId, UUID importJobId, String assemblyKey, String planHash);
@@ -23,7 +24,14 @@ public interface ExperimentAssemblyRepository {
     record SourceImport(UUID id, UUID sourceFileId, String sourceFileName, String sourceSha256,
                         UUID templateVersionId, int importContractVersion, String contractHash,
                         String status, String importPurpose, UUID targetExperimentCategoryId,
-                        UUID importedBy, Instant importedAt, List<SourceRecord> records) {}
+                        UUID importedBy, Instant importedAt, List<SourceRecord> records, String revision) {
+        public SourceImport(UUID id, UUID sourceFileId, String sourceFileName, String sourceSha256,
+                UUID templateVersionId, int importContractVersion, String contractHash, String status,
+                String importPurpose, UUID targetExperimentCategoryId, UUID importedBy, Instant importedAt, List<SourceRecord> records) {
+            this(id,sourceFileId,sourceFileName,sourceSha256,templateVersionId,importContractVersion,contractHash,status,
+                    importPurpose,targetExperimentCategoryId,importedBy,importedAt,records,null);
+        }
+    }
     record SourceRecord(UUID id, String recordKey, String sheetId, String sheetName, Integer rowNumber,
                         JsonNode effectiveData, List<SourceAnchor> anchors) {}
     record SourceAnchor(String fieldCode, String bindingId, String valuePath, String labelPath,

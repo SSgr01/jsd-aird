@@ -1,5 +1,6 @@
 import { StatusTag } from '@/components/status/StatusTag';
 import { reviewContentKey } from './review-content';
+import { measureProcessing, startOperationMetric } from '@/services/performance/metrics';
 import { WorkspaceFrame, WorkspaceMaximizeButton } from '@/components/workspace/WorkspaceFrame';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { instanceWorkbookView } from '@/features/data-workbench/instance-workbook-view';
@@ -196,6 +197,7 @@ export function ExperimentWorkspacePage({
   const editGenerationRef = useRef(0);
   const [versions, setVersions] = useState<ExperimentVersion[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<ExperimentVersion>();
+  const presentationGeneration = useRef(0);
   const [view, setView] = useState<WorkspaceView>('preview');
   const [workbenchSelection, setWorkbenchSelection] = useState<EditorSelection>();
   const workbookSyncFrame = useRef<number>();
@@ -237,6 +239,21 @@ export function ExperimentWorkspacePage({
     !detail || ['COMPLETED', 'VOIDED', 'PENDING_REVIEW', 'APPROVED'].includes(detail.summary.status);
 
   const beginLoad = useWorkspaceLoadGeneration();
+  // Status changes do not change business content. Keep the live editor mounted
+  // and load its read-only projection independently of the workflow button.
+  const loadPresentation = useCallback(async (current: ExperimentDetail) => {
+    const generation = ++presentationGeneration.current;
+    try {
+      const result = await getExperimentPresentation(current.summary.id, current.summary.revision);
+      if (generation !== presentationGeneration.current || detailRef.current?.summary.id !== current.summary.id
+        || detailRef.current.summary.revision !== current.summary.revision) return;
+      setPresentationSnapshot(result.snapshot);
+      setPresentationLocations(result.locationMap);
+    } catch {
+      // The current authoritative workbook remains usable when projection fails.
+    }
+  }, []);
+  useEffect(() => () => { presentationGeneration.current++; }, [id]);
   const load = useCallback(async () => {
     const isCurrent = beginLoad();
     setLoadError(undefined);
@@ -247,7 +264,7 @@ export function ExperimentWorkspacePage({
       const d = await trackSnapshot(getExperiment(id));
       if (!isCurrent()) return;
       preloadWorkspaceEditor(documentFormatOf(d.editModel ?? {}, d.templateSnapshot));
-      const history = await listVersions(id);
+      const history = requestedVersion && requestedVersion !== d.currentVersionId ? await listVersions(id) : [];
       if (!isCurrent()) return;
       setVersions(history);
       const pinned = requestedVersion ? history.find(version => version.id === requestedVersion) : undefined;
@@ -270,7 +287,10 @@ export function ExperimentWorkspacePage({
       detailRef.current = d;
       setDetail(d);
       setEditModel(nextModel);
-      const review = await (nextModel.importProcessingMode !== 'CONTENT_ONLY' && (nextModel.templateDataReview?.required ||
+      // Unified workbooks already carry the server-validated field definition.
+      // Legacy templates still need the dedicated review response.
+      const embeddedDefinition = labDefinition(nextModel.documentSnapshot) && readWorkbookInstance(nextModel.documentSnapshot ?? {})?.version === 2;
+      const review = await (!embeddedDefinition && nextModel.importProcessingMode !== 'CONTENT_ONLY' && (nextModel.templateDataReview?.required ||
       (d.summary.sourceType === 'TEMPLATE' && Boolean(d.templateVersionId)) ||
       (['EXCEL_IMPORT', 'OCR_IMPORT'].includes(d.summary.sourceType) &&
         Boolean(nextModel.sourceImportJobId) &&
@@ -279,12 +299,12 @@ export function ExperimentWorkspacePage({
         : undefined);
       if (!isCurrent()) return;
       setTemplateReview(review);
-      const initialSnapshot = buildExperimentSnapshot(
+      const initialSnapshot = measureProcessing('experiment-snapshot', () => buildExperimentSnapshot(
         nextModel,
         d.currentVersionId ?? id,
         d.templateSnapshot,
-      );
-      const verified = resolveInstanceDefinition(initialSnapshot, review?.templateInstance);
+      ));
+      const verified = embeddedDefinition ? undefined : resolveInstanceDefinition(initialSnapshot, review?.templateInstance);
       if (verified) {
         writeWorkbookInstance(initialSnapshot, verified);
         nextModel.documentSnapshot = initialSnapshot;
@@ -295,10 +315,7 @@ export function ExperimentWorkspacePage({
       setSelectedVersion(pinned);
       setView(pinned ? 'versions' : editable && canUpdate ? 'edit' : 'preview');
       if (!editable && nextModel.importProcessingMode !== 'CONTENT_ONLY' && labDefinition(initialSnapshot)) {
-        const result = await getExperimentPresentation(id, d.summary.revision);
-        if (!isCurrent()) return;
-        setPresentationSnapshot(result.snapshot);
-        setPresentationLocations(result.locationMap);
+        void loadPresentation(d);
       }
       setSaveState('SAVED');
       editGenerationRef.current = 0;
@@ -310,7 +327,7 @@ export function ExperimentWorkspacePage({
       if (!isCurrent()) return;
       setLoadError(error instanceof Error ? error.message : '实验本加载失败');
     }
-  }, [id, beginLoad, requestedVersion, canUpdate]);
+  }, [id, beginLoad, requestedVersion, canUpdate, loadPresentation]);
 
   useEffect(() => {
     setDetail(undefined);
@@ -332,7 +349,10 @@ export function ExperimentWorkspacePage({
       editorRef.current?.getSnapshot() ??
       snapshot ??
       buildExperimentSnapshot(editModel, detail.currentVersionId ?? id, detail.templateSnapshot);
-    const model = parseExperimentSnapshot(currentSnapshot, editModel);
+    // The server owns the unified workbook projection. Do not also rebuild all
+    // experimental records on the main thread before sending the same snapshot.
+    if (labDefinition(currentSnapshot)) return { ...editModel, documentSnapshot: currentSnapshot };
+    const model = measureProcessing('experiment-parse', () => parseExperimentSnapshot(currentSnapshot, editModel));
     if (labDefinition(currentSnapshot)) return model;
     if (!editorRef.current || !recognizedBindings.length) return model;
     let values = model.dynamicValues ?? {};
@@ -547,6 +567,23 @@ export function ExperimentWorkspacePage({
     ...projectionFieldViews(currentInstance.execution?.listProjections ?? [], currentInstance.model, currentInstance.mapping).map(v => v.field),
   ].filter(field => !displayBindings.some(b => b.bindingId === field.bindingId)).map(field => field.id)) : undefined;
   const recognizedBindings = currentInstance?.mapping ?? (labDefinition(labSource) ? labBindings(labSource) : legacyBindings);
+  const unifiedWorkbench = useMemo(() => {
+    if (!fullSource || editModel.importProcessingMode === 'CONTENT_ONLY' || !labDefinition(fullSource)) return undefined;
+    const visibleSnapshot = view === 'preview' ? (presentationSnapshot ?? fullSource) : fullSource;
+    const structureInstance = currentInstance ?? labWorkbookInstance(visibleSnapshot);
+    const savedIssues = (editModel.templateInstance as { issues?: InstanceIssue[] } | undefined)?.issues ?? [];
+    const issues = [...new Map(savedIssues.map(issue => [
+      [issue.code, issue.fieldId, issue.sheetId, issue.address, issue.message].join('|'), issue,
+    ])).values()];
+    const definitionReviews = definitionReviewItems(structureInstance, issues);
+    const remainingIssues = issues.filter(issue => !issueRepresentedByDefinition(issue, definitionReviews));
+    const editable = !statusLocked && canUpdate && isDesktop && view === 'edit';
+    const workbook = measureProcessing('experiment-fields', () => presentWorkbookFields(experimentTemplateWorkbook(
+      visibleSnapshot, editable, remainingIssues.map(issue => ({ ...issue, address: issue.address ?? '' })),
+    ), structureInstance));
+    return { structureInstance, definitionReviews, remainingIssues, workbook };
+  }, [fullSource, view, presentationSnapshot, snapshot, currentInstance, editModel.importProcessingMode,
+    editModel.templateInstance, statusLocked, canUpdate, isDesktop]);
   const handleRecognizedValue = (binding: TemplateBinding, value: unknown) => {
     if (value === undefined || !binding.dataPath) return;
     const dataPath = binding.dataPath;
@@ -617,7 +654,8 @@ export function ExperimentWorkspacePage({
   };
 
   const confirmTemplateData = async () => {
-    if (!detail || (!templateReview && detail.summary.sourceType !== 'EXCEL_IMPORT')) return;
+    if (!detail || (!templateReview && !labDefinition(editModel.documentSnapshot) && detail.summary.sourceType !== 'EXCEL_IMPORT')) return;
+    const finishMetric = startOperationMetric('experiment-confirm');
     setBusy(true);
     const session = saveSession.current,
       editor = editorRef.current;
@@ -631,9 +669,10 @@ export function ExperimentWorkspacePage({
       flushEditorChanges(editor);
       const generation = editGenerationRef.current,
         revision = editor?.getContentRevision?.();
-      const draft = draftModelRef.current();
-      const reviewedContent = reviewContentKey(draft);
-      const saved = await persistDraft(draft);
+      const changed = hasUnsavedChanges();
+      const draft = changed ? draftModelRef.current() : undefined;
+      const reviewedContent = draft ? reviewContentKey(draft) : undefined;
+      const saved = draft ? await persistDraft(draft) : detailRef.current;
       if (!saved) return;
       if (
         !isCurrent() ||
@@ -663,6 +702,7 @@ export function ExperimentWorkspacePage({
     } finally {
       resume();
       if (isCurrent()) setBusy(false);
+      finishMetric();
     }
   };
 
@@ -788,11 +828,16 @@ export function ExperimentWorkspacePage({
       editor = editorRef.current;
     const isCurrent = () =>
       session.active && saveSession.current === session && editorRef.current === editor;
-    setSaveState('SAVING');
+    const finishMetric = startOperationMetric('experiment-save');
     try {
       await Promise.all(pendingTemplateWrites.current);
       if (!isCurrent()) return false;
       flushEditorChanges(editor);
+      if (!hasUnsavedChanges()) {
+        setSaveState('SAVED');
+        return true;
+      }
+      setSaveState('SAVING');
       const generation = editGenerationRef.current,
         revision = editor?.getContentRevision?.();
       const savedDetail = await persistDraft(
@@ -823,6 +868,7 @@ export function ExperimentWorkspacePage({
     } finally {
       if (session.active && saveSession.current === session && editorRef.current !== editor)
         setSaveState('DIRTY');
+      finishMetric();
     }
   };
 
@@ -884,8 +930,16 @@ export function ExperimentWorkspacePage({
     void act(action);
   };
 
+  const hasUnsavedChanges = () => {
+    const editor = editorRef.current;
+    const baseline = savedEditorRef.current?.editor === editor ? savedEditorRef.current.revision : 0;
+    return editGenerationRef.current !== savedGenerationRef.current
+      || (editor?.getContentRevision !== undefined && editor.getContentRevision() !== baseline);
+  };
+
   const act = async (action: PublishAction) => {
     if (!detail) return;
+    const finishMetric = startOperationMetric(`experiment-${action}`);
     flushEditorChanges(editorRef.current);
     const editor = editorRef.current;
     const baseline =
@@ -897,6 +951,7 @@ export function ExperimentWorkspacePage({
       (editor?.getContentRevision && editor.getContentRevision() !== baseline)
     ) {
       void message.warning('当前内容尚未保存，请先保存后再执行流程操作');
+      finishMetric();
       return;
     }
     setBusy(true);
@@ -904,16 +959,28 @@ export function ExperimentWorkspacePage({
     const isCurrent = () => session.active && saveSession.current === session;
     const resume = pauseWorkspaceInputs(workspaceRootRef.current);
     try {
-      await actExperiment(id, action, detail.summary.revision);
+      const updated = await actExperiment(id, action, detail.summary.revision);
       if (!isCurrent()) return;
+      detailRef.current = updated;
+      setDetail(updated);
+      // Workflow-only acknowledgements cannot replace the editor's workbook.
+      setEditModel(current => ({ ...current,
+        templateDataReview: updated.editModel.templateDataReview,
+        importDataReview: updated.editModel.importDataReview,
+      }));
+      setTemplateReview(current => current ? { ...current, confirmed: Boolean(updated.editModel.templateDataReview?.confirmed) } : current);
+      if (['COMPLETED', 'VOIDED', 'PENDING_REVIEW', 'APPROVED'].includes(updated.summary.status)) {
+        setView('preview');
+        if (labDefinition(editModel.documentSnapshot ?? snapshot) && !presentationSnapshot) void loadPresentation(updated);
+      }
       void message.success('状态已更新');
-      await load();
     } catch (error) {
       if (isCurrent())
         void message.error(error instanceof Error ? error.message : '实验状态更新失败');
     } finally {
       resume();
       if (isCurrent()) setBusy(false);
+      finishMetric();
     }
   };
 
@@ -924,16 +991,27 @@ export function ExperimentWorkspacePage({
       return;
     }
     setBusy(true);
+    const session = saveSession.current;
+    const finishMetric = startOperationMetric(`experiment-${reviewAction}`);
     try {
-      await actExperiment(id, reviewAction, detail.summary.revision, reviewReason.trim());
+      const updated = await actExperiment(id, reviewAction, detail.summary.revision, reviewReason.trim());
+      if (!session.active || saveSession.current !== session) return;
+      presentationGeneration.current++;
+      detailRef.current = updated;
+      setDetail(updated);
+      setEditModel(current => ({ ...current, templateDataReview: updated.editModel.templateDataReview,
+        importDataReview: updated.editModel.importDataReview }));
+      setPresentationSnapshot(undefined);
+      setPresentationLocations({});
+      setView(reviewAction === 'return' && canUpdate ? 'edit' : 'preview');
       setReviewAction(undefined);
       setReviewReason('');
       void message.success(voiding ? '实验已作废' : '实验审核已驳回');
-      await load();
     } catch (error) {
       void message.error(error instanceof Error ? error.message : voiding ? '作废失败' : '驳回失败');
     } finally {
-      setBusy(false);
+      if (session.active && saveSession.current === session) setBusy(false);
+      finishMetric();
     }
   };
 
@@ -1041,6 +1119,7 @@ export function ExperimentWorkspacePage({
   };
 
   const changeView = async (key: WorkspaceView) => {
+    const session = saveSession.current;
     if (key === 'preview' && labDefinition(editModel.documentSnapshot ?? snapshot)) {
       if (view === 'edit' && saveState !== 'SAVED' && !(await save())) return;
       const full = view === 'edit' ? editorRef.current?.getSnapshot() : undefined;
@@ -1049,6 +1128,7 @@ export function ExperimentWorkspacePage({
       if (!current) return;
       try {
         const projected = await getExperimentPresentation(id, current.summary.revision);
+        if (!session.active || saveSession.current !== session || detailRef.current?.summary.revision !== current.summary.revision) return;
         setPresentationSnapshot(projected.snapshot);
         setPresentationLocations(projected.locationMap);
       } catch (error) {
@@ -1059,6 +1139,16 @@ export function ExperimentWorkspacePage({
     if (saveState !== 'SAVED' && key === 'versions') {
       void message.warning('当前内容尚未保存，请先保存后再查看版本记录');
       return;
+    }
+    if (key === 'versions') {
+      try {
+        const history = await listVersions(id);
+        if (!session.active || saveSession.current !== session) return;
+        setVersions(history);
+      } catch (error) {
+        void message.error(error instanceof Error ? error.message : '版本读取失败');
+        return;
+      }
     }
     setSelectedVersion(undefined);
     setWorkbenchSelection(undefined);
@@ -1094,11 +1184,11 @@ export function ExperimentWorkspacePage({
   const unifiedDefinition = contentOnlyImport ? undefined : labDefinition(editModel.documentSnapshot ?? snapshot);
   const showExcelRecognition =
     !contentOnlyImport &&
-    !templateReview &&
+    !templateReview && !currentInstance &&
     documentFormatOf(editModel, snapshot) === 'excel' &&
     Array.isArray(editModel.recognizedFields);
   const templateDataConfirmed = Boolean(
-    templateReview?.confirmed &&
+    (templateReview?.confirmed ?? true) &&
     saveState === 'SAVED' &&
     editModel.templateDataReview?.confirmed &&
     editModel.templateDataReview.confirmedRevision === detail.summary.revision,
@@ -1154,7 +1244,7 @@ export function ExperimentWorkspacePage({
           审核：{pendingFieldCount || pendingRegionCount ? '待确认' : '已确认'}
         </Tag>
       ) : null}
-      {!contentOnlyImport && templateReview && !importedData ? (
+      {!contentOnlyImport && (templateReview || editModel.templateDataReview?.required) && !importedData ? (
         <Tag color={templateDataConfirmed ? 'success' : 'warning'}>
           数据：{templateDataConfirmed ? '已核对' : '待核对'}
         </Tag>
@@ -1763,27 +1853,8 @@ export function ExperimentWorkspacePage({
       )}
     </>
   );
-  if (unifiedDefinition) {
-    const visibleSnapshot =
-      view === 'preview'
-        ? (presentationSnapshot ?? snapshot)
-        : (editModel.documentSnapshot ?? snapshot);
-    const structureInstance = currentInstance ?? labWorkbookInstance(visibleSnapshot);
-    const savedIssues =
-      (editModel.templateInstance as { issues?: InstanceIssue[] } | undefined)?.issues ?? [];
-    const issues = [...new Map(
-      savedIssues.map(issue => [
-        [issue.code, issue.fieldId, issue.sheetId, issue.address, issue.message].join('|'),
-        issue,
-      ]),
-    ).values()];
-    const definitionReviews = definitionReviewItems(structureInstance, issues);
-    const remainingIssues = issues.filter(issue => !issueRepresentedByDefinition(issue, definitionReviews));
-    const workbook = presentWorkbookFields(experimentTemplateWorkbook(
-      visibleSnapshot,
-      editable,
-      remainingIssues.map(issue => ({ ...issue, address: issue.address ?? '' })),
-    ), structureInstance);
+  if (unifiedDefinition && unifiedWorkbench) {
+    const { definitionReviews, remainingIssues, workbook } = unifiedWorkbench;
     const selectField = (field: DataFieldValueView) => {
       if (field.sheetId && field.address)
         editorRef.current?.focusCell?.(field.sheetId, field.address);

@@ -13,7 +13,7 @@ export const experimentStatusLabels: Record<string, string> = {
 
 export function linkedExperimentStatusText(items?: LinkedExperimentStatus[]): string {
   if (!items?.length) return '实验状态暂不可用';
-  if (items.length === 1) return `实验：${experimentStatusLabels[items[0].status] || '状态暂不可用'}`;
+  if (items.length === 1) return `实验：${experimentStatusLabels[items[0]!.status] || '状态暂不可用'}`;
   const counts = new Map<string, number>();
   items.forEach(item => counts.set(item.status, (counts.get(item.status) || 0) + 1));
   return `已生成 ${items.length} 个实验：${[...counts].map(([status, count]) => `${experimentStatusLabels[status] || '状态暂不可用'} ${count}`).join('、')}`;

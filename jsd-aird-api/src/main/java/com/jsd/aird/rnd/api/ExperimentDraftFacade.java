@@ -16,6 +16,13 @@ public interface ExperimentDraftFacade {
 
     ImportedDraft createImportedDraft(ImportedDraftCommand command);
 
+    PreparedImportedDraft prepareImportedDraft(ImportedDraftCommand command);
+
+    ImportedDraft createPreparedImportedDraft(PreparedImportedDraft prepared);
+
+    /** Internal RND preparation result; never accepted from an HTTP request. */
+    record PreparedImportedDraft(UUID experimentId, UUID versionId, ImportedDraftCommand command, JsonNode editModel) {}
+
     ImportedDraft createResearchDraft(ResearchDraftCommand command);
 
     record CategoryRef(UUID id, String code, String name) {}

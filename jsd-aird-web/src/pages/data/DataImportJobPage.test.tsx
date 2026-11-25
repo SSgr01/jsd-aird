@@ -107,6 +107,7 @@ it('keeps later edits dirty and uses the acknowledged revision on the next save'
   await waitFor(() => expect(api.saveWorkbookDraft).toHaveBeenCalledTimes(2));
   expect(api.saveWorkbookDraft.mock.calls[1]).toEqual(['one', expect.objectContaining({ revision: '2' }), false]);
   await waitFor(() => expect(screen.queryByText(dirtyNotice)).not.toBeInTheDocument());
+  expect(api.getImportWorkbookSnapshot).toHaveBeenCalledTimes(1);
 });
 
 it('does not reload the previous record when its save finishes after navigation', async () => {

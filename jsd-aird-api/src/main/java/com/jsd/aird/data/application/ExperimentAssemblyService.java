@@ -119,7 +119,7 @@ public class ExperimentAssemblyService {
     }
 
     public SyncStatus status(UUID importJobId) {
-        var actor=ActorContext.required();var plan=plan(actor.organizationId(),importJobId,actor.userId());
+        var actor=ActorContext.required();var plan=plan(actor.organizationId(),importJobId,actor.userId(),false);
         var links=repository.links(actor.organizationId(),importJobId).stream()
                 .map(link->reconcile(actor.organizationId(),importJobId,link)).toList();
         var visible=experimentStatuses==null?List.<com.jsd.aird.rnd.api.ExperimentStatusFacade.Summary>of()
@@ -140,12 +140,12 @@ public class ExperimentAssemblyService {
         if(categoryId!=null)experiments.requireActiveCategory(organizationId,categoryId);
         var already=repository.find(organizationId,importJobId,assemblyKey).orElse(null);
         if(already!=null&&already.experimentId()!=null)return created(already);
-        var plan=plan(organizationId,importJobId,actorId);
+        var source=repository.load(organizationId,importJobId);
+        var plan=plan(organizationId,source,actorId,true);
         var candidate=plan.candidates().stream().filter(c->c.assemblyKey().equals(assemblyKey)).findFirst()
                 .orElseThrow(()->validation("组装计划已变化，请重新预览"));
         if(!candidate.planHash().equals(expectedPlanHash))throw validation("组装计划已变化，请重新预览");
         if(!Set.of("READY","RUNNING").contains(candidate.status()))throw validation("组装计划仍有冲突或已在处理中，请重新预览");
-        var source=repository.load(organizationId,importJobId);
         /*
          * The isolated local acceptance profile deliberately uses local object
          * storage while published template rows may still point at a MinIO
@@ -167,26 +167,33 @@ public class ExperimentAssemblyService {
             if (exception.errorCode() != ApiErrorCode.FILE_NOT_READY) throw exception;
         }
         var prepared=new Prepared(source,sourceSnapshot,templateVersionId,templateSnapshotHash,templateSnapshot);
-        return Objects.requireNonNull(writes.execute(tx->{
+        var draft=experiments.prepareImportedDraft(draftCommand(organizationId,actorId,actorName,categoryId,
+                projectId,stageId,taskId,candidate,prepared));
+        try (var timing = new com.jsd.aird.shared.observability.OperationTiming("experiment-generation-write")) {
+        return Objects.requireNonNull(timing.phase("transaction", () -> writes.execute(tx->{
             jobs.requireExecution(context,false);
+            timing.checkpoint("lease-lock");
             requireExperimentCreate(organizationId,actorId);
             if(categoryId!=null)experiments.requireActiveCategory(organizationId,categoryId);
+            repository.lockSource(organizationId,importJobId);
             repository.lockAssembly(organizationId,importJobId,assemblyKey);
+            timing.checkpoint("source-and-assembly-lock");
             var existing=repository.find(organizationId,importJobId,assemblyKey).orElseThrow();
             if(existing.experimentId()!=null)return created(existing);
-            var current=plan(organizationId,importJobId,actorId).candidates().stream()
-                    .filter(c->c.assemblyKey().equals(assemblyKey)).findFirst().orElseThrow(()->validation("组装计划已变化，请重新预览"));
             var currentSource=repository.load(organizationId,importJobId);
-            if(!expectedPlanHash.equals(current.planHash())||!source.equals(currentSource))
+            if(!expectedPlanHash.equals(existing.planHash())||!candidate.contentHash().equals(existing.contentHash())||!source.equals(currentSource))
                 throw validation("读取文件期间导入资料已变化，请重新预览后生成");
             if(!repository.markRunning(organizationId,importJobId,assemblyKey))throw validation("该组装项已被处理");
-            return saveDraft(organizationId,actorId,actorName,importJobId,assemblyKey,categoryId,projectId,stageId,taskId,current,prepared);
-        }));
+            timing.checkpoint("source-recheck");
+            var created=saveDraft(organizationId,actorId,importJobId,assemblyKey,candidate,prepared,draft);
+            timing.checkpoint("create-and-link");
+            return created;
+        })));
+        }
     }
 
-    private ExperimentDraftFacade.ImportedDraft saveDraft(UUID organizationId,UUID actorId,String actorName,
-            UUID importJobId,String assemblyKey,UUID categoryId,UUID projectId,UUID stageId,UUID taskId,
-            Candidate candidate,Prepared prepared) {
+    private ExperimentDraftFacade.ImportedDraftCommand draftCommand(UUID organizationId,UUID actorId,String actorName,
+            UUID categoryId,UUID projectId,UUID stageId,UUID taskId,Candidate candidate,Prepared prepared) {
         var source=prepared.source();
         var sourceSnapshot=prepared.sourceSnapshot();
         var model=(com.fasterxml.jackson.databind.node.ObjectNode)candidate.editModel().deepCopy();
@@ -194,13 +201,19 @@ public class ExperimentAssemblyService {
         model.put("sourceFileId", source.sourceFileId().toString());
         model.put("sourceFileName", source.sourceFileName());
         model.put("documentFormat", "excel");
-        var created=experiments.createImportedDraft(new ExperimentDraftFacade.ImportedDraftCommand(
+        return new ExperimentDraftFacade.ImportedDraftCommand(
                 organizationId,actorId,actorName,model.path("title").asText(),categoryId,
                 source.sourceFileName().toLowerCase(java.util.Locale.ROOT)
                         .matches(".*\\.(docx|png|jpg|jpeg|gif|webp|bmp|tif|tiff)")
                         ?"OCR_IMPORT":"EXCEL_IMPORT",
                 projectId,stageId,taskId,blank(model.path("sourceOwnerName").asText()),date(model.path("sourceExperimentDate").asText()),
-                prepared.templateVersionId(),prepared.templateSnapshotHash(),prepared.templateSnapshot(),model,sourceSnapshot.path("importConfirmation")));
+                prepared.templateVersionId(),prepared.templateSnapshotHash(),prepared.templateSnapshot(),model,sourceSnapshot.path("importConfirmation"));
+    }
+
+    private ExperimentDraftFacade.ImportedDraft saveDraft(UUID organizationId,UUID actorId,UUID importJobId,String assemblyKey,
+            Candidate candidate,Prepared prepared,ExperimentDraftFacade.PreparedImportedDraft draft) {
+        var model=draft.command().editModel();
+        var created=experiments.createPreparedImportedDraft(draft);
         repository.markSynced(organizationId,importJobId,assemblyKey,created.experimentId(),created.experimentVersionId(),created.experimentNo());
         var coordinates=json.createObjectNode();
         coordinates.set("sourceRecordKeys",json.valueToTree(candidate.sourceRecordKeys()));
@@ -253,15 +266,23 @@ public class ExperimentAssemblyService {
             UUID templateVersionId,String templateSnapshotHash,com.fasterxml.jackson.databind.JsonNode templateSnapshot){}
 
     private AssemblyPlan plan(UUID org,UUID job,UUID actor){
-        var source=repository.load(org,job);if(!"COMPLETED".equals(source.status()))throw validation("数据导入尚未提交完成");
+        return plan(org,job,actor,true);
+    }
+
+    private AssemblyPlan plan(UUID org,UUID job,UUID actor,boolean persist){
+        return plan(org,repository.load(org,job),actor,persist);
+    }
+
+    private AssemblyPlan plan(UUID org,ExperimentAssemblyRepository.SourceImport source,UUID actor,boolean persist){
+        var job=source.id();if(!"COMPLETED".equals(source.status()))throw validation("数据导入尚未提交完成");
         if(source.importContractVersion()!=9)throw validation("只有V9实验数据模板可以生成实验草稿");
         var definition=templates.getVersion(org,source.templateVersionId());var contract=definition.importContract();
         if(contract==null||!"EXPERIMENT_DATA".equals(contract.path("templateUsage").asText()))throw validation("当前模板不是实验数据模板");
         var plan=assembler.assemble(source,contract.path("experimentImport"));
-        plan.candidates().forEach(c->repository.upsertPlan(org,job,new ExperimentAssemblyRepository.PlanRow(
+        if(persist)plan.candidates().forEach(c->repository.upsertPlan(org,job,new ExperimentAssemblyRepository.PlanRow(
                 c.assemblyKey(),c.parentAssemblyKey(),c.sourceIdentity(),c.sourceIdentityType(),json.valueToTree(c.sourceRecordKeys()),
                 json.valueToTree(c.sharedContextRecordKeys()),c.planHash(),c.contentHash(),c.status(),c.conflicts(),c.warnings()),actor));
-        repository.supersedeOtherPlans(org,job,plan.candidates().getFirst().assemblyKey());
+        if(persist)repository.supersedeOtherPlans(org,job,plan.candidates().getFirst().assemblyKey());
         var persisted=repository.links(org,job).stream().map(link->reconcile(org,job,link)).collect(java.util.stream.Collectors.toMap(
                 ExperimentAssemblyRepository.Link::assemblyKey,item->item,(a,b)->a));
         var candidates=plan.candidates().stream().map(c->{

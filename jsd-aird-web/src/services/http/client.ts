@@ -7,7 +7,8 @@ import type { ApiErrorResponse } from '@/services/http/types';
 import { getSessionEpoch, notifyAuthRequired } from '@/services/http/auth-events';
 import { generateUUID } from '@/utils/uuid';
 import { clearDomain, domainsForRequest, invalidateDomains, primaryDomainForRequest } from '@/services/query/query-client';
-import { recordRequestMetric } from '@/services/performance/metrics';
+import { operationMetricActive, recordRequestMetric } from '@/services/performance/metrics';
+import { invalidateInflightReads } from './inflight-reads';
 
 type RetriableRequestConfig = AxiosResponse['config'] & { _csrfRetried?: boolean; _sessionEpoch?: number; _startedAt?: number; _sampled?: boolean };
 
@@ -47,10 +48,11 @@ interface CsrfResponse {
 httpClient.interceptors.request.use(async (config) => {
   (config as RetriableRequestConfig)._sessionEpoch ??= getSessionEpoch();
   (config as RetriableRequestConfig)._startedAt = performance.now();
-  (config as RetriableRequestConfig)._sampled = Math.random() < 0.1;
+  (config as RetriableRequestConfig)._sampled = import.meta.env.DEV || operationMetricActive() || Math.random() < 0.1;
   config.headers.set('X-Request-Id', generateUUID());
   const method = (config.method || 'get').toLowerCase();
   const isUnsafe = ['post', 'put', 'patch', 'delete'].includes(method);
+  if (isUnsafe) invalidateInflightReads();
   const isCsrfRequest = config.url?.endsWith('/api/v1/auth/csrf') ?? false;
   const hasExplicitCsrf = Boolean(config.headers.get('X-XSRF-TOKEN'));
   if (isUnsafe && !isCsrfRequest && !hasExplicitCsrf) {
@@ -69,6 +71,7 @@ httpClient.interceptors.response.use(
       csrfToken = payload.data?.token || csrfToken;
     }
     if ((response.config as RetriableRequestConfig)._sessionEpoch === getSessionEpoch() && ['post', 'put', 'patch', 'delete'].includes((response.config.method || 'get').toLowerCase())) {
+      invalidateInflightReads();
       void invalidateDomains(domainsForRequest(response.config.url || ''));
     }
     return response;
@@ -83,6 +86,7 @@ httpClient.interceptors.response.use(
         && response?.data?.code === 'AUTH_INVALID';
       const method = (requestConfig?.method || 'get').toLowerCase();
       const isUnsafe = ['post', 'put', 'patch', 'delete'].includes(method);
+      if (isUnsafe) invalidateInflightReads();
       const isCsrfFailure = response?.data?.code === 'CSRF_TOKEN_INVALID';
       if (requestConfig && requestConfig._sessionEpoch !== getSessionEpoch()) throw new axios.CanceledError('Session changed');
       if (requestConfig) recordRequest(requestConfig, response?.status, response?.data?.traceId);

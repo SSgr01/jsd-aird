@@ -9,6 +9,7 @@ import { ProductionUploadWorkspacePage } from './production-orders/ProductionUpl
 import { ExperimentWorkspacePage } from './experiments/ExperimentWorkspacePage';
 
 const mocks = vi.hoisted(() => ({
+  deniedPermissions: new Set<string>(),
   order: { getEditModel: vi.fn(), downloadSnapshot: vi.fn(), listRevisions: vi.fn(), stageSnapshot: vi.fn(), saveDraft: vi.fn() },
   record: { get: vi.fn(), versions: vi.fn(), saveBatch: vi.fn() },
   experiment: { getExperiment: vi.fn(), getExperimentTemplateDataReview: vi.fn(), listVersions: vi.fn(), saveExperiment: vi.fn(), actExperiment: vi.fn(), confirmExperimentTemplateData: vi.fn() },
@@ -19,7 +20,7 @@ vi.mock('@/services/production-orders/production-upload-api', () => ({ productio
 vi.mock('@/services/experiments/experiment-api', () => mocks.experiment);
 vi.mock('@/features/template-workspace/preload-editor', () => ({ preloadWorkspaceEditor: vi.fn() }));
 vi.mock('@/components/auth/usePermission', () => ({ usePermission: () => true }));
-vi.mock('@/components/auth/Can', () => ({ Can: ({ children }: { children: React.ReactNode }) => children }));
+vi.mock('@/components/auth/Can', () => ({ Can: ({ children, permission }: { children: React.ReactNode; permission: string }) => mocks.deniedPermissions.has(permission) ? null : children }));
 vi.mock('./production-orders/ProductionUploadFieldManagerPanel', () => ({ ProductionUploadFieldManagerPanel: () => null }));
 vi.mock('./production-orders/ProductionUploadRecognitionStatusBar', () => ({ ProductionUploadRecognitionStatusBar: () => null }));
 vi.mock('@/features/template-workspace/editor-runtime', async () => {
@@ -48,6 +49,7 @@ function open(kind: Kind) {
 function edit(text: string, notify = true) { act(() => { mocks.runtime.text = text; mocks.runtime.revision++; if (notify) mocks.runtime.dirty(); }); }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 beforeEach(() => {
+  mocks.deniedPermissions.clear();
   vi.clearAllMocks(); mocks.runtime.revision = 0; mocks.runtime.text = 'before'; mocks.runtime.mounts = 0;
   vi.spyOn(window, 'matchMedia').mockImplementation(query => ({ matches: query.includes('min-width'), media: query, onchange: null, addListener: () => {}, removeListener: () => {}, addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => false }));
   mocks.order.getEditModel.mockImplementation((id: string) => Promise.resolve({ orderId: id, orderNo: id, status: 'DRAFT', format: 'XLSX', schema: {}, mapping: [], data: {}, snapshotFileId: 'snapshot', lockVersion: 1 }));
@@ -55,6 +57,36 @@ beforeEach(() => {
   mocks.record.get.mockImplementation((id: string) => Promise.resolve({ ...record(id), lockVersion: id === 'one' && mocks.record.saveBatch.mock.calls.length ? 2 : 1 })); mocks.record.versions.mockResolvedValue([]); mocks.record.saveBatch.mockResolvedValue({});
   mocks.experiment.getExperiment.mockImplementation((id: string) => Promise.resolve(experiment(id))); mocks.experiment.listVersions.mockResolvedValue([]); mocks.experiment.saveExperiment.mockResolvedValue(experiment());
   mocks.experiment.actExperiment.mockResolvedValue(undefined);
+});
+
+it('experiment approval enters a locked pending-publication state with a separate publish action', async () => {
+  const draft = experiment();
+  const approved = { ...draft, summary: { ...draft.summary, status: 'APPROVED', revision: 2 } };
+  mocks.experiment.getExperiment.mockResolvedValue({ ...draft, summary: { ...draft.summary, status: 'PENDING_REVIEW' } });
+  mocks.experiment.actExperiment.mockImplementation(async () => {
+    mocks.experiment.getExperiment.mockResolvedValue(approved);
+  });
+  open('experiment');
+  const approve = await screen.findByRole('button', { name: '审核通过' });
+  expect(screen.queryByRole('button', { name: /^发\s*布$/ })).not.toBeInTheDocument();
+  fireEvent.click(approve);
+  await waitFor(() => expect(mocks.experiment.actExperiment).toHaveBeenCalledWith('one', 'approve', 1));
+  const publish = await screen.findByRole('button', { name: /^发\s*布$/ });
+  expect(screen.getByText('审核通过，待发布')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '审核通过' })).not.toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: '编辑' })).toHaveAttribute('aria-disabled', 'true');
+  fireEvent.click(publish);
+  await waitFor(() => expect(mocks.experiment.actExperiment).toHaveBeenCalledWith('one', 'publish', 2));
+});
+
+it('experiment approval permission alone does not display the separate publish button', async () => {
+  const draft = experiment();
+  mocks.deniedPermissions.add('eln.view.publish');
+  mocks.experiment.getExperiment.mockResolvedValue({ ...draft, summary: { ...draft.summary, status: 'APPROVED' } });
+  open('experiment');
+  await screen.findByText('审核通过，待发布');
+  expect(screen.queryByRole('button', { name: /^发\s*布$/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '提交审核' })).not.toBeInTheDocument();
 });
 
 it('adopts data confirmation without reloading the workbook or resetting the editor', async () => {

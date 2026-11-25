@@ -134,7 +134,7 @@ class TerminalParseRetryTest(unittest.TestCase):
                         return {"documentStatus": "PROCESSING", "parseRunStatus": parse_status,
                                 "terminal": terminal, "jobStatus": job_status,
                                 "lastError": "异步任务超时：PT15M"}
-                    if path.endswith("/review"):
+                    if path.endswith("/review-status"):
                         return {"reviewRevision": None}
                     return {"currentVersionId": "version", "reviewStatus": "PENDING_REVIEW"}
                 api.json.side_effect = request
@@ -204,7 +204,7 @@ class PublicationReviewTest(unittest.TestCase):
                                 "reviewStatus": "PUBLISHED" if state["published"] else "PENDING_REVIEW"}
                     if method == "GET" and path.endswith("/processing"):
                         return {"versionId": "version", "documentStatus": "READY", "parseRunStatus": "SUCCEEDED"}
-                    if method == "GET" and path.endswith("/versions/version/review"):
+                    if method == "GET" and path.endswith("/versions/version/review-status"):
                         return {"reviewRevision": {"id": "revision", "lockVersion": 7, "status": "DRAFT"}}
                     if method == "GET" and path == self.path:
                         return {"status": state["approval"]}
@@ -246,6 +246,35 @@ class PublicationReviewTest(unittest.TestCase):
                         patch.object(module, "import_directory", return_value=0) as importer:
                     self.assertEqual(0, module.main())
                     self.assertEqual(expected, importer.call_args.args[0].auto_approve)
+
+
+class ReadRetryTest(unittest.TestCase):
+    def client(self):
+        with patch.object(Path, "touch"):
+            return module.ApiClient("http://localhost:8083", Path("unused-cookies"), "curl")
+
+    def test_transient_reads_retry_and_preserve_success(self):
+        api = self.client()
+        with patch.object(api, "_run", side_effect=[
+            module.ApiHttpError(503, "DATABASE_BUSY", "busy"),
+            module.ApiHttpError(504, "OPERATION_TIMEOUT", "timeout"),
+            {"reviewRevision": {"id": "revision", "lockVersion": 8}},
+        ]) as request, patch.object(module, "pause") as pause:
+            self.assertEqual(8, api.json("GET", "/review-status")["reviewRevision"]["lockVersion"])
+            self.assertEqual(3, request.call_count)
+            self.assertEqual([call(api, 2), call(api, 4)], pause.call_args_list)
+
+    def test_retries_are_bounded_and_writes_are_not_repeated(self):
+        for method, status, expected in (("GET", 503, 4), ("GET", 504, 4),
+                                         ("POST", 504, 1), ("POST", 503, 1), ("GET", 409, 1)):
+            with self.subTest(method=method, status=status):
+                api = self.client()
+                errors = [module.ApiHttpError(status, None, "failure") for _ in range(4)]
+                with patch.object(api, "_run", side_effect=errors) as request, patch.object(module, "pause"):
+                    with self.assertRaises(module.ApiHttpError) as caught:
+                        api.json(method, "/review-status")
+                    self.assertEqual(expected, request.call_count)
+                    self.assertIn(method + " /review-status", str(caught.exception))
 
 
 if __name__ == "__main__":

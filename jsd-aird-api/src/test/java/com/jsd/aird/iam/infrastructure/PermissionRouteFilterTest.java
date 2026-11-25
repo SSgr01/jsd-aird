@@ -846,6 +846,8 @@ class PermissionRouteFilterTest {
         assertThat(code("POST", "/api/v1/experiments/" + id + "/submit-review")).isEqualTo("experiment.submit");
         assertThat(code("POST", "/api/v1/experiments/" + id + "/approve")).isEqualTo("experiment.approve");
         assertThat(code("POST", "/api/v1/experiments/" + id + "/publish")).isEqualTo("eln.view.publish");
+        assertThat(code("POST", "/api/v1/projects/" + id + "/experiments/" + id + "/publish"))
+                .isEqualTo("eln.view.publish");
         assertThat(code("POST", "/api/v1/experiments/" + id + "/return")).isEqualTo("experiment.review");
 
         assertThat(code("POST", "/api/v1/template-versions/" + id + "/review/submit")).isEqualTo("template.view.submit");

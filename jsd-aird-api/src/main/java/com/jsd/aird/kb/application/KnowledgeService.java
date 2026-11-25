@@ -445,7 +445,7 @@ public class KnowledgeService implements KnowledgeSearchFacade {
         var actor = ActorContext.required();
         var document = repository.findDocument(actor.organizationId(), documentId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "知识文件不存在"));
-        var review = governance.review(actor.organizationId(), documentId, document.currentVersionId()).orElse(null);
+        var review = governance.reviewStatus(actor.organizationId(), documentId, document.currentVersionId()).orElse(null);
         var run = review == null ? null : review.parseRun();
         var job = async.findLatestJob(actor.organizationId(), "kb-reindex:" + document.currentVersionId())
                 .or(() -> async.findJob(actor.organizationId(), "kb-ingest:" + document.currentVersionId()))

@@ -292,12 +292,8 @@ public class ExperimentService {
         var contentOnly = isContentOnlyImport(current);
         if (contentOnly) model.put("importProcessingMode", "CONTENT_ONLY");
         if(!contentOnly && com.jsd.aird.shared.lab.LabWorkbook.supported(current.templateSnapshot())) {
-            var working=com.jsd.aird.shared.lab.LabWorkbook.prepare(json,model.path("documentSnapshot"),current.templateSnapshot(),id.toString());
-            if(current.templateVersionId()!=null && templates!=null) {
-                var structureDefinition=templates.getVersion(actor.organizationId(),current.templateVersionId());
-                com.jsd.aird.shared.excel.WorkbookStructure.seed(json,working,structureDefinition.schema(),structureDefinition.mappings(),id.toString());
-                working=com.jsd.aird.shared.lab.LabWorkbook.prepare(json,working,current.templateSnapshot(),id.toString());
-            }
+            var working=ExperimentWorkbookPreparation.prepare(json,templates,actor.organizationId(),current.templateVersionId(),
+                    current.templateSnapshot(),model.path("documentSnapshot"),id);
             model=com.jsd.aird.shared.lab.LabWorkbook.extract(json,working,model,id.toString());
         }
         if(com.jsd.aird.shared.excel.WorkbookStructure.instance(model.path("documentSnapshot")).isObject())
@@ -328,10 +324,11 @@ public class ExperimentService {
         }
         if (!contentOnly && ("EXCEL_IMPORT".equals(current.summary().sourceType()) || isTemplateImport(current)) && !confirmingData) {
             var previous = current.editModel().path("importDataReview");
-            var marker = json.createObjectNode();
+            var marker = previous.isObject() ? (ObjectNode)previous.deepCopy() : json.createObjectNode();
             var unchanged = importReviewMatches(previous, model.path("documentSnapshot"))
                     || importReviewMatches(previous, current.editModel().path("documentSnapshot"))
-                    && importDataHash(current.editModel().path("documentSnapshot")).equals(importDataHash(model.path("documentSnapshot")));
+                    && com.jsd.aird.shared.excel.WorkbookReviewContent.equivalent(json,
+                            current.editModel().path("documentSnapshot"),model.path("documentSnapshot"));
             marker.put("confirmed", unchanged);
             if (unchanged) {
                 marker.put("confirmedRevision", revision + 1);
@@ -529,7 +526,7 @@ public class ExperimentService {
     }
 
     private String importDataHash(JsonNode snapshot) {
-        return canonicalizer.hash(ExperimentReviewContent.workbook(json, snapshot));
+        return canonicalizer.hash(com.jsd.aird.shared.excel.WorkbookReviewContent.workbook(json, snapshot));
     }
 
     private boolean importReviewMatches(JsonNode marker, JsonNode snapshot) {
@@ -873,6 +870,17 @@ public class ExperimentService {
 
     private Detail normalize(Detail detail) {
         var model = editModels.normalize(detail.editModel(), detail.currentVersionId());
+        if(detail.summary().status()==ExperimentStatus.DRAFT && !model.path("sourceImportJobId").asText().isBlank()
+                && !model.path("importDataReview").path("confirmed").asBoolean() && canonicalizer!=null) {
+            var evidence=repository.initialReviewedImport(ActorContext.required().organizationId(),detail.summary().id()).orElse(null);
+            var initial=evidence==null?null:evidence.path("initialModel").path("documentSnapshot");
+            if(initial!=null && initial.isObject() && com.jsd.aird.shared.excel.WorkbookReviewContent.equivalent(json,initial,model.path("documentSnapshot"))) {
+                var marker=model.putObject("importDataReview");
+                for(var key:List.of("importJobId","revision","confirmedBy","confirmedAt"))marker.set(key,evidence.path(key));
+                marker.put("confirmed",true).put("hashVersion",2).put("confirmedRevision",detail.summary().revision())
+                        .put("dataHash",importDataHash(model.path("documentSnapshot")));
+            }
+        }
         var structure = com.jsd.aird.shared.excel.WorkbookStructure.instance(model.path("documentSnapshot"));
         var actor = ActorContext.required();
         if (fieldDefinitionReviews != null && fieldDefinitionReviews.apply(actor.organizationId(), detail.templateVersionId(), structure)) {

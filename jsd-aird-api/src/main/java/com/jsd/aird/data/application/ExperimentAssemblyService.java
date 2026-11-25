@@ -39,6 +39,9 @@ public class ExperimentAssemblyService {
     private final ObjectMapper json;
     private final SourceRecognitionRepository recognition;
     private final TransactionTemplate writes;
+    private com.jsd.aird.rnd.api.ExperimentStatusFacade experimentStatuses;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setExperimentStatuses(com.jsd.aird.rnd.api.ExperimentStatusFacade statuses) { this.experimentStatuses=statuses; }
 
     public ExperimentAssemblyService(ExperimentAssemblyRepository repository, ExperimentImportAssembler assembler,
                                      TemplateDataImportFacade templates, ExperimentDraftFacade experiments,
@@ -117,8 +120,15 @@ public class ExperimentAssemblyService {
 
     public SyncStatus status(UUID importJobId) {
         var actor=ActorContext.required();var plan=plan(actor.organizationId(),importJobId,actor.userId());
-        return new SyncStatus(plan,repository.links(actor.organizationId(),importJobId).stream()
-                .map(link->reconcile(actor.organizationId(),importJobId,link)).toList());
+        var links=repository.links(actor.organizationId(),importJobId).stream()
+                .map(link->reconcile(actor.organizationId(),importJobId,link)).toList();
+        var visible=experimentStatuses==null?List.<com.jsd.aird.rnd.api.ExperimentStatusFacade.Summary>of()
+                :experimentStatuses.current(links.stream().map(ExperimentAssemblyRepository.Link::experimentId).filter(Objects::nonNull).toList());
+        var ids=visible.stream().map(com.jsd.aird.rnd.api.ExperimentStatusFacade.Summary::experimentId).collect(java.util.stream.Collectors.toSet());
+        if(experimentStatuses!=null)links=links.stream().map(link->link.experimentId()==null||ids.contains(link.experimentId())?link:
+                new ExperimentAssemblyRepository.Link(link.assemblyKey(),link.parentAssemblyKey(),link.status(),link.resolutionAction(),
+                        link.resolutionReason(),null,null,null,link.planHash(),link.contentHash(),link.errorMessage())).toList();
+        return new SyncStatus(plan,links,visible);
     }
 
     @Transactional(propagation=Propagation.NOT_SUPPORTED)
@@ -190,7 +200,7 @@ public class ExperimentAssemblyService {
                         .matches(".*\\.(docx|png|jpg|jpeg|gif|webp|bmp|tif|tiff)")
                         ?"OCR_IMPORT":"EXCEL_IMPORT",
                 projectId,stageId,taskId,blank(model.path("sourceOwnerName").asText()),date(model.path("sourceExperimentDate").asText()),
-                prepared.templateVersionId(),prepared.templateSnapshotHash(),prepared.templateSnapshot(),model));
+                prepared.templateVersionId(),prepared.templateSnapshotHash(),prepared.templateSnapshot(),model,sourceSnapshot.path("importConfirmation")));
         repository.markSynced(organizationId,importJobId,assemblyKey,created.experimentId(),created.experimentVersionId(),created.experimentNo());
         var coordinates=json.createObjectNode();
         coordinates.set("sourceRecordKeys",json.valueToTree(candidate.sourceRecordKeys()));
@@ -302,5 +312,5 @@ public class ExperimentAssemblyService {
     }
     private static ApiException validation(String message){return new ApiException(ApiErrorCode.VALIDATION_ERROR,message);}
     public record SyncResult(int acceptedCount,List<UUID> jobIds){}
-    public record SyncStatus(AssemblyPlan plan,List<ExperimentAssemblyRepository.Link> links){}
+    public record SyncStatus(AssemblyPlan plan,List<ExperimentAssemblyRepository.Link> links,List<com.jsd.aird.rnd.api.ExperimentStatusFacade.Summary> experiments){}
 }

@@ -75,6 +75,24 @@ class JdbcAuthorizationServiceTest {
     }
 
     @Test
+    void experimentApprovalDoesNotGrantPublication() {
+        when(store.permissionDefinitions()).thenReturn(IamPermissionCatalog.definitions());
+        when(store.roleBindings(organizationId, roleId)).thenReturn(List.of(
+                new Binding("experiment.approve", "ALLOW", "ALL", List.of())));
+        var target = UUID.randomUUID();
+        assertThat(authorization.check(new PermissionCheck(organizationId, userId,
+                "experiment.approve", "EXPERIMENT", target, "WRITE")).allowed()).isTrue();
+        assertThat(authorization.check(new PermissionCheck(organizationId, userId,
+                "eln.view.publish", "EXPERIMENT", target, "WRITE")).allowed()).isFalse();
+        when(store.roleBindings(organizationId, roleId)).thenReturn(List.of(
+                new Binding("experiment.publish", "ALLOW", "ALL", List.of())));
+        assertThat(authorization.check(new PermissionCheck(organizationId, userId,
+                "eln.view.publish", "EXPERIMENT", target, "WRITE")).allowed()).isTrue();
+        assertThat(authorization.check(new PermissionCheck(organizationId, userId,
+                "experiment.approve", "EXPERIMENT", target, "WRITE")).allowed()).isFalse();
+    }
+
+    @Test
     void menuViewDoesNotBroadenSelectedExperimentScope() {
         var selected = UUID.randomUUID();
         var oldExperimentTarget = UUID.randomUUID();

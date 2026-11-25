@@ -13,6 +13,28 @@ import org.junit.jupiter.api.Test;
 
 class DataWorkbookServiceTest {
 
+    @Test
+    void buildsConfirmationOnlyFromAuditedCompletedSource() throws Exception {
+        var json=new ObjectMapper();var organization=UUID.randomUUID();var id=UUID.randomUUID();var file=UUID.randomUUID();
+        var repository=org.mockito.Mockito.mock(DataRepository.class);
+        var files=org.mockito.Mockito.mock(com.jsd.aird.ops.application.port.FileObjectRepository.class);
+        var templates=org.mockito.Mockito.mock(TemplateDataImportFacade.class);
+        var now=java.time.Instant.now();
+        var job=new DataRepository.Job(id,file,"sha","source.xlsx","XLSX",UUID.randomUUID(),null,"COMPLETED",100,"COMPLETED",null,null,now,now);
+        var snapshot=json.readTree("{\"sheets\":{\"s\":{\"cellData\":{\"0\":{\"0\":{\"v\":\"reviewed\"}}}}}}");
+        org.mockito.Mockito.when(repository.findJob(organization,id)).thenReturn(java.util.Optional.of(job));
+        org.mockito.Mockito.when(repository.findWorkbookDraft(organization,id)).thenReturn(java.util.Optional.of(new DataRepository.WorkbookDraft(snapshot,json.createObjectNode(),json.createArrayNode())));
+        org.mockito.Mockito.when(files.find(organization,file)).thenReturn(java.util.Optional.of(org.mockito.Mockito.mock(com.jsd.aird.ops.application.port.FileObjectRepository.FileObject.class)));
+        var reader=new DataWorkbookService(repository,files,null,null,templates,json);
+        assertThat(reader.sourceSnapshotForExperiment(organization,id).path("importConfirmation").isMissingNode()).isTrue();
+        var proof=json.createObjectNode().put("importJobId",id.toString()).put("revision","audit-id").put("confirmedBy",UUID.randomUUID().toString()).put("confirmedAt",now.toString());
+        org.mockito.Mockito.when(repository.importConfirmation(organization,id)).thenReturn(java.util.Optional.of(proof));
+        var result=reader.sourceSnapshotForExperiment(organization,id);
+        assertThat(result.at("/importConfirmation/dataHash").asText()).isEqualTo(new com.jsd.aird.shared.json.JsonCanonicalizer(json).hash(
+                com.jsd.aird.shared.excel.WorkbookReviewContent.workbook(json,snapshot)));
+        assertThat(snapshot.has("importConfirmation")).isFalse();
+    }
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final DataWorkbookService service = new DataWorkbookService(
             null, null, null, null, null, objectMapper);

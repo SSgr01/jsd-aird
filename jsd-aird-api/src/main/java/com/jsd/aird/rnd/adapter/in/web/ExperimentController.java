@@ -38,7 +38,7 @@ public class ExperimentController {
     @PostMapping("/experiments/{id}/publish") public ApiResponse<?> publish(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.publish(id,r.revision));}
     @PostMapping("/experiments/{id}/start") public ApiResponse<?> start(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.IN_PROGRESS,r.comment));}
     @PostMapping("/experiments/{id}/submit-review") public ApiResponse<?> submit(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.PENDING_REVIEW,r.comment));}
-    @PostMapping("/experiments/{id}/approve") public ApiResponse<?> approve(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.COMPLETED,r.comment));}
+    @PostMapping("/experiments/{id}/approve") public ApiResponse<?> approve(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.APPROVED,r.comment));}
     @PostMapping("/experiments/{id}/return") public ApiResponse<?> returned(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.RETURNED,r.comment));}
     @PostMapping("/experiments/{id}/void") public ApiResponse<?> voided(@PathVariable UUID id,@Valid @RequestBody ActionRequest r){return ok(service.transition(id,r.revision,ExperimentStatus.VOIDED,r.comment));}
     @GetMapping("/experiments/{id}/versions") public ApiResponse<?> versions(@PathVariable UUID id){return ok(service.versions(id));}

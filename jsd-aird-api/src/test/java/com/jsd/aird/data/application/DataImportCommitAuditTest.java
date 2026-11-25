@@ -73,6 +73,8 @@ class DataImportCommitAuditTest {
                 eq("DATA_IMPORT_JOB"), eq(importJobId), detail.capture());
         verifyNoInteractions(opsAsync);
         assertThat(detail.getValue().path("sourceSha256").asText()).isEqualTo("source-sha");
+        assertThat(detail.getValue().path("reviewedRevision").asText()).isEqualTo(job.getRevision());
+        assertThat(detail.getValue().path("reviewedContentHash").asText()).hasSize(64);
         assertThat(detail.getValue().path("records").get(0).path("recordId").asText()).isEqualTo(recordId.toString());
         assertThat(detail.getValue().toString()).doesNotContain("raw-secret");
     }

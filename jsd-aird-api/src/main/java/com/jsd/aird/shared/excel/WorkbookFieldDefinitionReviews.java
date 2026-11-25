@@ -35,6 +35,7 @@ public class WorkbookFieldDefinitionReviews {
                     VALUES(?,?,?,?::jsonb,?) ON CONFLICT DO NOTHING
                     """, organizationId, versionId, canonicalizer.hash(definition), definition.toString(), actorId);
         }
+        historical.remove(organizationId+":"+versionId);
     }
 
     public boolean apply(UUID organizationId, UUID versionId, JsonNode instance) {
@@ -43,6 +44,13 @@ public class WorkbookFieldDefinitionReviews {
                 SELECT definition_hash FROM data.workbook_field_definition_review
                 WHERE organization_id=? AND template_version_id=?
                 """, String.class, organizationId, versionId));
+        for(var text:jdbc.queryForList("""
+                SELECT definition_jsonb::text FROM data.workbook_field_definition_review
+                WHERE organization_id=? AND template_version_id=?
+                """,String.class,organizationId,versionId)) {
+            try { accepted.add(canonicalizer.hash(definition(json.readTree(text)))); }
+            catch(com.fasterxml.jackson.core.JsonProcessingException exception) {throw new IllegalStateException("已确认字段定义无法读取",exception);}
+        }
         // Older files already contain explicit human-confirmed definitions.
         // Read only their definition metadata once per template scope, never values.
         accepted.addAll(historical.computeIfAbsent(organizationId + ":" + versionId,
@@ -92,13 +100,17 @@ public class WorkbookFieldDefinitionReviews {
 
     JsonNode definition(JsonNode field) {
         var result = json.createObjectNode();
-        result.put("name", field.path("name").asText().strip());
-        result.put("groupId", field.path("groupId").asText());
+        result.put("name", normalizedLabel(field.path("name").asText()));
+        result.put("groupId",field.path("groupId").asText().replaceFirst("^s[0-9a-f]{16}\\.",""));
         result.put("valueType", field.path("valueType").asText("string"));
         result.put("unit", field.path("unit").asText().strip());
         result.put("required", field.path("required").asBoolean());
         for (var key : List.of("experimentField", "baseMetric", "testCondition"))
             result.set(key, field.path(key).isMissingNode() ? json.nullNode() : field.path(key));
         return result;
+    }
+
+    private static String normalizedLabel(String value) {
+        return value.replaceAll("[\\s　]+", "").replace('：', ':').replace('（','(').replace('）',')');
     }
 }

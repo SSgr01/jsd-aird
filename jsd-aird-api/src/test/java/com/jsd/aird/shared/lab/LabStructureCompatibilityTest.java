@@ -11,6 +11,42 @@ import java.io.ByteArrayInputStream;
 import static org.assertj.core.api.Assertions.*;
 
 class LabStructureCompatibilityTest {
+    @Test void inheritsPublishedHardnessDefinitionAfterLegacyMetadataDrifts() throws Exception {
+        var json=new ObjectMapper();var parser=new XlsxStructureParser(json);
+        var raw=parser.parseInstance(getClass().getResourceAsStream("/templates/unified/test.xlsx")).snapshot();
+        var baseline=new UnifiedLabTemplateCatalog(json).compile(UnifiedLabTemplateCatalog.TEST,
+                parser.parseInstance(getClass().getResourceAsStream("/templates/unified/test.xlsx"))).payload();
+        var snapshot=baseline.path("snapshot").deepCopy();
+        WorkbookStructure.seed(json,snapshot,baseline.path("schema"),baseline.path("mapping"),"published");
+        ((ObjectNode)LabWorkbook.definition(snapshot).path("fields").path("hardness.750g")).put("label","旧版硬度名称");
+        var prepared=LabWorkbook.prepare(json,raw,snapshot,"new-file");
+        var field=LabWorkbook.definition(prepared).path("fields").path("hardness.750g");
+        assertThat(LabWorkbook.findField(LabWorkbook.sheet(prepared),"hardness.750g")).isNotNull();
+        assertThat(field.path("local").asBoolean()).isFalse();
+        assertThat(field.path("resultKind").asText()).isEqualTo("HARDNESS");
+        assertThat(LabWorkbook.findField(LabWorkbook.sheet(prepared),"hardness.500g")).isNotNull();
+    }
+
+    @Test void readsPu62SynthesisWorkbookWithoutSkippingAnySheetWhenProvided() throws Exception {
+        var path=System.getProperty("lab.pu62.workbook");org.junit.jupiter.api.Assumptions.assumeTrue(path!=null);
+        var json=new ObjectMapper();var parser=new XlsxStructureParser(json);
+        var catalog=new UnifiedLabTemplateCatalog(json);
+        var pack=catalog.compile(UnifiedLabTemplateCatalog.SYNTHESIS,parser.parseInstance(
+                getClass().getResourceAsStream("/templates/unified/synthesis.xlsx"))).payload();
+        try(var stream=java.nio.file.Files.newInputStream(java.nio.file.Path.of(path))) {
+            var source=parser.parseInstance(stream).snapshot();
+            var prepared=LabWorkbook.prepare(json,source,pack.path("snapshot"),"pu62");
+            var model=LabWorkbook.extract(json,prepared,json.createObjectNode(),"pu62");
+            assertThat(LabWorkbookSheets.businessSheets(prepared)).hasSize(12);
+            assertThat(model.path("sourceGroups")).hasSize(12);
+            assertThat(model.path("formulaItems").size()).isGreaterThan(60);
+            assertThat(model.path("templateInstance").path("issues")).isEmpty();
+            for(var sheet:LabWorkbookSheets.businessSheets(prepared)) {
+                assertThat(LabWorkbook.findField(sheet,"sample.experimentNo")[0]).isEqualTo(8);
+                assertThat(LabWorkbook.findField(sheet,"formula.total")[0]).isEqualTo(23);
+            }
+        }
+    }
     @Test void keepsConfirmedLocalFieldWhenTemplateContainsAnOlderPendingDefinition() throws Exception {
         var json = new ObjectMapper();
         var parser = new XlsxStructureParser(json);

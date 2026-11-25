@@ -39,6 +39,20 @@ public class JdbcDataRepository implements DataRepository {
     }
     private JsonNode readDraftJson(String text) { try{return objectMapper.readTree(text);}catch(Exception ex){throw new IllegalStateException("Invalid workbook draft",ex);} }
     @Override
+    public Optional<JsonNode> importConfirmation(UUID organizationId,UUID importJobId) {
+        return jdbc.query("""
+                SELECT c.id,c.actor_id,c.created_at FROM data.import_job j
+                JOIN LATERAL (SELECT id,actor_id,created_at FROM ops.audit_log
+                    WHERE organization_id=j.organization_id AND aggregate_id=j.id AND action='DATA_IMPORT_COMMITTED'
+                    ORDER BY created_at DESC LIMIT 1) c ON true
+                LEFT JOIN data.import_workbook_draft w ON w.organization_id=j.organization_id AND w.import_job_id=j.id
+                WHERE j.organization_id=? AND j.id=? AND j.status='COMPLETED' AND j.import_purpose='EXPERIMENT_DRAFT'
+                    AND (w.updated_at IS NULL OR w.updated_at<=c.created_at)
+                """,(rs,n)->(JsonNode)objectMapper.createObjectNode().put("importJobId",importJobId.toString())
+                    .put("revision",rs.getString("id")).put("confirmedBy",rs.getString("actor_id"))
+                    .put("confirmedAt",rs.getTimestamp("created_at").toInstant().toString()),organizationId,importJobId).stream().findFirst();
+    }
+    @Override
     public void saveWorkbookDraft(UUID organizationId,UUID jobId,JsonNode snapshot,JsonNode instance,JsonNode operations,UUID actorId) {
         jdbc.update("""
                 INSERT INTO data.import_workbook_draft(organization_id,import_job_id,snapshot_jsonb,instance_jsonb,operations_jsonb,updated_by)

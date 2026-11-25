@@ -38,7 +38,19 @@ public interface ExperimentImportRepository {
     record Job(UUID id, UUID sourceFileId, String sourceFileName, String sourceSha256, String sourceFormat,
                String status, UUID experimentId, String errorMessage, String categoryName,
                UUID projectId, String projectName, UUID stageId, String stageName, UUID taskId,
-               String taskName, String visibility, Instant createdAt, int progress, String currentStage) {
+               String taskName, String visibility, Instant createdAt, int progress, String currentStage,
+               com.jsd.aird.rnd.api.ExperimentStatusFacade.Summary experiment) {
+        public Job(UUID id, UUID sourceFileId, String sourceFileName, String sourceSha256, String sourceFormat,
+                   String status, UUID experimentId, String errorMessage, String categoryName,
+                   UUID projectId, String projectName, UUID stageId, String stageName, UUID taskId,
+                   String taskName, String visibility, Instant createdAt, int progress, String currentStage) {
+            this(id,sourceFileId,sourceFileName,sourceSha256,sourceFormat,status,experimentId,errorMessage,categoryName,
+                    projectId,projectName,stageId,stageName,taskId,taskName,visibility,createdAt,progress,currentStage,null);
+        }
+        public Job withExperiment(com.jsd.aird.rnd.api.ExperimentStatusFacade.Summary value) {
+            return new Job(id,sourceFileId,sourceFileName,sourceSha256,sourceFormat,status,value==null?null:value.experimentId(),errorMessage,
+                    categoryName,projectId,projectName,stageId,stageName,taskId,taskName,visibility,createdAt,progress,currentStage,value);
+        }
         public List<String> getAllowedActions() {
             return AllowedActions.experimentImport(status, experimentId != null);
         }

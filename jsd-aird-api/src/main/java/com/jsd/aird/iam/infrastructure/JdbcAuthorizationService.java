@@ -221,9 +221,8 @@ public class JdbcAuthorizationService implements AuthorizationService {
             Map.entry("research-test.report.view.archive", List.of("research-test.report.publish")),
             Map.entry("research-test.report.export", List.of("research-test.report.view.export")),
             Map.entry("research-test.report.view.export", List.of("research-test.report.export")),
-            // Publish and review are separate columns in the permission UI, while the
-            // built-in roles still hold the legacy module action. Accept both.
-            Map.entry("eln.view.publish", List.of("experiment.approve")),
+            Map.entry("eln.view.publish", List.of("experiment.publish")),
+            Map.entry("experiment.publish", List.of("eln.view.publish")),
             Map.entry("experiment.review", List.of("eln.view.approve")),
             Map.entry("template.view.submit", List.of("template.review")),
             // 审核既有旧配置页发放的 template.approve，也有内置角色与旧接口

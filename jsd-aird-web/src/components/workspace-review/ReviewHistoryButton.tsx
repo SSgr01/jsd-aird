@@ -11,7 +11,7 @@ export interface ReviewHistoryItem {
 
 const actionLabels: Record<string, string> = {
   SUBMITTED: '提交审核', PENDING_REVIEW: '提交审核',
-  APPROVED: '审核通过', COMPLETED: '审核通过并发布',
+  APPROVED: '审核通过', COMPLETED: '已发布',
   REJECTED: '已退回', RETURNED: '已退回',
 };
 

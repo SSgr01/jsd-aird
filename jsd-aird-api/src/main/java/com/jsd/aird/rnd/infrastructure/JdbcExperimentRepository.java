@@ -20,6 +20,17 @@ public class JdbcExperimentRepository implements ExperimentRepository {
     private final ObjectMapper json;
     public JdbcExperimentRepository(JdbcTemplate jdbc, ObjectMapper json) { this.jdbc=jdbc; this.json=json; }
 
+    @Override public List<com.jsd.aird.rnd.api.ExperimentStatusFacade.Summary> statuses(UUID org, Collection<UUID> ids, DataScopeFilter scope) {
+        if(ids.isEmpty())return List.of();
+        var where=new StringBuilder(" WHERE e.organization_id=? AND e.deleted=false AND e.id IN (")
+                .append(String.join(",", Collections.nCopies(ids.size(), "?"))).append(")");
+        var args=new ArrayList<Object>();args.add(org);args.addAll(ids);
+        appendScope(where,args,scope,org);
+        return jdbc.query("SELECT e.id,e.current_version_id,e.experiment_no,e.title,e.status FROM rnd.experiment e"+where,
+                (rs,n)->new com.jsd.aird.rnd.api.ExperimentStatusFacade.Summary(rs.getObject("id",UUID.class),
+                        rs.getObject("current_version_id",UUID.class),rs.getString("experiment_no"),rs.getString("title"),rs.getString("status")),args.toArray());
+    }
+
     @Override public List<Summary> search(UUID org, Search q) {
         var where=new StringBuilder(" WHERE e.organization_id=? AND e.deleted=false"); var args=new ArrayList<Object>(); args.add(org);
         if (text(q.keyword())) { where.append(" AND (lower(e.title) LIKE ? OR lower(e.experiment_no) LIKE ?)"); var k="%"+q.keyword().toLowerCase()+"%"; args.add(k);args.add(k); }
@@ -42,6 +53,29 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         return Optional.ofNullable(jdbc.queryForObject("SELECT count(*) FROM rnd.experiment e JOIN rnd.experiment_version v ON v.id=e.current_version_id"+where,Long.class,args.toArray())).orElse(0L);
     }
     @Override public Optional<Detail> detail(UUID org,UUID id){return jdbc.query(BASE+" WHERE e.organization_id=? AND e.id=? AND e.deleted=false",(rs,n)->detailRow(rs),org,id).stream().findFirst();}
+    @Override public Optional<JsonNode> initialReviewedImport(UUID org,UUID id) {
+        return jdbc.query("""
+                SELECT a.after_jsonb,c.id confirmation_id,c.actor_id,c.created_at confirmation_at,j.id import_job_id
+                FROM rnd.experiment e
+                JOIN rnd.experiment_audit a ON a.organization_id=e.organization_id AND a.experiment_id=e.id AND a.action='CREATED'
+                JOIN data.import_job j ON j.organization_id=e.organization_id
+                    AND j.id::text=a.after_jsonb->>'sourceImportJobId' AND j.status='COMPLETED'
+                    AND j.source_file_id::text=a.after_jsonb->>'sourceFileId'
+                JOIN LATERAL (SELECT id,actor_id,created_at FROM ops.audit_log c
+                    WHERE c.organization_id=e.organization_id AND c.aggregate_id=j.id
+                        AND c.action='DATA_IMPORT_COMMITTED' AND c.created_at<=a.created_at
+                    ORDER BY c.created_at DESC LIMIT 1) c ON true
+                LEFT JOIN data.import_workbook_draft w ON w.organization_id=j.organization_id AND w.import_job_id=j.id
+                WHERE e.organization_id=? AND e.id=? AND e.deleted=false AND e.status='DRAFT'
+                    AND (w.updated_at IS NULL OR w.updated_at<=c.created_at)
+                ORDER BY a.created_at LIMIT 1
+                """,(rs,n)->{
+                    var result=json.createObjectNode();result.set("initialModel",node(rs,"after_jsonb"));
+                    result.put("importJobId",rs.getString("import_job_id")).put("revision",rs.getString("confirmation_id"))
+                            .put("confirmedBy",rs.getString("actor_id")).put("confirmedAt",rs.getTimestamp("confirmation_at").toInstant().toString());
+                    return (JsonNode)result;
+                },org,id).stream().findFirst();
+    }
     @Override public Optional<Detail> detailForUpdate(UUID org, UUID id) {
         return jdbc.query(BASE + " WHERE e.organization_id=? AND e.id=? AND e.deleted=false FOR UPDATE OF e",
                 (rs, n) -> detailRow(rs), org, id).stream().findFirst();

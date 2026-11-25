@@ -167,6 +167,11 @@ public class KnowledgeGovernanceService {
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "待校对版本不存在"));
     }
 
+    public KnowledgeGovernanceRepository.ReviewStatus reviewStatus(UUID documentId, UUID versionId) {
+        return governance.reviewStatus(ActorContext.required().organizationId(), documentId, versionId)
+                .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "待校对版本不存在"));
+    }
+
     @Transactional
     public KnowledgeGovernanceRepository.ReviewView saveReview(UUID documentId, UUID versionId, ReviewCommand command) {
         var actor = ActorContext.required();

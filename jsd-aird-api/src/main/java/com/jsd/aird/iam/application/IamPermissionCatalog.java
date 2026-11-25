@@ -145,6 +145,7 @@ public final class IamPermissionCatalog {
                 p("experiment.delete", "experiment", "删除实验记录", "HIGH", "SELF"),
                 p("experiment.submit", "experiment", "提交实验审核", "MEDIUM", "SELF"),
                 p("experiment.approve", "experiment", "通过实验审核", "HIGH", "ASSIGNED"),
+                p("experiment.publish", "experiment", "发布实验记录", "HIGH", "ASSIGNED"),
                 p("experiment.review", "experiment", "退回/作废实验记录", "HIGH", "ASSIGNED"),
                 p("eln.view.copy", "experiment", "复制实验记录", "MEDIUM", "SELF"),
                 p("eln.view.export", "experiment", "导出实验记录", "HIGH", "ALL"),

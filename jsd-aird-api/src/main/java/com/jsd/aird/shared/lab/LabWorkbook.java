@@ -21,6 +21,14 @@ public final class LabWorkbook {
         return com.fasterxml.jackson.databind.node.MissingNode.getInstance();
     }
     public static boolean supported(JsonNode snapshot) {return definition(snapshot).path("version").asInt()==1;}
+    public static void applyStructure(ObjectMapper json,JsonNode snapshot) {
+        if(!LabWorkbookSheets.multiple(snapshot)) {LabStructureAdapter.apply(json,snapshot);return;}
+        for(var sheet:LabWorkbookSheets.businessSheets(snapshot)) {
+            var local=LabWorkbookSheets.single(json,snapshot,sheet);
+            LabStructureAdapter.apply(json,local);
+            ((ObjectNode)snapshot.path("sheets")).set(sheet.path("id").asText(),local.path("sheets").path(sheet.path("id").asText()));
+        }
+    }
     public static void seedStructure(ObjectMapper json,JsonNode snapshot,ObjectNode instance,boolean fresh) {
         if(supported(snapshot)) {
             if(LabWorkbookSheets.multiple(snapshot))LabWorkbookSheets.seed(json,snapshot,instance,fresh);
@@ -42,7 +50,7 @@ public final class LabWorkbook {
         return cells.path(""+col) instanceof ObjectNode existing?existing:cells.putObject(""+col);
     }
     private static final java.util.regex.Pattern LABEL_WHITESPACE = java.util.regex.Pattern.compile("[\\s　]");
-    private static String normalized(String s) {return LABEL_WHITESPACE.matcher(s).replaceAll("").replace('：',':');}
+    private static String normalized(String s) {return LABEL_WHITESPACE.matcher(s).replaceAll("").replace('：',':').replace('（','(').replace('）',')');}
     public static String id(String seed,String key) {return UUID.nameUUIDFromBytes((seed+":"+key).getBytes(StandardCharsets.UTF_8)).toString();}
     public static String address(int row,int col) {var b=new StringBuilder();for(int n=col+1;n>0;n=(n-1)/26)b.insert(0,(char)('A'+(n-1)%26));return b.append(row+1).toString();}
     private static ObjectNode mark(ObjectNode cell) {return cell.withObject("/custom/lab");}
@@ -53,7 +61,11 @@ public final class LabWorkbook {
         if(LabWorkbookSheets.multiple(source))return LabWorkbookSheets.prepare(json,source,baseline,seed);
         var copy=(ObjectNode)source.deepCopy();
         LabStructureAdapter.apply(json,copy);
-        var authoritative=definition(baseline);
+        // Published generic bindings are authoritative too: the template editor
+        // can change field names/types without rebuilding legacy lab metadata.
+        var effectiveBaseline=baseline==null?null:baseline.deepCopy();
+        if(effectiveBaseline!=null)LabStructureAdapter.apply(json,effectiveBaseline);
+        var authoritative=definition(effectiveBaseline);
         if(!authoritative.isObject())return copy;
         var incoming=definition(copy);
         if(incoming.isObject()&&!incoming.path("templateCode").asText().equals(authoritative.path("templateCode").asText()))throw invalid("上传文件与选择的实验模板不一致");

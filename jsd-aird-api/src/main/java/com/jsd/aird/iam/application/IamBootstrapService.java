@@ -99,7 +99,7 @@ public class IamBootstrapService {
                 "template.recognition", "template.review", "template.publish", "template.rollback",
                 "template.delete", "template.export", "category.create", "category.update",
                 "category.delete", "experiment.view", "experiment.create", "experiment.update", "experiment.delete",
-                "experiment.submit", "experiment.approve", "knowledge.view", "knowledge.upload",
+                "experiment.submit", "experiment.approve", "experiment.publish", "knowledge.view", "knowledge.upload",
                 "research-test.report.view", "research-test.report.create", "research-test.report.update", "research-test.report.delete",
                 "research-test.report.submit", "research-test.report.approve", "research-test.report.publish", "research-test.report.export",
                 "research-test.standard.view", "research-test.standard.create", "research-test.standard.update", "research-test.standard.delete",

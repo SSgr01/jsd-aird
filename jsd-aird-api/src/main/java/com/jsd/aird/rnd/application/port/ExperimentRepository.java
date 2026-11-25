@@ -66,6 +66,8 @@ public interface ExperimentRepository extends com.jsd.aird.tpl.api.ExperimentTem
                            JsonNode recognitionSnapshot, String contentHash,
                            boolean sourceUpdated, Instant createdAt) {}
     List<Summary> search(UUID organizationId, Search search);
+    List<com.jsd.aird.rnd.api.ExperimentStatusFacade.Summary> statuses(UUID organizationId, java.util.Collection<UUID> ids, DataScopeFilter scope);
+    default Optional<JsonNode> initialReviewedImport(UUID organizationId, UUID experimentId) { return Optional.empty(); }
     long count(UUID organizationId, Search search);
     Optional<Detail> detail(UUID organizationId, UUID id);
     /** Loads an active experiment while serializing against a concurrent delete/edit. */

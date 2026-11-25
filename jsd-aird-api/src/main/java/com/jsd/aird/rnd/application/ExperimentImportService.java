@@ -514,16 +514,27 @@ public class ExperimentImportService implements com.jsd.aird.rnd.api.ExperimentS
             if (!resolved.allowed()) throw new ApiException(ApiErrorCode.PERMISSION_DENIED, "当前用户没有实验上传查看权限");
             scope = new com.jsd.aird.iam.api.RecordDataScope(resolved.scopeType(), actor.userId(), resolved.targetIds());
         }
-        return imports.list(actor.organizationId(), scope).stream()
+        var result = imports.list(actor.organizationId(), scope).stream()
                 .map(job -> enrichProgress(actor.organizationId(), job))
                 .toList();
+        if (experimentStatuses == null) return result;
+        var visible = experimentStatuses.current(result.stream().map(ExperimentImportRepository.Job::experimentId)
+                .filter(java.util.Objects::nonNull).toList()).stream().collect(java.util.stream.Collectors.toMap(
+                        com.jsd.aird.rnd.api.ExperimentStatusFacade.Summary::experimentId, java.util.function.Function.identity()));
+        return result.stream().map(job -> job.withExperiment(visible.get(job.experimentId()))).toList();
     }
+
+    private com.jsd.aird.rnd.api.ExperimentStatusFacade experimentStatuses;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setExperimentStatuses(com.jsd.aird.rnd.api.ExperimentStatusFacade statuses) { this.experimentStatuses=statuses; }
 
     public ExperimentImportRepository.Job get(UUID id) {
         var actor = ActorContext.required();
         var job = imports.find(actor.organizationId(), id)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "上传记录不存在"));
-        return enrichProgress(actor.organizationId(), job);
+        var result=enrichProgress(actor.organizationId(), job);
+        return experimentStatuses==null ? result : result.withExperiment(experimentStatuses.current(
+                result.experimentId()==null ? List.of() : List.of(result.experimentId())).stream().findFirst().orElse(null));
     }
 
     private ExperimentImportRepository.Job enrichProgress(UUID organizationId, ExperimentImportRepository.Job job) {

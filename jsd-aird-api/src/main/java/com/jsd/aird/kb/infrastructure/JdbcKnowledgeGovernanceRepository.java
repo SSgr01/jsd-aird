@@ -263,6 +263,33 @@ public class JdbcKnowledgeGovernanceRepository implements KnowledgeGovernanceRep
     }
 
     @Override
+    public Optional<ReviewStatus> reviewStatus(UUID organizationId, UUID documentId, UUID versionId) {
+        // Polling must not fetch or deserialize source/confirmed documents or source nodes.
+        return jdbc.query("""
+                SELECT r.id AS run_id, r.status AS run_status, r.error_message, r.created_at,
+                       rr.id AS revision_id, rr.lock_version, rr.base_publication_id,
+                       rr.status AS revision_status, rr.failure_reason
+                FROM kb.document d
+                JOIN kb.document_version v ON v.document_id = d.id
+                LEFT JOIN LATERAL (
+                    SELECT id, parse_run_id, lock_version, base_publication_id, status, failure_reason
+                    FROM kb.document_review_revision
+                    WHERE document_version_id = v.id ORDER BY revision_no DESC LIMIT 1
+                ) rr ON true
+                LEFT JOIN kb.document_parse_run r ON r.id = rr.parse_run_id
+                WHERE d.organization_id = ? AND d.id = ? AND v.id = ?
+                """, (rs, ignored) -> new ReviewStatus(documentId, versionId,
+                        rs.getObject("run_id") == null ? null : new ParseRunStatus(
+                                rs.getObject("run_id", UUID.class), rs.getString("run_status"),
+                                rs.getString("error_message"), rs.getTimestamp("created_at").toInstant()),
+                        rs.getObject("revision_id") == null ? null : new RevisionStatus(
+                                rs.getObject("revision_id", UUID.class), rs.getInt("lock_version"),
+                                rs.getObject("base_publication_id", UUID.class), rs.getString("revision_status"),
+                                rs.getString("failure_reason"))), organizationId, documentId, versionId)
+                .stream().findFirst();
+    }
+
+    @Override
     public Optional<ReviewView> review(UUID organizationId, UUID documentId, UUID versionId) {
         var values = jdbc.query("""
                 SELECT d.title, d.library_scope, d.category_id, c.name AS category_name, d.lifecycle_status,

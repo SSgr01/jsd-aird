@@ -107,14 +107,18 @@ final class LabStructureAdapter {
             var label=WorkbookStructure.range(WorkbookStructure.first(locator,"labelRange","labelAddress"));if(r==null)continue;
             var code=f.path("fieldCode").asText();if(code.isBlank())continue;present.add(code);
             boolean sample=binding.path("mappingKind").asText().equals("REPEAT_FIELD");
-            var def=fields.path(code).isObject()?(ObjectNode)fields.path(code):fields.putObject(code).put("local",true).put("trainingEligible",false);
+            var def=fields.path(code).isObject()?(ObjectNode)fields.path(code):fields.putObject(code)
+                    .put("local",f.path("fieldOrigin").asText().equals("INSTANCE_LOCAL")).put("trainingEligible",false);
             var semantic=f.path("experimentField").isObject()?f.path("experimentField"):binding.path("experimentField");
             def.put("fieldCode",code).put("label",f.path("name").asText()).put("groupId",f.path("groupId").asText()).put("unit",f.path("unit").asText()).put("valueType",f.path("valueType").asText("string")).put("confirmed",f.path("reviewStatus").asText().equals("CONFIRMED")).put("scope",sample?"SAMPLE":"EXPERIMENT").put("row",r[0]-1).put("column",r[1]-1);
             // Instance-local fields may start as text and be changed in the shared properties panel.
             // Keep their parser in sync while retaining specialized built-in grade/mixed parsers.
             if(def.path("local").asBoolean()||f.path("fieldOrigin").asText().equals("INSTANCE_LOCAL")||!def.has("resultKind"))
-                def.put("resultKind",java.util.Set.of("number","integer","duration").contains(f.path("valueType").asText())?"NUMBER":"TEXT");
+                def.put("resultKind",code.startsWith("hardness.")?"HARDNESS":code.startsWith("adhesion.")?"ADHESION":java.util.Set.of("number","integer","duration").contains(f.path("valueType").asText())?"NUMBER":"TEXT");
             def.put("domain",semantic.path("domain").asText("OTHER")).put("semantic",semantic.path("field").asText("DYNAMIC_VALUE"));
+            for(var key:java.util.List.of("testCondition","baseMetric")) {
+                if(f.has(key))def.set(key,f.path(key).deepCopy());
+            }
             if(sample&&label!=null)LabWorkbook.cell(sheet,label[0]-1,label[1]-1).withObject("/custom/lab").put("role","LABEL").put("fieldCode",code);
             for(int row=r[0];row<=r[2];row++)for(int c=r[1];c<=r[3];c++)LabWorkbook.cell(sheet,row-1,c-1).withObject("/custom/lab").put("role","VALUE").put("fieldCode",code);
         }

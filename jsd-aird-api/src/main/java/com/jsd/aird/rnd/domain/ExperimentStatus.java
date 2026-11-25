@@ -3,14 +3,15 @@ package com.jsd.aird.rnd.domain;
 import java.util.Set;
 
 public enum ExperimentStatus {
-    DRAFT, PENDING, IN_PROGRESS, PENDING_REVIEW, RETURNED, COMPLETED, VOIDED;
+    DRAFT, PENDING, IN_PROGRESS, PENDING_REVIEW, APPROVED, RETURNED, COMPLETED, VOIDED;
 
     public boolean canTransitionTo(ExperimentStatus target) {
         return switch (this) {
             case DRAFT -> Set.of(PENDING, IN_PROGRESS, PENDING_REVIEW, VOIDED).contains(target);
             case PENDING -> Set.of(IN_PROGRESS, PENDING_REVIEW, VOIDED).contains(target);
             case IN_PROGRESS, RETURNED -> Set.of(PENDING_REVIEW, VOIDED).contains(target);
-            case PENDING_REVIEW -> Set.of(COMPLETED, RETURNED).contains(target);
+            case PENDING_REVIEW -> Set.of(APPROVED, RETURNED).contains(target);
+            case APPROVED -> Set.of(COMPLETED, RETURNED, VOIDED).contains(target);
             case COMPLETED -> target == VOIDED;
             case VOIDED -> false;
         };
@@ -20,7 +21,7 @@ public enum ExperimentStatus {
     public boolean isEditable() {
         return switch (this) {
             case DRAFT, PENDING, IN_PROGRESS, RETURNED -> true;
-            case PENDING_REVIEW, COMPLETED, VOIDED -> false;
+            case PENDING_REVIEW, APPROVED, COMPLETED, VOIDED -> false;
         };
     }
 }

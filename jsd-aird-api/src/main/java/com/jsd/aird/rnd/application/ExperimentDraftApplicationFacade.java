@@ -21,6 +21,9 @@ public class ExperimentDraftApplicationFacade implements ExperimentDraftFacade {
     private final ExperimentEditModelNormalizer editModels;
     private final ObjectMapper json;
     private final AuthorizationService authorization;
+    private com.jsd.aird.tpl.api.TemplateDataImportFacade templates;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setTemplates(com.jsd.aird.tpl.api.TemplateDataImportFacade templates) { this.templates=templates; }
 
     public ExperimentDraftApplicationFacade(ExperimentRepository repository,
                                             ExperimentEditModelNormalizer editModels,
@@ -53,14 +56,28 @@ public class ExperimentDraftApplicationFacade implements ExperimentDraftFacade {
         var category = command.categoryId() == null ? null : requireActiveCategory(command.organizationId(), command.categoryId());
         var id = UUID.randomUUID();
         var versionId = UUID.randomUUID();
+        var proof=command.importConfirmation();
+        var canonicalizer=new com.jsd.aird.shared.json.JsonCanonicalizer(json);
+        boolean reviewed=proof!=null && proof.isObject() && command.editModel()!=null
+                && proof.path("importJobId").asText().equals(command.editModel().path("sourceImportJobId").asText())
+                && !proof.path("confirmedBy").asText().isBlank() && !proof.path("confirmedAt").asText().isBlank()
+                && !proof.path("revision").asText().isBlank()
+                && proof.path("dataHash").asText().equals(canonicalizer.hash(
+                        com.jsd.aird.shared.excel.WorkbookReviewContent.workbook(json,command.editModel().path("documentSnapshot"))));
         var editModel = editModels.normalize(
                 command.editModel() == null ? json.createObjectNode() : command.editModel(), versionId);
-        if (com.jsd.aird.shared.lab.LabWorkbook.supported(command.templateSnapshot())) {
-            var workbook = com.jsd.aird.shared.lab.LabWorkbook.prepare(json, editModel.path("documentSnapshot"),
-                    command.templateSnapshot(), id.toString());
+        if (!"CONTENT_ONLY".equals(editModel.path("importProcessingMode").asText()) && com.jsd.aird.shared.lab.LabWorkbook.supported(command.templateSnapshot())) {
+            var workbook = ExperimentWorkbookPreparation.prepare(json,templates,command.organizationId(),command.templateVersionId(),
+                    command.templateSnapshot(),editModel.path("documentSnapshot"),id);
             editModel = com.jsd.aird.shared.lab.LabWorkbook.extract(json, workbook, editModel, id.toString());
             if(editModel.hasNonNull("sourceFileId"))editModel.set("sourceMetadataGaps",com.jsd.aird.shared.lab.LabSourceMetadata.gaps(json,workbook));
             editModel.putObject("templateDataReview").put("required", true).put("confirmed", false);
+        }
+        if(reviewed) {
+            var marker=editModel.putObject("importDataReview");
+            marker.setAll((com.fasterxml.jackson.databind.node.ObjectNode)proof.deepCopy());
+            marker.put("confirmed",true).put("confirmedRevision",1).put("hashVersion",2)
+                    .put("dataHash",canonicalizer.hash(com.jsd.aird.shared.excel.WorkbookReviewContent.workbook(json,editModel.path("documentSnapshot"))));
         }
         var sourceType = ExperimentSourceType.fromNullable(command.sourceType()).name();
         var result = repository.create(new ExperimentRepository.Create(

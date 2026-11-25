@@ -217,11 +217,16 @@ export function DataImportJobPage({
       const sync = await dataApi.experimentSyncStatus(id);
       if (!isCurrent()) return;
       setAssemblyPlan(sync.plan); setAssemblyLinks(sync.links);
-    } catch (error) {
-      if (isCurrent()) void message.error(error instanceof Error ? error.message : '实验草稿组装计划加载失败');
+    } catch {
     }
   }, [id, assemblyLoads, message, preview]);
   useEffect(() => { void loadAssembly(); }, [loadAssembly]);
+  useEffect(() => {
+    const refresh = () => { if (document.visibilityState !== 'hidden') void loadAssembly(); };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
+  }, [loadAssembly]);
   useEffect(() => {
     if (workspaceMode !== 'EXPERIMENT' || !assemblyPlan) return;
     const linked = assemblyLinks.filter((item) => Boolean(item.experimentId));
@@ -359,23 +364,6 @@ export function DataImportJobPage({
         : '数据已完成核对，可以提交审核');
     } catch (error) {
       void message.error(error instanceof Error ? error.message : '正式数据提交失败');
-    } finally { if (loads.isActive()) setSaving(false); }
-  };
-
-  const retryAssembly = async () => {
-    const categoryId = preview?.job.targetExperimentCategoryId;
-    const assemblyKeys = assemblyLinks.filter(item => item.status === 'FAILED').map(item => item.assemblyKey);
-    if (assemblyKeys.length === 0) return;
-    setSaving(true);
-    try {
-      await dataApi.syncExperiments(id, {
-        categoryId, assemblyKeys,
-      });
-      await loadAssembly();
-      if (!loads.isActive()) return;
-      void message.success('已重新发起实验草稿生成');
-    } catch (error) {
-      void message.error(error instanceof Error ? error.message : '实验草稿重试未能发起');
     } finally { if (loads.isActive()) setSaving(false); }
   };
 
@@ -680,26 +668,7 @@ export function DataImportJobPage({
         ) : null}
       </>}
       footer={preview.job.status === 'COMPLETED' ? (
-        workspaceMode === 'EXPERIMENT' ? (
-          preview.templateContract?.importContractVersion === 9 && assemblyPlan ? <div style={{ width: '100%' }}>
-            <Alert style={{ marginTop: 8 }} type="info" showIcon message="导入数据已完成核对；实验草稿尚未发布" />
-            {assemblyPlan.candidates.filter((item) => item.status === 'BLOCKED').map((item) => <Alert key={item.assemblyKey} style={{ marginTop: 8 }} type="error" showIcon message="待处理：该记录尚未生成实验草稿" description={<Space direction="vertical">{item.conflicts.map((issue) => <span key={issue.code}>{issue.message}</span>)}</Space>} />)}
-            {assemblyPlan.candidates.filter((item) => item.status === 'NEEDS_REVIEW').map((item) => <Alert key={item.assemblyKey} style={{ marginTop: 8 }} type="warning" showIcon message="待复核：该记录尚未生成实验草稿" description={<Space direction="vertical">{[...item.conflicts, ...item.warnings].map((issue) => <span key={issue.code}>{issue.message}</span>)}</Space>} />)}
-            {assemblyLinks.filter((item) => item.status === 'FAILED').map((item) => <Alert key={item.assemblyKey} style={{ marginTop: 8 }} type="error" showIcon message="实验草稿生成失败" description={item.errorMessage || '请重试；若仍未完成，请联系管理员。'} />)}
-            <Space wrap style={{ marginTop: 8 }}>
-              {canUpdate && canGenerateExperiment && preview.job.targetExperimentCategoryId && assemblyLinks.some(item => item.status === 'FAILED') ? <Button loading={saving} onClick={() => void retryAssembly()}>重试生成实验草稿</Button> : null}
-              {assemblyLinks.filter((item) => item.experimentId).map((item) => <Button key={item.assemblyKey} type="link" onClick={() => {
-                if (!item.experimentId) return;
-                if (onExperimentReady) onExperimentReady(item.experimentId);
-                else navigate(`/experiments/${item.experimentId}`);
-              }}>{item.experimentNo} · 进入实验记录</Button>)}
-              {assemblyPlan.candidates.some(item => ['READY', 'RUNNING'].includes(item.status)) && !assemblyLinks.some((item) => item.experimentId) && !assemblyLinks.some((item) => item.status === 'FAILED') ? <Typography.Text type="secondary">实验草稿创建中</Typography.Text> : null}
-              {assemblyPlan.candidates.length === 0 ? <Typography.Text type="secondary">已完成导入，但当前没有可生成的实验草稿记录。</Typography.Text> : null}
-              {assemblyPlan.blockedCount > 0 ? <Tag color="red">需处理 {assemblyPlan.blockedCount}</Tag> : null}
-              {assemblyPlan.reviewCount > 0 ? <Tag color="warning">待复核 {assemblyPlan.reviewCount}</Tag> : null}
-            </Space>
-          </div> : null
-        ) : <Space direction="vertical" style={{ width: '100%' }} size={12}>
+        workspaceMode === 'EXPERIMENT' ? null : <Space direction="vertical" style={{ width: '100%' }} size={12}>
           <Space><CheckCircleOutlined className="data-success-icon" /><Typography.Text strong>导入已完成，来源文件已归档</Typography.Text><Button onClick={() => navigate('/data/view')}>查看来源文件</Button></Space>
         </Space>
       ) : undefined}

@@ -69,6 +69,8 @@ public interface DataRepository {
     default Optional<WorkbookDraft> findWorkbookDraft(UUID organizationId, UUID importJobId) { return Optional.empty(); }
     default void saveWorkbookDraft(UUID organizationId, UUID importJobId, JsonNode snapshot, JsonNode instance, JsonNode operations, UUID actorId) { throw new UnsupportedOperationException("Workbook draft storage is unavailable"); }
     record WorkbookDraft(JsonNode snapshot, JsonNode instance, JsonNode operations) {}
+    /** Only an audited commit newer than the saved workbook is eligible. */
+    default Optional<JsonNode> importConfirmation(UUID organizationId, UUID importJobId) { return Optional.empty(); }
 
     int hideExperimentJob(UUID organizationId, UUID importJobId);
     int hideDataCenterJob(UUID organizationId, UUID importJobId);

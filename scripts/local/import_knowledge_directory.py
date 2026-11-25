@@ -272,11 +272,16 @@ class ApiClient:
             args += ["--data-binary", "@-"]
             body = json.dumps(value, ensure_ascii=False).encode("utf-8")
         args.append(self._url(path))
-        try:
-            return self._run(args, body)
-        except ApiHttpError as error:
-            error.args = (f"{method} {path.split('?', 1)[0]} — {error}",)
-            raise
+        for attempt in range(4):
+            try:
+                return self._run(args, body)
+            except ApiHttpError as error:
+                # Reads are safe to repeat; write responses can be ambiguous after a timeout.
+                if method == "GET" and error.status in {503, 504} and attempt < 3:
+                    pause(self, min(8, 2 ** (attempt + 1)))
+                    continue
+                error.args = (f"{method} {path.split('?', 1)[0]} — {error}",)
+                raise
 
     def login(self, username: str, password: str) -> None:
         csrf = self._run(["--request", "GET", self._url("/api/v1/auth/csrf")])
@@ -609,7 +614,7 @@ def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_s
             if not retry_failed:
                 raise ImportErrorWithMessage(processing.get("parseRunError") or processing.get("lastError")
                                              or "文件解析失败；可使用 --retry-failed 重试")
-            failed_review = api.json("GET", f"{api_path_document(document_id)}/versions/{version_id}/review")
+            failed_review = api.json("GET", f"{api_path_document(document_id)}/versions/{version_id}/review-status")
             failed_revision = failed_review.get("reviewRevision") or {}
             queue_api_call(api, lambda: api.json(
                 "POST", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/reparse", {
@@ -618,7 +623,7 @@ def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_s
                 }
             ), queue_timeout_seconds)
         wait_for_parse(api, document_id, version_id, timeout_seconds)
-        review = api.json("GET", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/review")
+        review = api.json("GET", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/review-status")
         revision = review.get("reviewRevision")
         if not revision:
             raise ImportErrorWithMessage("解析完成，但没有生成待校对内容")
@@ -628,7 +633,7 @@ def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_s
         if revision.get("status") in {"DRAFT", "FAILED"}:
             ensure_publication_review(api, version_id, auto_approve=auto_approve, retry_failed=retry_failed)
             # Approval may update the revision lock; publish the reviewed state.
-            refreshed_review = api.json("GET", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/review")
+            refreshed_review = api.json("GET", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/review-status")
             refreshed_revision = refreshed_review.get("reviewRevision") or {}
             if refreshed_revision.get("id") != revision.get("id"):
                 raise ImportErrorWithMessage("审核期间校对版本发生变化，请核对后续跑")
@@ -650,7 +655,7 @@ def finish_document(api: ApiClient, document_id: str, version_id: str, timeout_s
                 raise ImportErrorWithMessage("等待发布时文档文件版本发生变化，请核对后重跑")
             if document.get("currentPublicationId") and document.get("reviewStatus") == "PUBLISHED":
                 break
-            latest_review = api.json("GET", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/review")
+            latest_review = api.json("GET", f"/api/v1/knowledge/documents/{document_id}/versions/{version_id}/review-status")
             latest_revision = latest_review.get("reviewRevision") or {}
             if latest_revision.get("status") == "FAILED":
                 raise ImportErrorWithMessage(latest_revision.get("failureReason") or "发布任务失败")

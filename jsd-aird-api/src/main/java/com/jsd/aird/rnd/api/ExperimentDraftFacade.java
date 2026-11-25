@@ -35,8 +35,16 @@ public interface ExperimentDraftFacade {
             UUID templateVersionId,
             String templateSnapshotHash,
             JsonNode templateSnapshot,
-            JsonNode editModel
-    ) {}
+            JsonNode editModel,
+            JsonNode importConfirmation
+    ) {
+        public ImportedDraftCommand(UUID organizationId,UUID actorId,String actorName,String title,UUID categoryId,String sourceType,
+                UUID projectId,UUID stageId,UUID taskId,String ownerName,LocalDate experimentDate,UUID templateVersionId,
+                String templateSnapshotHash,JsonNode templateSnapshot,JsonNode editModel) {
+            this(organizationId,actorId,actorName,title,categoryId,sourceType,projectId,stageId,taskId,ownerName,experimentDate,
+                    templateVersionId,templateSnapshotHash,templateSnapshot,editModel,null);
+        }
+    }
 
     record ResearchDraftCommand(
             String title,

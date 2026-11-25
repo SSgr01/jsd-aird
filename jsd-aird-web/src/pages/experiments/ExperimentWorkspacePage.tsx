@@ -116,7 +116,7 @@ import {
 } from '@/features/data-workbench/field-definition-review';
 
 type WorkspaceView = 'preview' | 'edit' | 'versions';
-type PublishAction = 'submit-review' | 'approve';
+type PublishAction = 'submit-review' | 'approve' | 'publish';
 /** 与模板中心一致：停止编辑 2 秒后自动保存草稿。 */
 const AUTOSAVE_DELAY_MS = 2000;
 const STATUS_TEXT: Record<string, string> = {
@@ -124,6 +124,7 @@ const STATUS_TEXT: Record<string, string> = {
   PENDING: '待开始',
   IN_PROGRESS: '进行中',
   PENDING_REVIEW: '待审核',
+  APPROVED: '审核通过，待发布',
   RETURNED: '已退回',
   COMPLETED: '已发布',
   VOIDED: '已作废',
@@ -233,7 +234,7 @@ export function ExperimentWorkspacePage({
   const isDesktop = useDesktopEditing();
   // 只读状态与自动保存共用同一判定，避免两处条件漂移。
   const statusLocked =
-    !detail || ['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(detail.summary.status);
+    !detail || ['COMPLETED', 'VOIDED', 'PENDING_REVIEW', 'APPROVED'].includes(detail.summary.status);
 
   const beginLoad = useWorkspaceLoadGeneration();
   const load = useCallback(async () => {
@@ -290,7 +291,7 @@ export function ExperimentWorkspacePage({
         setEditModel(nextModel);
       }
       setSnapshot(initialSnapshot);
-      const editable = !['COMPLETED', 'VOIDED', 'PENDING_REVIEW'].includes(d.summary.status);
+      const editable = !['COMPLETED', 'VOIDED', 'PENDING_REVIEW', 'APPROVED'].includes(d.summary.status);
       setSelectedVersion(pinned);
       setView(pinned ? 'versions' : editable && canUpdate ? 'edit' : 'preview');
       if (!editable && nextModel.importProcessingMode !== 'CONTENT_ONLY' && labDefinition(initialSnapshot)) {
@@ -1132,7 +1133,9 @@ export function ExperimentWorkspacePage({
         ? 'submit-review'
         : status === 'PENDING_REVIEW'
           ? 'approve'
-          : undefined;
+          : status === 'APPROVED'
+            ? 'publish'
+            : undefined;
   const workspaceMeta = (
     <>
       <span className="workspace-meta-item">V{detail.summary.versionNo || 1}</span>
@@ -1269,10 +1272,18 @@ export function ExperimentWorkspacePage({
               disabled={saveState !== 'SAVED'}
               onClick={() => publish('approve')}
             >
-              审核通过并发布
+              审核通过
             </Button>
           </Can>
         </>
+      ) : null}
+      {publishAction === 'publish' ? (
+        <Can permission="eln.view.publish">
+          <Button type="primary" className="workspace-publish-button" loading={busy}
+            disabled={saveState !== 'SAVED'} onClick={() => publish('publish')}>
+            发布
+          </Button>
+        </Can>
       ) : null}
     </Space>
   );

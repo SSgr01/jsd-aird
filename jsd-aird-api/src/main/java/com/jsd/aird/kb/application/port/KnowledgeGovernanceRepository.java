@@ -27,6 +27,10 @@ public interface KnowledgeGovernanceRepository {
         throw new UnsupportedOperationException("Candidate parse runs not supported");
     }
     Optional<ReviewView> review(UUID organizationId, UUID documentId, UUID versionId);
+    Optional<ReviewStatus> reviewStatus(UUID organizationId, UUID documentId, UUID versionId);
+    record ParseRunStatus(UUID id, String status, String errorMessage, Instant createdAt) { }
+    record RevisionStatus(UUID id, int lockVersion, UUID basePublicationId, String status, String failureReason) { }
+    record ReviewStatus(UUID documentId, UUID versionId, ParseRunStatus parseRun, RevisionStatus reviewRevision) { }
     Optional<PublishedContentView> publishedContent(UUID organizationId, UUID documentId, UUID publicationId);
     Optional<TableWindow> reviewTableWindow(UUID organizationId, UUID reviewRevisionId, UUID sourceTableId,
                                             int rowOffset, int rowLimit, int columnOffset, int columnLimit);

@@ -31,6 +31,7 @@ import {
 import { triggerNativeDownload } from '@/services/files/file-api';
 import { useAuthStore } from '@/stores/auth-store';
 import { loadAllPages } from './experiment-import-history-utils';
+import { LinkedExperimentStatus } from './LinkedExperimentStatus';
 
 type UnifiedJob =
   | { kind: 'FREEFORM'; job: ExperimentImportJob }
@@ -78,6 +79,7 @@ export function ExperimentUploadPage() {
         dataApi.conversions(),
       ]);
       if (!isCurrent()) return;
+      if (!silent) { setAssemblyStatuses({}); requestedAssemblyStatuses.current.clear(); }
       if (free.status === 'fulfilled') setFreeJobs(free.value);
       if (conversionJobs.status === 'fulfilled') setConversions(conversionJobs.value);
       if (allTemplateJobs.status === 'fulfilled') setTemplateJobs(allTemplateJobs.value
@@ -121,6 +123,12 @@ export function ExperimentUploadPage() {
     [freeJobs, templateJobs, conversions],
   );
   usePolling(() => load({ silent: true }), running, 2000);
+  useEffect(() => {
+    const refresh = () => { if (document.visibilityState === 'visible') void load({ silent: false }); };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
+  }, [load]);
 
   const chosenTemplate = useMemo(
     () => templates.find((item) => item.versionId === templateVersionId),
@@ -230,17 +238,20 @@ export function ExperimentUploadPage() {
     [jobs, page.current, page.pageSize],
   );
   useEffect(() => {
-    const targets = visibleJobs.flatMap((item) => item.kind === 'TEMPLATE' && item.job.status === 'COMPLETED'
-      && !assemblyStatuses[item.job.id] && !requestedAssemblyStatuses.current.has(item.job.id) ? [item.job.id] : []);
+    const targets = [...new Set(visibleJobs.flatMap((item) => {
+      const job = item.kind === 'TEMPLATE' ? item.job : item.kind === 'CONVERSION' ? templateJobs.find(job => job.id === item.job.importJobId) : undefined;
+      return job?.status === 'COMPLETED' && !assemblyStatuses[job.id] && !requestedAssemblyStatuses.current.has(job.id) ? [job.id] : [];
+    }))];
     if (!targets.length) return;
     targets.forEach((id) => requestedAssemblyStatuses.current.add(id));
     void Promise.all(targets.map(async (id) => [id, await dataApi.experimentSyncStatus(id)] as const))
       .then((items) => setAssemblyStatuses((current) => ({ ...current, ...Object.fromEntries(items) })))
       .catch(() => targets.forEach((id) => requestedAssemblyStatuses.current.delete(id)));
-  }, [assemblyStatuses, visibleJobs]);
-  const assemblyPollingKey = visibleJobs.flatMap((item) => item.kind === 'TEMPLATE'
-    && assemblyStatuses[item.job.id]?.links.some((link) => ['READY', 'RUNNING'].includes(link.status))
-    ? [item.job.id] : []).join('|');
+  }, [assemblyStatuses, visibleJobs, templateJobs]);
+  const assemblyPollingKey = [...new Set(visibleJobs.flatMap((item) => {
+    const id = item.kind === 'TEMPLATE' ? item.job.id : item.kind === 'CONVERSION' ? item.job.importJobId : undefined;
+    return id && assemblyStatuses[id]?.links.some((link) => ['READY', 'RUNNING'].includes(link.status)) ? [id] : [];
+  }))].join('|');
   const assemblyReads = useLatestRequest(assemblyPollingKey);
   usePolling(async () => {
     const isCurrent = assemblyReads.begin();
@@ -315,8 +326,8 @@ export function ExperimentUploadPage() {
       id: `free-${job.id}`,
       name: job.sourceFileName,
       meta: `${formatLabel(job.sourceFormat)} · 无模板导入 · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
-      detail: [(job.status === 'COMPLETED' ? '草稿已生成，尚未发布' : job.currentStage || '等待读取'), job.errorMessage ? `失败原因：${job.errorMessage}` : null].filter(Boolean).join(' · '),
-      status: job.status === 'COMPLETED' ? { label: '草稿已生成 · 尚未发布', color: 'success' } : job.status === 'FAILED' ? { label: '解析失败', color: 'error' } : { label: `处理中 ${progress}%`, color: 'processing' },
+      detail: job.status === 'COMPLETED' ? <LinkedExperimentStatus items={job.experiment ? [job.experiment] : undefined} /> : [job.currentStage || '等待读取', job.errorMessage ? `失败原因：${job.errorMessage}` : null].filter(Boolean).join(' · '),
+      status: job.status === 'COMPLETED' ? { label: '导入完成', color: 'success' } : job.status === 'FAILED' ? { label: '解析失败', color: 'error' } : { label: `处理中 ${progress}%`, color: 'processing' },
       progress,
       actions: <Space size={2}>{job.experimentId ? <Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/experiments/${job.experimentId}`)}>打开实验</Button> : null}{can('view') && <Button type="link" icon={<DownloadOutlined />} onClick={() => triggerNativeDownload(`/api/v1/experiment-imports/${job.id}/source`, job.sourceFileName)}>下载原文件</Button>}{(canUpload || can('retry')) && <Button type="link" icon={<ReloadOutlined />} disabled={!['FAILED', 'CANCELLED'].includes(job.status)} loading={retryingId === job.id} onClick={() => void retry(job)}>重试</Button>}{can('delete') && <Popconfirm title="确认删除该导入记录？" description="删除后记录将从列表中移除。" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => deleteFree(job)}><Button type="link" danger icon={<DeleteOutlined />} disabled={ACTIVE_JOB_STATES.includes(job.status)}>删除</Button></Popconfirm>}</Space>,
     };
@@ -339,7 +350,7 @@ export function ExperimentUploadPage() {
     return {
       id: `conversion-${job.id}`, name: job.sourceName,
       meta: `专家转换 · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
-      detail: job.errorMessage || linked?.errorMessage || (reviewed ? '导入已核对；实验草稿仍需发布' : job.importJobId
+      detail: job.errorMessage || linked?.errorMessage || (reviewed ? <LinkedExperimentStatus items={assemblyStatuses[job.importJobId || '']?.experiments} /> : job.importJobId
         ? `未落位 ${job.report?.unplaced?.length ?? 0} 项 · 源冲突 ${job.report?.source_conflicts?.length ?? 0} 项 · 请对照原件核对`
         : '原件已保存，等待专家处理；模型服务不可用时可稍后继续'),
       status: { label: reviewed ? '导入已核对' : failed ? '需处理' : job.importJobId ? '待人工核对' : '待转换 / 处理中', color: reviewed ? 'success' : failed ? 'error' : job.importJobId ? 'warning' : 'processing' },
@@ -369,7 +380,7 @@ export function ExperimentUploadPage() {
     );
     const hasPendingAssembly = pendingCandidates.length > 0;
     const assemblyText = linkedExperiments.length
-      ? linkedExperiments.length + ' 个实验草稿已生成，尚未发布' + (hasPendingAssembly ? '；另有 ' + pendingCandidates.length + ' 项待处理' : '')
+      ? '已生成 ' + linkedExperiments.length + ' 个实验' + (hasPendingAssembly ? '；另有 ' + pendingCandidates.length + ' 项待处理' : '')
       : hasPendingAssembly ? '待处理，尚未生成草稿' + (pendingReasons[0] ? '：' + pendingReasons[0] : '')
         : !assembly ? '导入完成，正在读取实验草稿状态'
           : assembly.plan.readyCount ? '实验草稿生成中' : '导入完成，尚未生成实验草稿';
@@ -377,9 +388,9 @@ export function ExperimentUploadPage() {
       id: `template-${job.id}`,
       name: job.sourceFileName,
       meta: `按模板导入 · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
-      detail: job.status === 'COMPLETED' ? [assemblyText, ...pendingReasons, ...linkReasons].filter(Boolean).slice(0, 3).join(' · ') : dataParseStageLabel(job),
+      detail: job.status === 'COMPLETED' ? <Space direction="vertical" size={0}><LinkedExperimentStatus items={assembly?.experiments} />{(hasPendingAssembly || !linkedExperiments.length) && <span>{assemblyText}</span>}{[...pendingReasons, ...linkReasons].filter(Boolean).slice(0, 2).map(reason => <span key={reason}>{reason}</span>)}</Space> : dataParseStageLabel(job),
       status: job.status === 'COMPLETED'
-        ? linkedExperiments.length ? { label: '草稿已生成 · 尚未发布', color: 'success' }
+        ? linkedExperiments.length ? { label: '导入完成', color: 'success' }
           : hasPendingAssembly ? { label: '待处理 · 未生成草稿', color: 'warning' }
             : assembly?.plan.readyCount ? { label: '草稿生成中', color: 'processing' }
               : { label: '导入完成', color: 'success' }

@@ -4,7 +4,7 @@ import type { ImportBinding, TemplateFieldDefinition } from '@/services/data/dat
 import type { WorkbookTemplateInstance } from '@/features/template-workspace/workbook-instance';
 
 export type ExperimentStatus =
-  'DRAFT' | 'PENDING' | 'IN_PROGRESS' | 'PENDING_REVIEW' | 'RETURNED' | 'COMPLETED' | 'VOIDED';
+  'DRAFT' | 'PENDING' | 'IN_PROGRESS' | 'PENDING_REVIEW' | 'APPROVED' | 'RETURNED' | 'COMPLETED' | 'VOIDED';
 export type ExperimentSourceType =
   'PROJECT' | 'TEMPLATE' | 'MANUAL' | 'EXCEL_IMPORT' | 'OCR_IMPORT';
 export interface ExperimentSummary {
@@ -314,7 +314,7 @@ export async function publishExperiment(id: string, revision: number) {
 }
 export async function actExperiment(
   id: string,
-  action: 'start' | 'submit-review' | 'approve' | 'return' | 'void',
+  action: 'start' | 'submit-review' | 'approve' | 'publish' | 'return' | 'void',
   revision: number,
   comment?: string,
 ) {
@@ -412,6 +412,7 @@ export interface ExperimentImportAccepted {
   status: string;
 }
 export interface ExperimentImportJob {
+  experiment?: import('./experiment-status').LinkedExperimentStatus;
   id: string;
   sourceFileId: string;
   sourceFileName: string;

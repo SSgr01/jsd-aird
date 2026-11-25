@@ -490,6 +490,27 @@ class ExperimentServiceTest {
         assertThat(captor.getValue().experimentDate()).isEqualTo(java.time.LocalDate.of(2026, 10, 18));
     }
 
+    @Test
+    void restoresOnlyAuditedUnchangedImportedDrafts() throws Exception {
+        var id=UUID.randomUUID();var version=UUID.randomUUID();
+        var model=mapper.createObjectNode().put("sourceImportJobId",UUID.randomUUID().toString());
+        model.set("documentSnapshot",mapper.readTree("{\"sheets\":{\"s\":{\"cellData\":{\"0\":{\"0\":{\"v\":\"reviewed\"}}}}}}"));
+        var summary=new Summary(id,"LEGACY","旧导入",null,null,"EXCEL_IMPORT",ExperimentStatus.DRAFT,null,null,null,null,null,null,null,null,1,4,Instant.now());
+        var detail=new Detail(summary,version,null,null,null,mapper.createObjectNode(),model,List.of(),List.of());
+        when(repository.detail(ORGANIZATION_ID,id)).thenReturn(Optional.of(detail));
+        var evidence=mapper.createObjectNode().put("importJobId",model.path("sourceImportJobId").asText())
+                .put("revision","audit-1").put("confirmedBy",USER_ID.toString()).put("confirmedAt",Instant.now().toString());
+        evidence.set("initialModel",model.deepCopy());
+        when(repository.initialReviewedImport(ORGANIZATION_ID,id)).thenReturn(Optional.of(evidence));
+        var reviewed=new ExperimentService(repository,mapper,files,new ExperimentEditModelNormalizer(mapper),null,null,new JsonCanonicalizer(mapper));
+        assertThat(reviewed.detail(id).editModel().at("/importDataReview/confirmed").asBoolean()).isTrue();
+        ((com.fasterxml.jackson.databind.node.ObjectNode)model.at("/documentSnapshot/sheets/s/cellData/0/0")).put("v","changed");
+        assertThat(reviewed.detail(id).editModel().at("/importDataReview/confirmed").asBoolean()).isFalse();
+        when(repository.initialReviewedImport(ORGANIZATION_ID,id)).thenReturn(Optional.empty());
+        assertThat(reviewed.detail(id).editModel().at("/importDataReview/confirmed").asBoolean()).isFalse();
+        verify(repository,org.mockito.Mockito.never()).saveDraft(any(),any(),org.mockito.ArgumentMatchers.anyLong(),any(),any(),any());
+    }
+
     private Summary summary(ExperimentRepository.Create command) {
         return new Summary(
                 command.id(), command.experimentNo(), command.title(), command.categoryId(), command.categoryName(),

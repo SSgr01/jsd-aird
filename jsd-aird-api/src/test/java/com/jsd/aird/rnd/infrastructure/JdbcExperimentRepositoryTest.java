@@ -57,7 +57,7 @@ class JdbcExperimentRepositoryTest {
 
     @Test
     void lifecycleAuditKeepsBothFullSnapshotsWithoutSerializingThemAgain() {
-        var current=detail(ExperimentStatus.PENDING_REVIEW);givenDetail(current);
+        var current=detail(ExperimentStatus.APPROVED);givenDetail(current);
         when(jdbc.update(anyString(), any(Object[].class))).thenReturn(1);
         repository.publish(ORGANIZATION_ID,current.summary().id(),0,USER_ID,"reviewer");
         var sql=ArgumentCaptor.forClass(String.class);var args=ArgumentCaptor.forClass(Object[].class);
@@ -91,10 +91,37 @@ class JdbcExperimentRepositoryTest {
     }
 
     @Test
+    void pendingReviewCannotPublishBeforeApproval() {
+        givenDetail(detail(ExperimentStatus.PENDING_REVIEW));
+        assertThatThrownBy(() -> repository.publish(ORGANIZATION_ID, UUID.randomUUID(), 0, USER_ID, "publisher"))
+                .isInstanceOfSatisfying(ApiException.class,
+                        error -> assertThat(error.errorCode()).isEqualTo(ApiErrorCode.RESOURCE_CONFLICT));
+        verify(jdbc, never()).update(anyString(), any(Object[].class));
+    }
+
+    @Test
+    void approvalDoesNotEmitPublicationEvent() {
+        var current = detail(ExperimentStatus.PENDING_REVIEW);
+        givenDetail(current);
+        when(jdbc.update(anyString(), any(Object[].class))).thenReturn(1);
+        repository.transition(ORGANIZATION_ID, current.summary().id(), 0,
+                ExperimentStatus.APPROVED, null, USER_ID, "reviewer");
+        var sql = ArgumentCaptor.forClass(String.class);
+        var args = ArgumentCaptor.forClass(Object[].class);
+        verify(jdbc, atLeastOnce()).update(sql.capture(), args.capture());
+        assertThat(sql.getAllValues()).noneMatch(value -> value.contains("INSERT INTO rnd.experiment_outbox"));
+        int versionUpdate = -1;
+        for (int i = 0; i < sql.getAllValues().size(); i++)
+            if (sql.getAllValues().get(i).startsWith("UPDATE rnd.experiment_version SET status=")) versionUpdate = i;
+        assertThat(versionUpdate).isGreaterThanOrEqualTo(0);
+        assertThat(args.getAllValues().get(versionUpdate)).startsWith("APPROVED", "APPROVED", "APPROVED");
+    }
+
+    @Test
     void aRaceLostDuringApprovalStopsBeforeVersionAuditOrOutboxUpdates() {
         givenDetail(detail(ExperimentStatus.PENDING_REVIEW));
         when(jdbc.update(anyString(), any(Object[].class))).thenReturn(0);
-        assertThatThrownBy(() -> repository.publish(ORGANIZATION_ID, UUID.randomUUID(), 0, USER_ID, "reviewer"))
+        assertThatThrownBy(() -> repository.transition(ORGANIZATION_ID, UUID.randomUUID(), 0, ExperimentStatus.APPROVED, null, USER_ID, "reviewer"))
                 .isInstanceOfSatisfying(ApiException.class,
                         error -> assertThat(error.errorCode()).isEqualTo(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT));
         var sql = ArgumentCaptor.forClass(String.class);

@@ -65,6 +65,12 @@ public class KnowledgeGovernanceController {
         return success(service.review(documentId, versionId));
     }
 
+    @GetMapping("/documents/{documentId}/versions/{versionId}/review-status")
+    public ApiResponse<KnowledgeGovernanceRepository.ReviewStatus> reviewStatus(
+            @PathVariable UUID documentId, @PathVariable UUID versionId) {
+        return success(service.reviewStatus(documentId, versionId));
+    }
+
     @PutMapping("/documents/{documentId}/versions/{versionId}/review")
     public ApiResponse<KnowledgeGovernanceRepository.ReviewView> saveReview(
             @PathVariable UUID documentId, @PathVariable UUID versionId,

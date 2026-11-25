@@ -13,6 +13,22 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 class ReviewVersionContractTest {
+    @Test void experimentApprovalAndPublicationAreSeparateEndpoints() throws Exception {
+        var service=mock(ExperimentService.class);
+        var mvc=MockMvcBuilders.standaloneSetup(new ExperimentController(service,mock(ExperimentExportService.class)))
+                .setControllerAdvice(new GlobalExceptionHandler()).build();
+        var id=UUID.randomUUID();
+        mvc.perform(post("/api/v1/experiments/"+id+"/approve")
+                .contentType(MediaType.APPLICATION_JSON).content("{\"revision\":3}"))
+                .andExpect(status().isOk());
+        verify(service).transition(id,3,com.jsd.aird.rnd.domain.ExperimentStatus.APPROVED,null);
+        verify(service,never()).publish(any(),anyLong());
+        mvc.perform(post("/api/v1/experiments/"+id+"/publish")
+                .contentType(MediaType.APPLICATION_JSON).content("{\"revision\":4}"))
+                .andExpect(status().isOk());
+        verify(service).publish(id,4);
+    }
+
     @Test void reportApprovalAndRevisionRequireNonNegativeVersions() throws Exception {
         var service=mock(ResearchTestService.class);
         var mvc=MockMvcBuilders.standaloneSetup(new ResearchTestController(service,mock(ResearchTestExportService.class)))

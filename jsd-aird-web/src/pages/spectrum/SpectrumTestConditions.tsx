@@ -56,9 +56,9 @@ export function SpectrumTestConditions({ categoryCode, value, onChange, legacyTe
     }
     const label = `${field.label}${field.unit ? `（${field.unit}）` : ''}`;
     return <Form.Item key={field.key} label={label}>
-      {field.options ? <Select aria-label={label} allowClear value={current as string | undefined} options={field.options.map(option => ({ value: option, label: option }))} onChange={v => patch(field, v)} placeholder="未填写" />
-        : field.kind === 'number' || field.kind === 'integer' ? <InputNumber aria-label={label} style={{ width: '100%' }} min={field.min} max={field.max} precision={field.kind === 'integer' ? 0 : undefined} value={current as number | undefined} onChange={v => patch(field, v)} placeholder="未填写" />
-          : <Input aria-label={label} maxLength={500} placeholder={field.placeholder ?? '未填写，可后续补充'} value={current as string ?? ''} onChange={e => patch(field, e.target.value)} />}
+      {field.options ? <Select aria-label={label} allowClear value={current as string | undefined} options={field.options.map(option => ({ value: option, label: option }))} onChange={v => patch(field, v)} placeholder="可选" />
+        : field.kind === 'number' || field.kind === 'integer' ? <InputNumber aria-label={label} style={{ width: '100%' }} min={field.min} max={field.max} precision={field.kind === 'integer' ? 0 : undefined} value={current as number | undefined} onChange={v => patch(field, v)} placeholder="可选" />
+          : <Input aria-label={label} maxLength={500} placeholder={field.placeholder ?? '可选'} value={current as string ?? ''} onChange={e => patch(field, e.target.value)} />}
     </Form.Item>;
   };
   const presets = catalog?.presets.filter(item => item.methodType === code) ?? [];
@@ -87,7 +87,7 @@ export function SpectrumTestConditions({ categoryCode, value, onChange, legacyTe
         onChange(preset ? applyMethodPreset(preset, method, snapshot.legacyText ?? legacyText) : { ...snapshot, presetId: undefined, presetRevision: undefined, presetName: undefined });
       }} />{snapshot.presetRevision && <Typography.Text type="secondary">本次采用 V{snapshot.presetRevision}；修改预设不会改变本记录。</Typography.Text>}</Form.Item>
       {method.fields.filter(field => field.variable).map(fieldInput)}
-      <Collapse items={[{ key: 'method', label: '仪器与固定设置（可修改本次值）', children: method.fields.filter(field => !field.variable).map(fieldInput) }, {
+      <Collapse items={[{ key: 'method', label: '仪器与固定设置', children: method.fields.filter(field => !field.variable).map(fieldInput) }, {
         key: 'notes', label: '方法详情／补充说明', children: <><Input.TextArea aria-label="方法详情／补充说明" value={snapshot.notes ?? ''} maxLength={6000} rows={4} placeholder="校准、光学参数、参考压力、原报告待核对值；多方法文件注明对应页／样品" onChange={e => onChange({ ...snapshot, notes: e.target.value })} />
           {(snapshot.legacyText || legacyText) && <Form.Item label="原测试条件（保留原文，不自动拆解）"><Input.TextArea aria-label="原测试条件" rows={3} maxLength={10000} value={snapshot.legacyText ?? legacyText} onChange={e => onChange({ ...snapshot, legacyText: e.target.value })} /></Form.Item>}</>,
       }]} />

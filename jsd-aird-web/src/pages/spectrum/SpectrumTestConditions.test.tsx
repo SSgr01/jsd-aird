@@ -27,7 +27,7 @@ describe('spectrum method conditions', () => {
   it.each(methods)('renders only the $name variable fields and keeps fixed settings collapsed', async method => {
     api.catalog.mockResolvedValue(catalog);
     const { unmount } = render(<App><SpectrumTestConditions categoryCode={method.code} onChange={vi.fn()} /></App>);
-    await waitFor(() => expect(screen.getByText('仪器与固定设置（可修改本次值）')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('仪器与固定设置')).toBeInTheDocument());
     for (const field of method.fields.filter(field => field.variable && !field.when && !['specimens', 'program'].includes(field.kind ?? ''))) {
       expect(screen.getByText(`${field.label}${field.unit ? `（${field.unit}）` : ''}`)).toBeInTheDocument();
     }

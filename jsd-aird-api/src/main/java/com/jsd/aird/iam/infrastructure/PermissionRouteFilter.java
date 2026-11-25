@@ -172,7 +172,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if ("POST".equals(method) && (path.matches(project + "/experiments") || path.endsWith("/copy"))) return "eln.create.create";
             if ("DELETE".equals(method)) return "eln.view.delete";
             if ("POST".equals(method) && (path.endsWith("/approve") || path.endsWith("/return") || path.endsWith("/void"))) return "eln.view.approve";
-            if ("POST".equals(method) && path.endsWith("/publish")) return "eln.view.approve";
+            if ("POST".equals(method) && path.endsWith("/publish")) return "eln.view.publish";
             if ("POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method)) return "eln.view.update";
         }
         if (path.matches(project + "/documents(/.*)?")) {
@@ -424,7 +424,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if (read) return permission("experiment.view", "EXPERIMENT", "READ");
             if (path.contains("/submit-review")) return permission("experiment.submit", "EXPERIMENT", "WRITE");
             if (path.contains("/approve")) return permission("experiment.approve", "EXPERIMENT", "WRITE");
-            // Publishing is granted by its own page column; keep approve as a legacy alias.
+            // Publishing and approval require separate permissions.
             if (path.endsWith("/publish")) return permission("eln.view.publish", "EXPERIMENT", "WRITE");
             if (path.contains("/return") || path.contains("/void")) return permission("experiment.review", "EXPERIMENT", "WRITE");
             if (path.contains("/start")) return permission("experiment.update", "EXPERIMENT", "WRITE");

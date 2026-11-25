@@ -35,14 +35,28 @@ class WorkbookFieldDefinitionReviewsTest {
         var field = instance.withArray("/model/fields").addObject().put("id", "hardness")
                 .put("fieldOrigin", "INSTANCE_LOCAL").put("name", "硬度：750g").put("groupId", "film")
                 .put("valueType", "string").put("unit", "").put("reviewStatus", "NEEDS_CONFIRMATION");
-        when(jdbc.queryForList(anyString(), eq(String.class), eq(org), eq(version)))
+        when(jdbc.queryForList(contains("SELECT definition_hash"), eq(String.class), eq(org), eq(version)))
                 .thenReturn(List.of(canonicalizer.hash(reviews.definition(field))));
         assertThat(reviews.apply(org, version, instance)).isTrue();
         assertThat(field.path("reviewStatus").asText()).isEqualTo("CONFIRMED");
         field.put("reviewStatus", "NEEDS_CONFIRMATION").put("unit", "kg");
         assertThat(reviews.apply(org, version, instance)).isFalse();
         field.put("unit", "");
-        when(jdbc.queryForList(anyString(), eq(String.class), eq(org), eq(version))).thenReturn(List.of());
+        when(jdbc.queryForList(contains("SELECT definition_hash"), eq(String.class), eq(org), eq(version))).thenReturn(List.of());
         assertThat(reviews.apply(org, version, instance)).isFalse();
+    }
+    @Test void reusesAcrossPhysicalSheetsWithoutMergingDifferentConditions() {
+        var json=new ObjectMapper();var jdbc=mock(JdbcTemplate.class);var org=UUID.randomUUID();var version=UUID.randomUUID();
+        var reviews=new WorkbookFieldDefinitionReviews(jdbc,json,new JsonCanonicalizer(json));
+        var instance=json.createObjectNode();var field=instance.withArray("/model/fields").addObject()
+                .put("fieldOrigin","INSTANCE_LOCAL").put("name","硬度：750g").put("groupId","s1234567890abcdef.film")
+                .put("valueType","string").put("unit","").put("reviewStatus","CONFIRMED");
+        var stored=field.deepCopy();field.put("name","硬度: 750g").put("groupId","sfedcba0987654321.film").put("reviewStatus","NEEDS_CONFIRMATION");
+        when(jdbc.queryForList(contains("definition_jsonb::text"),eq(String.class),eq(org),eq(version))).thenReturn(List.of(stored.toString()));
+        assertThat(reviews.apply(org,version,instance)).isTrue();
+        field.put("reviewStatus","NEEDS_CONFIRMATION").put("name","硬度：500g");
+        assertThat(reviews.apply(org,version,instance)).isFalse();
+        field.put("name","硬度：750g");
+        assertThat(reviews.apply(org,UUID.randomUUID(),instance)).isFalse();
     }
 }

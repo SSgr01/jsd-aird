@@ -24,7 +24,7 @@ import '@/components/project-relations/project-relation-picker.css';
 import { ProjectRelationPath } from '@/components/project-relations/ProjectRelationPath';
 import '@/styles/management-list.css';
 
-const statusLabels:Record<string,string>={DRAFT:'草稿',PENDING:'待开始',IN_PROGRESS:'进行中',PENDING_REVIEW:'待审核',RETURNED:'已退回',COMPLETED:'已发布',VOIDED:'已作废'};
+const statusLabels:Record<string,string>={DRAFT:'草稿',PENDING:'待开始',IN_PROGRESS:'进行中',PENDING_REVIEW:'待审核',APPROVED:'审核通过，待发布',RETURNED:'已退回',COMPLETED:'已发布',VOIDED:'已作废'};
 const sourceLabels:Record<string,string>={PROJECT:'项目同步',TEMPLATE:'模板新增',MANUAL:'手工录入',EXCEL_IMPORT:'Excel导入',OCR_IMPORT:'OCR导入'};
 const datePresetLabels:Record<string,string>={7:'近7天',30:'近30天',YEAR:'本年度'};
 const sourceTagTones:Record<string,string>={PROJECT:'project',TEMPLATE:'template',MANUAL:'manual',EXCEL_IMPORT:'excel_import',OCR_IMPORT:'ocr_import'};

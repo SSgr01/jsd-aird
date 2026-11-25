@@ -22,7 +22,9 @@ class ExperimentStatusTest {
                 ExperimentStatus.RETURNED,
                 Set.of(ExperimentStatus.PENDING_REVIEW, ExperimentStatus.VOIDED),
                 ExperimentStatus.PENDING_REVIEW,
-                Set.of(ExperimentStatus.COMPLETED, ExperimentStatus.RETURNED),
+                Set.of(ExperimentStatus.APPROVED, ExperimentStatus.RETURNED),
+                ExperimentStatus.APPROVED,
+                Set.of(ExperimentStatus.COMPLETED, ExperimentStatus.RETURNED, ExperimentStatus.VOIDED),
                 ExperimentStatus.COMPLETED, Set.of(ExperimentStatus.VOIDED),
                 ExperimentStatus.VOIDED, Set.of()
         );
@@ -43,6 +45,7 @@ class ExperimentStatusTest {
         assertThat(ExperimentStatus.IN_PROGRESS.isEditable()).isTrue();
         assertThat(ExperimentStatus.RETURNED.isEditable()).isTrue();
         assertThat(ExperimentStatus.PENDING_REVIEW.isEditable()).isFalse();
+        assertThat(ExperimentStatus.APPROVED.isEditable()).isFalse();
         assertThat(ExperimentStatus.COMPLETED.isEditable()).isFalse();
         assertThat(ExperimentStatus.VOIDED.isEditable()).isFalse();
     }

@@ -27,6 +27,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class DataWorkbookService {
 
+    private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(DataWorkbookService.class);
+
     private final DataRepository repository;
     private final FileObjectRepository files;
     private final ObjectStorage storage;
@@ -113,6 +115,15 @@ public class DataWorkbookService {
         if (snapshot == null || !snapshot.isObject() || snapshot.isEmpty()) {
             throw new ApiException(ApiErrorCode.FILE_NOT_READY, "导入文件缺少可编辑工作簿快照");
         }
+        ((ObjectNode)snapshot).remove("importConfirmation");
+        if ("COMPLETED".equals(job.status())) {
+            repository.importConfirmation(organizationId,importJobId).ifPresent(evidence->{
+                var proof=(ObjectNode)evidence.deepCopy();
+                proof.put("dataHash",new com.jsd.aird.shared.json.JsonCanonicalizer(objectMapper).hash(
+                        com.jsd.aird.shared.excel.WorkbookReviewContent.workbook(objectMapper,snapshot)));
+                ((ObjectNode)snapshot).set("importConfirmation",proof);
+            });
+        }
         return snapshot.deepCopy();
     }
 
@@ -162,6 +173,7 @@ public class DataWorkbookService {
             } catch (ApiException exception) {
                 throw exception;
             } catch (Exception exception) {
+                log.warn("Source workbook could not be read: fileId={}",file.id(),exception);
                 throw new ApiException(ApiErrorCode.FILE_NOT_READY, "原始 Excel 工作簿读取失败");
             }
         }

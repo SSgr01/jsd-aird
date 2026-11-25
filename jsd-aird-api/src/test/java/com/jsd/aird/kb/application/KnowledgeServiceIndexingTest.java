@@ -42,6 +42,42 @@ import org.springframework.beans.factory.ObjectProvider;
 
 class KnowledgeServiceIndexingTest {
 
+
+    @Test
+    void processingReadsLightweightStatusWithoutLoadingDocumentContent() {
+        var repository = mock(KnowledgeRepository.class);
+        var governance = mock(KnowledgeGovernanceRepository.class);
+        var organizationId = UUID.randomUUID();
+        var documentId = UUID.randomUUID();
+        var versionId = UUID.randomUUID();
+        var runId = UUID.randomUUID();
+        var createdAt = Instant.now();
+        var document = mock(KnowledgeRepository.DocumentRow.class);
+        when(document.id()).thenReturn(documentId);
+        when(document.currentVersionId()).thenReturn(versionId);
+        when(document.status()).thenReturn("PROCESSING");
+        when(repository.findDocument(organizationId, documentId)).thenReturn(Optional.of(document));
+        when(governance.reviewStatus(organizationId, documentId, versionId)).thenReturn(Optional.of(
+                new KnowledgeGovernanceRepository.ReviewStatus(documentId, versionId,
+                        new KnowledgeGovernanceRepository.ParseRunStatus(runId, "RUNNING", null, createdAt), null)));
+        var mapper = new ObjectMapper();
+        var service = new KnowledgeService(repository, governance,
+                mock(FileStorageFacade.class), mock(OpsAsyncFacade.class), mock(AuditLogFacade.class), mapper,
+                new StructuredDocumentCodec(mapper), List.of(), mock(FileSafetyScanner.class),
+                mockEmbeddingProvider(), List.of(), "embedding-model", 1024, Duration.ofMinutes(15),
+                new BlockAwareChunker(mapper), testAnalyzer());
+        com.jsd.aird.shared.security.ActorContext.set(new com.jsd.aird.shared.security.Actor(
+                organizationId, UUID.randomUUID(), "tester"));
+        try {
+            var result = service.processing(documentId);
+            assertThat(result.parseRunId()).isEqualTo(runId);
+            assertThat(result.parseRunStatus()).isEqualTo("RUNNING");
+            verify(governance, never()).review(any(), any(), any());
+        } finally {
+            com.jsd.aird.shared.security.ActorContext.clear();
+        }
+    }
+
     @Test
     void retrievesCurrentAiAuthorizedChunkFromDocumentFilenameMetadata() {
         var repository = mock(KnowledgeRepository.class);

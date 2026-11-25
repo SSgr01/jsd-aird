@@ -51,7 +51,7 @@ export interface DataFormalRecord { revision: string; id: string; recordKey: str
 export interface ExperimentAssemblyCandidate { assemblyKey: string; parentAssemblyKey?: string; sourceIdentity?: string; sourceIdentityType: string; status: 'READY' | 'NEEDS_REVIEW' | 'BLOCKED' | 'RUNNING' | 'SYNCED' | 'ALREADY_CREATED' | 'FAILED' | 'SKIPPED'; sourceRecordKeys: string[]; sharedContextRecordKeys: string[]; conflicts: Array<{ code: string; message: string }>; warnings: Array<{ code: string; message: string }>; editModel: Record<string, unknown>; planHash: string; contentHash: string }
 export interface ExperimentAssemblyPlan { importJobId: string; candidates: ExperimentAssemblyCandidate[]; readyCount: number; reviewCount: number; blockedCount: number; sourceRecordCount: number; sampleGroupCount: number; sourceGroupCount: number; sourceContextCount: number; sourceIdentityCount: number; logicalSampleCount: number }
 export interface ExperimentAssemblyLink { assemblyKey: string; parentAssemblyKey?: string; status: string; resolutionAction?: string; resolutionReason?: string; experimentId?: string; experimentVersionId?: string; experimentNo?: string; planHash: string; contentHash: string; errorMessage?: string }
-export interface ExperimentSyncStatus { plan: ExperimentAssemblyPlan; links: ExperimentAssemblyLink[] }
+export interface ExperimentSyncStatus { plan: ExperimentAssemblyPlan; links: ExperimentAssemblyLink[]; experiments?: import('@/services/experiments/experiment-status').LinkedExperimentStatus[] }
 
 export interface ExperimentConversion {
   id: string; batchId: string; sourceFileId: string; sourceName: string; sourceSha256: string;

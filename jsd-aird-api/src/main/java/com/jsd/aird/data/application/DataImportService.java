@@ -437,6 +437,7 @@ public class DataImportService {
         if(!Set.of("WAITING_MAPPING","WAITING_CONFIRM","COMPLETED").contains(job.status())||!Set.of("XLSX","XLS","CSV").contains(job.sourceFormat()))throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"当前导入任务不能修改工作簿结构");
         if(source==null||!source.path("sheets").isObject())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"工作簿草稿无效");
         var snapshot=source.deepCopy();
+        if(snapshot instanceof ObjectNode object)object.remove("importConfirmation");
         var instance=com.jsd.aird.shared.excel.WorkbookStructure.validate(objectMapper,snapshot,provided);
         if(operations!=null&&!operations.isArray())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"结构操作记录无效");
         // Exporting and parsing can involve an isolated Office process. Keep it
@@ -1285,6 +1286,8 @@ public class DataImportService {
                     .put("dataHash", item.dataHash()));
         }
         var detail = objectMapper.createObjectNode()
+                .put("reviewedRevision",job.getRevision())
+                .put("reviewedContentHash",new com.jsd.aird.shared.json.JsonCanonicalizer(objectMapper).hash(records))
                 .put("templateVersionId", job.templateVersionId().toString())
                 .put("sourceFileId", job.sourceFileId().toString())
                 .put("sourceFileName", job.sourceFileName())

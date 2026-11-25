@@ -152,7 +152,7 @@ public class ProjectExperimentController {
     public ApiResponse<Detail> approve(@PathVariable UUID projectId,
                                        @PathVariable UUID id,
                                        @Valid @RequestBody ActionRequest request) {
-        return transition(projectId, id, request, ExperimentStatus.COMPLETED);
+        return transition(projectId, id, request, ExperimentStatus.APPROVED);
     }
 
     @PostMapping("/{id}/return")

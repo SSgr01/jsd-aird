@@ -69,6 +69,20 @@ class ExperimentAssemblyServiceTest {
         });
     }
     @AfterEach void cleanup(){ActorContext.clear();}
+    @Test void reportsCurrentExperimentStatusAndHidesInaccessibleLinks(){
+        var experiment=UUID.randomUUID();var statuses=mock(com.jsd.aird.rnd.api.ExperimentStatusFacade.class);
+        service.setExperimentStatuses(statuses);
+        when(repository.links(org,job)).thenReturn(List.of(link("SYNCED",experiment)));
+        var current=new com.jsd.aird.rnd.api.ExperimentStatusFacade.Summary(experiment,UUID.randomUUID(),"RD261101","已发布实验","COMPLETED");
+        when(statuses.current(List.of(experiment))).thenReturn(List.of(current));
+        assertThat(service.status(job).experiments()).containsExactly(current);
+        when(statuses.current(List.of(experiment))).thenReturn(List.of());
+        var hidden=service.status(job);
+        assertThat(hidden.experiments()).isEmpty();
+        assertThat(hidden.links().getFirst().experimentId()).isNull();
+        assertThat(hidden.links().getFirst().experimentVersionId()).isNull();
+        assertThat(hidden.links().getFirst().experimentNo()).isNull();
+    }
 
     ExperimentDraftFacade.ImportedDraft execute(){return service.execute(org,user,"陈霖",job,key,hash,category,null,null,null,context);}
     ExperimentAssemblyRepository.Link link(String status,UUID experiment){return new ExperimentAssemblyRepository.Link(key,null,status,null,null,experiment,

@@ -14,8 +14,9 @@ import org.junit.jupiter.api.Test;
 class DataWorkbookServiceTest {
 
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
-    void preparedLaboratoryWorkspaceKeepsAllSheetsWithoutReadingStagedValueCopies(boolean legacyDraft) throws Exception {
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"prepared", "legacy", "missing"})
+    void preparedLaboratoryWorkspaceKeepsAllSheetsWithoutReadingStagedValueCopies(String state) throws Exception {
+        boolean needsRepair=!state.equals("prepared");
         var json=new ObjectMapper();var organization=UUID.randomUUID();var id=UUID.randomUUID();var version=UUID.randomUUID();var file=UUID.randomUUID();
         var repository=org.mockito.Mockito.mock(DataRepository.class);
         var templates=org.mockito.Mockito.mock(TemplateDataImportFacade.class);
@@ -25,11 +26,14 @@ class DataWorkbookServiceTest {
         var snapshot=json.readTree("""
                 {"sheets":{"s":{"id":"s","custom":{"labTemplate":{"version":1}},"cellData":{"0":{"0":{"f":"=Other!A1"}}}},"other":{"id":"other","name":"Other","cellData":{"0":{"0":{"v":42}}}}}}
                 """);
-        var instance=json.createObjectNode().put("version",2);
-        if(legacyDraft) instance.putObject("model").putArray("fields").addObject().put("id","first-sheet-field");
+        var instance=json.createObjectNode();
+        if(!state.equals("missing"))instance.put("version",2);
+        if(state.equals("prepared"))instance.put("labMultiSheet",true);
+        if(state.equals("legacy"))instance.putObject("model").putArray("fields").addObject().put("id","first-sheet-field");
         var schema=json.createObjectNode();schema.putObject("x-jsd-lab-template");
-        var repairedInstance=instance.deepCopy().put("labMultiSheet",true);
-        repairedInstance.withObject("/model").withArray("/fields").addObject().put("id","second-sheet-field");
+        var repairedInstance=json.createObjectNode().put("version",2).put("labMultiSheet",true);
+        var restoredFields=repairedInstance.withObject("/model").putArray("fields");
+        restoredFields.addObject().put("id","first-sheet-field");restoredFields.addObject().put("id","second-sheet-field");
         schema.set("x-jsd-workbook-instance",repairedInstance);
         var definition=new TemplateDataImportFacade.DataTemplateDefinition(version,version,"TEST","测试模板",null,1,"XLSX",schema,json.createArrayNode(),List.of(),9,7,"contract",json.createObjectNode());
         org.mockito.Mockito.when(repository.findJob(organization,id)).thenReturn(java.util.Optional.of(job));
@@ -45,7 +49,7 @@ class DataWorkbookServiceTest {
             assertThat(result.snapshot().path("sheets").size()).isEqualTo(2);
             assertThat(result.snapshot().at("/sheets/s/cellData/0/0/f").asText()).isEqualTo("=Other!A1");
             assertThat(result.fieldResultsSource()).isEqualTo("SNAPSHOT");
-            if(legacyDraft) {
+            if(needsRepair) {
                 var restored=com.jsd.aird.shared.excel.WorkbookStructure.instance(result.snapshot());
                 assertThat(restored.path("labMultiSheet").asBoolean()).isTrue();
                 assertThat(restored.path("model").path("fields")).hasSize(2);

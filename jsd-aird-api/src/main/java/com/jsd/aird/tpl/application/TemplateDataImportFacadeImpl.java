@@ -418,6 +418,11 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
             applyInstanceFields(fields,pack.path("schema").path("x-jsd-field-model").path("fields"));
             var contract=pack.path("contract");
             var definition=new DataTemplateDefinition(workspace.templateId(),versionId,workspace.templateCode(),workspace.name(),null,workspace.versionNo(),"XLSX",pack.path("schema"),pack.path("mapping"),List.copyOf(fields.values()),9,contract.path("layoutStructureVersion").asInt(),contract.path("contractHash").asText(),contract);
+            // The contract describes every physical sheet. Carry that same
+            // definition into the cached display snapshot, otherwise the client
+            // falls back to rebuilding only the first sheet's legacy metadata.
+            com.jsd.aird.shared.excel.WorkbookStructure.attach(prepared,
+                    pack.path("schema").path("x-jsd-workbook-instance"));
             var tabularSnapshot=prepared.deepCopy();
             removeLabTotalFormulas(tabularSnapshot);
             var bytes=workbookExporter.export(tabularSnapshot,objectMapper.createArrayNode(),objectMapper.createObjectNode(),null).content();

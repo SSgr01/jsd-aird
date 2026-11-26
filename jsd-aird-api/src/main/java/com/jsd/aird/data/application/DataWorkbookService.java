@@ -135,9 +135,11 @@ public class DataWorkbookService {
                     if(com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot)) {
                         var instance=com.jsd.aird.shared.excel.WorkbookStructure.instance(snapshot);
                         if(com.jsd.aird.shared.lab.LabWorkbookSheets.multiple(snapshot)
-                                && !instance.path("labMultiSheet").asBoolean()
-                                && !instance.path("model").path("fields").isEmpty()) {
+                                && !instance.path("labMultiSheet").asBoolean()) {
                             // Legacy drafts can contain only the first sheet's definitions.
+                            // Cold cached snapshots can have no generic instance at all.
+                            if(!instance.isObject()) instance=com.jsd.aird.shared.excel.WorkbookStructure.seed(
+                                    objectMapper,snapshot,definition.schema(),definition.mappings(),job.sourceFileId().toString());
                             // Rebuild all physical sheets before exposing confirmation actions.
                             var repaired=templates.prepareWorkbookReview(org,job.templateVersionId(),snapshot,instance);
                             snapshot=repaired.preparedSnapshot();

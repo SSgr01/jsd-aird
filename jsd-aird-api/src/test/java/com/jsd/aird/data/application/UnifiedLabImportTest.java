@@ -83,6 +83,10 @@ class UnifiedLabImportTest {
         var facade=new TemplateDataImportFacadeImpl(repository,files,storage,new GenericTabularStructureParser(),mock(StandardFieldService.class),exporter,json,parser);
         var execution=facade.prepareImport(org,version,fileId);
         assertThat(execution.parsed().sheets()).hasSize(2);
+        var displayed=com.jsd.aird.shared.excel.WorkbookStructure.instance(execution.preparedSnapshot());
+        assertThat(displayed.path("labMultiSheet").asBoolean()).isTrue();
+        assertThat(displayed).isEqualTo(execution.definition().schema().path("x-jsd-workbook-instance"));
+        assertThat(displayed.path("mapping").findValuesAsText("sheetId")).contains(first.path("id").asText(),"sheet-2");
         var required=execution.definition().fields().stream().filter(com.jsd.aird.tpl.api.TemplateDataImportFacade.FieldDefinition::required).toList();
         assertThat(required).hasSize(6);
         assertThat(required).allSatisfy(field -> {
@@ -200,12 +204,12 @@ class UnifiedLabImportTest {
         var experiments=mock(com.jsd.aird.rnd.application.port.ExperimentRepository.class);
         var category=UUID.randomUUID();
         when(experiments.categories(org,false)).thenReturn(List.of(new com.jsd.aird.rnd.domain.ExperimentModels.Category(category,"TEST","Test",null,true,1)));
-        when(experiments.create(any())).thenReturn(mock(com.jsd.aird.rnd.domain.ExperimentModels.Summary.class));
+        when(experiments.createPrepared(any(),anyString(),anyString())).thenReturn(mock(com.jsd.aird.rnd.domain.ExperimentModels.Summary.class));
         var drafts=new com.jsd.aird.rnd.application.ExperimentDraftApplicationFacade(experiments,
                 new com.jsd.aird.rnd.application.ExperimentEditModelNormalizer(json),json,mock(com.jsd.aird.iam.api.AuthorizationService.class));
         drafts.createImportedDraft(new com.jsd.aird.rnd.api.ExperimentDraftFacade.ImportedDraftCommand(org,UUID.randomUUID(),"Tester","Live import",category,"EXCEL_IMPORT",null,null,null,"Tester",java.time.LocalDate.of(2026,10,24),version,"hash",pack.path("snapshot"),json.createObjectNode().set("documentSnapshot",source)));
         var created=ArgumentCaptor.forClass(com.jsd.aird.rnd.application.port.ExperimentRepository.Create.class);
-        verify(experiments).create(created.capture());
+        verify(experiments).createPrepared(created.capture(),anyString(),anyString());
         assertThat(created.getValue().editModel().path("sourceGroups")).hasSize(1);
         assertThat(created.getValue().editModel().path("formulaItems").get(0).path("actualQty").asInt()).isEqualTo(90);
         assertThat(created.getValue().editModel().path("templateInstance").path("issues")).isEmpty();

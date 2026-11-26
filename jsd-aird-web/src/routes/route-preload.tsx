@@ -1,5 +1,6 @@
 import { createElement, lazy, type ComponentType } from 'react';
 import { matchRoutes } from 'react-router-dom';
+import { retryChunkImport } from '@/services/release/chunk-import';
 
 const routes = new Map<string, () => Promise<unknown>>();
 const resets = new Set<() => void>();
@@ -7,7 +8,9 @@ const resets = new Set<() => void>();
 export function routePage<P extends object>(importer: () => Promise<{ default: ComponentType<P> }>) {
   let promise: Promise<{ default: ComponentType<P> }> | undefined;
   let failed = false;
-  const preload = () => promise ??= importer().catch((error: unknown) => { failed = true; throw error; });
+  const preload = () => promise ??= retryChunkImport(importer)
+    .then(module => { failed = false; return module; })
+    .catch((error: unknown) => { promise = undefined; failed = true; throw error; });
   let Page = lazy(preload);
   resets.add(() => { if (failed) { promise = undefined; failed = false; Page = lazy(preload); } });
   // The wrapper is stable; retries replace only a failed lazy component.

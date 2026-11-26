@@ -1,3 +1,4 @@
+import { SheetsEditor } from '@/features/template-workspace/editor-runtime';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { WorkspaceFrame, WorkspaceMaximizeButton } from '@/components/workspace/WorkspaceFrame';
 import {
@@ -11,7 +12,7 @@ import {
   TableOutlined,
 } from '@ant-design/icons';
 import { Button, Empty, Segmented, Select, Skeleton, Space, Spin, Tag, Typography } from 'antd';
-import { forwardRef, lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
+import { forwardRef, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 import { FieldPanelToggle } from '@/components/field-panel/CollapsibleFieldPanel';
 import { useAppStore } from '@/stores/app-store';
 import { markPerformance, measurePerformance } from '@/services/performance/metrics';
@@ -30,10 +31,6 @@ import { customerFieldName, customerFieldPath, customerGroupName, customerLabelT
 import type { WorkbookTemplateInstance } from '@/features/template-workspace/workbook-instance';
 import { fieldMatchesSheet, normalizeCellAddress, selectionAnchor } from './field-cell-selection';
 
-const SheetsEditor = lazy(async () => {
-  const module = await import('@/features/template-workspace/UniverSheetsEditor');
-  return { default: module.UniverSheetsEditor };
-});
 
 interface ShellProps {
   maximizable?: boolean;

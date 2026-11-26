@@ -139,13 +139,41 @@ public class ExperimentConversionService implements com.jsd.aird.data.api.Experi
         return get(id,false);
     }
 
+    @Override
+    @Transactional
+    public ObjectNode updateLaunchStatus(UUID id,String status,String expectedUpdatedAt,String reason,String requestId) {
+        require("create");
+        var task=get(id,true);
+        String current=task.path("status").asText();
+        boolean changed=switch(status) {
+            case "ACCEPTED", "START_FAILED" -> Set.of("QUEUED","START_FAILED","FAILED").contains(current)
+                    && task.path("updatedAt").asText().equals(expectedUpdatedAt);
+            case "RUNNING" -> Set.of("QUEUED","ACCEPTED","START_FAILED","FAILED").contains(current);
+            case "FAILED" -> Set.of("ACCEPTED","RUNNING").contains(current);
+            default -> throw invalid("不支持的转换状态");
+        };
+        if(!changed || task.hasNonNull("importJobId")) return task;
+        if(Set.of("START_FAILED","FAILED").contains(status)) {
+            if(reason==null||reason.isBlank()||reason.length()>2000) throw invalid("请提供转换失败原因");
+        } else reason=null;
+        if("START_FAILED".equals(status)) {
+            if(requestId==null || !requestId.matches("[A-Za-z0-9:.+-]{1,180}")) throw invalid("转换请求标识无效");
+        } else requestId=null;
+        var actor=ActorContext.required();
+        jdbc.update("""
+                UPDATE data.experiment_conversion SET status=?,error_message=?,launch_request_id=?,updated_at=now()
+                WHERE organization_id=? AND owner_id=? AND id=?
+                """,status,reason,requestId,actor.organizationId(),actor.userId(),id);
+        return get(id,false);
+    }
+
     private ObjectNode row(java.sql.ResultSet rs) throws java.sql.SQLException {
         var node=json.createObjectNode();
         for(var pair:List.of(new String[]{"id","id"},new String[]{"batch_id","batchId"},new String[]{"source_file_id","sourceFileId"},
                 new String[]{"source_name","sourceName"},new String[]{"source_sha256","sourceSha256"},new String[]{"template_version_id","templateVersionId"},
                 new String[]{"category_id","categoryId"},new String[]{"kind","kind"},new String[]{"status","status"},new String[]{"result_artifact_id","resultArtifactId"},
                 new String[]{"plan_artifact_id","planArtifactId"},new String[]{"report_artifact_id","reportArtifactId"},new String[]{"import_job_id","importJobId"},
-                new String[]{"error_message","errorMessage"})) node.put(pair[1],rs.getString(pair[0]));
+                new String[]{"error_message","errorMessage"},new String[]{"launch_request_id","launchRequestId"})) node.put(pair[1],rs.getString(pair[0]));
         node.put("createdAt",rs.getTimestamp("created_at").toInstant().toString());
         node.put("updatedAt",rs.getTimestamp("updated_at").toInstant().toString());
         try {if(rs.getString("report")!=null) node.set("report",json.readTree(rs.getString("report")));}

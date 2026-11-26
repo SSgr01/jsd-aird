@@ -49,7 +49,8 @@ export function ExperimentUploadPage() {
   const [mode, setMode] = useState<'TEMPLATE' | 'CONTENT_ONLY' | 'CONVERSION'>('TEMPLATE');
   const canAI = user?.permissions.includes('ai.use') ?? false;
   const [conversions, setConversions] = useState<ExperimentConversion[]>([]);
-  const [startingBatch, setStartingBatch] = useState<string>();
+  const [startingBatches, setStartingBatches] = useState<ReadonlySet<string>>(() => new Set());
+  const startingBatchesRef = useRef(new Set<string>());
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [freeJobs, setFreeJobs] = useState<ExperimentImportJob[]>([]);
   const [templateJobs, setTemplateJobs] = useState<DataJob[]>([]);
@@ -121,7 +122,7 @@ export function ExperimentUploadPage() {
   }, [canUpload, load]);
 
   const running = useMemo(
-    () => [...freeJobs, ...templateJobs].some((job) => ACTIVE_JOB_STATES.includes(job.status)) || conversions.some(job => job.status === 'QUEUED'),
+    () => [...freeJobs, ...templateJobs].some((job) => ACTIVE_JOB_STATES.includes(job.status)) || conversions.some(job => ['QUEUED', 'ACCEPTED', 'RUNNING'].includes(job.status)),
     [freeJobs, templateJobs, conversions],
   );
   usePolling(() => load({ silent: true }), running, 2000);
@@ -199,8 +200,8 @@ export function ExperimentUploadPage() {
       setFiles(current => current.filter(f => failedNames.has(f.name)));
       await load();
       if (mode === 'CONVERSION' && templateJobCount) {
+        void message.success(`${templateJobCount} 个原件已保存${failed ? `，${failed} 个上传失败` : ''}`);
         await startBatch(batchId);
-        void message.success(`${templateJobCount} 个原件已保存；专家转换结果将进入待人工核对${failed ? `，${failed} 个上传失败` : ''}`);
         return;
       }
       if (!failed) {
@@ -229,7 +230,7 @@ export function ExperimentUploadPage() {
   ].filter((item) => {
     const convertedJob = item.kind === 'CONVERSION' ? templateJobs.find(job => job.id === item.job.importJobId) : undefined;
     const status = item.kind === 'CONVERSION'
-      ? convertedJob?.status === 'COMPLETED' ? 'COMPLETED' : item.job.status === 'FAILED' || convertedJob?.status === 'FAILED' ? 'FAILED' : item.job.status === 'WAITING_REVIEW' ? 'WAITING_MAPPING' : 'PARSING'
+      ? convertedJob?.status === 'COMPLETED' ? 'COMPLETED' : ['FAILED', 'START_FAILED'].includes(item.job.status) || convertedJob?.status === 'FAILED' ? 'FAILED' : item.job.status === 'WAITING_REVIEW' ? 'WAITING_MAPPING' : 'PARSING'
       : item.job.status === 'WAITING_CONFIRM' ? 'WAITING_MAPPING' : item.job.status;
     return (filter === 'ALL' || status === filter)
       && (!keyword || item.job.sourceFileName.toLowerCase().includes(keyword.toLowerCase()));
@@ -338,30 +339,49 @@ export function ExperimentUploadPage() {
   }
 
   async function startBatch(batchId: string, retryFailed = false) {
-    setStartingBatch(batchId);
+    const active = startingBatchesRef.current;
+    if (active.has(batchId)) return;
+    active.add(batchId);
+    setStartingBatches(new Set(active));
     try {
       const result = await dataApi.startConversions(batchId, retryFailed);
-      const failed = result.tasks.filter(item => !item.accepted).length;
-      if (failed) void message.warning(`${failed} 个转换任务暂未启动，可点击“启动转换”继续`);
-    } catch { void message.warning('原件已保存，专家暂未启动；请稍后点击“启动转换”。'); }
-    finally { setStartingBatch(undefined); }
+      const failures = result.tasks.filter(item => !item.accepted);
+      const warning = result.tasks.find(item => item.warning)?.warning;
+      if (failures.length) void message.warning(`${failures.length} 个任务启动失败。 ${failures[0]?.error ?? '请查看转换记录。'}`);
+      else if (warning) void message.warning(warning);
+      else if (result.tasks.length) void message.success(`专家已受理 ${result.tasks.length} 个任务`);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : '未收到服务响应';
+      void message.warning(`未能确认启动结果。 ${reason}。可在「查看专家处理」中核对。`);
+    } finally {
+      active.delete(batchId);
+      setStartingBatches(new Set(active));
+      void load({ silent: true });
+    }
   }
 
   function conversionRecord(job: ExperimentConversion): UploadWorkspaceRecord {
     const linked = templateJobs.find(item => item.id === job.importJobId);
     const reviewed = linked?.status === 'COMPLETED';
     const failed = job.status === 'FAILED' || linked?.status === 'FAILED';
+    const status = reviewed ? { label: '导入已核对', color: 'success' }
+      : failed ? { label: '转换失败', color: 'error' }
+      : job.importJobId ? { label: '待人工核对', color: 'warning' }
+      : job.status === 'START_FAILED' ? { label: '启动失败', color: 'error' }
+      : job.status === 'RUNNING' ? { label: '运行中', color: 'processing' }
+      : job.status === 'ACCEPTED' ? { label: '专家已受理', color: 'processing' }
+      : { label: '未提交', color: 'default' };
     return {
       id: `conversion-${job.id}`, name: job.sourceName,
       meta: `专家转换 · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
       detail: job.errorMessage || linked?.errorMessage || (reviewed ? <LinkedExperimentStatus items={assemblyStatuses[job.importJobId || '']?.experiments} /> : job.importJobId
         ? `未落位 ${job.report?.unplaced?.length ?? 0} 项 · 源冲突 ${job.report?.source_conflicts?.length ?? 0} 项 · 请对照原件核对`
-        : '原件已保存，等待专家处理；模型服务不可用时可稍后继续'),
-      status: { label: reviewed ? '导入已核对' : failed ? '需处理' : job.importJobId ? '待人工核对' : '待转换 / 处理中', color: reviewed ? 'success' : failed ? 'error' : job.importJobId ? 'warning' : 'processing' },
+        : job.status === 'QUEUED' ? '原件已保存' : undefined),
+      status,
       actions: <Space size={2} wrap>
         {job.importJobId && (canUpload || can('update')) && <Button type="link" onClick={() => navigate(`/experiments/template-imports/${job.importJobId}`)}>核对结果</Button>}
-        {canAI && job.status === 'QUEUED' && <Button type="link" loading={startingBatch === job.batchId} onClick={() => void startBatch(job.batchId)}>启动转换</Button>}
-        {canAI && job.status === 'FAILED' && <Button type="link" loading={startingBatch === job.batchId} onClick={() => void startBatch(job.batchId, true)}>重试转换</Button>}
+        {canAI && ['QUEUED', 'START_FAILED'].includes(job.status) && <Button type="link" loading={startingBatches.has(job.batchId)} onClick={() => void startBatch(job.batchId)}>{job.status === 'START_FAILED' ? '重试启动' : '启动转换'}</Button>}
+        {canAI && job.status === 'FAILED' && <Button type="link" loading={startingBatches.has(job.batchId)} onClick={() => void startBatch(job.batchId, true)}>重试转换</Button>}
         {canAI && <Button type="link" href={`/agent/?conversion=${job.id}`}>查看专家处理</Button>}
         {canUpload && <Button type="link" onClick={() => triggerNativeDownload(`/api/v1/data/experiment-conversions/${job.id}/source`, job.sourceName)}>下载原件</Button>}
       </Space>,

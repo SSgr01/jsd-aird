@@ -260,7 +260,9 @@ def extract(root, source, sheet=None, start=0, limit=1):
     view = dict(payload)
     if "sheets" in payload:
         view["sheets"] = [{**item, "cells": {
-            cell["cell"]: {key: value for key, value in cell.items()
+            cell["cell"]: {key: (value[:120] + "… [完整公式见 artifact]"
+                                if key == "formula" and isinstance(value, str) and len(value) > 500 else value)
+                           for key, value in cell.items()
                            if key != "cell" and not (key == "format" and value == "General")}
             for cell in item["cells"]}} for item in payload["sheets"]]
     preview = state_dir(root) / ("view-" + hashlib.sha256((sha + key).encode()).hexdigest()[:12] + ".json")
@@ -268,8 +270,53 @@ def extract(root, source, sheet=None, start=0, limit=1):
     # across lines, rather than emitting one giant line that hides later cells.
     preview.write_text(json.dumps(view, ensure_ascii=False, separators=(',\n', ':')), encoding="utf-8")
     return {"cache_hit": hit, "artifact": relposix(target, root), "preview": relposix(preview, root), "sheets": wanted,
-            "read_hint": "preview 已完整保留本批所有非空源坐标、原值、公式、格式与工作表元数据；只读 preview，不再重复读取 artifact。artifact 是完整提取证据，仅排查具体提取错误时定向读取。",
+            "read_hint": "preview 保留本批所有非空坐标、原值和格式；长公式仅显示开头。完整公式保存在 artifact，仅按具体坐标查阅。",
             "next_start": start + len(wanted) if not sheet and suffix in (".xlsx", ".xls") else None}
+
+
+def semantic_handoff(root, result):
+    """Return the inputs for semantic mapping without rediscovering the workspace."""
+    sources = [(kind, path) for kind, category in zip(("test", "synthesis"), CATEGORIES)
+               for path in (root / "原始实验" / category).glob("*.xlsx")
+               if not path.name.startswith("~$")]
+    if len(sources) != 1:
+        return result
+    kind, source = sources[0]
+    template = root / "标准模板" / (kind + ".xlsx")
+    if not template.is_file():
+        return result
+    source_ref = relposix(source, root)
+    source_hash, template_hash = digest(source), digest(template)
+    target = state_dir(root) / f"target-{kind}-{template_hash[:16]}.json"
+    if not target.is_file():
+        sheets = extract_xlsx(template, sheet_names(template)[:1])
+        write_json(target, {"template_sha256": template_hash, "sheet": sheets[0]["sheet"],
+                           "labels": {cell["cell"]: cell["value"] for cell in sheets[0]["cells"]
+                                      if "formula" not in cell}})
+    batch = extract(root, source_ref)
+    with zipfile.ZipFile(source) as archive:
+        members = archive.namelist()
+    plans = []
+    for path in sorted((state_dir(root) / "plans").glob("*.json")):
+        try:
+            plan = read_json(path)
+        except (OSError, ValueError):
+            continue
+        if (isinstance(plan, dict) and plan.get("source") == source_ref and plan.get("kind") == kind
+                and plan.get("source_sha256") == source_hash and plan.get("template_sha256") == template_hash):
+            plans.append(relposix(path, root))
+    result["semantic"] = {
+        "source": source_ref, "kind": kind, "source_sha256": source_hash, "template_sha256": template_hash,
+        "source_preview": batch["preview"], "target_labels": relposix(target, root),
+        "source_media": sum(name.startswith("xl/media/") and not name.endswith("/") for name in members),
+        "source_charts": sum(name.startswith("xl/charts/chart") and name.endswith(".xml") for name in members),
+        "existing_plans": plans, "next_start": batch["next_start"],
+        "plan_contract": ".conversion-tools/jsd-experiment-converter/references/execution.md",
+        "next_action": "有已保存计划则先检查并续跑。否则读取源预览、目标标签和计划约定，再保存坐标映射。"
+                       "无需重新清点或阅读执行器源码。后续工作表按源预览中的 sheet_names 提取。"
+    }
+    write_json(state_dir(root) / "semantic-handoff.json", result)
+    return result
 
 
 def main():
@@ -289,6 +336,8 @@ def main():
         if args.command == "prepare":
             from exact_template import prepare
             result = prepare(root)
+            if not result["eligible"]:
+                result = semantic_handoff(root, result)
         elif args.command == "inspect":
             result = inventory(root)
         else:

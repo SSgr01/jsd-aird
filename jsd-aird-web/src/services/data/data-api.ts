@@ -57,7 +57,7 @@ export interface ExperimentSyncStatus { plan: ExperimentAssemblyPlan | null; lin
 export interface ExperimentConversion {
   id: string; batchId: string; sourceFileId: string; sourceName: string; sourceSha256: string;
   templateVersionId: string; categoryId?: string; kind: 'test' | 'synthesis';
-  status: 'QUEUED' | 'WAITING_REVIEW' | 'FAILED'; importJobId?: string;
+  status: 'QUEUED' | 'ACCEPTED' | 'RUNNING' | 'START_FAILED' | 'WAITING_REVIEW' | 'FAILED'; importJobId?: string;
   resultArtifactId?: string; planArtifactId?: string; reportArtifactId?: string;
   report?: { status: string; human_review: string; unplaced?: unknown[]; source_conflicts?: unknown[]; limitations?: string };
   errorMessage?: string; createdAt: string; updatedAt: string;
@@ -71,7 +71,7 @@ export const dataApi = {
     const response = await httpClient.get<ApiResponse<ExperimentConversion[]>>('/api/v1/data/experiment-conversions', { params: { batchId } }); return response.data.data;
   },
   async startConversions(batchId: string, retryFailed = false) {
-    const response = await httpClient.post<{ tasks: Array<{ conversion_id: string; session_id: string; accepted: boolean }> }>('/agent/business/conversion-start', { batch_id: batchId, retry_failed: retryFailed }, { timeout: 120000 }); return response.data;
+    const response = await httpClient.post<{ tasks: Array<{ conversion_id: string; session_id: string; accepted: boolean; error?: string; warning?: string }> }>('/agent/business/conversion-start', { batch_id: batchId, retry_failed: retryFailed }, { timeout: 120000 }); return response.data;
   },
   async publication(id: string) { const response = await httpClient.get<ApiResponse<DataPublication>>(`/api/v1/data/sources/${id}/publication`); return response.data.data; },
   async publicationAction(id: string, action: 'confirm' | 'submit' | 'withdraw' | 'revise' | 'publish' | 'disable' | 'restore', revision: string, reviewerId?: string) { const response = await httpClient.post<ApiResponse<DataPublication>>(`/api/v1/data/sources/${id}/publication/${action}`, action === 'submit' ? { reviewerId, revision } : { revision }); return response.data.data; },

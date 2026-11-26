@@ -138,6 +138,7 @@ public class AgentToolsController {
             return switch (command.action()) {
                 case "normalize_conversion_office" -> normalizeConversionOffice(args);
                 case "experiment_conversion" -> conversions.invoke(args);
+                case "experiment_conversion_status" -> conversions.updateLaunchStatus(args);
                 case "topic" -> topic(UUID.fromString(args.path("id").asText()));
                 case "runtime_context" -> host.context(args);
                 case "expert_catalog" -> experts.invoke(args);

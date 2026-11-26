@@ -20,8 +20,10 @@ def prepare(root):
         if len(original.worksheets) != 1 or len(blank.worksheets) != 1:
             return {'eligible': False, 'reason': '多工作表或隐藏元数据需要独立核对'}
         src, target = original.worksheets[0], blank.worksheets[0]
-        if (src.max_row, src.max_column) != (target.max_row, target.max_column) or src._images or src._charts:
-            return {'eligible': False, 'reason': '尺寸、图片或图表不适用精确模板模式'}
+        if (src.max_row, src.max_column) != (target.max_row, target.max_column):
+            return {'eligible': False, 'reason': '源表尺寸与模板不一致'}
+        if src._images or src._charts:
+            return {'eligible': False, 'reason': '源表含图片或图表，需要独立核对'}
         if set(map(str, src.merged_cells)) != set(map(str, target.merged_cells)):
             return {'eligible': False, 'reason': '合并区域不一致'}
         protected = {c.coordinate for row in target for c in row

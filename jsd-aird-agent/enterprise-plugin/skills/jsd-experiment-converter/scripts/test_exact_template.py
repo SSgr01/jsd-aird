@@ -5,6 +5,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 from exact_template import prepare
+from workflow import digest, read_json, semantic_handoff, write_json
 
 
 class ExactTemplateTests(unittest.TestCase):
@@ -55,6 +56,24 @@ class ExactTemplateTests(unittest.TestCase):
         self.edit({'C60': '=IF(COUNTA(C52:C59)=0,"",SUM(C52:C59))'})
         with self.assertRaisesRegex(ValueError, '源公式缺缓存'):
             prepare(self.root)
+
+    def test_semantic_fallback_exposes_reusable_inputs_and_fingerprint_bound_plans(self):
+        self.edit({'B104': 'different metric'})
+        first = semantic_handoff(self.root, prepare(self.root))['semantic']
+        preview = read_json(self.root / first['source_preview'])
+        self.assertEqual(preview['sheets'][0]['cells']['B104']['value'], 'different metric')
+        labels = read_json(self.root / first['target_labels'])['labels']
+        self.assertIn('B104', labels)
+        self.assertNotEqual(labels['B104'], 'different metric')
+        cache = self.root / '.dsh/cache/jsd-experiment-converter'
+        plan = {key: first[key] for key in ('source', 'kind', 'source_sha256', 'template_sha256')}
+        write_json(cache / 'plans/current.json', plan)
+        write_json(cache / 'plans/stale.json', {**plan, 'source_sha256': 'stale'})
+        second = semantic_handoff(self.root, prepare(self.root))['semantic']
+        self.assertEqual(second['source_preview'], first['source_preview'])
+        self.assertEqual(second['source_sha256'], digest(self.source))
+        self.assertEqual(second['existing_plans'], ['.dsh/cache/jsd-experiment-converter/plans/current.json'])
+        self.assertEqual(read_json(cache / 'semantic-handoff.json')['semantic'], second)
 
     def test_wrong_total_still_blocks(self):
         self.edit({'C60': 999})

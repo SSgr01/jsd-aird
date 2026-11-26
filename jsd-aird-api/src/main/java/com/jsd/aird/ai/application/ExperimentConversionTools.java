@@ -56,6 +56,10 @@ public class ExperimentConversionTools {
             return queue.stage(id,resultId,planId,reportId,uuid(result,"file_id"),plan,report,hash(content));
         } catch(ApiException error){throw error;} catch(Exception error){throw invalid("映射计划或校验报告不是有效 JSON");}
     }
+    public ObjectNode updateLaunchStatus(JsonNode args) {
+        return queue.updateLaunchStatus(uuid(args,"conversion_id"),args.path("status").asText(),
+                args.path("expected_updated_at").asText(),args.path("reason").asText(),args.path("request_id").asText());
+    }
     public void validateSource(JsonNode source,String excerpt) {
         var task=queue.get(uuid(source,"resource_id"),false);
         var text="原始实验文件："+task.path("sourceName").asText()+"\nSHA256："+task.path("sourceSha256").asText();

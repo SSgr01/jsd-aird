@@ -60,8 +60,17 @@ public final class IsolatedProcessRunner {
         catch(java.io.IOException error){throw new ApiException(ApiErrorCode.SERVER_BUSY,"文档处理进程暂不可用");}
         finally{
             if(process!=null){
-                children=process.descendants().toList();children.forEach(ProcessHandle::destroyForcibly);
-                if(process.isAlive())process.destroyForcibly();
+                // Windows can report the worker itself as a descendant after PID reuse.
+                long workerPid = ProcessHandle.current().pid();
+                children = process.descendants().filter(child -> child.pid() != workerPid).toList();
+                for (var child : children) {
+                    try {
+                        if (child.isAlive()) child.destroyForcibly();
+                    } catch (IllegalStateException | SecurityException error) {
+                        log.warn("Unable to terminate document child {}", child.pid(), error);
+                    }
+                }
+                if (process.isAlive()) process.destroyForcibly();
                 boolean interrupted=Thread.interrupted();
                 try{process.waitFor(3,TimeUnit.SECONDS);for(var child:children)try{child.onExit().get(1,TimeUnit.SECONDS);}catch(ExecutionException|TimeoutException ignored){ }}catch(InterruptedException error){interrupted=true;}
                 if(interrupted)Thread.currentThread().interrupt();

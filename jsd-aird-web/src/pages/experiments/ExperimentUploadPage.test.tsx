@@ -20,7 +20,7 @@ vi.mock('@/services/data/data-api', () => ({ dataApi: {
 } }));
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: (select: (state: { user: { permissions: string[] } }) => unknown) =>
-    select({ user: { permissions: ['eln.upload.create'] } }),
+    select({ user: { permissions: ['eln.upload.create', 'ai.use'] } }),
 }));
 vi.mock('@/utils/uuid', async importOriginal => {
   const original = await importOriginal<typeof UuidModule>();
@@ -30,6 +30,7 @@ vi.mock('@/components/project-relations/ProjectRelationPicker', () => ({ Project
 vi.mock('@/components/upload-workspace', () => ({
   UploadWorkspace: (props: ComponentProps<typeof UploadWorkspace>) => <div>
     <span>导入记录数：{props.rightCount}</span>
+    {props.records?.map(record => <div key={record.id}><span>{record.status?.label}</span>{record.detail}{record.actions}</div>)}
     <button onClick={() => props.onFilesChange([{
       uid: 'file', name: '实验.xlsx', originFileObj: Object.assign(new File(['data'], '实验.xlsx'), {
         uid: 'file', lastModifiedDate: new Date(),
@@ -95,4 +96,21 @@ it('keeps completed imports visible while their assembly plan is still preparing
   render(<App><MemoryRouter><ExperimentUploadPage /></MemoryRouter></App>);
   await waitFor(() => expect(api.syncStatus).toHaveBeenCalledWith('preparing'));
   expect(await screen.findByText('导入记录数：1')).toBeInTheDocument();
+});
+
+it('separates pending, accepted, running and failed launches', async () => {
+  const createdAt = new Date().toISOString();
+  api.conversions.mockResolvedValue([
+    { id: 'pending', sourceName: '待提交.xlsx', status: 'QUEUED', createdAt },
+    { id: 'accepted', sourceName: '已受理.xlsx', status: 'ACCEPTED', createdAt },
+    { id: 'running', sourceName: '运行中.xlsx', status: 'RUNNING', createdAt },
+    { id: 'failed', sourceName: '启动失败.xlsx', status: 'START_FAILED', createdAt, errorMessage: '绑定实验转换专家失败：权限不足' },
+  ]);
+  render(<App><MemoryRouter><ExperimentUploadPage /></MemoryRouter></App>);
+  for (const label of ['未提交', '专家已受理', '运行中', '启动失败']) {
+    expect(await screen.findByText(label)).toBeInTheDocument();
+  }
+  expect(screen.getByText(/绑定实验转换专家失败：权限不足/)).toBeInTheDocument();
+  expect(screen.getAllByRole('button', { name: '启动转换' })).toHaveLength(1);
+  expect(screen.getByRole('button', { name: '重试启动' })).toBeInTheDocument();
 });

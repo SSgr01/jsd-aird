@@ -26,7 +26,7 @@ import { readExecutionPolicy } from './read-policy.mjs';
 import { prepareCompactionRequest } from './compaction-request.mjs';
 import { materializeBusinessDataset } from './business-dataset.mjs';
 import { prepareConversionResources } from './conversion-resources.mjs';
-import { conversionLauncher, conversionContext } from './conversion-launch.mjs';
+import { conversionLauncher, conversionContext, conversionId, conversionError, reportConversion } from './conversion-launch.mjs';
 import { installSessionLifecycle } from './session-lifecycle.mjs';
 import { installTaskDirectories, ensureTaskDirectory } from './task-directories.mjs';
 import { installExperts } from './experts.mjs';
@@ -113,7 +113,7 @@ export async function apply(ctx) {
       ? Math.min(600000,Math.max(1,body.arguments?.timeout_ms || 120000))+15000
       // Output is a read of an accepted command, not a new execution. A short
       // read deadline can cancel healthy work during transient broker latency.
-      : action==='admission-renew' ? 5000 : action==='native-output' ? 30000 : action==='native-cancel' ? 7000 : 120000;
+          : ['admission-renew','conversion-status'].includes(action) ? 5000 : action==='native-output' ? 30000 : action==='native-cancel' ? 7000 : 120000;
     const encoded=JSON.stringify(body), encodedAt=performance.now();
     let response, headersAt, responseBytes, completed=false;
     try {
@@ -360,6 +360,10 @@ export async function apply(ctx) {
     const bound=mergeBinding(previous,current,hasInput);
     runs.set(agent.id, bound);
     alignNativeTools(agent,bound);
+    if(hasInput && conversionId(agent.id)) {
+      await reportConversion(business,agent.id,'RUNNING').catch(error =>
+        ctx.logger.warn('Conversion running projection pending: %s',conversionError(error)));
+    }
     // Tool resolution precedes native compaction. Archive the completed
     // background period here, before compaction can summarize its old bodies
     // into new high-sequence checkpoints. Fresh sessions still commit their
@@ -487,7 +491,12 @@ export async function apply(ctx) {
         ...(outputLimited.has(agent.id) ? {stop_reason:'max-tokens'} : {}) };
       // Keep the native truncation/continue flow. A cut-off response is not a
       // completed business result and must not trigger a different task.
-      if (outputLimited.has(agent.id)) { await business('complete', input, signal); return; }
+      if (outputLimited.has(agent.id)) {
+        await business('complete', input, signal);
+        if(conversionId(agent.id)) await reportConversion(business,agent.id,'FAILED',{reason:'模型输出达到上限，本轮未交付转换结果。'})
+          .catch(error => ctx.logger.warn('Conversion failure projection pending: %s',conversionError(error)));
+        return;
+      }
       const checked = await business('complete', {...input, check_only:true}, signal);
       if(checked.status==='FAILED' && checked.coverage && !checked.coverage.complete) {
         const source=briefingCoverageContinuation(checked.coverage,agent.session.snapshotEvents(),turn,bound.id);
@@ -514,6 +523,11 @@ export async function apply(ctx) {
       }
       const result = await business('complete', input, signal);
       bound.status = result.status;
+      if(conversionId(agent.id) && ['FAILED','SUCCEEDED'].includes(result.status)) {
+        const reason = result.status==='FAILED' ? conversionError(deliveryError(result)) : '专家已结束处理，但未提交可核对的转换结果。';
+        await reportConversion(business,agent.id,'FAILED',{reason}).catch(error =>
+          ctx.logger.warn('Conversion completion projection pending: %s',conversionError(error)));
+      }
       if (result.status === 'FAILED') throw deliveryError(result);
       if (result.status === 'SUCCEEDED' && !isFolderSession(agent.id)) await memory.capture(agent,bound);
     }
@@ -521,6 +535,9 @@ export async function apply(ctx) {
   ctx.on('agent/error', ({ agent, error }) => {
     projection.flush(agent.id);streams.flush(agent.id);
     const bound = runs.get(agent.id);
+    if(conversionId(agent.id) && bound?.status === 'RUNNING') {
+      enqueue(agent.id, () => reportConversion(business,agent.id,'FAILED',{reason:conversionError(error)}));
+    }
     // An activation error for a later Inbox delivery cannot fail an earlier
     // terminal Run. Admission owns failures before the new binding exists.
     if (bound?.status === 'RUNNING') enqueue(agent.id, () => business('failure', { run_id: bound.id, session_id: agent.id,
@@ -700,7 +717,11 @@ export async function apply(ctx) {
       } else value = await business(action, body);
       res.writeHead(200, {'content-type':'application/json','cache-control':'no-store'});
       res.end(JSON.stringify(value));
-    } catch(error) {res.writeHead(action==='memory' ? error.status || 409 : 409);res.end(JSON.stringify({error:error.code || 'BUSINESS_ACCESS_REFUSED'}));}
+    } catch(error) {
+      res.writeHead(action==='memory' ? error.status || 409 : 409, {'content-type':'application/json'});
+      res.end(JSON.stringify({error:error.code || 'BUSINESS_ACCESS_REFUSED',
+        ...(action==='conversion-start' ? {message:conversionError(error)} : {})}));
+    }
   }}));
   if(identity.scope==='folder-conversion' && !interactiveIdentity) { /* Folder leases do not install research automations. */ }
   else if(backgroundIdentity) await asBackground(()=>briefings.sync());

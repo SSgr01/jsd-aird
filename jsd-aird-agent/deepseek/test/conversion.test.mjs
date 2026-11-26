@@ -14,7 +14,7 @@ test('batch uses one native session per original and stable prompt identities; o
   const tasks=[{id,status:'QUEUED',sourceName:'F助剂性能对比测试766F.xlsx'},{id:other,status:'QUEUED'},{id:'done',status:'WAITING_REVIEW'}];
   const launch=conversionLauncher({workspaceRegistry:{async create(){return {id:'workspace'};}},sessionController:{
     async projections(){return undefined;},async create(body){created.push(body);},
-    async prompt(body,signal){signal.throwIfAborted();prompted.push(body);if(body.sessionId===conversionSession(id))throw new Error('model unavailable');},
+    async prompt(body,signal){signal.throwIfAborted();prompted.push(body);if(body.sessionId===conversionSession(id))throw Object.assign(new Error('forbidden'),{code:'ENTERPRISE_GATE_403'});},
   }},{executionRoot:root,business:async(action,body)=>{
     calls.push([action,body]);if(action==='conversion-queue')return {tasks};
     if(body.action==='resolve')return {id:'experiment-assistant'};
@@ -23,6 +23,9 @@ test('batch uses one native session per original and stable prompt identities; o
   const result=await launch({batch_id:id});
   assert.equal(created.length,2);assert.equal(prompted.length,2);
   assert.equal(result.tasks[0].accepted,false);assert.equal(result.tasks[1].accepted,true);
+  assert.match(result.tasks[0].error,/提交专家请求失败.*ENTERPRISE_GATE_403/);
+  assert.deepEqual(calls.filter(([action])=>action==='conversion-status').map(([,body])=>[body.conversion_id,body.status]),
+    [[id,'START_FAILED'],[other,'ACCEPTED']]);
   assert.equal(prompted[0].requestId,'conversion-'+id);
   assert.equal(prompted[0].content[0].text,'帮我把《F助剂性能对比测试766F.xlsx》按我选择的实验模板整理，保留原始数据。无法确定的地方标出来，完成后交给我核对。');
   for(const prompt of prompted)assert.doesNotMatch(prompt.content[0].text,/tool_search|conversion_id|artifact_save|verification\.json|action=|11111111|22222222/);
@@ -58,6 +61,25 @@ test('explicit retry keeps the original session and uses a stable identity for t
   assert.equal(prompts.length,2);assert.equal(prompts[0].sessionId,conversionSession(id));
   assert.equal(prompts[0].requestId,prompts[1].requestId);
   assert.match(prompts[0].content[0].text,/请继续帮我把刚上传的文件/);
+});
+
+test('retrying a start failure reuses the prior native request without retrying execution failures',async()=>{
+  const prompts=[];
+  const receipt='conversion-retry-'+id+'-2026-11-26T10:00:00Z';
+  const launch=conversionLauncher({sessionController:{
+    async projections(){return {values:{}};},
+    async prompt(body){prompts.push(body);},
+  }},{business:async(action,body)=>{
+    if(action==='conversion-queue')return {tasks:[
+      {id,status:'START_FAILED',launchRequestId:receipt}, {id:other,status:'FAILED'},
+    ]};
+    if(action==='conversion-status')throw Object.assign(new Error('unavailable'),{code:'ECONNREFUSED'});
+    return body.action==='resolve'?{id:'experiment-assistant'}:{expert:{id:'experiment-assistant'}};
+  }});
+  const {tasks}=await launch({batch_id:id});
+  assert.deepEqual(prompts.map(prompt=>prompt.requestId),[receipt]);
+  assert.equal(tasks[0].accepted,true);
+  assert.match(tasks[0].warning,/专家已受理.*ECONNREFUSED/);
 });
 
 test('conversion protocol remains in session-bound internal context, including after restore',()=>{

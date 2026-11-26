@@ -13,4 +13,5 @@ public interface ExperimentConversionFacade {
     FileStorageFacade.StoredFile original(UUID id);
     ObjectNode stage(UUID id,UUID artifactId,UUID planId,UUID reportId,UUID fileId,JsonNode plan,JsonNode report,String resultSha);
     ObjectNode fail(UUID id,String reason);
+    ObjectNode updateLaunchStatus(UUID id,String status,String expectedUpdatedAt,String reason,String requestId);
 }

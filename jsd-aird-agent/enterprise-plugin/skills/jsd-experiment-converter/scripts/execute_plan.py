@@ -368,15 +368,21 @@ def execute(root, plan_path, output=None):
                 if cell.data_type == "f" and cached[coord].value is None:
                     col = get_column_letter(cell.column)
                     area = f"{col}{info['first']}:{col}{info['last']}"
-                    # A legacy blank group's known total formula has a provable
-                    # empty result. Never infer a missing measured/formula value.
+                    # Known total formulas return blank with no charges. A
+                    # sample-only group may have an identity but no recipe.
+                    recipe_less_sample = (
+                        not metadata_sheets
+                        and spec.get('group_identity_role') in ('SAMPLE', 'PLAN')
+                        and not spec.get('recipe', {}).get('names')
+                        and all(src.cell(row, 2).value is None for row in range(info['first'], info['last'] + 1))
+                    )
                     empty_total = (cell.row == info['total']
                         and cell.column >= info['first_col'] and cell.column <= info['last_col']
                         and (cell.value == f'=IF(COUNTA({area})=0,"",SUM({area}))'
                              or cell.value == blank[coord].value and cell.value.startswith(f'=IF(COUNTA({area})=0,"",'))
                         and src.cell(info['total'], 2).value == ('用量合计（g）' if kind == 'test' else '质量合计（g）')
                         and all(src.cell(row, cell.column).value is None for row in range(info['first'], info['last'] + 1))
-                        and src.cell(info['id_row'], cell.column).value is None
+                        and (src.cell(info['id_row'], cell.column).value is None or recipe_less_sample)
                         and src.cell(info['recipe_id_row'], cell.column).value is None)
                     if not empty_total:
                         raise ValueError(f"源公式缺缓存：{name}!{coord}，需要一次重算")

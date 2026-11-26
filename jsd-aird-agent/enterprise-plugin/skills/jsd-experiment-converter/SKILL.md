@@ -74,7 +74,7 @@ description: 整理历史研发实验，按原文提取配方、工艺、多条�
 
 系统上传任务先运行 source 返回的 fast_path.command（workflow.py prepare）。只对单表测试实验逐项匹配标签坐标、合并区域、格式和分组；完全匹配才生成确定性计划并运行现有执行器。eligible=true 直接按返回的 plan/result 登记并 stage，不再读单元格或重写计划；eligible=false 才进入下面流程。校验失败仍是真实阻塞，不能跳过。此路径不授予人工审核状态。
 
-1. 系统模式使用已经准备好的当前任务目录和 `--root .`。仅本地模式从用户指定目录、当前项目或本 skill 项目目录向上找 `标准模板/` 和 `原始实验/`。有歧义才询问；不扫描整台电脑。目录规则见 [workspace.md](references/workspace.md)。
+1. 系统上传任务若收到 `semantic`，直接使用其中的 `source_preview`、`target_labels`、`plan_contract` 和指纹编写计划，跳过下方清点及首批提取。上下文压缩后先从任务缓存的 `semantic-handoff.json` 和其中引用的文件续跑，检查 `plans/` 中已写入的当前源计划。执行器源码仅用于排查一次具体执行错误。系统模式使用已经准备好的任务目录和 `--root .`。仅本地模式从用户指定目录、当前项目或本 skill 项目目录向上找 `标准模板/` 和 `原始实验/`。目录规则见 [workspace.md](references/workspace.md)。
 2. 只执行一次清点，读取紧凑 JSON。脚本路径相对于本 skill 目录；`ROOT` 是当前工作区绝对路径：
 
    ```text

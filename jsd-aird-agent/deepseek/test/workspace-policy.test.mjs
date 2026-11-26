@@ -104,7 +104,7 @@ test('configured model compacts source-heavy context before cumulative requests 
   const patch=enterprisePatch({plugin:tmpdir(),executionRoot:tmpdir(),model:{provider:'enterprise-provider',id:'configured-model'}});
   const preset=patch.find(row=>row.insert).insert.find(row=>row.config?.id==='enterprise');
   const policy=preset.config.plugins.find(row=>row.id==='compaction').config.find(row=>row.id==='compaction-basic').config.modelPolicies[0];
-  assert.deepEqual(policy,{provider:'enterprise-provider',model:'configured-model',thresholdRatio:0.06,retainTokens:1000,maxTokens:4096,compactionRetries:0});
+  assert.deepEqual(policy,{provider:'enterprise-provider',model:'configured-model',thresholdRatio:0.06,retainTokens:8000,maxTokens:4096,compactionRetries:0});
 });
 
 

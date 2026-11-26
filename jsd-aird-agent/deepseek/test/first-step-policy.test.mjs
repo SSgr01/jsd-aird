@@ -59,7 +59,7 @@ test('native tool resolution binds the claimed batch before the first prompt and
   const ctx={tools:{register:(definition,options)=>{definitions.push({definition,options});return ()=>{};},
     definitions:()=>definitions.map(row=>row.definition),guard:()=>()=>{}},
     plugin:()=>{},web:{registerSearchProvider:()=>{}},fs:{hostPath:path=>path,exposeAttachment:async(...args)=>exposed.push(args)},agents:{get:()=>undefined},sessions:{},systemPrompt:{section:value=>{if(value.name==='enterprise-policy')section=value;return ()=>{};},
-      context:value=>{context=value;return ()=>{};}},llm:{},
+      context:value=>{if(value.name==='enterprise-business')context=value;return ()=>{};}},llm:{},
     agentPresets:{presetForSession:()=> 'enterprise'},
     workingDirectory:{get:()=>tmpdir(),ensure:async()=>tmpdir()},workspaceRegistry:{create:async()=>({id:'default'})},sessionController:{},
     attachments,

@@ -355,6 +355,13 @@ def create_app(settings=None, store=None, service=None):
             if user.automation_grant_id:
                 raise HTTPException(403, "INTERACTIVE_AUTHORIZATION_REQUIRED")
             return await service.java(user, "experiment_conversion", {"action": "list", "batch_id": body["batch_id"]})
+        if action == "conversion-status":
+            if user.automation_grant_id:
+                raise HTTPException(403, "INTERACTIVE_AUTHORIZATION_REQUIRED")
+            conversion_id = body["conversion_id"]
+            if body.get("session_id") != f"session-conversion-{conversion_id}":
+                raise HTTPException(400, "CONVERSION_SESSION_MISMATCH")
+            return await service.java(user, "experiment_conversion_status", body)
         if action == "catalog":
             if settings.memory_enabled and not user.automation_grant_id:
                 await service.memory.preferences(user, initialize=True)

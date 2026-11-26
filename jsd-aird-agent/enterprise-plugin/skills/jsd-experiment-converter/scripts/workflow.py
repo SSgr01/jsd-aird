@@ -254,13 +254,27 @@ def extract(root, source, sheet=None, start=0, limit=1):
             payload["sheets"] = (extract_xlsx if suffix == ".xlsx" else extract_xls)(path, wanted)
         write_json(target, payload)
     (state_dir(root) / sha / "failure-extract.json").unlink(missing_ok=True)
-    return {"cache_hit": hit, "artifact": str(target), "sheets": wanted,
+    # Keep the complete extraction as evidence, but give the model a concise
+    # coordinate-indexed view and a short relative path it can copy reliably.
+    payload = read_json(target)
+    view = dict(payload)
+    if "sheets" in payload:
+        view["sheets"] = [{**item, "cells": {
+            cell["cell"]: {key: value for key, value in cell.items()
+                           if key != "cell" and not (key == "format" and value == "General")}
+            for cell in item["cells"]}} for item in payload["sheets"]]
+    preview = state_dir(root) / ("view-" + hashlib.sha256((sha + key).encode()).hexdigest()[:12] + ".json")
+    # Native read truncates each line at 2000 characters. Keep JSON compact
+    # across lines, rather than emitting one giant line that hides later cells.
+    preview.write_text(json.dumps(view, ensure_ascii=False, separators=(',\n', ':')), encoding="utf-8")
+    return {"cache_hit": hit, "artifact": relposix(target, root), "preview": relposix(preview, root), "sheets": wanted,
+            "read_hint": "preview 已完整保留本批所有非空源坐标、原值、公式、格式与工作表元数据；只读 preview，不再重复读取 artifact。artifact 是完整提取证据，仅排查具体提取错误时定向读取。",
             "next_start": start + len(wanted) if not sheet and suffix in (".xlsx", ".xls") else None}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("inspect", "extract"))
+    parser.add_argument("command", choices=("prepare", "inspect", "extract"))
     parser.add_argument("--root")
     parser.add_argument("--source")
     parser.add_argument("--sheet")
@@ -272,7 +286,10 @@ def main():
         root = workspace(args.root)
         if args.start < 0 or not 1 <= args.limit <= 5:
             raise ValueError("start >= 0；limit 为 1..5，每批只处理少量工作表")
-        if args.command == "inspect":
+        if args.command == "prepare":
+            from exact_template import prepare
+            result = prepare(root)
+        elif args.command == "inspect":
             result = inventory(root)
         else:
             if not args.source:

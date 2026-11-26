@@ -65,6 +65,34 @@ class WorkflowTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_compact_preview_preserves_cell_evidence_and_cache(self):
+        result = extract(self.root, self.plan['source'], limit=1)
+        preview_path = self.root / result['preview']
+        original_path = self.root / result['artifact']
+        preview = json.loads(preview_path.read_text(encoding='utf-8'))
+        original = json.loads(original_path.read_text(encoding='utf-8'))
+        self.assertLess(len(result['preview']), 70)
+        self.assertLess(preview_path.stat().st_size, original_path.stat().st_size)
+        self.assertLess(max(map(len, preview_path.read_text(encoding='utf-8').splitlines())), 2000)
+        for sheet, compact in zip(original['sheets'], preview['sheets']):
+            for cell in sheet['cells']:
+                actual = compact['cells'][cell['cell']]
+                self.assertEqual(actual['value'], cell['value'])
+                self.assertEqual(actual.get('formula'), cell.get('formula'))
+                self.assertEqual(actual.get('format', 'General'), cell.get('format'))
+        self.assertEqual(extract(self.root, self.plan['source'])['preview'], result['preview'])
+
+    def test_invalid_plan_reports_contract_instead_of_a_key_error(self):
+        write_json(self.plan_path, {'version': 1, 'source': self.plan['source'], 'meta': {}})
+        with self.assertRaisesRegex(ValueError, 'INVALID_MAPPING_PLAN.*kind.*execution.md'):
+            execute(self.root, self.plan_path)
+
+    def test_all_protected_targets_are_reported_together(self):
+        self.plan['sheets'][0]['writes'].extend([{'src': 'E2', 'dst': 'A1'}, {'src': 'G2', 'dst': 'A2'}])
+        write_json(self.plan_path, self.plan)
+        with self.assertRaisesRegex(ValueError, '拒绝覆盖模板标签.*A1.*A2'):
+            execute(self.root, self.plan_path)
+
     def test_customer_no_charge_is_explicit_and_measurements_stay_strict(self):
         for raw in (None, '', '/', '-', '－'):
             self.assertEqual(convert_value(raw, 'customer_charge_g'), 0)

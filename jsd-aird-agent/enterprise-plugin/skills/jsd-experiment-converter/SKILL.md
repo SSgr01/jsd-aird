@@ -72,6 +72,8 @@ description: 整理历史研发实验，按原文提取配方、工艺、多条�
 
 ## 立即开始
 
+系统上传任务先运行 source 返回的 fast_path.command（workflow.py prepare）。只对单表测试实验逐项匹配标签坐标、合并区域、格式和分组；完全匹配才生成确定性计划并运行现有执行器。eligible=true 直接按返回的 plan/result 登记并 stage，不再读单元格或重写计划；eligible=false 才进入下面流程。校验失败仍是真实阻塞，不能跳过。此路径不授予人工审核状态。
+
 1. 系统模式使用已经准备好的当前任务目录和 `--root .`。仅本地模式从用户指定目录、当前项目或本 skill 项目目录向上找 `标准模板/` 和 `原始实验/`。有歧义才询问；不扫描整台电脑。目录规则见 [workspace.md](references/workspace.md)。
 2. 只执行一次清点，读取紧凑 JSON。脚本路径相对于本 skill 目录；`ROOT` 是当前工作区绝对路径：
 
@@ -80,7 +82,7 @@ description: 整理历史研发实验，按原文提取配方、工艺、多条�
    ```
 
    清点会保存 `.dsh/cache/jsd-experiment-converter/inventory.json`。按用户指定范围处理；未指定范围才处理全部。已有 validated 状态只在源、模板、执行器和产物指纹仍有效时复用。**不要递归读取 `_work/` 的历史调试文件，也不要先通读所有参考文件。**
-3. 选择一个明确源文件，先提取 1 张表；复杂文件每批最多 5 张。输出给出缓存 JSON 路径，再定向读取这份 JSON。不要把整个文件夹的单元格一次倒进上下文。
+3. 选择一个明确源文件，先提取 1 张表；复杂文件每批最多 5 张。优先用 read 一次读取返回的 `preview` 相对路径：它保留坐标、原值、公式及非默认格式，完整提取另存于 `artifact`。直接复制路径，不手输或猜测 SHA 长串；不要用多次 cat/head/tail 分段读取展开的原始 JSON。不要把整个文件夹的单元格一次倒进上下文。每次 bash 调用必须包含 description 和 command。
 
    ```text
    python -X utf8 scripts/workflow.py extract --root ROOT --source 原始实验/测试实验/文件.xlsx --limit 1
@@ -89,6 +91,8 @@ description: 整理历史研发实验，按原文提取配方、工艺、多条�
    后续用 `--sheet 精确表名` 或 `--start N --limit N`。`.xls/.doc` 才读 [legacy-formats.md](references/legacy-formats.md)。某旧格式转换受阻时，记下该文件原因，继续其他文件；不让它挡住整个批次。
 4. 文件夹模式独立读取每份文件的源标签和目标标签，不能自动套用 `matching_plans` 或其他文件的映射；只允许续跑当前绑定文件已经生成且指纹有效的计划。本地及原上传模式可查看 `matching_plans`，仅重放源/模板指纹一致的样例。按 [decisions.md](references/decisions.md) 判断分类、字段、条件及未落位项；目标布局以当前模板为准，坐标提示见 [template-layouts.md](references/template-layouts.md)。**分类清单是进度产物，不是全批次等待用户确认的关卡**；只把无法判断的具体文件记录为阻塞。
 5. 将判断保存为映射 JSON，放在 `.dsh/cache/jsd-experiment-converter/plans/`，然后执行，不再临时重写扩容/合并/合计代码：
+
+   先按需读取 references/execution.md 的计划格式，不自行发明 meta/formula 等新结构。用原生 write 保存计划会自动创建父目录；使用 bash 时必须在同一条命令中 mkdir 并写入，沙箱不保留单独创建的空目录。重复坐标可用短 Python 循环生成计划，避免逐条展开导致输出截断；脚本仍只写坐标映射，原值由执行器读取。
 
    ```text
    python -X utf8 scripts/execute_plan.py --root ROOT --plan PLAN.json

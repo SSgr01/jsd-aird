@@ -726,6 +726,16 @@ class BusinessService:
                 })
             if unknown and not recovery:
                 raise HTTPException(409, "SIDE_EFFECT_RECONCILIATION_REQUIRED")
+            # Conversion commands already perform bounded receipt polling. Give
+            # the model a small read-only recovery window, not an unbounded loop
+            # paying for the same context while all further writes are fenced.
+            if str(run.get("dsh_session_id", "")).startswith("session-conversion-"):
+                if unknown and body["kind"] == "model":
+                    if run.get("conversion_recovery_calls", 0) >= 3:
+                        raise HTTPException(409, "SIDE_EFFECT_RECONCILIATION_REQUIRED")
+                    run["conversion_recovery_calls"] = run.get("conversion_recovery_calls", 0) + 1
+                elif not unknown:
+                    run.pop("conversion_recovery_calls", None)
             if run["active_seconds"] + time.time() - run["started_at"] > self.settings.max_active_seconds:
                 raise HTTPException(409, "BUDGET_EXCEEDED")
             usage_records = [call.get("usage", {}) for call in run.get("dsh_model_attempts", [])] if run.get("dsh_model_attempts") else run.get("dsh_usage", [])

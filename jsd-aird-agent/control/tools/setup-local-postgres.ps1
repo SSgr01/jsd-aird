@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([ValidateRange(1024,65535)][int]$Port = 55439, [string]$PgBin, [switch]$Stop)
+param([ValidateRange(1024,65535)][int]$Port = 55449, [string]$PgBin, [switch]$Stop)
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $clusterRoot = Join-Path $repoRoot ".tmp\agents-pg"

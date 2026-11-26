@@ -7,6 +7,7 @@ import { resolve, dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { prepareProfile } from './profile.mjs';
 import { ownerKey, sameOwner } from './security.mjs';
+import { hostEnvironment } from './host-environment.mjs';
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function freePort() {
@@ -98,9 +99,7 @@ export class Hosts {
     const path = '/agent/';
     const internalKey = randomBytes(32).toString('base64url');
     const env = {
-      ...Object.fromEntries(['PATH', 'Path', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT',
-        'TEMP', 'TMP', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'LANG', 'LC_ALL',
-        'JSD_AIRD_DSH_API_KEY'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])),
+      ...hostEnvironment(),
       DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1',
       // A managed execution folder may live under the application checkout.
       // Native Git snapshots must never discover that parent repository.

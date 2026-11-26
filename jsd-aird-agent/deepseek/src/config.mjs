@@ -83,7 +83,9 @@ export function standardPlugins(config) {
           // The fixed header and a whole fresh receipt may themselves exceed
           // the early threshold. Do not immediately summarize the new tiny
           // checkpoint again; reconsider after the next real step advances.
-          thresholdRatio:0.06,retainTokens:1000,maxTokens:4096,compactionRetries:0}],
+          // Keep a recent coordinate mapping and its validation error together.
+          // A 1k tail discarded the plan and made conversion restart discovery.
+          thresholdRatio:0.06,retainTokens:8000,maxTokens:4096,compactionRetries:0}],
       }} : child.id==='tool-result-pruner' ? {...child,config:{...child.config,
         // Business bodies are bounded to 45k characters before delivery. The
         // coding preset's 8k pruner would cut a newly returned body before its

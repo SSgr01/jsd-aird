@@ -30,7 +30,7 @@ import {
 } from '@/services/experiments/experiment-api';
 import { triggerNativeDownload } from '@/services/files/file-api';
 import { useAuthStore } from '@/stores/auth-store';
-import { loadAllPages } from './experiment-import-history-utils';
+import { assemblyActivity, loadAllPages } from './experiment-import-history-utils';
 import { LinkedExperimentStatus } from './LinkedExperimentStatus';
 
 type UnifiedJob =
@@ -79,7 +79,9 @@ export function ExperimentUploadPage() {
         dataApi.conversions(),
       ]);
       if (!isCurrent()) return;
-      if (!silent) { setAssemblyStatuses({}); requestedAssemblyStatuses.current.clear(); }
+      // Refresh cached details in place; clearing them makes completed records
+      // briefly lose their experiment state whenever the window regains focus.
+      if (!silent) requestedAssemblyStatuses.current.clear();
       if (free.status === 'fulfilled') setFreeJobs(free.value);
       if (conversionJobs.status === 'fulfilled') setConversions(conversionJobs.value);
       if (allTemplateJobs.status === 'fulfilled') setTemplateJobs(allTemplateJobs.value
@@ -240,7 +242,7 @@ export function ExperimentUploadPage() {
   useEffect(() => {
     const targets = [...new Set(visibleJobs.flatMap((item) => {
       const job = item.kind === 'TEMPLATE' ? item.job : item.kind === 'CONVERSION' ? templateJobs.find(job => job.id === item.job.importJobId) : undefined;
-      return job?.status === 'COMPLETED' && !assemblyStatuses[job.id] && !requestedAssemblyStatuses.current.has(job.id) ? [job.id] : [];
+      return job?.status === 'COMPLETED' && !requestedAssemblyStatuses.current.has(job.id) ? [job.id] : [];
     }))];
     if (!targets.length) return;
     targets.forEach((id) => requestedAssemblyStatuses.current.add(id));
@@ -381,21 +383,20 @@ export function ExperimentUploadPage() {
       item.errorMessage || item.resolutionReason ? [item.errorMessage || item.resolutionReason || ''] : [],
     );
     const hasPendingAssembly = pendingCandidates.length > 0;
+    const activity = assemblyActivity(assembly);
     const assemblyText = linkedExperiments.length
       ? '已生成 ' + linkedExperiments.length + ' 个实验' + (hasPendingAssembly ? '；另有 ' + pendingCandidates.length + ' 项待处理' : '')
       : hasPendingAssembly ? '待处理，尚未生成草稿' + (pendingReasons[0] ? '：' + pendingReasons[0] : '')
-        : !assembly ? '导入完成，正在读取实验草稿状态'
-          : ['READY', 'RUNNING'].includes(assembly.preparationStatus ?? '') || assembly.plan?.readyCount ? '实验草稿生成中' : '导入完成，尚未生成实验草稿';
+        : activity === 'loading' ? '正在读取实验状态'
+          : activity === 'running' ? '实验草稿生成中'
+            : activity === 'ready' ? '可生成实验草稿' : '尚未生成实验草稿';
     return {
       id: `template-${job.id}`,
       name: job.sourceFileName,
       meta: `按模板导入 · ${new Date(job.createdAt).toLocaleString('zh-CN')}`,
-      detail: job.status === 'COMPLETED' ? <Space direction="vertical" size={0}><LinkedExperimentStatus items={assembly?.experiments} />{(hasPendingAssembly || !linkedExperiments.length) && <span>{assemblyText}</span>}{[...pendingReasons, ...linkReasons].filter(Boolean).slice(0, 2).map(reason => <span key={reason}>{reason}</span>)}</Space> : dataParseStageLabel(job),
+      detail: job.status === 'COMPLETED' ? <Space direction="vertical" size={0}>{assembly?.experiments?.length ? <LinkedExperimentStatus items={assembly.experiments} /> : null}{(hasPendingAssembly || !linkedExperiments.length) && <span>{assemblyText}</span>}{[...pendingReasons, ...linkReasons].filter(Boolean).slice(0, 2).map(reason => <span key={reason}>{reason}</span>)}</Space> : dataParseStageLabel(job),
       status: job.status === 'COMPLETED'
-        ? linkedExperiments.length ? { label: '导入完成', color: 'success' }
-          : hasPendingAssembly ? { label: '待处理 · 未生成草稿', color: 'warning' }
-            : ['READY', 'RUNNING'].includes(assembly?.preparationStatus ?? '') || assembly?.plan?.readyCount ? { label: '草稿生成中', color: 'processing' }
-              : { label: '导入完成', color: 'success' }
+        ? { label: '导入完成', color: 'success' }
         : job.status === 'FAILED' ? { label: '处理失败', color: 'error' }
           : { label: job.status === 'WAITING_MAPPING' || job.status === 'WAITING_CONFIRM' ? '待核对数据' : `处理中 ${progress}%`, color: job.status === 'WAITING_MAPPING' || job.status === 'WAITING_CONFIRM' ? 'warning' : 'processing' },
       progress,

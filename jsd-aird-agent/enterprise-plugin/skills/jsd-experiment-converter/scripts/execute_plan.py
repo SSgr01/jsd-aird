@@ -198,6 +198,12 @@ def _docx_table_views(path):
 
 def execute(root, plan_path, output=None):
     plan = read_json(plan_path)
+    required = ('version', 'source', 'kind', 'source_sha256', 'template_sha256', 'sheets')
+    if not isinstance(plan, dict) or any(key not in plan for key in required):
+        missing = ', '.join(key for key in required if not isinstance(plan, dict) or key not in plan)
+        raise ValueError('INVALID_MAPPING_PLAN: 缺少字段 ' + missing
+                         + '；先读取 .conversion-tools/jsd-experiment-converter/references/execution.md，'
+                         + '使用源坐标映射结构，不使用 meta/formula/test_results 抄值结构')
     if plan.get("version") != VERSION:
         raise ValueError("不支持的映射计划版本")
     source = source_path(root, plan["source"])
@@ -321,6 +327,13 @@ def execute(root, plan_path, output=None):
             src = tables[name] if docx else wf[name]
             cached = None if docx else wv[name]
             title = prefix if index == 0 else prefix + "-" + str(index+1)
+            invalid_targets = [item['dst'] for item in (spec.get('writes') or [])
+                if isinstance(item, dict) and isinstance(item.get('dst'), str)
+                and re.fullmatch(r'[A-Z]+[1-9][0-9]*', item['dst'])
+                and blank[item['dst']].value is not None and blank[item['dst']].data_type != 'f']
+            if invalid_targets:
+                raise ValueError('拒绝覆盖模板标签：' + ', '.join(title + '!' + coord for coord in invalid_targets)
+                    + '；writes.dst 必须指向空模板可填写格，源标签归 structural。请一次修正全部冲突，不逐个重试')
             ws = pristine_sheet(wb, blank, title)
             used, destinations = set(), set()
             part = spec.get('source_partition')
@@ -353,7 +366,23 @@ def execute(root, plan_path, output=None):
                 used.add(coord)
                 cell = src[coord]
                 if cell.data_type == "f" and cached[coord].value is None:
-                    raise ValueError(f"源公式缺缓存：{name}!{coord}，需要一次重算")
+                    col = get_column_letter(cell.column)
+                    area = f"{col}{info['first']}:{col}{info['last']}"
+                    # A legacy blank group's known total formula has a provable
+                    # empty result. Never infer a missing measured/formula value.
+                    empty_total = (cell.row == info['total']
+                        and cell.column >= info['first_col'] and cell.column <= info['last_col']
+                        and (cell.value == f'=IF(COUNTA({area})=0,"",SUM({area}))'
+                             or cell.value == blank[coord].value and cell.value.startswith(f'=IF(COUNTA({area})=0,"",'))
+                        and src.cell(info['total'], 2).value == ('用量合计（g）' if kind == 'test' else '质量合计（g）')
+                        and all(src.cell(row, cell.column).value is None for row in range(info['first'], info['last'] + 1))
+                        and src.cell(info['id_row'], cell.column).value is None
+                        and src.cell(info['recipe_id_row'], cell.column).value is None)
+                    if not empty_total:
+                        raise ValueError(f"源公式缺缓存：{name}!{coord}，需要一次重算")
+                    derived_fields.append({'source': name + '!' + coord, 'sourceFormula': cell.value,
+                        'value': '', 'status': 'PROVEN_EMPTY_GROUP_TOTAL'})
+                    return ''
                 return cached[coord].value if cell.data_type == "f" else cell.value
 
             def converted(coord,transform):

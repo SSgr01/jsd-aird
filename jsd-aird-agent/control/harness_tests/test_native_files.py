@@ -43,6 +43,42 @@ async def test_native_shell_creates_empty_working_directory_before_launch(tmp_pa
     assert captured['selected'] == []
 
 
+async def test_native_transfer_flattens_long_session_paths(tmp_path, principal):
+    name = 'tasks/session-conversion-' + str(uuid4()) + '/' + str(uuid4()) + '/' + 'nested/' * 30 + '原件.xlsx'
+    content = b'original workbook'
+    async def execute(workspace, script, language, execution_id, selected, **kwargs):
+        assert len(selected) == 1
+        assert len(selected[0]) < 60
+        assert workspace.resolve(selected[0]).read_bytes() == content
+        setup = script.split('cwd=root/', 1)[0]
+        setup = setup.replace("'/work/scratch/native'", repr(str(tmp_path / 'native')))
+        setup = setup.replace("'/work/'+source", repr(str(workspace.root)) + "+'/'+source")
+        # The restored native path belongs to Linux; verify the mapping without
+        # creating that deliberately oversized path on the Windows test host.
+        assert repr(name) in setup
+        return {'error': 'SANDBOX_UNAVAILABLE'}
+    service = SimpleNamespace(settings=SimpleNamespace(storage_root=tmp_path),
+        bindings=SimpleNamespace(sandbox=SimpleNamespace(execute=execute)))
+    await native_execute(service, principal, {'id': str(uuid4()), 'epoch': 1},
+        {'command': 'true', 'files': [{'path': name, 'base64': base64.b64encode(content).decode(),
+            'sha256': hashlib.sha256(content).hexdigest()}]}, 'long-input')
+
+
+async def test_preparation_failure_is_known_before_submission(tmp_path, principal, monkeypatch):
+    execute = AsyncMock()
+    def fail(*args, **kwargs):
+        raise FileNotFoundError('path too long')
+    monkeypatch.setattr(Workspace, 'write_bytes', fail)
+    service = SimpleNamespace(settings=SimpleNamespace(storage_root=tmp_path),
+        bindings=SimpleNamespace(sandbox=SimpleNamespace(execute=execute)))
+    with pytest.raises(HTTPException, match='SANDBOX_INPUT_PREPARATION_FAILED') as caught:
+        await native_execute(service, principal, {'id': str(uuid4()), 'epoch': 1},
+            {'command': 'true', 'files': [{'path': 'a', 'base64': 'YQ==',
+                'sha256': hashlib.sha256(b'a').hexdigest()}]}, 'failed-input')
+    assert caught.value.status_code == 422
+    execute.assert_not_awaited()
+
+
 async def test_binary_attachment_lineage_uses_authorized_parsed_version_without_claiming_model_reading(principal):
     document, version = str(uuid4()), str(uuid4())
     binary_hash = hashlib.sha256(b'original PDF bytes').hexdigest()
@@ -108,6 +144,18 @@ def test_native_export_rejects_symlinks_and_duplicates():
         read_export(export_zip([(link, b'/etc/passwd')]))
     with pytest.warns(UserWarning), pytest.raises(HTTPException, match='INVALID_NATIVE_EXPORT'):
         read_export(export_zip([('same', b'one'), ('same', b'two')]))
+
+
+def test_long_report_export_uses_short_host_blob_but_preserves_native_name(tmp_path, principal):
+    workspace = Workspace(tmp_path, str(principal.organization_id), str(principal.actor_id))
+    workspace.prepare()
+    name = 'tasks/conversion/verifications/' + 'a' * 64 + '-' + 'b' * 64 + '.json'
+    export = workspace.write_bytes('output/native-files.zip', export_zip([(name, b'{"status":"validated"}')]))
+    result = accept_native_result(workspace, {'artifacts': [export], 'receipt': {'status': 'SUCCEEDED'}})
+    assert result['files'][0]['path'] == name
+    assert len(result['artifacts'][0]['path']) < 80
+    assert result['artifacts'][0]['path'].endswith('.json')
+    assert workspace.resolve(result['artifacts'][0]['path']).read_bytes() == b'{"status":"validated"}'
 
 
 async def test_reconcile_native_restores_hash_bound_outputs_without_running_command(tmp_path, principal):

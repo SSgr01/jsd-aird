@@ -1657,6 +1657,29 @@ async def test_pdf_header_cannot_bypass_real_sandbox_validation(setup, principal
     assert not any(name == "artifact_save" for name, _, _ in host.calls)
 
 
+async def test_conversion_unknown_receipt_has_bounded_model_recovery(setup, principal, store):
+    service, host, run, _ = setup
+    sid = 'session-conversion-' + str(uuid4())
+    async with store.transaction(principal, run['id']) as conn:
+        current = await store.get(principal, 'run', run['id'], conn)
+        current['dsh_session_id'] = sid
+        await store.update(principal, 'run', current, conn)
+        await conn.execute(
+            "INSERT INTO agent_runtime.harness_calls(run_id,call_id,request_hash,status,tool_name) "
+            "VALUES(%s,'unknown-execution','unknown','UNKNOWN','dsh_execute')", (run['id'],))
+    body = {'run_id': run['id'], 'session_id': sid, 'turn': 1, 'kind': 'model'}
+    for index in range(3):
+        await service.gate_dsh(principal, {**body, 'call_id': str(index)})
+    with pytest.raises(HTTPException, match='SIDE_EFFECT_RECONCILIATION_REQUIRED'):
+        await service.gate_dsh(principal, {**body, 'call_id': 'fourth'})
+    # Readback remains permitted, and a confirmed receipt restores admission.
+    await service.gate_dsh(principal, {**body, 'kind': 'native-tool', 'native_name': 'read', 'call_id': 'receipt'})
+    async with store.transaction(principal, run['id']) as conn:
+        await conn.execute("UPDATE agent_runtime.harness_calls SET status='FAILED' WHERE run_id=%s", (run['id'],))
+    await service.gate_dsh(principal, {**body, 'call_id': 'recovered'})
+    assert 'conversion_recovery_calls' not in (await store.get(principal, 'run', run['id']))
+
+
 async def test_changed_inputs_and_unknown_executions_block_registration(setup, principal, store):
     from aird_agent.core.receipts import receipt
     from aird_agent.core.workspace import Workspace

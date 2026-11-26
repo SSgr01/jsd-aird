@@ -1,6 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { loadAllPages } from './experiment-import-history-utils';
+import { assemblyActivity, loadAllPages } from './experiment-import-history-utils';
+import type { ExperimentSyncStatus } from '@/services/data/data-api';
+
+describe('assemblyActivity', () => {
+  it('does not mistake a ready plan for a running background task', () => {
+    const status: ExperimentSyncStatus = { preparationStatus: 'SUCCEEDED', links: [], plan: {
+      importJobId: 'import-1', candidates: [], readyCount: 4, reviewCount: 0, blockedCount: 0,
+      sourceRecordCount: 4, sampleGroupCount: 4, sourceGroupCount: 0, sourceContextCount: 0,
+      sourceIdentityCount: 1, logicalSampleCount: 4,
+    } };
+    expect(assemblyActivity(status)).toBe('ready');
+    expect(assemblyActivity({ ...status, preparationStatus: 'RUNNING' })).toBe('running');
+  });
+
+  it('tracks pending assembly links after preparation has finished', () => {
+    const status = { preparationStatus: 'SUCCEEDED', plan: null, links: [{ status: 'READY' }] } as ExperimentSyncStatus;
+    expect(assemblyActivity(status)).toBe('running');
+    expect(assemblyActivity({ ...status, links: [] })).toBe('idle');
+    expect(assemblyActivity()).toBe('loading');
+  });
+});
 
 describe('loadAllPages', () => {
   it('loads every API page instead of truncating history at the first 100 tasks', async () => {

@@ -22,7 +22,13 @@ def relative_file(value):
 
 def storage_path(path):
     path = relative_file(path)
-    return "output/native-" + digest(path)[:16] + "/" + PurePosixPath(path).name
+    name = PurePosixPath(path).name
+    # Verification reports use two SHA256s in the basename. Keep these host
+    # blobs short too; original native names remain in the exported manifest.
+    if len(name.encode('utf-16-le')) // 2 > 40:
+        suffix = PurePosixPath(path).suffix
+        name = digest(path)[:32] + (suffix if len(suffix) <= 10 else '')
+    return "output/native-" + digest(path)[:16] + "/" + name
 
 
 def decode_files(values):
@@ -78,22 +84,31 @@ with zipfile.ZipFile("/work/output/native-files.zip","w",compression=zipfile.ZIP
 
 async def native_execute(service, principal, run, args, call_id):
     workspace = Workspace(service.settings.storage_root / "workspaces", str(principal.organization_id), run["id"])
-    workspace.prepare()
     files = decode_files(args["files"])
     # Each invocation gets its own transfer paths; stale scratch copies never leak into execution.
     prefix = "scratch/native-" + digest(call_id)[:16] + "/"
     selected = []
-    for name, content in files.items():
-        path = prefix + name
-        workspace.write_bytes(path, content)
-        selected.append(path)
+    transfers = []
+    try:
+        workspace.prepare()
+        for name, content in files.items():
+            # Native session paths can exceed Windows MAX_PATH. Only the Linux
+            # sandbox needs that hierarchy; host transfer blobs use short names.
+            path = prefix + digest(name)[:16]
+            workspace.write_bytes(path, content)
+            selected.append(path)
+            transfers.append((path, name))
+    except OSError as exc:
+        # Nothing has been submitted yet: this is a known preparation failure,
+        # never an uncertain remote write requiring receipt reconciliation.
+        raise HTTPException(422, "SANDBOX_INPUT_PREPARATION_FAILED") from exc
     command = args["command"]
     cwd = args.get("cwd", "")
     if cwd:
         cwd = relative_file(cwd)
     script = "import os,pathlib,shutil,subprocess,sys\n"
     script += "root=pathlib.Path('/work/scratch/native');root.mkdir(parents=True,exist_ok=True)\n"
-    script += "shutil.copytree(" + repr("/work/" + prefix.rstrip('/')) + ",root,dirs_exist_ok=True)\n" if selected else ""
+    script += "for source,name in " + repr(transfers) + ":\n target=root/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile('/work/'+source,target)\n"
     # The transfer contains files, not empty directories. A new workspace can
     # therefore have no copied cwd even though the native workspace exists.
     script += "cwd=root/" + repr(cwd) + ";cwd.mkdir(parents=True,exist_ok=True)\n"

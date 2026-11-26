@@ -26,7 +26,7 @@ import { readExecutionPolicy } from './read-policy.mjs';
 import { prepareCompactionRequest } from './compaction-request.mjs';
 import { materializeBusinessDataset } from './business-dataset.mjs';
 import { prepareConversionResources } from './conversion-resources.mjs';
-import { conversionLauncher } from './conversion-launch.mjs';
+import { conversionLauncher, conversionContext } from './conversion-launch.mjs';
 import { installSessionLifecycle } from './session-lifecycle.mjs';
 import { installTaskDirectories, ensureTaskDirectory } from './task-directories.mjs';
 import { installExperts } from './experts.mjs';
@@ -299,6 +299,8 @@ export async function apply(ctx) {
     interpolate: false, text: ({ agent }) => (runs.get(agent?.id)?.instructions || catalog.instructions) + '\n化学式和反应式使用 $ 或 $$ 内的 \\ce{...}。已知且有依据的分子结构使用 smiles 代码块，反应结构使用 reaction-smiles 代码块（反应物>试剂>产物）。不得猜测文献结构对应的 SMILES；不确定时展示原图并说明。绘图成功仅表示语法可解析，不代表原文结构核验。' }));
   ctx.effect(() => ctx.systemPrompt.context({ name: 'enterprise-business', order: 0, required: true,
     interpolate: false, text: ({ agent }) => runs.get(agent?.id)?.context || '' }));
+  ctx.effect(() => ctx.systemPrompt.context({ name: 'enterprise-conversion', order: 1, required: true,
+    interpolate: false, text: ({ agent }) => conversionContext(agent?.id) }));
   ctx.effect(() => ctx.systemPrompt.section({name:'enterprise-document-references',order:1,
     interpolate:false,text:'读取结果的 document_sources 是本次返回的固定版本文献目录，片段的 document_ref 指向其中的 ref。继续读取时取目录中的 document_id、publication_id；引用仍使用片段的 evidence_id，document_ref 不能作为证据 ID。'}));
   ctx.on('agent/created', async ({ agent, source, signal }) => {

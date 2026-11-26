@@ -38,6 +38,21 @@ class JdbcExperimentRepositoryTest {
     private final JdbcExperimentRepository repository = new JdbcExperimentRepository(jdbc, mapper);
 
     @Test
+    void selectedScopeWithoutProjectsFiltersToCreatedExperiments() throws Exception {
+        var method = JdbcExperimentRepository.class.getDeclaredMethod("appendSelectedOrCreated",
+                StringBuilder.class, List.class, ExperimentRepository.DataScopeFilter.class);
+        method.setAccessible(true);
+        var where = new StringBuilder();
+        var args = new java.util.ArrayList<Object>();
+
+        method.invoke(repository, where, args,
+                new ExperimentRepository.DataScopeFilter("SELECTED", USER_ID, java.util.Set.of()));
+
+        assertThat(where.toString()).isEqualTo(" AND e.created_by=?");
+        assertThat(args).containsExactly(USER_ID);
+    }
+
+    @Test
     void savesOneModelParameterAndAuditsBothDatabaseSnapshotsAtomically() {
         var current=detail(ExperimentStatus.DRAFT);givenDetail(current);
         when(jdbc.update(anyString(), any(Object[].class))).thenReturn(1);

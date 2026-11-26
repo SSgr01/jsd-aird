@@ -8,11 +8,13 @@ export function FieldDefinitionReview({
   busy,
   onEdit,
   onConfirm,
+  onConfirmAll,
 }: {
   items: FieldDefinitionReviewItem[];
   busy?: boolean;
   onEdit?: (item: FieldDefinitionReviewItem) => void;
   onConfirm?: (item: FieldDefinitionReviewItem) => Promise<void>;
+  onConfirmAll?: (items: FieldDefinitionReviewItem[]) => Promise<void>;
 }) {
   const [confirming, setConfirming] = useState<string>();
   const [expanded, setExpanded] = useState(true);
@@ -32,6 +34,18 @@ export function FieldDefinitionReview({
           onClick={() => setExpanded((value) => !value)}
         >
           {expanded ? '收起' : '展开'}
+        </Button>
+        <Button
+          type="primary"
+          size="small"
+          loading={confirming === 'all'}
+          disabled={busy || Boolean(confirming) || !onConfirmAll}
+          onClick={() => {
+            setConfirming('all');
+            void onConfirmAll?.(items).catch(() => undefined).finally(() => setConfirming(undefined));
+          }}
+        >
+          全部确认无误
         </Button>
       </header>
       <div id={listId} className="data-field-definition-review-list" hidden={!expanded}>

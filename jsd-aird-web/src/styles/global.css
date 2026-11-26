@@ -1163,13 +1163,18 @@ a:active,
 }
 
 .data-field-definition-review-head strong {
-  color: #594214;
+  color: #8a6115;
   font-size: 13px;
 }
 
-.data-field-definition-review-head span {
-  color: #8c7335;
+.data-field-definition-review-head > span {
+  color: #9b8047;
   font-size: 12px;
+}
+
+.data-field-definition-review-head .ant-btn-primary,
+.data-field-definition-review-head .ant-btn-primary:hover {
+  color: #fff;
 }
 
 .data-field-definition-review-list {

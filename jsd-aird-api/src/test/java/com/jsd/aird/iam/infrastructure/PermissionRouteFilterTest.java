@@ -8,6 +8,31 @@ import org.springframework.mock.web.MockHttpServletRequest;
 
 class PermissionRouteFilterTest {
     @Test
+    void experimentDraftUsesWorkspaceEditPermission() throws Exception {
+        var actor = new com.jsd.aird.shared.security.Actor(java.util.UUID.randomUUID(),
+                java.util.UUID.randomUUID(), "editor", "USER");
+        var codes = new java.util.ArrayList<String>();
+        com.jsd.aird.shared.security.ActorContext.set(actor);
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+                org.springframework.security.authentication.UsernamePasswordAuthenticationToken.authenticated(
+                        actor, null, java.util.List.of()));
+        try {
+            var filter = new PermissionRouteFilter(check -> {
+                codes.add(check.permissionCode());
+                return new com.jsd.aird.iam.api.PermissionDecision(true, check.permissionCode(), "ALLOW", "ALL", "TEST");
+            }, new ObjectMapper(), false);
+            var request = new MockHttpServletRequest("POST",
+                    "/api/v1/experiments/00000000-0000-0000-0000-000000000101/draft");
+            filter.doFilter(request, new org.springframework.mock.web.MockHttpServletResponse(),
+                    (servletRequest, servletResponse) -> { });
+            assertThat(codes).containsExactly("eln.view.update");
+        } finally {
+            com.jsd.aird.shared.security.ActorContext.clear();
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
+    }
+
+    @Test
     void projectChildIdsAreResolvedByTheirServices() throws Exception {
         var filter = new PermissionRouteFilter(check ->
                 new com.jsd.aird.iam.api.PermissionDecision(true, check.permissionCode(), "ALLOW", "ALL", "TEST"),
@@ -667,6 +692,36 @@ class PermissionRouteFilterTest {
         assertThat(code("PUT", root + "/workbook-draft")).isEqualTo("eln.upload.create");
         assertThat(code("POST", root + "/commit")).isEqualTo("eln.upload.create");
         assertThat(code("POST", root + "/experiment-sync")).isEqualTo("eln.upload.create");
+        assertThat(code("POST", root + "/retry")).isEqualTo("eln.upload.create");
+        assertThat(resourceType("PUT", root + "/workbook-draft")).isEqualTo("DATA");
+        assertThat(resourceType("POST", root + "/commit")).isEqualTo("DATA");
+        assertThat(resourceType("POST", root + "/retry")).isEqualTo("DATA");
+    }
+
+    @Test
+    void uploadActionsUseTheirUploadRecordScopes() {
+        var id = "00000000-0000-0000-0000-000000000001";
+        assertThat(resourceType("POST", "/api/v1/production-uploads/" + id + "/retry")).isEqualTo("PRODUCTION_UPLOAD");
+        assertThat(resourceType("PUT", "/api/v1/production-uploads/" + id + "/fields")).isEqualTo("PRODUCTION_UPLOAD");
+        assertThat(resourceType("POST", "/api/v1/quality/uploads/" + id + "/retry")).isEqualTo("QUALITY_UPLOAD");
+        assertThat(resourceType("POST", "/api/v1/comprehensive-reports/uploads/" + id + "/retry"))
+                .isEqualTo("RESEARCH_TEST_UPLOAD");
+        assertThat(resourceType("POST", "/api/v1/test-standards/uploads/" + id + "/retry"))
+                .isEqualTo("RESEARCH_TEST_UPLOAD");
+        assertThat(code("POST", "/api/v1/template-imports")).isEqualTo("template.upload.create");
+        assertThat(code("GET", "/api/v1/spc/uploads/attempts")).isEqualTo("spectrum.upload.view");
+        assertThat(code("POST", "/api/v1/spc/uploads/attempts")).isEqualTo("spectrum.upload.create");
+        assertThat(resourceType("DELETE", "/api/v1/spc/uploads/attempts/" + id)).isEqualTo("SPECTRUM_UPLOAD");
+        assertThat(code("POST", "/api/v1/data/import-jobs/" + id + "/retry")).isEqualTo("data.upload.create");
+        assertThat(code("PUT", "/api/v1/data/import-jobs/" + id + "/workbook-draft"))
+                .isEqualTo("data.upload.create");
+        assertThat(code("POST", "/api/v1/data/import-jobs/" + id + "/commit"))
+                .isEqualTo("data.upload.create");
+        assertThat(code("GET", "/api/v1/knowledge/upload-tasks")).isEqualTo("knowledge.upload.view");
+        assertThat(code("PUT", "/api/v1/knowledge/upload-tasks/" + id))
+                .isEqualTo("knowledge.upload.create");
+        assertThat(resourceType("PUT", "/api/v1/knowledge/upload-tasks/" + id))
+                .isEqualTo("KNOWLEDGE_UPLOAD");
     }
 
     @Test
@@ -683,12 +738,12 @@ class PermissionRouteFilterTest {
                 .isEqualTo("knowledge.update");
         assertThat(code("POST", "/api/v1/knowledge/documents/00000000-0000-0000-0000-000000000000/versions/00000000-0000-0000-0000-000000000000/metadata-extraction/retry"))
                 .isEqualTo("knowledge.update");
-        assertThat(code("GET", "/api/v1/knowledge/upload-tasks")).isEqualTo("knowledge.view");
-        assertThat(code("POST", "/api/v1/knowledge/upload-tasks")).isEqualTo("knowledge.upload");
+        assertThat(code("GET", "/api/v1/knowledge/upload-tasks")).isEqualTo("knowledge.upload.view");
+        assertThat(code("POST", "/api/v1/knowledge/upload-tasks")).isEqualTo("knowledge.upload.create");
         assertThat(code("PUT", "/api/v1/knowledge/upload-tasks/00000000-0000-0000-0000-000000000000"))
-                .isEqualTo("knowledge.upload");
+                .isEqualTo("knowledge.upload.create");
         assertThat(code("DELETE", "/api/v1/knowledge/upload-tasks/00000000-0000-0000-0000-000000000000"))
-                .isEqualTo("knowledge.upload");
+                .isEqualTo("knowledge.upload.delete");
     }
 
     @Test
@@ -751,7 +806,7 @@ class PermissionRouteFilterTest {
         assertThat(code("GET", "/api/v1/experiment-imports")).isEqualTo("eln.upload.view");
         assertThat(code("POST", "/api/v1/experiment-imports")).isEqualTo("eln.upload.create");
         assertThat(code("POST", "/api/v1/experiment-imports/00000000-0000-0000-0000-000000000001/retry"))
-                .isEqualTo("eln.upload.retry");
+                .isEqualTo("eln.upload.create");
         assertThat(code("DELETE", "/api/v1/experiment-imports/00000000-0000-0000-0000-000000000001"))
                 .isEqualTo("eln.upload.delete");
         assertThat(codeWithKind("POST", "/api/v1/files/staged", "EXPERIMENT_SOURCE"))
@@ -767,7 +822,7 @@ class PermissionRouteFilterTest {
         assertThat(codeWithKind("POST", "/api/v1/files/staged", "UNKNOWN"))
                 .isEqualTo("ops.file.upload");
         assertThat(code("POST", "/api/v1/data/import-jobs/00000000-0000-0000-0000-000000000001/experiment-sync"))
-                .isEqualTo("data.create");
+                .isEqualTo("data.upload.create");
     }
 
     @Test
@@ -789,8 +844,8 @@ class PermissionRouteFilterTest {
         var id = "00000000-0000-0000-0000-000000000001";
         assertThat(code("GET", "/api/v1/experiments")).isEqualTo("experiment.view");
         assertThat(code("POST", "/api/v1/experiments")).isEqualTo("eln.create.create");
-        assertThat(code("POST", "/api/v1/experiments/" + id + "/draft")).isEqualTo("experiment.update");
-        assertThat(code("POST", "/api/v1/experiments/" + id + "/start")).isEqualTo("experiment.update");
+        assertThat(code("POST", "/api/v1/experiments/" + id + "/draft")).isEqualTo("eln.view.update");
+        assertThat(code("POST", "/api/v1/experiments/" + id + "/start")).isEqualTo("eln.view.update");
         assertThat(code("POST", "/api/v1/experiments/" + id + "/submit-review"))
                 .isEqualTo("experiment.submit");
         assertThat(code("POST", "/api/v1/experiments/" + id + "/approve"))
@@ -802,7 +857,7 @@ class PermissionRouteFilterTest {
         assertThat(code("POST", "/api/v1/experiments/" + id + "/void"))
                 .isEqualTo("experiment.review");
         assertThat(code("POST", "/api/v1/experiments/" + id + "/versions"))
-                .isEqualTo("experiment.update");
+                .isEqualTo("eln.view.update");
     }
 
     @Test
@@ -895,6 +950,19 @@ class PermissionRouteFilterTest {
 
     private String code(String method, String uri) {
         return filter.permissionCode(new MockHttpServletRequest(method, uri));
+    }
+
+    private String resourceType(String method, String uri) {
+        try {
+            var permissionMethod = PermissionRouteFilter.class.getDeclaredMethod("permission", jakarta.servlet.http.HttpServletRequest.class);
+            permissionMethod.setAccessible(true);
+            var permission = permissionMethod.invoke(filter, new MockHttpServletRequest(method, uri));
+            var accessor = permission.getClass().getDeclaredMethod("resourceType");
+            accessor.setAccessible(true);
+            return (String) accessor.invoke(permission);
+        } catch (ReflectiveOperationException error) {
+            throw new AssertionError(error);
+        }
     }
 
     @Test

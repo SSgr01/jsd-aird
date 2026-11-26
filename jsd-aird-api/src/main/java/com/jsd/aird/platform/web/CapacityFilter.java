@@ -67,7 +67,9 @@ public class CapacityFilter extends OncePerRequestFilter {
             long maximum=workspaceCommand?limits.workspaceJsonBytes():limits.jsonBytes();
             if(!upload && !read && request.getContentLengthLong()>maximum)throw new ApiException(ApiErrorCode.PAYLOAD_TOO_LARGE);
             var kind=upload?OperationBudget.Kind.UPLOAD:expensive?OperationBudget.Kind.HEAVY:read?OperationBudget.Kind.READ:OperationBudget.Kind.WRITE;
-            long duration=upload?limits.uploadMillis():expensive?limits.heavyMillis():read?limits.readMillis():limits.writeMillis();
+            long duration=upload?limits.uploadMillis():workspaceCommand
+                    ?Math.min(limits.heavyMillis(),read?60000L:120000L)
+                    :expensive?limits.heavyMillis():read?limits.readMillis():limits.writeMillis();
             var uploadInput=upload?request.getInputStream():null;
             try(var budget=stream?null:OperationBudget.open(kind,duration);var deadline=stream?null:new DeadlineInterrupt(duration,()->{if(uploadInput!=null)try{uploadInput.close();}catch(IOException ignored){ }})){
                 if(!stream && !upload && !read){long bytes=request.getContentLengthLong()<0?maximum:request.getContentLengthLong();OperationBudget.hold(WorkingMemory.reserve(Math.min(maximum,bytes)*4+65536));}

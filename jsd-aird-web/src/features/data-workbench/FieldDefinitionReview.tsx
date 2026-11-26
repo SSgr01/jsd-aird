@@ -1,5 +1,5 @@
 import { Button } from 'antd';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import type { FieldDefinitionReviewItem } from './field-definition-review';
 
@@ -15,14 +15,26 @@ export function FieldDefinitionReview({
   onConfirm?: (item: FieldDefinitionReviewItem) => Promise<void>;
 }) {
   const [confirming, setConfirming] = useState<string>();
+  const [expanded, setExpanded] = useState(true);
+  const listId = useId();
   if (!items.length) return null;
   return (
     <section className="data-field-definition-review" aria-label="待确认字段定义">
       <header className="data-field-definition-review-head">
         <strong>{items.length} 个新增字段需要确认</strong>
         <span>字段值已通过。请核对类型和单位，有误可直接修改。</span>
+        <Button
+          type="text"
+          size="small"
+          style={{ marginLeft: 'auto' }}
+          aria-expanded={expanded}
+          aria-controls={listId}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? '收起' : '展开'}
+        </Button>
       </header>
-      <div className="data-field-definition-review-list">
+      <div id={listId} className="data-field-definition-review-list" hidden={!expanded}>
         {items.map((item) => (
           <article className="data-field-definition-review-row" key={item.fieldId}>
             <div className="data-field-definition-review-identity">

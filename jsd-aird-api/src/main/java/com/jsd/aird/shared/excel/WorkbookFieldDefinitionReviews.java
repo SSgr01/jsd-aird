@@ -40,15 +40,23 @@ public class WorkbookFieldDefinitionReviews {
 
     public boolean apply(UUID organizationId, UUID versionId, JsonNode instance) {
         if (versionId == null || !instance.isObject()) return false;
-        var accepted = new HashSet<>(jdbc.queryForList("""
-                SELECT definition_hash FROM data.workbook_field_definition_review
+        boolean pending = false;
+        for (var field : instance.path("model").path("fields")) {
+            if (field instanceof ObjectNode && local(field)
+                    && (!field.path("reviewStatus").asText().equals("CONFIRMED")
+                        || field.path("experimentSemanticStatus").asText().equals("NEEDS_REVIEW"))) {
+                pending = true;
+                break;
+            }
+        }
+        if (!pending) return false;
+        var accepted = new HashSet<String>();
+        for(var row:jdbc.queryForList("""
+                SELECT definition_hash, definition_jsonb::text AS definition_text FROM data.workbook_field_definition_review
                 WHERE organization_id=? AND template_version_id=?
-                """, String.class, organizationId, versionId));
-        for(var text:jdbc.queryForList("""
-                SELECT definition_jsonb::text FROM data.workbook_field_definition_review
-                WHERE organization_id=? AND template_version_id=?
-                """,String.class,organizationId,versionId)) {
-            try { accepted.add(canonicalizer.hash(definition(json.readTree(text)))); }
+                """,organizationId,versionId)) {
+            accepted.add((String) row.get("definition_hash"));
+            try { accepted.add(canonicalizer.hash(definition(json.readTree((String) row.get("definition_text"))))); }
             catch(com.fasterxml.jackson.core.JsonProcessingException exception) {throw new IllegalStateException("已确认字段定义无法读取",exception);}
         }
         // Older files already contain explicit human-confirmed definitions.

@@ -24,6 +24,18 @@ public interface SourceRecognitionRepository {
     void markFinalized(UUID organizationId, UUID id);
     FinalizedData finalizeData(UUID organizationId, UUID recognitionJobId, UUID actorId,
                                List<RecognizedSample> samples, JsonNode mappingContract, String submissionHash);
+    record PreparedExperimentLink(JsonNode coordinates, JsonNode snapshot, List<RecognizedSample> samples,
+                                  String snapshotJson, String coordinatesJson) {}
+    default PreparedExperimentLink prepareExperimentLink(JsonNode coordinates, JsonNode snapshot, List<RecognizedSample> samples) {
+        return new PreparedExperimentLink(coordinates,snapshot,samples,snapshot.toString(),coordinates.toString());
+    }
+    default void linkPreparedExperiment(UUID organizationId, UUID recognitionJobId, UUID confirmedSubmissionId,
+            String boundaryId, UUID experimentId, UUID experimentVersionId, String experimentNo,
+            PreparedExperimentLink link, String contentHash, UUID actorId) {
+        linkExperiment(organizationId,recognitionJobId,confirmedSubmissionId,boundaryId,experimentId,experimentVersionId,
+                experimentNo,link.coordinates(),link.snapshot(),link.samples(),contentHash,actorId);
+    }
+
     void linkExperiment(UUID organizationId, UUID recognitionJobId, UUID confirmedSubmissionId,
                         String experimentBoundaryId, UUID experimentId, UUID experimentVersionId,
                         String experimentNo, JsonNode sourceCoordinates, JsonNode recognitionSnapshot,

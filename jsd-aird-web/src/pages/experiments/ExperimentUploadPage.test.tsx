@@ -9,14 +9,14 @@ import { ExperimentUploadPage } from './ExperimentUploadPage';
 
 const api = vi.hoisted(() => ({
   categories: vi.fn(), imports: vi.fn(), stage: vi.fn(), templates: vi.fn(),
-  jobs: vi.fn(), conversions: vi.fn(), create: vi.fn(),
+  jobs: vi.fn(), conversions: vi.fn(), create: vi.fn(), syncStatus: vi.fn(),
 }));
 vi.mock('@/services/experiments/experiment-api', () => ({
   listCategories: api.categories, listExperimentImports: api.imports, stageExperimentFile: api.stage,
 }));
 vi.mock('@/services/data/data-api', () => ({ dataApi: {
   listTemplates: api.templates, listExperimentJobs: api.jobs, conversions: api.conversions,
-  createExperimentJob: api.create,
+  createExperimentJob: api.create, experimentSyncStatus: api.syncStatus,
 } }));
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: (select: (state: { user: { permissions: string[] } }) => unknown) =>
@@ -51,6 +51,7 @@ beforeEach(() => {
   api.conversions.mockResolvedValue([]);
   api.stage.mockResolvedValue({ fileId: 'staged' });
   api.create.mockResolvedValue({ id: 'job' });
+  api.syncStatus.mockResolvedValue({ plan: null, links: [], preparationStatus: 'RUNNING' });
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -87,4 +88,11 @@ it('keeps other import histories visible when one source fails', async () => {
   render(<App><MemoryRouter><ExperimentUploadPage /></MemoryRouter></App>);
   expect(await screen.findByText('导入记录数：1')).toBeInTheDocument();
   expect(await screen.findByText('部分导入记录加载失败，请刷新重试')).toBeInTheDocument();
+});
+
+it('keeps completed imports visible while their assembly plan is still preparing', async () => {
+  api.jobs.mockResolvedValue({ items: [{ id: 'preparing', sourceFileName: 'UA-3160B.xlsx', status: 'COMPLETED', importPurpose: 'EXPERIMENT_DRAFT', createdAt: new Date().toISOString() }], totalPages: 1 });
+  render(<App><MemoryRouter><ExperimentUploadPage /></MemoryRouter></App>);
+  await waitFor(() => expect(api.syncStatus).toHaveBeenCalledWith('preparing'));
+  expect(await screen.findByText('导入记录数：1')).toBeInTheDocument();
 });

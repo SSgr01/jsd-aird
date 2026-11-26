@@ -424,7 +424,7 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
             var parsed=parser.parse(new java.io.ByteArrayInputStream(bytes),"experiment.xlsx");
             markLabTotals(parsed,prepared);
             parsed=instanceParsedSheets(parsed,prepared);
-            return new ImportExecution(definition,bindings(contractBindings(contract),contract),parsed,labModel.path("templateInstance").path("issues"));
+            return new ImportExecution(definition,bindings(contractBindings(contract),contract),parsed,labModel.path("templateInstance").path("issues"),prepared);
         }catch(ApiException ex){throw ex;}catch(Exception ex){throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"实验文件解析失败："+ex.getMessage());}
     }
 
@@ -454,6 +454,15 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
     @Override
     public ImportExecution describePreparedWorkbook(UUID organizationId,UUID versionId,JsonNode source,JsonNode provided) {
         return prepareWorkbook(organizationId,versionId,source,provided,false,true);
+    }
+
+    @Override
+    public void refreshPreparedWorkbookReviews(UUID organizationId,UUID versionId,JsonNode snapshot) {
+        var instance=com.jsd.aird.shared.excel.WorkbookStructure.instance(snapshot);
+        if(fieldDefinitionReviews!=null && fieldDefinitionReviews.apply(organizationId,versionId,instance)) {
+            var validated=com.jsd.aird.shared.excel.WorkbookStructure.validate(objectMapper,snapshot,instance);
+            com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot,validated);
+        }
     }
 
     private ImportExecution prepareWorkbook(UUID organizationId,UUID versionId,JsonNode source,JsonNode provided,boolean extractRows,boolean prepared) {
@@ -507,7 +516,7 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
         // parent-column copies, which may still retain the field's initial name.
         applyInstanceFields(fields,executableFields);
         var definition=new DataTemplateDefinition(workspace.templateId(),versionId,workspace.templateCode(),workspace.name(),null,workspace.versionNo(),"XLSX",schema,mappings,List.copyOf(fields.values()),compiled.importContractVersion(),compiled.layoutStructureVersion(),compiled.contractHash(),compiled.contract());
-        if (!extractRows) return new ImportExecution(definition,bindings(contractBindings(compiled.contract()),compiled.contract()),null,labIssues);
+        if (!extractRows) return new ImportExecution(definition,bindings(contractBindings(compiled.contract()),compiled.contract()),null,labIssues,snapshot);
         var tabular=snapshot.deepCopy();
         removeLabTotalFormulas(tabular);
         try {
@@ -515,7 +524,7 @@ public class TemplateDataImportFacadeImpl implements TemplateDataImportFacade, P
             var parsed=parser.parse(new java.io.ByteArrayInputStream(bytes),"workbook.xlsx");
             markLabTotals(parsed,snapshot);
             parsed=instanceParsedSheets(parsed,snapshot);
-            return new ImportExecution(definition,bindings(contractBindings(compiled.contract()),compiled.contract()),parsed,labIssues);
+            return new ImportExecution(definition,bindings(contractBindings(compiled.contract()),compiled.contract()),parsed,labIssues,snapshot);
         }catch(Exception ex){if(ex instanceof ApiException api)throw api;throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"工作簿草稿解析失败："+ex.getMessage());}
     }
 

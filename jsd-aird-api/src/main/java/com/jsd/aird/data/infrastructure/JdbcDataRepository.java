@@ -563,6 +563,20 @@ public class JdbcDataRepository implements DataRepository {
     }
 
     @Override
+    public List<Sheet> listSheetSummaries(UUID organizationId, UUID importJobId) {
+        return jdbc.query("""
+                SELECT s.id, s.sheet_id, s.sheet_name, s.sheet_order, s.selected, s.header_rows_jsonb,
+                       s.data_start_row, s.data_end_row, '{}'::jsonb AS structure_jsonb, s.confirmation_status
+                FROM data.import_sheet s JOIN data.import_job j ON j.id = s.import_job_id
+                WHERE j.organization_id = ? AND j.id = ? ORDER BY s.sheet_order
+                """, (rs, n) -> new Sheet(rs.getObject("id", UUID.class), rs.getString("sheet_id"),
+                        rs.getString("sheet_name"), rs.getInt("sheet_order"), rs.getBoolean("selected"),
+                        ints(parse(rs.getString("header_rows_jsonb"))), (Integer) rs.getObject("data_start_row"),
+                        (Integer) rs.getObject("data_end_row"), parse(rs.getString("structure_jsonb")),
+                        rs.getString("confirmation_status")), organizationId, importJobId);
+    }
+
+    @Override
     public List<Mapping> listMappings(UUID organizationId, UUID importJobId) {
         return jdbc.query("""
                 SELECT m.id, s.sheet_id, m.source_column, m.source_header, m.field_code, m.field_name,
@@ -578,8 +592,36 @@ public class JdbcDataRepository implements DataRepository {
     }
 
     @Override
-    public List<Row> listRows(UUID organizationId, UUID importJobId) {
+    public List<Mapping> listMappingsForSheet(UUID organizationId, UUID importJobId, String sheetId) {
         return jdbc.query("""
+                SELECT m.id, s.sheet_id, m.source_column, m.source_header, m.field_code, m.field_name,
+                       m.action, m.value_type, m.source_unit, m.standard_unit, m.mapping_jsonb, m.status
+                FROM data.import_mapping m JOIN data.import_job j ON j.id = m.import_job_id
+                LEFT JOIN data.import_sheet s ON s.id = m.import_sheet_id
+                WHERE j.organization_id = ? AND j.id = ? AND (?::text IS NULL OR s.sheet_id = ?) ORDER BY s.sheet_order, m.source_column
+                """, (rs, n) -> new Mapping(rs.getObject("id", UUID.class), rs.getString("sheet_id"),
+                        rs.getString("source_column"), rs.getString("source_header"), rs.getString("field_code"),
+                        rs.getString("field_name"), rs.getString("action"), rs.getString("value_type"),
+                        rs.getString("source_unit"), rs.getString("standard_unit"), parse(rs.getString("mapping_jsonb")),
+                        rs.getString("status")), organizationId, importJobId, sheetId, sheetId);
+    }
+
+    @Override
+    public boolean hasRowOverrides(UUID organizationId, UUID importJobId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS(SELECT 1 FROM data.staging_row r
+                  JOIN data.import_job j ON j.id=r.import_job_id
+                  WHERE j.organization_id=? AND j.id=? AND (r.excluded OR
+                    (r.corrected_values_jsonb IS DISTINCT FROM r.normalized_values_jsonb
+                     AND jsonb_path_exists(r.corrected_values_jsonb,'$.*.correctedValue'))))
+                """,Boolean.class,organizationId,importJobId));
+    }
+
+    @Override
+    @Transactional(readOnly=true)
+    public List<Row> listRows(UUID organizationId, UUID importJobId) {
+        return jdbc.query(connection -> {
+            var statement=connection.prepareStatement("""
                 SELECT r.id, s.sheet_id, r.source_row_number, r.raw_values_jsonb, r.normalized_values_jsonb,
                        r.corrected_values_jsonb, r.status, r.source_metadata_jsonb,
                        r.excluded, r.exclusion_reason
@@ -587,11 +629,32 @@ public class JdbcDataRepository implements DataRepository {
                 JOIN data.import_job j ON j.id = r.import_job_id
                 WHERE j.organization_id = ? AND j.id = ? AND s.selected = true
                 ORDER BY s.sheet_order, r.source_row_number
+                """);
+            statement.setObject(1,organizationId);statement.setObject(2,importJobId);
+            // Fetch bounded batches: a single portal must not serialize every large JSON row at once.
+            statement.setFetchSize(16);return statement;
+        }, (rs, n) -> new Row(rs.getObject("id", UUID.class), rs.getString("sheet_id"),
+                        rs.getInt("source_row_number"), parse(rs.getString("raw_values_jsonb")),
+                        parse(rs.getString("normalized_values_jsonb")), parse(rs.getString("corrected_values_jsonb")),
+                        rs.getString("status"), parse(rs.getString("source_metadata_jsonb")),
+                        rs.getBoolean("excluded"), rs.getString("exclusion_reason")));
+    }
+
+    @Override
+    public List<Row> listRowsForSheet(UUID organizationId, UUID importJobId, String sheetId) {
+        return jdbc.query("""
+                SELECT r.id, s.sheet_id, r.source_row_number, r.raw_values_jsonb, r.normalized_values_jsonb,
+                       r.corrected_values_jsonb, r.status, r.source_metadata_jsonb,
+                       r.excluded, r.exclusion_reason
+                FROM data.staging_row r JOIN data.import_sheet s ON s.id = r.import_sheet_id
+                JOIN data.import_job j ON j.id = r.import_job_id
+                WHERE j.organization_id = ? AND j.id = ? AND (?::text IS NULL OR s.sheet_id = ?) AND s.selected = true
+                ORDER BY s.sheet_order, r.source_row_number
                 """, (rs, n) -> new Row(rs.getObject("id", UUID.class), rs.getString("sheet_id"),
                         rs.getInt("source_row_number"), parse(rs.getString("raw_values_jsonb")),
                         parse(rs.getString("normalized_values_jsonb")), parse(rs.getString("corrected_values_jsonb")),
                         rs.getString("status"), parse(rs.getString("source_metadata_jsonb")),
-                        rs.getBoolean("excluded"), rs.getString("exclusion_reason")), organizationId, importJobId);
+                        rs.getBoolean("excluded"), rs.getString("exclusion_reason")), organizationId, importJobId, sheetId, sheetId);
     }
 
     @Override

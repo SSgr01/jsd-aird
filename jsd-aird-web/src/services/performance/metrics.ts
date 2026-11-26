@@ -1,5 +1,14 @@
 let routeDataRecorded = false;
 let activeOperations = 0;
+if (import.meta.env.DEV && import.meta.env.MODE !== 'test' && typeof PerformanceObserver !== 'undefined') {
+  const observer = new PerformanceObserver(list => {
+    for (const entry of list.getEntries()) {
+      if (entry.name.startsWith('aird:')) console.info('[aird:performance]', entry.name, Math.round(entry.duration));
+    }
+  });
+  observer.observe({ type: 'measure', buffered: true });
+  import.meta.hot?.dispose(() => observer.disconnect());
+}
 export function operationMetricActive() { return activeOperations > 0; }
 
 /** A button is finished after React has committed its unlocked state and painted. */

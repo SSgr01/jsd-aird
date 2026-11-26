@@ -30,6 +30,28 @@ public class PostgresWorkRepository implements WorkRepository {
         this.objectMapper = objectMapper;
     }
 
+    @Override
+    @Transactional
+    public int expireExhaustedJobs() {
+        return jdbcTemplate.update("""
+                WITH exhausted AS (
+                    SELECT id FROM ops.async_job
+                    WHERE status = 'RUNNING' AND lease_expires_at < now()
+                      AND attempt_count >= max_attempts
+                    ORDER BY lease_expires_at
+                    FOR UPDATE SKIP LOCKED LIMIT 100
+                )
+                UPDATE ops.async_job j
+                SET status = 'FAILED', current_stage = 'FAILED',
+                    last_error = concat_ws(E'\\n', nullif(j.last_error, ''),
+                        '任务租约已过期且重试次数已耗尽；需核对远程任务后恢复'),
+                    lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+                    lease_generation = j.lease_generation + 1,
+                    finished_at = now(), updated_at = now()
+                FROM exhausted e WHERE j.id = e.id
+                """);
+    }
+
     @Transactional
     @Override
     public Optional<AsyncJob> claimJob(String workerId, Duration leaseDuration) {
@@ -106,7 +128,10 @@ public class PostgresWorkRepository implements WorkRepository {
     }
 
     @Override
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW, timeout = 1)
     public boolean heartbeatClaimedJob(AsyncJob job, String workerId, Duration leaseDuration) {
+        jdbcTemplate.execute("SET LOCAL lock_timeout = '200ms'");
+        jdbcTemplate.execute("SET LOCAL statement_timeout = '1s'");
         return jdbcTemplate.update("""
                 UPDATE ops.async_job
                 SET lease_expires_at = ?, updated_at = now()

@@ -14,6 +14,61 @@ import org.junit.jupiter.api.Test;
 class DataWorkbookServiceTest {
 
     @Test
+    void preparedLaboratoryWorkspaceKeepsAllSheetsWithoutReadingStagedValueCopies() throws Exception {
+        var json=new ObjectMapper();var organization=UUID.randomUUID();var id=UUID.randomUUID();var version=UUID.randomUUID();var file=UUID.randomUUID();
+        var repository=org.mockito.Mockito.mock(DataRepository.class);
+        var templates=org.mockito.Mockito.mock(TemplateDataImportFacade.class);
+        var files=org.mockito.Mockito.mock(com.jsd.aird.ops.application.port.FileObjectRepository.class);
+        var storage=org.mockito.Mockito.mock(com.jsd.aird.ops.application.port.ObjectStorage.class);
+        var job=new DataRepository.Job(id,file,"hash","large.xlsx","XLSX",version,"WAITING_CONFIRM",100,"READY","v1",null,java.time.Instant.EPOCH,java.time.Instant.EPOCH);
+        var snapshot=json.readTree("""
+                {"sheets":{"s":{"id":"s","custom":{"labTemplate":{"version":1}},"cellData":{"0":{"0":{"f":"=Other!A1"}}}},"other":{"id":"other","name":"Other","cellData":{"0":{"0":{"v":42}}}}}}
+                """);
+        var instance=json.createObjectNode().put("version",2);
+        var schema=json.createObjectNode();schema.putObject("x-jsd-lab-template");
+        var definition=new TemplateDataImportFacade.DataTemplateDefinition(version,version,"TEST","测试模板",null,1,"XLSX",schema,json.createArrayNode(),List.of(),9,7,"contract",json.createObjectNode());
+        org.mockito.Mockito.when(repository.findJob(organization,id)).thenReturn(java.util.Optional.of(job));
+        org.mockito.Mockito.when(repository.findWorkbookDraft(organization,id)).thenReturn(java.util.Optional.of(new DataRepository.WorkbookDraft(snapshot,instance,json.createArrayNode())));
+        org.mockito.Mockito.when(templates.getVersion(organization,version)).thenReturn(definition);
+        org.mockito.Mockito.when(files.find(organization,file)).thenReturn(java.util.Optional.of(org.mockito.Mockito.mock(com.jsd.aird.ops.application.port.FileObjectRepository.FileObject.class)));
+        var reader=new DataWorkbookService(repository,files,storage,null,templates,json);
+        com.jsd.aird.shared.security.ActorContext.set(new com.jsd.aird.shared.security.Actor(organization,UUID.randomUUID(),"tester"));
+        try {
+            var result=reader.workspace(id);
+            assertThat(result.snapshot().path("sheets").size()).isEqualTo(2);
+            assertThat(result.snapshot().at("/sheets/s/cellData/0/0/f").asText()).isEqualTo("=Other!A1");
+            assertThat(result.fieldResultsSource()).isEqualTo("SNAPSHOT");
+            assertThat(json.valueToTree(result).has("templateInstance")).isFalse();
+            org.mockito.Mockito.verify(repository,org.mockito.Mockito.never()).listRows(organization,id);
+            org.mockito.Mockito.verify(repository,org.mockito.Mockito.never()).listMappings(organization,id);
+            org.mockito.Mockito.verify(templates,org.mockito.Mockito.never()).describePreparedWorkbook(org.mockito.ArgumentMatchers.eq(organization),org.mockito.ArgumentMatchers.eq(version),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any());
+            org.mockito.Mockito.verifyNoInteractions(storage);
+        } finally { com.jsd.aird.shared.security.ActorContext.clear(); }
+    }
+
+    @Test
+    void fieldResultsUseCurrentRevisionAndNeverOpenTheSourceWorkbook() {
+        var organization=UUID.randomUUID();var id=UUID.randomUUID();var rowId=UUID.randomUUID();
+        var repository=org.mockito.Mockito.mock(DataRepository.class);var templates=org.mockito.Mockito.mock(TemplateDataImportFacade.class);
+        var storage=org.mockito.Mockito.mock(com.jsd.aird.ops.application.port.ObjectStorage.class);
+        var job=new DataRepository.Job(id,UUID.randomUUID(),"hash","source.xlsx","XLSX",UUID.randomUUID(),"WAITING_CONFIRM",100,"READY","v1",null,java.time.Instant.EPOCH,java.time.Instant.EPOCH);
+        var json=new ObjectMapper();var values=json.createObjectNode().put("A","sample");
+        var row=new DataRepository.Row(rowId,"s",1,values,values,json.createObjectNode(),"VALID");
+        org.mockito.Mockito.when(repository.findJob(organization,id)).thenReturn(java.util.Optional.of(job));
+        org.mockito.Mockito.when(repository.listRowsForSheet(organization,id,"s")).thenReturn(List.of(row));
+        var service=new DataWorkbookService(repository,null,storage,null,templates,json);
+        com.jsd.aird.shared.security.ActorContext.set(new com.jsd.aird.shared.security.Actor(organization,UUID.randomUUID(),"tester"));
+        try {
+            var result=service.fieldResults(id,job.getRevision(),"s",rowId.toString());
+            assertThat(result.fields()).hasSize(1);
+            assertThat(result.fields().getFirst().effectiveValue().asText()).isEqualTo("sample");
+            org.assertj.core.api.Assertions.assertThatThrownBy(()->service.fieldResults(id,"stale","s",rowId.toString())).isInstanceOf(com.jsd.aird.shared.error.ApiException.class);
+            org.mockito.Mockito.verifyNoInteractions(storage);
+            org.mockito.Mockito.verify(repository,org.mockito.Mockito.never()).listRows(organization,id);
+        } finally { com.jsd.aird.shared.security.ActorContext.clear(); }
+    }
+
+    @Test
     void buildsConfirmationOnlyFromAuditedCompletedSource() throws Exception {
         var json=new ObjectMapper();var organization=UUID.randomUUID();var id=UUID.randomUUID();var file=UUID.randomUUID();
         var repository=org.mockito.Mockito.mock(DataRepository.class);

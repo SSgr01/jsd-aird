@@ -64,11 +64,24 @@ def pristine_sheet(wb, blank, title):
                  "page_setup", "page_margins", "print_options"):
         setattr(ws, attr, deepcopy(getattr(blank, attr)))
     ws.views = deepcopy(blank.views)
-    ws.freeze_panes = blank.freeze_panes
     ws.print_area = str(blank.print_area).split("!", 1)[-1] if blank.print_area else None
     ws.print_title_rows = blank.print_title_rows
     ws.print_title_cols = blank.print_title_cols
     return ws
+
+
+def shift_view_rows(ws, at, count):
+    """Move the scroll origin independently of the frozen row count."""
+    for view in ws.views.sheetView:
+        pane = view.pane
+        if pane is None:
+            continue
+        if pane.topLeftCell:
+            row, column = coordinate_to_tuple(pane.topLeftCell)
+            if row >= at:
+                pane.topLeftCell = f'{get_column_letter(column)}{row+count}'
+        if pane.state in ('frozen', 'frozenSplit') and pane.ySplit and at <= pane.ySplit:
+            pane.ySplit += count
 
 
 def expand_recipe(ws, count, kind):
@@ -115,10 +128,7 @@ def expand_recipe(ws, count, kind):
     # Only the recipe totals are formula-bearing in the supported templates.
     if any(c.data_type == "f" and c.row != at+extra for row in ws for c in row):
         raise ValueError("模板新增了配方合计以外的公式；拒绝猜测行引用")
-    if ws.freeze_panes:
-        p = ws[ws.freeze_panes]
-        if p.row >= at:
-            ws.freeze_panes = f"{get_column_letter(p.column)}{p.row+extra}"
+    shift_view_rows(ws, at, extra)
     info.update(last=info["last"]+extra, total=at+extra)
     return info, lambda row: row+extra if row >= at else row
 
@@ -222,9 +232,7 @@ def insert_client_test_rows(ws, info, base_map, items):
                     rg.max_row += 1
                 ranges.append(str(rg))
             dv.sqref = ' '.join(ranges)
-        if ws.freeze_panes and ws[ws.freeze_panes].row >= at:
-            pane = ws[ws.freeze_panes]
-            ws.freeze_panes = f'{get_column_letter(pane.column)}{pane.row+1}'
+        shift_view_rows(ws, at, 1)
         placements.append(dict(item, target_row=at))
     ws.print_area = f"A1:{get_column_letter(info['output_last_col'])}{ws.max_row}"
     return lambda row: base_map(row)+sum(anchor < row for anchor in anchors), placements

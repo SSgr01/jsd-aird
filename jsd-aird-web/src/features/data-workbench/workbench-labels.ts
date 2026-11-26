@@ -75,10 +75,15 @@ export function workbookRecordOptions(
     && /实验|对照|样品|配方|方案|comparison|samples/i.test(`${region.name} ${region.regionId}`);
   const fallback = (index: number) => `${comparison ? '对照组' : '记录'} ${index + 1}`;
   const definitionByBinding = new Map(definitions.map((field) => [field.bindingId, field]));
+  const fieldsByRecord = new Map<string, DataFieldValueView[]>();
+  for (const field of fields) {
+    if (field.excluded) continue;
+    const key = field.recordGroupId || field.recordId;
+    if (!key) continue;
+    const list = fieldsByRecord.get(key) ?? []; list.push(field); fieldsByRecord.set(key, list);
+  }
   const options = records.map((record, index) => {
-    const candidates = fields.filter((field) => !field.excluded
-      && (field.recordGroupId || field.recordId) === record.recordId
-      && (!field.componentId || field.componentId === record.regionId))
+    const candidates = (fieldsByRecord.get(record.recordId) ?? []).filter(field => !field.componentId || field.componentId === record.regionId)
       .map((field) => ({ value: businessValue(field.effectiveValue ?? field.correctedValue ?? field.normalizedValue ?? field.rawValue),
         priority: identityPriority(field, definitionByBinding.get(field.bindingId)) }))
       .filter((candidate) => candidate.value && candidate.priority < 3)

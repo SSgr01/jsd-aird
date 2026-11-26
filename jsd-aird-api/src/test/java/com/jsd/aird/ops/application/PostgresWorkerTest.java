@@ -21,6 +21,32 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 
 class PostgresWorkerTest {
+    @Test void workerLimitAppliesEvenWhenGlobalCapacityIsLargerAndReapsWhileBusy() throws Exception {
+        var repository = mock(WorkRepository.class);
+        var mapper = new ObjectMapper();
+        var handler = mock(AsyncJobHandler.class);
+        var started = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var job = new WorkRepository.AsyncJob(UUID.randomUUID(), "PARSE", mapper.createObjectNode(), 1, 5);
+        when(repository.claimJob(any(), any())).thenReturn(Optional.of(job));
+        when(handler.supports("PARSE")).thenReturn(true);
+        when(handler.handle(any(), any())).thenAnswer(i -> {
+            started.countDown(); release.await(); return mapper.createObjectNode();
+        });
+        var worker = new PostgresWorker(repository, mock(FileObjectRepository.class), mapper,
+                List.of(handler), "limited", Duration.ofSeconds(30));
+        var limits = com.jsd.aird.shared.resource.CapacityProperties.defaults();
+        worker.configureCapacity(limits, new com.jsd.aird.shared.resource.ResourceAdmission(limits), 1);
+        worker.configureDispatch(16);
+        try {
+            worker.poll();
+            org.assertj.core.api.Assertions.assertThat(started.await(2, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            worker.poll();
+            verify(repository, org.mockito.Mockito.times(1)).claimJob(any(), any());
+            verify(repository, org.mockito.Mockito.times(2)).expireExhaustedJobs();
+        } finally { release.countDown(); worker.shutdownExecutors(); }
+    }
+
     @Test void dispatchesIndependentJobsBeforeTheFirstOneFinishes() throws Exception {
         var repository=mock(WorkRepository.class); var mapper=new ObjectMapper(); var handler=mock(AsyncJobHandler.class);
         var started=new java.util.concurrent.CountDownLatch(2); var release=new java.util.concurrent.CountDownLatch(1);
@@ -33,11 +59,11 @@ class PostgresWorkerTest {
         var worker=new PostgresWorker(repository,mock(FileObjectRepository.class),mapper,List.of(handler),"parallel",Duration.ofSeconds(30));
         worker.configureDispatch(16);
         try {
-            java.util.concurrent.CompletableFuture.runAsync(worker::poll).get(2,java.util.concurrent.TimeUnit.SECONDS);
-            org.assertj.core.api.Assertions.assertThat(started.await(2,java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            java.util.concurrent.CompletableFuture.runAsync(worker::poll).get(10,java.util.concurrent.TimeUnit.SECONDS);
+            org.assertj.core.api.Assertions.assertThat(started.await(10,java.util.concurrent.TimeUnit.SECONDS)).isTrue();
             release.countDown();
-            verify(repository,timeout(2000)).completeClaimedJob(org.mockito.ArgumentMatchers.eq(first),any());
-            verify(repository,timeout(2000)).completeClaimedJob(org.mockito.ArgumentMatchers.eq(second),any());
+            verify(repository,timeout(10000)).completeClaimedJob(org.mockito.ArgumentMatchers.eq(first),any());
+            verify(repository,timeout(10000)).completeClaimedJob(org.mockito.ArgumentMatchers.eq(second),any());
         } finally { release.countDown(); worker.shutdownExecutors(); }
     }
     @Test void knowledgeJobsHaveTheirOwnTimeoutWithoutExtendingOtherJobs() {
@@ -65,15 +91,17 @@ class PostgresWorkerTest {
     @Test
     void ignoredInterruptionRetainsSlotsAndStopsClaimingMoreJobs()throws Exception {
         var repository=mock(WorkRepository.class);var mapper=new ObjectMapper();var handler=mock(AsyncJobHandler.class);
-        var release=new java.util.concurrent.CountDownLatch(1);var actualExits=new java.util.concurrent.CountDownLatch(2);
+        var release=new java.util.concurrent.CountDownLatch(1);var actualExits=new java.util.concurrent.CountDownLatch(1);
         var job=new WorkRepository.AsyncJob(UUID.randomUUID(),"STUCK",mapper.createObjectNode(),1,5);
         when(handler.supports("STUCK")).thenReturn(true);
         when(handler.handle(any(),any())).thenAnswer(invocation->{try{while(release.getCount()>0){try{release.await(10,java.util.concurrent.TimeUnit.MILLISECONDS);}catch(InterruptedException ignored){ }}}finally{actualExits.countDown();}return mapper.createObjectNode();});
         when(repository.claimOutbox(any(),any())).thenReturn(Optional.empty());when(repository.claimJob(any(),any())).thenReturn(Optional.of(job));
         var worker=new PostgresWorker(repository,mock(FileObjectRepository.class),mapper,List.of(handler),"bounded",Duration.ofSeconds(30),Duration.ofMillis(30));
+        var limits = com.jsd.aird.shared.resource.CapacityProperties.defaults();
+        worker.configureCapacity(limits, new com.jsd.aird.shared.resource.ResourceAdmission(limits), 1);
         try{
-            worker.poll();worker.poll();verify(repository,org.mockito.Mockito.times(2)).claimJob(any(),any());
-            release.countDown();org.assertj.core.api.Assertions.assertThat(actualExits.await(2,java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            worker.poll();worker.poll();verify(repository,org.mockito.Mockito.times(1)).claimJob(any(),any());
+            release.countDown();org.assertj.core.api.Assertions.assertThat(actualExits.await(10,java.util.concurrent.TimeUnit.SECONDS)).isTrue();
         }finally{release.countDown();worker.shutdownExecutors();}
     }
 

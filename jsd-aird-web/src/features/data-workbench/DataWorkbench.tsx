@@ -1,3 +1,4 @@
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { WorkspaceFrame, WorkspaceMaximizeButton } from '@/components/workspace/WorkspaceFrame';
 import {
   CheckCircleFilled,
@@ -13,6 +14,7 @@ import { Button, Empty, Segmented, Select, Skeleton, Space, Spin, Tag, Typograph
 import { forwardRef, lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 import { FieldPanelToggle } from '@/components/field-panel/CollapsibleFieldPanel';
 import { useAppStore } from '@/stores/app-store';
+import { markPerformance, measurePerformance } from '@/services/performance/metrics';
 
 import type {
   DataFieldValueView,
@@ -137,6 +139,13 @@ export const DataWorkbookCanvas = forwardRef<EditorHandle, CanvasProps>(function
         permissionDialogVisible={Boolean(editable && workbook.editable)}
         onDirty={onDirty ?? (() => undefined)}
         onEditorValue={() => undefined}
+        onReady={() => {
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            markPerformance('import-workbook-ready');
+            measurePerformance('import-workbook-open', 'route-start', 'import-workbook-ready');
+            measurePerformance('import-workbook-load', 'import-workbook-load-start', 'import-workbook-ready');
+          }));
+        }}
         onSelectionChange={onSelectionChange}
         onCellChange={editable && workbook.editable ? onCellChange : undefined}
       />
@@ -222,6 +231,7 @@ interface FieldDataBrowserProps {
   selectedFieldKey?: string;
   selectedCell?: EditorSelection;
   onSelectField: (field: DataFieldValueView) => void;
+  onFieldScopeChange?: (scope: { sheetId?: string; recordId: string }) => void;
   renderFieldExtra?: (field: DataFieldValueView) => ReactNode;
   renderFieldMeta?: (field: DataFieldValueView) => ReactNode;
   headerExtra?: ReactNode;
@@ -234,6 +244,7 @@ export function DataFieldDataBrowser({
   selectedFieldKey,
   selectedCell,
   onSelectField,
+  onFieldScopeChange,
   renderFieldExtra,
   renderFieldMeta,
   headerExtra,
@@ -243,7 +254,20 @@ export function DataFieldDataBrowser({
   const fields = workbook?.fields || [];
   const regions = useMemo(() => normalizeRegions(workbook), [workbook]);
   const records = workbook?.records || [];
-  const selectedField = fields.find((field) => dataFieldKey(field) === selectedFieldKey);
+  const fieldIndex = useMemo(() => {
+    const byKey = new Map<string, DataFieldValueView>();
+    const byRecord = new Map<string, DataFieldValueView[]>();
+    const byRegion = new Map<string | undefined, DataFieldValueView[]>();
+    for (const field of fields) {
+      const key = dataFieldKey(field);
+      if (!byKey.has(key)) byKey.set(key, field);
+      const record = field.recordGroupId || field.recordId || '';
+      const values = byRecord.get(record) ?? []; values.push(field); byRecord.set(record, values);
+      const regionValues = byRegion.get(field.componentId) ?? []; regionValues.push(field); byRegion.set(field.componentId, regionValues);
+    }
+    return { byKey, byRecord, byRegion };
+  }, [fields]);
+  const selectedField = selectedFieldKey ? fieldIndex.byKey.get(selectedFieldKey) : undefined;
   const bodyRef = useRef<HTMLDivElement>(null);
   const activeCardRef = useRef<HTMLElement>(null);
   const [selectedRegionId, setSelectedRegionId] = useState<string>();
@@ -255,16 +279,32 @@ export function DataFieldDataBrowser({
   }, [selectedField?.componentId, selectedField?.recordGroupId, selectedField?.recordId]);
   const activeRegionId = selectedRegionId || selectedField?.componentId || regions[0]?.regionId;
   const region = regions.find((item) => item.regionId === activeRegionId) || regions[0];
-  const regionRecords = records.filter((item) => !region || item.regionId === region.regionId);
-  const recordOptions = workbookRecordOptions(regionRecords, region, fields, workbook?.fieldDefinitions);
+  const regionRecords = useMemo(() => records.filter((item) => !region || item.regionId === region.regionId), [records, region]);
+  const recordOptions = useMemo(() => workbookRecordOptions(regionRecords, region, fields, workbook?.fieldDefinitions),
+    [regionRecords, region, fields, workbook?.fieldDefinitions]);
   const activeRecordId = selectedRecordId && regionRecords.some((item) => item.recordId === selectedRecordId)
     ? selectedRecordId : regionRecords[0]?.recordId;
-  const visibleFields = activeRecordId
-    ? fields.filter((item) => (item.recordGroupId || item.recordId) === activeRecordId
-      && (!region || item.componentId === region.regionId))
-    : fields.filter((item) => !region || item.componentId === region.regionId);
-  const grouped = groupFields(visibleFields, workbook?.fieldDefinitions);
-  const summary = summarizeFields(visibleFields);
+  const visibleFields = useMemo(() => activeRecordId
+    ? (fieldIndex.byRecord.get(activeRecordId) ?? []).filter((item) => !region || item.componentId === region.regionId)
+    : region ? fieldIndex.byRegion.get(region.regionId) ?? [] : fields, [activeRecordId, region, fieldIndex, fields]);
+  const grouped = useMemo(() => groupFields(visibleFields, workbook?.fieldDefinitions), [visibleFields, workbook?.fieldDefinitions]);
+  const scopeSheetId = regionRecords.find(record => record.recordId === activeRecordId)?.sheetId;
+  useEffect(() => {
+    if (activeRecordId) onFieldScopeChange?.({ sheetId: scopeSheetId, recordId: activeRecordId });
+  }, [activeRecordId, scopeSheetId, onFieldScopeChange]);
+  const virtualRows = useMemo(() => grouped.flatMap(group => [
+    { group, field: undefined as DataFieldValueView | undefined }, ...group.fields.map(field => ({ group, field })),
+  ]), [grouped]);
+  const virtual = useVirtualizer({ count: virtualRows.length, getScrollElement: () => bodyRef.current,
+    estimateSize: index => virtualRows[index]?.field ? 50 : 36, overscan: 8,
+    enabled: virtualRows.length > 100,
+  });
+  useEffect(() => {
+    if (virtualRows.length <= 100) return;
+    const index = virtualRows.findIndex(row => row.field && dataFieldKey(row.field) === selectedFieldKey);
+    if (index >= 0) virtual.scrollToIndex(index, { align: 'auto' });
+  }, [selectedFieldKey, virtualRows, virtual]);
+  const summary = useMemo(() => summarizeFields(visibleFields), [visibleFields]);
   const activeRecordIndex = regionRecords.findIndex((item) => item.recordId === activeRecordId);
   useEffect(() => {
     if (!selectedCell || !selectedField || !fieldMatchesSheet(selectedField, selectedCell)
@@ -368,7 +408,18 @@ export function DataFieldDataBrowser({
       ? <div className="data-inline-note">该单元格没有匹配到业务字段</div> : null}
     {grouped.length ? <div className="data-field-columns" aria-hidden="true"><span>字段名称</span><span>当前值</span><span>状态</span></div> : null}
     <div className="data-structure-groups">
-      {grouped.length ? grouped.map((group, groupIndex) => {
+      {virtualRows.length > 100 ? <div style={{ height: virtual.getTotalSize(), position: 'relative' }}>
+        {virtual.getVirtualItems().map(item => {
+          const row = virtualRows[item.index]!;
+          return <div key={item.key} data-index={item.index} ref={virtual.measureElement}
+            style={{ position: 'absolute', top: 0, width: '100%', transform: `translateY(${item.start}px)` }}>
+            {row.field ? <DataFieldCard field={row.field} active={dataFieldKey(row.field) === selectedFieldKey}
+              activeRef={activeCardRef} onSelect={() => onSelectField(row.field!)} extra={renderFieldExtra?.(row.field)}>
+              {renderFieldMeta?.(row.field)}
+            </DataFieldCard> : <section className="data-field-group"><header><strong>{visibleFieldGroupName(row.group)}</strong><span>{distinctBindings(row.group.fields)} 项</span></header></section>}
+          </div>;
+        })}
+      </div> : grouped.length ? grouped.map((group, groupIndex) => {
         const groupName = visibleFieldGroupName(group);
         return <section className="data-field-group" key={`${group.name || 'root'}-${groupIndex}`}>
         {groupName ? <header><strong>{groupName}</strong><span>{distinctBindings(group.fields)} 项</span></header> : null}

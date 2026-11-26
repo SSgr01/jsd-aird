@@ -152,6 +152,9 @@ public class JdbcExperimentRepository implements ExperimentRepository {
     }
 
     @Override @Transactional public Summary create(Create c){
+        return createPrepared(c,c.templateSnapshot()==null?null:c.templateSnapshot().toString(),c.editModel()==null?null:c.editModel().toString());
+    }
+    @Override @Transactional public Summary createPrepared(Create c,String templateJson,String modelJson){
         String no = c.experimentNo();
         if (!text(no)) no = "EXP-" + LocalDate.now().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE) + "-" + UUID.randomUUID().toString().substring(0, 6).toUpperCase();
         if (Boolean.TRUE.equals(jdbc.queryForObject(
@@ -161,10 +164,15 @@ public class JdbcExperimentRepository implements ExperimentRepository {
         jdbc.update("INSERT INTO rnd.experiment(id,organization_id,experiment_no,title,category_id,category_name,source_type,status,project_id,stage_id,task_id,owner_id,owner_name,experiment_date,source_file_id,current_version_id,created_by,updated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?)",
                 c.id(),c.organizationId(),no,c.title(),c.categoryId(),c.categoryName(),c.sourceType(),c.status().name(),c.projectId(),c.stageId(),c.taskId(),c.ownerId(),c.ownerName(),c.experimentDate(),sourceFileId(c.editModel()),c.actorId(),c.actorId());
         jdbc.update("INSERT INTO rnd.experiment_version(id,organization_id,experiment_id,version_no,status,template_version_id,template_snapshot_hash,template_snapshot_jsonb,edit_model_jsonb,created_by) VALUES(?,?,?,1,?,?,?,?,?,?)",
-                c.versionId(),c.organizationId(),c.id(),c.status().name(),c.templateVersionId(),c.templateHash(),pg(c.templateSnapshot()),pg(c.editModel()),c.actorId());
+                c.versionId(),c.organizationId(),c.id(),c.status().name(),c.templateVersionId(),c.templateHash(),preparedJson(templateJson),preparedJson(modelJson),c.actorId());
         jdbc.update("UPDATE rnd.experiment SET current_version_id=? WHERE id=?",c.versionId(),c.id());
-        audit(c.organizationId(),c.id(),c.versionId(),"CREATED",null,c.editModel(),c.actorId(),c.actorName()); event(c.organizationId(),c.id(),ExperimentEvents.CREATED,c.versionId(),1);
-        return detail(c.organizationId(),c.id()).orElseThrow().summary();
+        // Audit references the JSONB already written; do not serialize and send the workbook twice.
+        jdbc.update("""
+                INSERT INTO rnd.experiment_audit(id,organization_id,experiment_id,experiment_version_id,action,before_jsonb,after_jsonb,operator_id,operator_name)
+                SELECT ?,?,?,id,'CREATED',NULL,edit_model_jsonb,?,? FROM rnd.experiment_version WHERE id=? AND organization_id=?
+                """,UUID.randomUUID(),c.organizationId(),c.id(),c.actorId(),c.actorName(),c.versionId(),c.organizationId());
+        event(c.organizationId(),c.id(),ExperimentEvents.CREATED,c.versionId(),1);
+        return jdbc.query(SUMMARY_BASE+" WHERE e.organization_id=? AND e.id=? AND e.deleted=false",this::summary,c.organizationId(),c.id()).stream().findFirst().orElseThrow();
     }
     @Override @Transactional public Summary copy(UUID org, UUID sourceId, UUID actor, String name) {
         var source = required(org, sourceId);
@@ -362,4 +370,8 @@ public class JdbcExperimentRepository implements ExperimentRepository {
     // Lists and relation pickers need summaries, not the potentially large workbook snapshots.
     private static final String SUMMARY_BASE="SELECT e.*,p.name AS project_name,s.name AS stage_name,t.name AS task_name,v.version_no,"+DOCUMENT_FORMAT+" AS document_format FROM rnd.experiment e LEFT JOIN mdm.project p ON p.id=e.project_id AND p.deleted=false LEFT JOIN mdm.project_stage s ON s.id=e.stage_id AND s.deleted=false LEFT JOIN mdm.project_task t ON t.id=e.task_id AND t.deleted=false JOIN rnd.experiment_version v ON v.id=e.current_version_id";
     private static final String BASE="SELECT e.*,p.name AS project_name,s.name AS stage_name,t.name AS task_name,v.version_no,v.template_version_id,v.template_snapshot_hash,v.template_snapshot_jsonb,v.edit_model_jsonb,"+DOCUMENT_FORMAT+" AS document_format FROM rnd.experiment e LEFT JOIN mdm.project p ON p.id=e.project_id AND p.deleted=false LEFT JOIN mdm.project_stage s ON s.id=e.stage_id AND s.deleted=false LEFT JOIN mdm.project_task t ON t.id=e.task_id AND t.deleted=false JOIN rnd.experiment_version v ON v.id=e.current_version_id";
+    private static org.postgresql.util.PGobject preparedJson(String value) {
+        try { var object=new org.postgresql.util.PGobject(); object.setType("jsonb"); object.setValue(value); return object; }
+        catch(java.sql.SQLException e) { throw new IllegalArgumentException(e); }
+    }
 }

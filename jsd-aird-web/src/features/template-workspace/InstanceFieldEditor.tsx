@@ -176,7 +176,7 @@ export function InstanceFieldEditor({
   return (
     <div className="instance-field-editor" hidden={view === 'data'}>
       <div className="field-definition-pane" hidden={view !== 'structure'}>
-      <FieldStructure
+      {view === 'structure' ? <FieldStructure
         allowGroupManagement={false}
         hiddenFieldIds={hiddenFieldIds}
         editable={editable}
@@ -197,7 +197,7 @@ export function InstanceFieldEditor({
         onAddField={() => add()}
         onAddStructuredField={(parent) => add(parent)}
         onManageGroups={() => undefined}
-      />
+      /> : null}
       </div>
       <div className="field-definition-pane" hidden={view !== 'properties'}>{view === 'properties' ? renderProperties() : null}</div>
     </div>

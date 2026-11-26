@@ -19,6 +19,7 @@ app:
     pending-jobs: ${JSD_AIRD_CAPACITY_PENDING_JOBS:2000}
     organization-pending-jobs: ${JSD_AIRD_CAPACITY_ORGANIZATION_PENDING_JOBS:1000}
   worker:
+    max-concurrent-jobs: ${JSD_AIRD_WORKER_MAX_CONCURRENT_JOBS:4}
     claims-per-poll: ${JSD_AIRD_WORKER_CLAIMS_PER_POLL:16}
     document-processes: ${JSD_AIRD_WORKER_DOCUMENT_PROCESSES:4}
     document-process-heap-mib: ${JSD_AIRD_WORKER_DOCUMENT_PROCESS_HEAP_MIB:2048}

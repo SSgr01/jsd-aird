@@ -33,12 +33,21 @@ public class JdbcOpsAsyncFacade implements OpsAsyncFacade {
     }
     @Override @Transactional
     public void requireExecution(com.jsd.aird.ops.application.port.AsyncJobHandler.ExecutionContext context,boolean terminal){
+        validateExecution(context, terminal, true);
+    }
+
+    @Override
+    public void checkExecution(com.jsd.aird.ops.application.port.AsyncJobHandler.ExecutionContext context, boolean terminal) {
+        validateExecution(context, terminal, false);
+    }
+
+    private void validateExecution(com.jsd.aird.ops.application.port.AsyncJobHandler.ExecutionContext context, boolean terminal, boolean lock) {
         if(context==null)return;
         boolean valid=!jdbc.query("""
             SELECT id FROM ops.async_job WHERE id=? AND organization_id=? AND lease_generation=?
-                AND ((?=false AND status='RUNNING' AND lease_token=? AND lease_expires_at>now())
-                  OR (?=true AND status='FAILED')) FOR UPDATE
-            """,(rs,n)->rs.getObject(1),context.jobId(),context.organizationId(),context.leaseGeneration(),terminal,context.leaseToken(),terminal).isEmpty();
+                AND ((?=false AND status='RUNNING' AND lease_token=? AND lease_expires_at>clock_timestamp())
+                  OR (?=true AND status='FAILED'))
+            """ + (lock ? " FOR UPDATE" : ""),(rs,n)->rs.getObject(1),context.jobId(),context.organizationId(),context.leaseGeneration(),terminal,context.leaseToken(),terminal).isEmpty();
         if(!valid)throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT,"旧任务租期已失效");
     }
 

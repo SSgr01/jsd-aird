@@ -50,6 +50,39 @@ final class MineruTasksClient {
     }
 
     void parseBatch(java.util.List<MineruBatcher.Item> inputs) {
+        var groups = new LinkedHashMap<String, java.util.List<MineruBatcher.Item>>();
+        for (var input : inputs) groups.computeIfAbsent(wireName(input), ignored -> new java.util.ArrayList<>()).add(input);
+        if (groups.size() == inputs.size()) { parseUniqueBatch(inputs); return; }
+        // Concurrent retries of the same version must not create duplicate descriptors.
+        var representatives = new java.util.ArrayList<MineruBatcher.Item>();
+        for (var group : groups.values()) {
+            var first = group.getFirst();
+            representatives.add(group.size() == 1 ? first : new MineruBatcher.Item(first.request, first.bytes));
+        }
+        parseUniqueBatch(representatives);
+        for (var representative : representatives) {
+            var aliases = groups.get(wireName(representative));
+            if (aliases.size() == 1) continue;
+            try {
+                var result = representative.future.join();
+                try {
+                    for (var alias : aliases) {
+                        Path copy = Files.createTempFile("mineru-result-copy-", ".zip");
+                        try {
+                            Files.copy(result.zip(), copy, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                            alias.success(new Downloaded(copy, result.taskId(), result.metadata()));
+                        } catch (Exception error) { Files.deleteIfExists(copy); alias.fail(error); }
+                    }
+                } finally { Files.deleteIfExists(result.zip()); }
+            } catch (Exception error) {
+                Throwable cause = error instanceof java.util.concurrent.CompletionException && error.getCause() != null
+                        ? error.getCause() : error;
+                aliases.forEach(alias -> alias.fail(cause));
+            }
+        }
+    }
+
+    private void parseUniqueBatch(java.util.List<MineruBatcher.Item> inputs) {
         var fresh = new java.util.ArrayList<MineruBatcher.Item>();
         var resumed = new LinkedHashMap<String, java.util.List<MineruBatcher.Item>>();
         var saved = new java.util.HashMap<MineruBatcher.Item, Task>();
@@ -68,6 +101,12 @@ final class MineruTasksClient {
                         throw error;
                     }
                     snapshots.put(checkpoint.batchId(), snapshot);
+                }
+                var remoteFile = file(snapshot, input, checkpoint.remoteFileId());
+                if (uploadExpired(remoteFile, snapshot)) {
+                    save(input, descriptor(remoteFile, checkpoint.batchId(), false));
+                    fresh.add(input);
+                    continue;
                 }
                 saved.put(input, checkpoint);
                 // Partition identity is derived from immutable source bytes and page range.
@@ -155,10 +194,10 @@ final class MineruTasksClient {
                         catch (Throwable error) { Files.deleteIfExists(zip); throw error; }
                         iterator.remove();
                     } else if (Set.of("failed", "canceled", "error").contains(status)
-                            || Set.of("failed", "canceled", "error").contains(task.path("status").asText())) {
+                            || (status.isBlank() && Set.of("failed", "canceled", "error").contains(task.path("status").asText()))) {
                         save(input, descriptor(item, id, true));
                         var error = item.hasNonNull("error") ? item.get("error") : task.path("error");
-                        throw failure("MinerU 文件解析失败：" + error.path("message").asText(error.toString()), error.path("code").asText("PARSE_FAILED"), id, false, null);
+                        throw failure("MinerU 文件解析失败：" + error.path("message").asText(error.toString()), error.path("code").asText("PARSE_FAILED"), id, uploadExpired(item, task), null);
                     } else if (status.equals("waiting-file") && (checkpoint == null || !checkpoint.uploaded())) {
                         var pending = descriptor(item, id, false); save(input, pending);
                         upload(pending, input.request.file());
@@ -172,6 +211,13 @@ final class MineruTasksClient {
             pause(poll, id);
             task = json("GET", "v1/tasks/" + identifier(id), null, id);
         }
+    }
+
+    private static boolean uploadExpired(JsonNode item, JsonNode task) {
+        if (!Set.of("failed", "error", "expired").contains(item.path("status").asText())) return false;
+        var error = item.hasNonNull("error") ? item.path("error") : task.path("error");
+        return "upload_expired".equalsIgnoreCase(error.path("code").asText())
+                || "Upload expired".equalsIgnoreCase(error.path("message").asText());
     }
 
     private JsonNode file(JsonNode task, MineruBatcher.Item input, String fileId) {

@@ -16,6 +16,16 @@ function adapt(handler: (config: InternalAxiosRequestConfig) => ReturnType<typeo
 
 describe('HTTP CSRF request lifecycle', () => {
   beforeEach(() => { vi.resetModules(); });
+  it('decodes small error envelopes for workbook reads without parsing successful payloads', async () => {
+    const { httpClient } = await import('./client');
+    httpClient.defaults.adapter = adapt(config => {
+      throw new AxiosError('Gateway timeout', 'ERR_BAD_RESPONSE', config, undefined,
+        response(config, JSON.stringify({ code: 'OPERATION_TIMEOUT', message: 'timeout', traceId: 'test-trace' }), 504));
+    });
+    await expect(httpClient.get('/api/v1/data/import-jobs/id/workbook-snapshot', {
+      responseType: 'text', transformResponse: value => value,
+    })).rejects.toMatchObject({ code: 'OPERATION_TIMEOUT', message: 'timeout', status: 504, traceId: 'test-trace' });
+  });
   it('does not retry or invalidate domains when admission rejected a write', async () => {
     const { httpClient } = await import('./client');
     const queries = await import('@/services/query/query-client');

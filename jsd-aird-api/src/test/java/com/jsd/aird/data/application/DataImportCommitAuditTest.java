@@ -50,6 +50,19 @@ class DataImportCommitAuditTest {
     }
 
     @Test
+    void summaryNeverLoadsRowsMappingsTemplateOrExecutionContract() {
+        ActorContext.set(new com.jsd.aird.shared.security.Actor(ORGANIZATION_ID,USER_ID,"developer"));
+        when(repository.findJob(ORGANIZATION_ID,importJobId)).thenReturn(Optional.of(job));
+        var summary=service.previewSummary(importJobId);
+        assertThat(summary.rows()).isEmpty();assertThat(summary.mappings()).isEmpty();
+        org.mockito.Mockito.verify(repository,org.mockito.Mockito.never()).listRows(any(),any());
+        org.mockito.Mockito.verify(repository,org.mockito.Mockito.never()).listMappings(any(),any());
+        org.mockito.Mockito.verify(repository,org.mockito.Mockito.never()).listSheets(any(),any());
+        org.mockito.Mockito.verify(repository,org.mockito.Mockito.never()).findCompatibilityReport(any(),any());
+        verifyNoInteractions(templates);
+    }
+
+    @Test
     void appendsAuditWithIdentifiersAndHashesWithoutObsoleteIndexingOutbox() {
         ActorContext.set(new com.jsd.aird.shared.security.Actor(ORGANIZATION_ID, USER_ID, "developer"));
         var recordId = UUID.randomUUID();
@@ -128,6 +141,57 @@ class DataImportCommitAuditTest {
         verify(repository).commit(eq(ORGANIZATION_ID), eq(importJobId), eq(USER_ID), committed.capture());
         assertThat(committed.getValue()).singleElement()
                 .extracting(DataRepository.CommittedRow::recordKey).isEqualTo("NEW-001");
+    }
+
+    @Test
+    void confirmedExperimentEnqueuesPreparationInTheCommitAndReusesAnActiveJob() {
+        ActorContext.set(new com.jsd.aird.shared.security.Actor(ORGANIZATION_ID,USER_ID,"developer"));
+        var confirmed=experimentJob("COMPLETED");
+        when(repository.findJobForUpdate(ORGANIZATION_ID,importJobId)).thenReturn(Optional.of(confirmed));
+        var payload=ArgumentCaptor.forClass(com.fasterxml.jackson.databind.JsonNode.class);
+        service.commit(importJobId);
+        verify(opsAsync).enqueue(eq(ORGANIZATION_ID),eq("DATA_TO_EXPERIMENT_SYNC"),payload.capture(),
+                eq("data-experiment-prepare:"+importJobId+":"+confirmed.getRevision()),eq(40));
+        assertThat(payload.getValue().path("phase").asText()).isEqualTo("PREPARE");
+        assertThat(payload.getValue().path("reviewedRevision").asText()).isEqualTo(confirmed.getRevision());
+        org.mockito.Mockito.clearInvocations(opsAsync);
+        when(opsAsync.findLatestJob(eq(ORGANIZATION_ID),any())).thenReturn(Optional.of(new OpsAsyncFacade.AsyncJobView(
+                UUID.randomUUID(),"DATA_TO_EXPERIMENT_SYNC","RUNNING",0,"PREPARING",1,5,Instant.EPOCH,null,null)));
+        service.commit(importJobId);
+        org.mockito.Mockito.verify(opsAsync,org.mockito.Mockito.never()).enqueue(any(),any(),any(),any(),org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    void initialConfirmationRecordsAuditBeforeEnqueueAndPropagatesEnqueueFailure() {
+        ActorContext.set(new com.jsd.aird.shared.security.Actor(ORGANIZATION_ID,USER_ID,"developer"));
+        when(repository.findJobForUpdate(ORGANIZATION_ID,importJobId)).thenReturn(Optional.of(experimentJob("WAITING_CONFIRM")));
+        when(repository.findJob(ORGANIZATION_ID,importJobId)).thenReturn(Optional.of(experimentJob("COMPLETED")));
+        when(repository.commit(eq(ORGANIZATION_ID),eq(importJobId),eq(USER_ID),any())).thenReturn(new DataRepository.CommitResult(List.of(),0));
+        doThrow(new IllegalStateException("queue unavailable")).when(opsAsync).enqueue(any(),any(),any(),any(),org.mockito.ArgumentMatchers.anyInt());
+        assertThatThrownBy(()->service.commit(importJobId)).hasMessage("queue unavailable");
+        var order=org.mockito.Mockito.inOrder(auditLog,opsAsync);
+        order.verify(auditLog).append(eq(ORGANIZATION_ID),eq(USER_ID),eq("DATA_IMPORT_COMMITTED"),eq("DATA_IMPORT_JOB"),eq(importJobId),any());
+        order.verify(opsAsync).enqueue(any(),any(),any(),any(),org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    void failedPreparationCanBeRetriedWithoutExceedingTheJobKeyLimit() {
+        ActorContext.set(new com.jsd.aird.shared.security.Actor(ORGANIZATION_ID,USER_ID,"developer"));
+        var confirmed=experimentJob("COMPLETED");var failed=UUID.randomUUID();
+        when(repository.findJobForUpdate(ORGANIZATION_ID,importJobId)).thenReturn(Optional.of(confirmed));
+        when(opsAsync.findLatestJob(eq(ORGANIZATION_ID),any())).thenReturn(Optional.of(new OpsAsyncFacade.AsyncJobView(
+                failed,"DATA_TO_EXPERIMENT_SYNC","FAILED",0,"PREPARING",1,5,Instant.EPOCH,null,null)));
+        service.commit(importJobId);
+        var key=ArgumentCaptor.forClass(String.class);
+        verify(opsAsync).enqueue(eq(ORGANIZATION_ID),eq("DATA_TO_EXPERIMENT_SYNC"),any(),key.capture(),eq(40));
+        assertThat(key.getValue()).hasSizeLessThanOrEqualTo(160)
+                .startsWith("data-experiment-prepare:"+importJobId+":"+confirmed.getRevision())
+                .endsWith(failed.toString().replace("-",""));
+    }
+
+    private DataRepository.Job experimentJob(String status) {
+        return new DataRepository.Job(importJobId,job.sourceFileId(),"source-sha","source.xlsx","XLSX",templateVersionId,
+                null,status,100,status,"parser",null,Instant.EPOCH,Instant.EPOCH,9,"contract","COMPATIBLE","EXPERIMENT_DRAFT",null);
     }
 
     @Test

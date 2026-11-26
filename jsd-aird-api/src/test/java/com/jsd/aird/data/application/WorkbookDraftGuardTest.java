@@ -49,6 +49,28 @@ class WorkbookDraftGuardTest {
         verify(repository,never()).saveWorkbookDraft(any(),any(),any(),any(),any(),any());
     }
 
+    @Test void lostSaveResponseCanBeAcknowledgedWithoutOverwritingOrReparsing() {
+        actor();var current=job();var source=workbook();
+        var normalized=com.jsd.aird.shared.excel.WorkbookStructure.validate(json,source,instance());
+        when(repository.findJob(org,id)).thenReturn(Optional.of(current));
+        when(repository.findWorkbookDraft(org,id)).thenReturn(Optional.of(new DataRepository.WorkbookDraft(source,normalized,json.createArrayNode())));
+        assertThat(service.saveWorkbookDraft(id,"old-revision",source,normalized,json.createArrayNode())).isEqualTo(current);
+        verifyNoInteractions(templates);
+        verify(repository,never()).saveWorkbookDraft(any(),any(),any(),any(),any(),any());
+    }
+
+    @Test void lostResponseRecoveryNeverAcceptsDifferentPersistedContent() {
+        actor();var current=job();var source=workbook();
+        var normalized=com.jsd.aird.shared.excel.WorkbookStructure.validate(json,source,instance());
+        var other=source.deepCopy();other.withObject("/sheets/s/cellData/0/0").put("v","8h");
+        when(repository.findJob(org,id)).thenReturn(Optional.of(current));
+        when(repository.findWorkbookDraft(org,id)).thenReturn(Optional.of(new DataRepository.WorkbookDraft(other,normalized,json.createArrayNode())));
+        assertThatThrownBy(()->service.saveWorkbookDraft(id,"old-revision",source,normalized,json.createArrayNode()))
+                .isInstanceOf(ApiException.class);
+        verifyNoInteractions(templates);
+        verify(repository,never()).saveWorkbookDraft(any(),any(),any(),any(),any(),any());
+    }
+
     private com.fasterxml.jackson.databind.node.ObjectNode workbook() {
         var source=json.createObjectNode();
         source.withObject("/sheets/s").put("id","s").withObject("/cellData/0/0").put("v","5h");

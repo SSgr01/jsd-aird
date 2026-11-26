@@ -14,6 +14,18 @@ import java.util.concurrent.*;
 import static org.assertj.core.api.Assertions.*;
 
 class CapacityFilterTest {
+    @Test void workbookReadsAndWritesKeepTheirOwnBoundedDeadlines() throws Exception {
+        var filter=filter(Map.of());
+        for(var owner:List.of("import-jobs","experiment-import-jobs")) {
+            var base="/api/v1/data/"+owner+"/"+UUID.randomUUID();
+            filter.doFilter(new MockHttpServletRequest("GET",base+"/workbook-snapshot"),new MockHttpServletResponse(),(req,res)->{
+                assertThat(OperationBudget.kind()).isEqualTo(OperationBudget.Kind.HEAVY);
+                assertThat(OperationBudget.remainingMillis()).isBetween(59000L,60000L);
+            });
+            filter.doFilter(new MockHttpServletRequest("PUT",base+"/workbook-draft"),new MockHttpServletResponse(),(req,res)->
+                assertThat(OperationBudget.remainingMillis()).isBetween(119000L,120000L));
+        }
+    }
     @Test void multiSheetReviewAndPresentationReadsOwnHeavyAdmission() throws Exception {
         var limits=CapacityProperties.defaults();var metrics=new SimpleMeterRegistry();
         var filter=new CapacityFilter(limits,new TemporarySpace(limits.temporaryBytes(),directory),new ObjectMapper(),metrics);

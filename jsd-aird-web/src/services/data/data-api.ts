@@ -1,7 +1,7 @@
 import type { WorkbookTemplateInstance } from '@/features/template-workspace/workbook-instance';
 import type { ApiResponse, PageResponse } from '@/types/api';
-import { httpClient, LARGE_PAYLOAD_TIMEOUT } from '@/services/http/client';
-import { sharedRead } from '@/services/http/inflight-reads';
+import { httpClient, LARGE_PAYLOAD_TIMEOUT, LARGE_WRITE_TIMEOUT } from '@/services/http/client';
+import { sharedAbortableRead } from '@/services/http/inflight-reads';
 import { fetchFileBlob, fetchFilePreviewBlob } from '@/services/files';
 import type { ProjectRelationTarget, RelatedProjectView } from '@/services/project/project-resource-api';
 
@@ -44,7 +44,7 @@ export interface DataWorkbookRegion { regionId: string; name: string; structureT
 export interface DataWorkbookRecord { recordId: string; regionId: string; label: string; sequence: number; sheetId?: string; sheetName?: string; address?: string; excluded: boolean }
 export interface DataWorkbookFieldDefinition { componentId: string; bindingId: string; parentBindingId?: string; fieldCode: string; displayName: string; description?: string; labelPath?: string; mappingKind?: string; repeatAxis?: string; valueType?: string; unit?: string; required: boolean; identity: boolean; groupPath?: string; sheetId?: string; sheetName?: string; sourceRange?: string }
 export interface DataFieldValueView { recordId?: string; fieldCode: string; fieldName: string; labelPath?: string; bindingId: string; valuePath: string; valueSource: string; valueStatus: string; valueType?: string; unit?: string; required: boolean; identity: boolean; trainingEligible: boolean; ragEligible: boolean; sheetId?: string; sheetName?: string; rowNumber?: number; address?: string; sourceLocation?: string; rawValue?: unknown; normalizedValue?: unknown; correctedValue?: unknown; effectiveValue?: unknown; editable: boolean; excluded: boolean; exclusionReason?: string; componentId?: string; mappingKind?: string; repeatAxis?: string; parentBindingId?: string; groupPath?: string; recordKey?: string; dimensions?: Record<string, unknown>; recordGroupId?: string }
-export interface DataWorkbookSnapshot { templateInstance?: WorkbookTemplateInstance; fileName: string; contentType?: string; sourceFileHash?: string; format: string; snapshot: Record<string, unknown>; sheets: DataWorkbookSheet[]; selectedSheetId?: string; editable: boolean; regions: DataWorkbookRegion[]; fieldDefinitions?: DataWorkbookFieldDefinition[]; records: DataWorkbookRecord[]; fields: DataFieldValueView[] }
+export interface DataWorkbookSnapshot { fieldResultsSource?: 'SNAPSHOT' | 'STAGED'; templateInstance?: WorkbookTemplateInstance; fileName: string; contentType?: string; sourceFileHash?: string; format: string; snapshot: Record<string, unknown>; sheets: DataWorkbookSheet[]; selectedSheetId?: string; editable: boolean; regions: DataWorkbookRegion[]; fieldDefinitions?: DataWorkbookFieldDefinition[]; records: DataWorkbookRecord[]; fields: DataFieldValueView[] }
 export interface DataPublicationSnapshot { id: string; versionNo: number; contentHash: string; confirmedSubmissionId?: string; confirmedBy: string; confirmedAt: string }
 export interface DataPublicationEvent { id: string; snapshotId?: string; action: string; actorName: string; comment?: string; createdAt: string }
 export interface DataPublication { revision: string; status: 'DRAFT' | 'CONFIRMED' | 'PENDING_REVIEW' | 'RETURNED' | 'APPROVED' | 'PUBLISHED' | 'DISABLED'; confirmedSnapshot?: DataPublicationSnapshot; publishedSnapshotId?: string; legacyPublished: boolean; publishedEnabled: boolean; reviewer?: { id: string; name: string }; versions: DataPublicationSnapshot[]; events: DataPublicationEvent[] }
@@ -52,7 +52,7 @@ export interface DataFormalRecord { revision: string; id: string; recordKey: str
 export interface ExperimentAssemblyCandidate { assemblyKey: string; parentAssemblyKey?: string; sourceIdentity?: string; sourceIdentityType: string; status: 'READY' | 'NEEDS_REVIEW' | 'BLOCKED' | 'RUNNING' | 'SYNCED' | 'ALREADY_CREATED' | 'FAILED' | 'SKIPPED'; sourceRecordKeys: string[]; sharedContextRecordKeys: string[]; conflicts: Array<{ code: string; message: string }>; warnings: Array<{ code: string; message: string }>; editModel: Record<string, unknown>; planHash: string; contentHash: string }
 export interface ExperimentAssemblyPlan { importJobId: string; candidates: ExperimentAssemblyCandidate[]; readyCount: number; reviewCount: number; blockedCount: number; sourceRecordCount: number; sampleGroupCount: number; sourceGroupCount: number; sourceContextCount: number; sourceIdentityCount: number; logicalSampleCount: number }
 export interface ExperimentAssemblyLink { assemblyKey: string; parentAssemblyKey?: string; status: string; resolutionAction?: string; resolutionReason?: string; experimentId?: string; experimentVersionId?: string; experimentNo?: string; planHash: string; contentHash: string; errorMessage?: string }
-export interface ExperimentSyncStatus { plan: ExperimentAssemblyPlan; links: ExperimentAssemblyLink[]; experiments?: import('@/services/experiments/experiment-status').LinkedExperimentStatus[] }
+export interface ExperimentSyncStatus { plan: ExperimentAssemblyPlan | null; links: ExperimentAssemblyLink[]; preparationStatus?: string; experiments?: import('@/services/experiments/experiment-status').LinkedExperimentStatus[] }
 
 export interface ExperimentConversion {
   id: string; batchId: string; sourceFileId: string; sourceName: string; sourceSha256: string;
@@ -127,21 +127,50 @@ export const dataApi = {
     await httpClient.delete(`/api/v1/data/experiment-import-jobs/${id}`, { params: { revision } });
   },
   async parse(id: string, revision: string) { const response = await httpClient.post<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/parse`, { revision }); return response.data.data; },
-  async reExtract(id: string, revision: string) { const response = await httpClient.post<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/re-extract`, { revision }, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; },
-  preview(id: string, experiment = false) { return sharedRead(`import-preview:${experiment}:${id}`, async () => { const response = await httpClient.get<ApiResponse<DataPreview>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/preview`, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; }); },
-  async saveWorkbookDraft(id: string, input: { revision: string; snapshot: Record<string, unknown>; templateInstance: WorkbookTemplateInstance; structureOperations: unknown[] }, experiment = false) { const response = await httpClient.put<ApiResponse<{ job: DataJob; workbook: DataWorkbookSnapshot }>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/workbook-draft`, input, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; },
-  getImportWorkbookSnapshot(id: string, experiment = false) { return sharedRead(`import-workbook:${experiment}:${id}`, async () => { const response = await httpClient.get<ApiResponse<DataWorkbookSnapshot>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/workbook-snapshot`, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; }); },
+  async reExtract(id: string, revision: string) { const response = await httpClient.post<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/re-extract`, { revision }, { timeout: LARGE_WRITE_TIMEOUT }); return response.data.data; },
+  preview(id: string, experiment = false, view: 'full' | 'summary' = 'full', signal?: AbortSignal) {
+    return sharedAbortableRead(`import-preview:${experiment}:${id}:${view}`, async requestSignal => {
+      const response = await httpClient.get<ApiResponse<DataPreview>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/preview`, { params: { view }, signal: requestSignal, timeout: LARGE_PAYLOAD_TIMEOUT });
+      return response.data.data;
+    }, signal).then(value => structuredClone(value));
+  },
+  async saveWorkbookDraft(id: string, input: { revision: string; snapshot: Record<string, unknown>; templateInstance: WorkbookTemplateInstance; structureOperations: unknown[] }, experiment = false) { const response = await httpClient.put<ApiResponse<{ job: DataJob; workbook?: DataWorkbookSnapshot | null }>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/workbook-draft`, input, { timeout: LARGE_WRITE_TIMEOUT }); const result = response.data.data;
+    if (result.workbook) {
+      const sheets = Object.values((result.workbook.snapshot.sheets ?? {}) as Record<string, { custom?: { templateInstance?: WorkbookTemplateInstance } }>);
+      result.workbook.templateInstance = sheets.map(sheet => sheet.custom?.templateInstance).find(instance => instance?.version === 2);
+      if (result.workbook.fieldResultsSource === 'SNAPSHOT' && result.workbook.templateInstance) {
+        const { buildImportWorkbookView } = await import('@/features/data-workbench/import-workbook-loader');
+        const view = await buildImportWorkbookView(result.workbook.snapshot, result.workbook.templateInstance);
+        result.workbook = { ...result.workbook, regions: view.regions, records: view.records,
+          fields: view.fields, fieldDefinitions: view.fieldDefinitions };
+      }
+    }
+    return result; },
+  async getImportWorkbookSnapshot(id: string, experiment = false, signal?: AbortSignal) {
+    const text = await sharedAbortableRead(`import-workbook:${experiment}:${id}`, async requestSignal => {
+      const response = await httpClient.get<string>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/workbook-snapshot`, {
+        params: { view: 'workspace' }, responseType: 'text', transformResponse: value => value, signal: requestSignal, timeout: LARGE_PAYLOAD_TIMEOUT,
+      });
+      return response.data;
+    }, signal);
+    const { decodeImportWorkbook } = await import('@/features/data-workbench/import-workbook-loader');
+    return decodeImportWorkbook(text, signal);
+  },
+  async importFieldResults(id: string, input: { revision: string; sheetId?: string; recordId?: string }, experiment = false, signal?: AbortSignal) {
+    const response = await httpClient.get<ApiResponse<{ revision: string; fields: DataFieldValueView[] }>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/field-results`, { params: input, signal, timeout: LARGE_PAYLOAD_TIMEOUT });
+    return response.data.data;
+  },
   async saveSheets(id: string, revision: string, items: Array<Pick<DataSheet, 'sheetId' | 'selected' | 'headerRows' | 'dataStartRow' | 'dataEndRow' | 'confirmationStatus'>>) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/sheets`, { revision, items }); return response.data.data; },
-  async saveMappings(id: string, revision: string, items: DataMapping[]) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/mappings`, { revision, items }, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; },
+  async saveMappings(id: string, revision: string, items: DataMapping[]) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/mappings`, { revision, items }, { timeout: LARGE_WRITE_TIMEOUT }); return response.data.data; },
   async resolveIssue(id: string, revision: string, issueId: string, status: 'IGNORED', reason: string) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/issues/${issueId}`, { revision, status, reason }); return response.data.data; },
   async correctValue(id: string, recordId: string, input: { revision: string; bindingId: string; valuePath: string; correctedValue: unknown; reason: string }) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/records/${recordId}/values`, input); return response.data.data; },
   async excludeRecord(id: string, revision: string, recordId: string, excluded: boolean, reason?: string) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/records/${recordId}/exclusion`, { revision, excluded, reason }); return response.data.data; },
   async reanchorComponent(id: string, componentId: string, input: { revision: string; sheetId: string; sourceRange: string; reason: string }) { const response = await httpClient.put<ApiResponse<DataJob>>(`/api/v1/data/import-jobs/${id}/components/${encodeURIComponent(componentId)}/anchor`, input); return response.data.data; },
   async requestField(id: string, input: { fieldId?: string; displayName: string; valueType?: string; uiType?: string; groupCode?: string; description?: string }) { const response = await httpClient.post<ApiResponse<{ id: string; status: string }>>(`/api/v1/data/import-jobs/${id}/field-requests`, input); return response.data.data; },
-  async commit(id: string, experiment = false) { const response = await httpClient.post<ApiResponse<DataJob>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/commit`, undefined, { timeout: LARGE_PAYLOAD_TIMEOUT }); return response.data.data; },
+  async commit(id: string, experiment = false, revision?: string) { const response = await httpClient.post<ApiResponse<DataJob>>(`/api/v1/data/${experiment ? 'experiment-import-jobs' : 'import-jobs'}/${id}/commit`, revision ? { revision } : undefined, { timeout: LARGE_WRITE_TIMEOUT }); return response.data.data; },
   async experimentPlan(id: string) { const response = await httpClient.get<ApiResponse<ExperimentAssemblyPlan>>(`/api/v1/data/experiment-import-jobs/${id}/experiments`); return response.data.data; },
   async syncExperiments(id: string, input: { categoryId?: string; assemblyKeys?: string[] }) { const response = await httpClient.post<ApiResponse<{ acceptedCount: number; jobIds: string[] }>>(`/api/v1/data/experiment-import-jobs/${id}/experiment-sync`, input); return response.data.data; },
-  async experimentSyncStatus(id: string) { const response = await httpClient.get<ApiResponse<ExperimentSyncStatus>>(`/api/v1/data/experiment-import-jobs/${id}/experiment-sync-status`); return response.data.data; },
+  async experimentSyncStatus(id: string, view: 'full' | 'summary' = 'full') { const response = await httpClient.get<ApiResponse<ExperimentSyncStatus>>(`/api/v1/data/experiment-import-jobs/${id}/experiment-sync-status`, { params: { view } }); return response.data.data; },
   async listSourceFiles(params: { categoryId?: string; uncategorized?: boolean; status?: string; keyword?: string; projectId?: string; page?: number; size?: number } = {}, signal?: AbortSignal) { const response = await httpClient.get<ApiResponse<PageResponse<DataSourceFile>>>('/api/v1/data/sources', { params, signal }); return response.data.data; },
   async listCategories(signal?: AbortSignal) { const response = await httpClient.get<ApiResponse<DataCategory[]>>('/api/v1/data/categories', { signal }); return response.data.data; },
   async sourceFacets(signal?: AbortSignal) { const response = await httpClient.get<ApiResponse<DataSourceFacets>>('/api/v1/data/sources/facets', { signal }); return response.data.data; },

@@ -50,6 +50,7 @@ public class PostgresWorker {
     private final java.util.concurrent.ThreadPoolExecutor jobExecutor = new java.util.concurrent.ThreadPoolExecutor(
             0,2,30,TimeUnit.SECONDS,new java.util.concurrent.SynchronousQueue<>(),Thread.ofVirtual().name("aird-job-",0).factory(),new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     private com.jsd.aird.shared.resource.BoundedGate executionGate=new com.jsd.aird.shared.resource.BoundedGate(2,0);
+    private com.jsd.aird.shared.resource.BoundedGate workerGate = new com.jsd.aird.shared.resource.BoundedGate(2, 0);
     private com.jsd.aird.shared.resource.IsolatedProcessRunner documentProcesses;
     private java.util.concurrent.ExecutorService dispatchExecutor;
     private int claimsPerPoll = 5;
@@ -61,11 +62,17 @@ public class PostgresWorker {
     }
     @Autowired(required=false)
     public void setDocumentProcesses(com.jsd.aird.shared.resource.IsolatedProcessRunner documentProcesses) { this.documentProcesses = documentProcesses; }
-    @Autowired void configureCapacity(com.jsd.aird.shared.resource.CapacityProperties limits,com.jsd.aird.shared.resource.ResourceAdmission admission){
-        jobExecutor.setMaximumPoolSize(limits.heavy());executionGate=admission.heavy;
+    @Autowired void configureCapacity(com.jsd.aird.shared.resource.CapacityProperties limits,
+            com.jsd.aird.shared.resource.ResourceAdmission admission,
+            @Value("${app.worker.max-concurrent-jobs:2}") int maxConcurrentJobs) {
+        if (maxConcurrentJobs < 1) throw new IllegalArgumentException("Worker concurrency must be positive");
+        int concurrency = Math.min(limits.heavy(), maxConcurrentJobs);
+        jobExecutor.setMaximumPoolSize(concurrency);
+        workerGate = new com.jsd.aird.shared.resource.BoundedGate(concurrency, 0);
+        executionGate = admission.heavy;
     }
     private final ScheduledExecutorService heartbeatExecutor =
-            Executors.newSingleThreadScheduledExecutor(
+            Executors.newScheduledThreadPool(4,
                     Thread.ofPlatform().name("jsd-aird-worker-heartbeat-", 0).factory());
 
     @Autowired
@@ -138,6 +145,8 @@ public class PostgresWorker {
 
     @Scheduled(fixedDelayString = "${app.worker.poll-delay}")
     public void poll() {
+        int expired = workRepository.expireExhaustedJobs();
+        if (expired > 0) log.warn("Marked {} exhausted expired jobs FAILED", expired);
         for (int index = 0; index < 10; index++) {
             var event = workRepository.claimOutbox(workerId, leaseDuration);
             if (event.isEmpty()) {
@@ -146,19 +155,27 @@ public class PostgresWorker {
             process(event.get());
         }
         for (int index = 0; index < claimsPerPoll; index++) {
+            com.jsd.aird.shared.resource.BoundedGate.Lease workerSlot;
+            try { workerSlot = workerGate.enter(0); }
+            catch (com.jsd.aird.shared.error.ApiException busy) { break; }
             com.jsd.aird.shared.resource.BoundedGate.Lease slot;
-            try{slot=executionGate.enter(0);}catch(com.jsd.aird.shared.error.ApiException busy){break;}
+            try { slot = executionGate.enter(0); }
+            catch (com.jsd.aird.shared.error.ApiException busy) { workerSlot.close(); break; }
             java.util.Optional<WorkRepository.AsyncJob> job;
-            try{job=workRepository.claimJob(workerId,leaseDuration);}catch(RuntimeException failure){slot.close();throw failure;}
+            try{job=workRepository.claimJob(workerId,leaseDuration);}catch(RuntimeException failure){slot.close();workerSlot.close();throw failure;}
             if (job.isEmpty()) {
+                workerSlot.close();
                 slot.close();
                 break;
             }
-            if (dispatchExecutor == null) process(job.get(), slot);
+            if (dispatchExecutor == null) {
+                process(job.get(), slot, workerSlot);
+            }
             else {
                 var claimed = job.get();
-                try { dispatchExecutor.submit(() -> process(claimed, slot)); }
+                try { dispatchExecutor.submit(() -> process(claimed, slot, workerSlot)); }
                 catch (java.util.concurrent.RejectedExecutionException shuttingDown) {
+                    workerSlot.close();
                     slot.close();
                     workRepository.deferClaimedJob(claimed);
                     break;
@@ -184,11 +201,12 @@ public class PostgresWorker {
         }
     }
 
-    private void process(WorkRepository.AsyncJob job,com.jsd.aird.shared.resource.BoundedGate.Lease slot) {
+    private void process(WorkRepository.AsyncJob job, com.jsd.aird.shared.resource.BoundedGate.Lease slot,
+                         com.jsd.aird.shared.resource.BoundedGate.Lease workerSlot) {
         var submitted=new java.util.concurrent.atomic.AtomicBoolean();
         var heartbeat = scheduleHeartbeat(job);
         try {
-            var result = executeWithTimeout(job,slot,submitted);
+            var result = executeWithTimeout(job,slot,workerSlot,submitted);
             if (!workRepository.completeClaimedJob(job, result)) {
                 log.warn("Async job {} completion ignored because its lease is stale", job.id());
             }
@@ -218,11 +236,11 @@ public class PostgresWorker {
             } else workRepository.failJob(job, exception);
         } finally {
             heartbeat.cancel(false);
-            if(!submitted.get())slot.close();
+            if(!submitted.get()) { slot.close(); workerSlot.close(); }
         }
     }
 
-    private com.fasterxml.jackson.databind.JsonNode executeWithTimeout(WorkRepository.AsyncJob job,com.jsd.aird.shared.resource.BoundedGate.Lease slot,java.util.concurrent.atomic.AtomicBoolean submitted)
+    private com.fasterxml.jackson.databind.JsonNode executeWithTimeout(WorkRepository.AsyncJob job,com.jsd.aird.shared.resource.BoundedGate.Lease slot,com.jsd.aird.shared.resource.BoundedGate.Lease workerSlot,java.util.concurrent.atomic.AtomicBoolean submitted)
             throws Exception {
         if (workRepository.isCancelled(job.id())) {
             throw new JobCancelledException();
@@ -232,7 +250,7 @@ public class PostgresWorker {
             try (var ignored = JobDeadline.start(timeout);var budget=com.jsd.aird.shared.resource.OperationBudget.open(com.jsd.aird.shared.resource.OperationBudget.Kind.HEAVY,timeout.toMillis())) {
                 return execute(job);
             }
-        }){@Override public void run(){try{super.run();}finally{slot.close();}}};
+        }){@Override public void run(){try{super.run();}finally{slot.close();workerSlot.close();}}};
         jobExecutor.execute(future);submitted.set(true);
         try {
             var timeout = timeoutFor(job);
@@ -317,6 +335,9 @@ public class PostgresWorker {
                 if (!workRepository.heartbeatClaimedJob(job, workerId, leaseDuration)) {
                     log.warn("Async job {} heartbeat rejected because its lease is stale", job.id());
                 }
+            } catch (org.springframework.dao.QueryTimeoutException | org.springframework.dao.CannotAcquireLockException contention) {
+                // The final write fence may briefly own the row. Do not revoke a valid lease.
+                log.debug("Async job {} heartbeat deferred by short database contention", job.id());
             } catch (Exception exception) {
                 log.warn("Async job {} heartbeat failed", job.id(), exception);
             }

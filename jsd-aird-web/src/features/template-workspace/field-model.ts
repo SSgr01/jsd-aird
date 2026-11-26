@@ -97,10 +97,14 @@ export function readFieldModel(
   const stored = schema[FIELD_MODEL_KEY];
   if (isRecord(stored) && Array.isArray(stored.groups) && Array.isArray(stored.fields)) {
     const normalized = normalizeFieldModel(structuredClone(stored) as unknown as FieldModel);
+    const bindings = new Map<string, TemplateBinding>();
+    for (const binding of mapping) if (binding.bindingId && !bindings.has(binding.bindingId)) bindings.set(binding.bindingId, binding);
+    const groupNames = new Map(normalized.groups.map(group => [group.id, group.name]));
     return normalizeFieldModel({
       ...normalized,
       fields: normalized.fields.map((field) => {
-        const binding = mapping.find((item) => bindingMatchesIdentity(item, {
+        const exact = field.bindingId ? bindings.get(field.bindingId) : undefined;
+        const binding = exact ?? mapping.find((item) => bindingMatchesIdentity(item, {
           bindingId: field.bindingId,
           relationId: field.relationId,
           fieldId: field.fieldId || field.id,
@@ -124,7 +128,7 @@ export function readFieldModel(
         // stable in storage; display their configured names, never guessed text.
         const pathSegments = semanticPath?.map((segment, index) =>
           index < semanticPath.length - 1
-            ? normalized.groups.find((group) => group.id === segment)?.name ?? segment
+            ? groupNames.get(segment) ?? segment
             : segment,
         );
         return {

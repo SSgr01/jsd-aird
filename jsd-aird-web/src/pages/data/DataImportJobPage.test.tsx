@@ -6,18 +6,18 @@ import type { DataPreview, DataWorkbookSnapshot } from '@/services/data/data-api
 import type { WorkbookTemplateInstance } from '@/features/template-workspace/workbook-instance';
 import { DataImportJobPage } from './DataImportJobPage';
 
-const api = vi.hoisted(() => ({ preview: vi.fn(), getImportWorkbookSnapshot: vi.fn(), saveWorkbookDraft: vi.fn(), listCategories: vi.fn(), experimentSyncStatus: vi.fn() }));
+const api = vi.hoisted(() => ({ preview: vi.fn(), getImportWorkbookSnapshot: vi.fn(), saveWorkbookDraft: vi.fn(), listCategories: vi.fn(), experimentSyncStatus: vi.fn(), commit: vi.fn() }));
 vi.mock('@/services/data/data-api', () => ({ dataApi: api }));
 vi.mock('@/components/auth/usePermission', () => ({ usePermission: () => true }));
 vi.mock('@/services/project/project-resource-api', () => ({ projectResourceApi: { links: () => Promise.resolve([]) } }));
 vi.mock('@/features/template-workspace/instance-definition', () => ({ resolveInstanceDefinition: (_snapshot: unknown, instance: unknown) => instance }));
 vi.mock('@/features/template-workspace/workbook-instance', () => ({ writeWorkbookInstance: () => {}, updateWorkbookField: () => {} }));
-vi.mock('@/features/data-workbench/instance-workbook-view', () => ({ instanceWorkbookView: () => ({ fields: [], records: [], regions: [], fieldDefinitions: [] }) }));
+vi.mock('@/features/data-workbench/import-workbook-loader', () => ({ buildImportWorkbookView: () => Promise.resolve({ fields: [], records: [], regions: [], fieldDefinitions: [] }) }));
 vi.mock('@/features/data-workbench/DataPublicationPanel', () => ({ DataPublicationPanel: () => null }));
 vi.mock('@/features/template-workspace/InstanceFieldEditor', () => ({ InstanceFieldEditor: () => null }));
 vi.mock('@/components/file-preview', () => ({ FilePreviewModal: () => null, downloadPreviewFile: () => {} }));
 vi.mock('@/features/data-workbench/DataWorkbench', () => ({
-  DataWorkbenchShell: ({ title, actions, notice, canvas, footer }: { title: string; actions: ReactNode; notice: ReactNode; canvas: ReactNode; footer: ReactNode }) => <><h1>{title}</h1>{actions}{notice}{canvas}{footer}</>,
+  DataWorkbenchShell: ({ title, actions, notice, canvas, panel, footer }: { title: string; actions: ReactNode; notice: ReactNode; canvas: ReactNode; panel: ReactNode; footer: ReactNode }) => <><h1>{title}</h1>{actions}{notice}{canvas}{panel}{footer}</>,
   DataFieldDataBrowser: () => null, DataFieldStructureBrowser: () => null,
   DataWorkbookCanvas: forwardRef(function Canvas({ instance, onDirty }: { instance: WorkbookTemplateInstance; onDirty: () => void }, ref) {
     useImperativeHandle(ref, () => ({ getSnapshot: () => ({ sheets: {} }), getTemplateInstance: () => instance }));
@@ -40,9 +40,19 @@ beforeEach(() => {
   api.getImportWorkbookSnapshot.mockResolvedValue(workbook);
   api.listCategories.mockResolvedValue([]);
   api.saveWorkbookDraft.mockResolvedValue({ job: preview('one', '2').job, workbook });
+  api.experimentSyncStatus.mockResolvedValue({ plan: { candidates: [], readyCount: 0 }, links: [] });
 });
 const dirtyNotice = '工作簿还有未保存的修改，可继续编辑或点击“保存草稿”。';
 
+
+it('starts workbook loading before the summary finishes', async () => {
+  const delayed = deferred<DataPreview>(); api.preview.mockReturnValueOnce(delayed.promise);
+  mount();
+  await waitFor(() => expect(api.getImportWorkbookSnapshot).toHaveBeenCalledTimes(1));
+  expect(api.preview).toHaveBeenCalledWith('one', false, 'summary', expect.any(AbortSignal));
+  await act(() => { delayed.resolve(preview()); return Promise.resolve(); });
+  await screen.findByRole('button', { name: '保存草稿' });
+});
 
 it('shows task information while the workbook is still loading', async () => {
   const delayed = deferred<DataWorkbookSnapshot>();
@@ -65,11 +75,11 @@ it('keeps task information visible on snapshot failure and retries the workbook'
   expect(screen.queryByText('加载失败，请重试')).not.toBeInTheDocument();
 });
 
-it('does not load a full workbook while the import is parsing', async () => {
+it('cancels speculative workbook loading while the import is parsing', async () => {
   api.preview.mockResolvedValue({ ...preview(), job: { ...preview().job, status: 'PARSING' } });
   mount();
   await screen.findByRole('heading', { name: 'one.xlsx' });
-  expect(api.getImportWorkbookSnapshot).not.toHaveBeenCalled();
+  expect(api.getImportWorkbookSnapshot.mock.calls[0]?.[2].aborted).toBe(true);
 });
 
 it('ignores a stale workbook after navigating to another record', async () => {
@@ -130,4 +140,52 @@ it('preserves the unsaved workbook after a failed save and allows retry', async 
   fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
   await waitFor(() => expect(screen.queryByText(dirtyNotice)).not.toBeInTheDocument());
   expect(api.saveWorkbookDraft).toHaveBeenCalledTimes(2);
+});
+
+it('accepts a save acknowledgement without rebuilding the workbook and keeps its revision after refresh fails', async () => {
+  api.saveWorkbookDraft.mockResolvedValueOnce({ job: preview('one', '2').job, workbook: null });
+  mount(); await screen.findByRole('button', { name: '保存草稿' });
+  api.preview.mockRejectedValueOnce(new Error('刷新暂不可用'));
+  fireEvent.click(screen.getByRole('button', { name: '修改表格' }));
+  fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+  await waitFor(() => expect(screen.queryByText(dirtyNotice)).not.toBeInTheDocument());
+  expect(screen.queryByText('草稿保存失败，当前修改仍保留')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '修改表格' }));
+  fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+  await waitFor(() => expect(api.saveWorkbookDraft).toHaveBeenCalledTimes(2));
+  expect(api.saveWorkbookDraft.mock.calls[1][1].revision).toBe('2');
+  expect(api.getImportWorkbookSnapshot).toHaveBeenCalledTimes(1);
+});
+
+it('keeps the existing confirmation button visible after confirmation', async () => {
+  mount('EXPERIMENT');
+  expect(await screen.findByRole('button', { name: '完成数据核对' })).toBeDisabled();
+  expect(screen.getByText('本次数据已完成核对')).toBeInTheDocument();
+});
+
+it('allows an earlier confirmed import to resume draft preparation when it never queued a job', async () => {
+  api.preview.mockResolvedValue({ ...preview(), job: { ...preview().job, importContractVersion: 9 } });
+  api.experimentSyncStatus.mockResolvedValue({ plan: { candidates: [{ assemblyKey: 'file', status: 'READY' }], readyCount: 1 }, links: [] });
+  api.commit.mockResolvedValue(preview('one', '2').job);
+  mount('EXPERIMENT');
+  const button = await screen.findByRole('button', { name: '完成数据核对' });
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(button);
+  await waitFor(() => expect(api.commit).toHaveBeenCalledWith('one', true, '1'));
+});
+
+it('acknowledges confirmation before a delayed status refresh finishes', async () => {
+  const initial = { ...preview(), job: { ...preview().job, status: 'WAITING_CONFIRM' as const } };
+  api.preview.mockResolvedValue(initial);
+  api.commit.mockResolvedValue(preview('one', '2').job);
+  mount('EXPERIMENT');
+  const button = await screen.findByRole('button', { name: '完成数据核对' });
+  await waitFor(() => expect(button).toBeEnabled());
+  const delayed = deferred<DataPreview>();
+  api.preview.mockReturnValueOnce(delayed.promise);
+  fireEvent.click(button);
+  await screen.findByText('本次数据已完成核对');
+  expect(api.commit).toHaveBeenCalledWith('one', true, '1');
+  expect(button).toBeDisabled();
+  await act(() => { delayed.resolve(preview('one', '2')); return Promise.resolve(); });
 });

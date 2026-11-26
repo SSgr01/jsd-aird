@@ -28,7 +28,7 @@ public class JdbcExperimentAssemblyRepository implements ExperimentAssemblyRepos
         var jobs = jdbc.query("""
                 SELECT id, source_file_id, source_file_name, source_sha256, template_version_id,
                        coalesce(import_contract_version, 0) import_contract_version, contract_hash,
-                       status, import_purpose, target_experiment_category_id, created_by, created_at, revision::text
+                       status, import_purpose, target_experiment_category_id, created_by, created_at, xmin::text AS revision
                   FROM data.import_job WHERE organization_id=? AND id=?
                 """, (rs, n) -> new Object[]{rs.getObject("id", UUID.class), rs.getObject("source_file_id", UUID.class),
                 rs.getString("source_file_name"), rs.getString("source_sha256"),

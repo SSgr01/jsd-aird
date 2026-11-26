@@ -43,6 +43,10 @@ class ExperimentAssemblyServiceTest {
 
     @BeforeEach void setup(){
         ActorContext.set(new Actor(org,user,"陈霖"));
+        when(recognition.prepareExperimentLink(any(),any(),anyList())).thenAnswer(call->{
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            return new SourceRecognitionRepository.PreparedExperimentLink(call.getArgument(0),call.getArgument(1),call.getArgument(2),call.getArgument(1).toString(),call.getArgument(0).toString());
+        });
         when(repository.load(org,job)).thenReturn(source);
         when(repository.links(org,job)).thenReturn(List.of(link("READY",null)));
         when(repository.find(org,job,key)).thenReturn(Optional.of(link("READY",null)));
@@ -74,6 +78,68 @@ class ExperimentAssemblyServiceTest {
         });
     }
     @AfterEach void cleanup(){ActorContext.clear();}
+    @Test void pollingSummaryReadsPersistedStateWithoutReassemblingSourceRows() {
+        var imports=mock(com.jsd.aird.data.application.port.DataRepository.class);
+        service.setImportJobs(imports);
+        when(imports.findJob(org,job)).thenReturn(Optional.of(confirmedJob()));
+        var experimentId=UUID.randomUUID();
+        when(repository.links(org,job)).thenReturn(List.of(link("SYNCED",experimentId)));
+        var status=service.statusSummary(job);
+        assertThat(status.plan()).isNull();
+        assertThat(status.links()).hasSize(1);
+        assertThat(status.links().getFirst().experimentId()).isEqualTo(experimentId);
+        verify(repository,never()).load(any(),any());
+        verifyNoInteractions(assembler,templates,workbooks);
+    }
+    com.jsd.aird.data.application.port.DataRepository.Job confirmedJob() {
+        return new com.jsd.aird.data.application.port.DataRepository.Job(job,source.sourceFileId(),"source","source.xlsx","XLSX",version,
+                null,"COMPLETED",100,"COMPLETED","parser",null,Instant.EPOCH,Instant.EPOCH,9,"contract","COMPATIBLE","EXPERIMENT_DRAFT",category);
+    }
+    @Test void preparesConfirmedImportOutsideTransactionThenAtomicallyQueuesChildrenWithFinalLeaseFence() {
+        var imports=mock(com.jsd.aird.data.application.port.DataRepository.class);
+        service.setImportJobs(imports);
+        when(imports.findJob(org,job)).thenReturn(Optional.of(confirmedJob()));
+        when(jobs.enqueue(eq(org),eq("DATA_TO_EXPERIMENT_SYNC"),any(),anyString(),eq(40))).thenReturn(UUID.randomUUID());
+        when(assembler.assemble(any(),any())).thenAnswer(call->{
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            var candidate=new ExperimentImportAssembler.Candidate(key,null,null,"FILE","READY",List.of("row"),List.of(),
+                    json.createArrayNode(),json.createArrayNode(),json.createObjectNode(),hash,"content");
+            return new ExperimentImportAssembler.AssemblyPlan(job,List.of(candidate),1,0,0,1,0,0,1,0,0);
+        });
+        assertThat(service.prepareConfirmed(job,confirmedJob().getRevision(),context).acceptedCount()).isEqualTo(1);
+        var order=inOrder(repository,jobs);
+        order.verify(jobs).checkExecution(context,false);
+        order.verify(repository).lockSource(org,job);
+        order.verify(repository).upsertPlan(eq(org),eq(job),any(),eq(user));
+        order.verify(jobs).enqueue(eq(org),eq("DATA_TO_EXPERIMENT_SYNC"),any(),anyString(),eq(40));
+        order.verify(jobs).requireExecution(context,false);
+        verify(experiments,never()).prepareImportedDraft(any());
+        verify(experiments,never()).createPreparedImportedDraft(any());
+        verifyNoInteractions(workbooks,recognition);
+    }
+    @Test void obsoleteConfirmationCannotPersistPlanOrEnqueueChildren() {
+        var imports=mock(com.jsd.aird.data.application.port.DataRepository.class);
+        service.setImportJobs(imports);
+        when(imports.findJob(org,job)).thenReturn(Optional.of(confirmedJob()));
+        assertThatThrownBy(()->service.prepareConfirmed(job,"old-revision",context)).isInstanceOf(ApiException.class);
+        verify(repository,never()).upsertPlan(any(),any(),any(),any());
+        verify(jobs,never()).enqueue(any(),any(),any(),any(),anyInt());
+    }
+    @Test void preparationStatusRemainsReadableWithoutRebuildingTheFailedOrInFlightPlan() {
+        var imports=mock(com.jsd.aird.data.application.port.DataRepository.class);
+        service.setImportJobs(imports);
+        when(imports.findJob(org,job)).thenReturn(Optional.of(confirmedJob()));
+        when(repository.links(org,job)).thenReturn(List.of());
+        for(var state:List.of("READY","RUNNING","FAILED","CANCELLED")) {
+            when(jobs.findLatestJob(org,"data-experiment-prepare:"+job+":"))
+                    .thenReturn(Optional.of(async(UUID.randomUUID(),state)));
+            var status=service.status(job);
+            assertThat(status.preparationStatus()).isEqualTo(state);
+            assertThat(status.plan()).isNull();
+        }
+        verify(repository,never()).load(any(),any());
+        verifyNoInteractions(assembler,templates,workbooks);
+    }
     @Test void reportsCurrentExperimentStatusAndHidesInaccessibleLinks(){
         var experiment=UUID.randomUUID();var statuses=mock(com.jsd.aird.rnd.api.ExperimentStatusFacade.class);
         service.setExperimentStatuses(statuses);
@@ -98,7 +164,13 @@ class ExperimentAssemblyServiceTest {
         var created=execute();
         verify(jobs).requireExecution(context,false);
         verify(repository).markSynced(org,job,key,created.experimentId(),created.experimentVersionId(),created.experimentNo());
-        verify(recognition).linkExperiment(eq(org),eq(job),any(),eq(key),eq(created.experimentId()),eq(created.experimentVersionId()),eq(created.experimentNo()),any(),any(),anyList(),eq("content"),eq(user));
+        verify(recognition).linkPreparedExperiment(eq(org),eq(job),any(),eq(key),eq(created.experimentId()),eq(created.experimentVersionId()),eq(created.experimentNo()),any(),eq("content"),eq(user));
+        var order=inOrder(repository,recognition,jobs);
+        order.verify(jobs).checkExecution(context,false);
+        order.verify(repository).lockSource(org,job);
+        order.verify(repository).lockAssembly(org,job,key);
+        order.verify(recognition).linkPreparedExperiment(eq(org),eq(job),any(),eq(key),eq(created.experimentId()),eq(created.experimentVersionId()),eq(created.experimentNo()),any(),eq("content"),eq(user));
+        order.verify(jobs).requireExecution(context,false);
     }
     @Test void uncategorizedImportCanQueueAndCreateDraftThroughAsyncHandler(){
         when(repository.load(org,job)).thenReturn(new ExperimentAssemblyRepository.SourceImport(job,source.sourceFileId(),
@@ -159,6 +231,7 @@ class ExperimentAssemblyServiceTest {
     }
     @Test void failedJobIsVisibleEvenWhenDomainCallbackWasMissed(){
         when(jobs.findLatestJob(eq(org),anyString())).thenReturn(Optional.of(async(UUID.randomUUID(),"FAILED")));
+        when(jobs.findLatestJob(org,"data-experiment-prepare:"+job+":" )).thenReturn(Optional.empty());
         var state=service.status(job);
         verify(repository,never()).upsertPlan(any(),any(),any(),any());
         verify(repository,never()).supersedeOtherPlans(any(),any(),any());
@@ -169,6 +242,7 @@ class ExperimentAssemblyServiceTest {
     }
     @Test void refreshingDoesNotRetryFailedJob(){
         when(jobs.findLatestJob(eq(org),anyString())).thenReturn(Optional.of(async(UUID.randomUUID(),"FAILED")));
+        when(jobs.findLatestJob(org,"data-experiment-prepare:"+job+":" )).thenReturn(Optional.empty());
         service.status(job);service.preview(job);
         assertThatThrownBy(()->service.sync(job,category,List.of())).hasMessageContaining("没有可创建");
         verify(jobs,never()).enqueue(any(),anyString(),any(),anyString(),anyInt());

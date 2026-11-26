@@ -26,12 +26,17 @@ export function AutoSaveFieldInput({
 }) {
   const timer = useRef<number>();
   const latest = useRef(value);
+  const requested = useRef<string>();
   latest.current = value;
   const save = (next: string) => {
     window.clearTimeout(timer.current);
     timer.current = undefined;
-    if (next !== savedValue && !saving) onSave(next);
+    if (next !== savedValue && !saving && requested.current !== next) {
+      requested.current = next;
+      onSave(next);
+    }
   };
+  useEffect(() => { if (!saving) requested.current = undefined; }, [savedValue, saving]);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   return (
     <Input

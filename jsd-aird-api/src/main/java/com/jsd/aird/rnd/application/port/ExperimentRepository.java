@@ -31,6 +31,9 @@ public interface ExperimentRepository extends com.jsd.aird.tpl.api.ExperimentTem
                     dateFrom, dateTo, format, page, size, value);
         }
     }
+    default com.jsd.aird.rnd.domain.ExperimentModels.Summary createPrepared(Create command, String templateJson, String modelJson) {
+        return create(command);
+    }
     record Create(UUID id, UUID organizationId, String experimentNo, String title, UUID categoryId, String categoryName,
                   String sourceType, ExperimentStatus status, UUID projectId, UUID stageId, UUID taskId,
                   UUID ownerId, String ownerName, LocalDate experimentDate, UUID versionId, UUID templateVersionId,

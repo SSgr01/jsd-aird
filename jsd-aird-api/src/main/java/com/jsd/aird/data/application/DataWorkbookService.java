@@ -35,6 +35,9 @@ public class DataWorkbookService {
     private final WorkbookInstanceParser workbookParser;
     private final TemplateDataImportFacade templates;
     private final ObjectMapper objectMapper;
+    private PreparedImportWorkbooks preparedWorkbooks;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setPreparedWorkbooks(PreparedImportWorkbooks preparedWorkbooks) { this.preparedWorkbooks=preparedWorkbooks; }
     private DataReviewGuard reviewGuard;
     @org.springframework.beans.factory.annotation.Autowired
     public void setReviewGuard(DataReviewGuard reviewGuard) { this.reviewGuard = reviewGuard; }
@@ -51,17 +54,28 @@ public class DataWorkbookService {
     }
 
     public WorkbookContext importJob(UUID importJobId) {
+        try (var timing = new com.jsd.aird.shared.observability.OperationTiming("import-workbook-read-" + com.jsd.aird.shared.resource.OperationBudget.kind())) {
         var actor = ActorContext.required();
         var job = repository.findJob(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
-        var sheets = repository.listSheets(actor.organizationId(), importJobId);
+        timing.checkpoint("job");
+        if(Set.of("CREATED","QUEUED","PARSING","VALIDATING","COMMITTING").contains(job.status()))
+            throw new ApiException(ApiErrorCode.FILE_NOT_READY,"工作簿正在准备");
+        var sheets = "XLSX".equalsIgnoreCase(job.sourceFormat()) ? repository.listSheetSummaries(actor.organizationId(), importJobId) : repository.listSheets(actor.organizationId(), importJobId);
+        timing.checkpoint("sheet-summaries");
         var mappings = repository.listMappings(actor.organizationId(), importJobId);
+        timing.checkpoint("mappings");
         var rows = repository.listRows(actor.organizationId(), importJobId);
+        timing.checkpoint("staged-values");
         var definition = templates.getVersion(actor.organizationId(), job.templateVersionId());
+        timing.checkpoint("template-definition");
         var bindings = templates.getBindings(actor.organizationId(), job.templateVersionId());
+        timing.checkpoint("template-bindings");
         var file = requireFile(actor.organizationId(), job.sourceFileId());
+        timing.checkpoint("source-file");
         var draft=repository.findWorkbookDraft(actor.organizationId(),importJobId).orElse(null);
-        var snapshot = draft==null?prepareLabSnapshot(actor.organizationId(),job,sourceSnapshot(file, job.sourceFormat(), sheets),definition):draft.snapshot().deepCopy();
+        timing.checkpoint("metadata");
+        var snapshot = draft==null?preparedSource(actor.organizationId(),job,file,sheets,definition):draft.snapshot().deepCopy();
         if(draft!=null)com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot,draft.instance());
         else if(needsSourceResolution(job, snapshot)) {
             // This is a review read: reuse the source already parsed above. prepareImport
@@ -73,6 +87,7 @@ public class DataWorkbookService {
                         importedInstance,job.sourceFileId().toString());
         }
         var preparedInstance=com.jsd.aird.shared.excel.WorkbookStructure.instance(snapshot);
+        timing.checkpoint("prepared-source");
         var effectiveInstance=draft==null && com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot) && preparedInstance.isObject()
                 ?preparedInstance:com.jsd.aird.shared.excel.WorkbookStructure.seed(objectMapper,snapshot,definition.schema(),definition.mappings(),importJobId.toString());
         if(effectiveInstance.isObject()) {
@@ -83,14 +98,72 @@ public class DataWorkbookService {
             com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot, definition.schema().path("x-jsd-workbook-instance"));
         }
         var fields = importFields(rows, mappings, sheets, componentByBinding(definition));
+        timing.checkpoint("definitions-and-values");
         var fieldDefinitions = fieldDefinitions(definition, bindings, fields);
         applyCorrections(snapshot, fields);
-        return context(file, job.sourceSha256(), job.sourceFormat(), snapshot, sheets,
+        var result = context(file, job.sourceSha256(), job.sourceFormat(), snapshot, sheets,
                 sheets.stream().filter(DataRepository.Sheet::selected).findFirst()
                         .map(DataRepository.Sheet::sheetId).orElse(null),
-                List.of("WAITING_MAPPING", "WAITING_CONFIRM").contains(job.status())
+                (List.of("WAITING_MAPPING", "WAITING_CONFIRM").contains(job.status())
+                        || "COMPLETED".equals(job.status()) && "EXPERIMENT_DRAFT".equals(job.importPurpose()))
                         && (reviewGuard == null || !reviewGuard.locked(actor.organizationId(), importJobId)),
                 fieldDefinitions, fields, definition);
+        timing.checkpoint("presentation");
+        return result;
+        }
+    }
+
+    /** Workspace payload carries the complete workbook/definitions and only the first record's values. */
+    public WorkbookContext workspace(UUID id) {
+        try(var timing=new com.jsd.aird.shared.observability.OperationTiming("import-prepared-workspace")) {
+            var org=ActorContext.required().organizationId();
+            var job=repository.findJob(org,id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"导入任务不存在"));
+            if(Set.of("CREATED","QUEUED","PARSING","VALIDATING","COMMITTING").contains(job.status()))
+                throw new ApiException(ApiErrorCode.FILE_NOT_READY,"工作簿正在准备");
+            if("XLSX".equalsIgnoreCase(job.sourceFormat())) {
+                var definition=templates.getVersion(org,job.templateVersionId());
+                // Laboratory snapshots carry the full instance geometry and original cell values.
+                // Reading staged value wrappers duplicates that data by tens of MB on large imports.
+                if(definition.schema().path("x-jsd-lab-template").isObject() && !repository.hasRowOverrides(org,id)) {
+                    var sheets=repository.listSheetSummaries(org,id);
+                    var file=requireFile(org,job.sourceFileId());
+                    var draft=repository.findWorkbookDraft(org,id).orElse(null);
+                    timing.checkpoint("metadata");
+                    var snapshot=draft==null?preparedSource(org,job,file,sheets,definition):draft.snapshot().deepCopy();
+                    if(draft!=null)com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot,draft.instance());
+                    timing.checkpoint("prepared-source");
+                    if(com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot)) {
+                        templates.refreshPreparedWorkbookReviews(org,job.templateVersionId(),snapshot);
+                        timing.checkpoint("field-decisions");
+                        // Only display preparation moves to the worker; commit still checks all staged records.
+                        return context(file,job.sourceSha256(),job.sourceFormat(),snapshot,sheets,
+                                sheets.stream().filter(DataRepository.Sheet::selected).findFirst().map(DataRepository.Sheet::sheetId).orElse(null),
+                                (List.of("WAITING_MAPPING","WAITING_CONFIRM").contains(job.status())
+                                    || "COMPLETED".equals(job.status()) && "EXPERIMENT_DRAFT".equals(job.importPurpose()))
+                                    && (reviewGuard==null || !reviewGuard.locked(org,id)),List.of(),List.of(),null);
+                    }
+                }
+            }
+        }
+        var all=importJob(id);
+        var record=all.records().isEmpty()?null:all.records().getFirst();
+        var fields=record==null?all.fields():all.fields().stream().filter(f->record.recordId().equals(f.recordGroupId())).toList();
+        return new WorkbookContext(all.fileName(),all.contentType(),all.sourceFileHash(),all.format(),all.snapshot(),all.sheets(),
+                all.selectedSheetId(),all.editable(),all.regions(),all.fieldDefinitions(),all.records(),fields,all.templateInstance());
+    }
+
+    public record FieldResults(String revision, String sheetId, String recordId, List<FieldValue> fields) {}
+    public FieldResults fieldResults(UUID id, String revision, String sheetId, String recordId) {
+        var org=ActorContext.required().organizationId();
+        var job=repository.findJob(org,id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"导入任务不存在"));
+        if(!job.getRevision().equals(revision))throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
+        var definition=templates.getVersion(org,job.templateVersionId());
+        var fields=importFields(repository.listRowsForSheet(org,id,sheetId),repository.listMappingsForSheet(org,id,sheetId),
+                repository.listSheetSummaries(org,id),componentByBinding(definition)).stream()
+                .filter(f->recordId==null || recordId.equals(f.recordGroupId()) || recordId.equals(f.recordId())).toList();
+        var after=repository.findJob(org,id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND));
+        if(!after.getRevision().equals(revision))throw new ApiException(ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
+        return new FieldResults(revision,sheetId,recordId,fields);
     }
 
     /** Returns the uploaded workbook instance used by the background T04 assembler. */
@@ -99,11 +172,10 @@ public class DataWorkbookService {
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
         var file = requireFile(organizationId, job.sourceFileId());
         var draft=repository.findWorkbookDraft(organizationId,importJobId).orElse(null);
-        var source = draft!=null?draft.snapshot().deepCopy():Set.of("DOC", "DOCX", "IMAGE").contains(job.sourceFormat())
-                ? templateSnapshotForDocument(organizationId, job)
-                : sourceSnapshot(file, job.sourceFormat(), repository.listSheets(organizationId, importJobId));
         var definition=templates.getVersion(organizationId,job.templateVersionId());
-        var snapshot=prepareLabSnapshot(organizationId,job,source,definition);
+        var snapshot=draft!=null?draft.snapshot().deepCopy():preparedSource(organizationId,job,file,
+                repository.listSheetSummaries(organizationId,importJobId),definition);
+        if(draft!=null)com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot,draft.instance());
         if(draft==null&&needsSourceResolution(job, snapshot)) {
             var execution=templates.prepareImport(organizationId,job.templateVersionId(),job.sourceFileId());
             if(execution!=null&&execution.definition()!=null&&execution.definition().schema()!=null) {
@@ -111,7 +183,7 @@ public class DataWorkbookService {
                 if(resolved.path("version").asInt()==2)com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot,resolved);
             }
         }
-        if(com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot))applyCorrections(snapshot,importFields(repository.listRows(organizationId,importJobId),repository.listMappings(organizationId,importJobId),repository.listSheets(organizationId,importJobId),componentByBinding(definition)));
+        if(com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot) && repository.hasRowOverrides(organizationId,importJobId))applyCorrections(snapshot,importFields(repository.listRows(organizationId,importJobId),repository.listMappings(organizationId,importJobId),repository.listSheets(organizationId,importJobId),componentByBinding(definition)));
         if (snapshot == null || !snapshot.isObject() || snapshot.isEmpty()) {
             throw new ApiException(ApiErrorCode.FILE_NOT_READY, "导入文件缺少可编辑工作簿快照");
         }
@@ -124,7 +196,22 @@ public class DataWorkbookService {
                 ((ObjectNode)snapshot).set("importConfirmation",proof);
             });
         }
-        return snapshot.deepCopy();
+        return snapshot;
+    }
+
+    private JsonNode preparedSource(UUID org, DataRepository.Job job, FileObjectRepository.FileObject file,
+                                    List<DataRepository.Sheet> sheets, TemplateDataImportFacade.DataTemplateDefinition definition) {
+        java.util.function.Supplier<JsonNode> build=()->{
+            var snapshot=Set.of("DOC","DOCX","IMAGE").contains(job.sourceFormat())
+                    ?templateSnapshotForDocument(org,job):prepareLabSnapshot(org,job,sourceSnapshot(file,job.sourceFormat(),sheets),definition);
+            if(needsSourceResolution(job,snapshot)) {
+                var resolved=com.jsd.aird.shared.excel.WorkbookStructure.seed(objectMapper,snapshot,definition.schema(),definition.mappings(),job.sourceFileId().toString());
+                com.jsd.aird.shared.excel.WorkbookStructure.expandImportedRegions(objectMapper,snapshot,resolved,job.sourceFileId().toString());
+            }
+            return snapshot;
+        };
+        // Document sources depend on corrected rows, so only tabular immutable bases are cached.
+        return preparedWorkbooks==null || !"XLSX".equalsIgnoreCase(job.sourceFormat())?build.get():preparedWorkbooks.getOrBuild(org,job,build);
     }
 
     private boolean needsSourceResolution(DataRepository.Job job, JsonNode snapshot) {
@@ -169,7 +256,7 @@ public class DataWorkbookService {
         var format = sourceFormat == null ? "" : sourceFormat.toUpperCase(Locale.ROOT);
         if ("XLSX".equals(format)) {
             try (var stored = storage.get(file.objectKey())) {
-                return workbookParser.parseSnapshot(stored.stream()).deepCopy();
+                return workbookParser.parseSnapshot(stored.stream());
             } catch (ApiException exception) {
                 throw exception;
             } catch (Exception exception) {
@@ -231,9 +318,17 @@ public class DataWorkbookService {
         var sheetNames = new LinkedHashMap<String, String>();
         sheets.forEach(item -> sheetNames.put(item.sheetId(), item.sheetName()));
         var result = new ArrayList<FieldValue>();
-        var mappingsBySheet = mappings.stream().collect(java.util.stream.Collectors.groupingBy(DataRepository.Mapping::sheetId));
+        var bySource = new java.util.HashMap<List<String>, DataRepository.Mapping>();
+        var byField = new java.util.HashMap<List<String>, DataRepository.Mapping>();
+        var byIdentity = new java.util.HashMap<List<String>, DataRepository.Mapping>();
+        for(var m:mappings) {
+            bySource.putIfAbsent(java.util.Arrays.asList(m.sheetId(),m.sourceColumn()),m);
+            byField.putIfAbsent(java.util.Arrays.asList(m.sheetId(),m.fieldCode()),m);
+            var detail=m.detail()==null?JsonNodeFactory.instance.missingNode():m.detail();
+            byIdentity.putIfAbsent(java.util.Arrays.asList(m.sheetId(),m.fieldCode(),detail.path("bindingId").asText(m.fieldCode()),
+                    detail.path("dataPath").asText("/"+m.fieldCode())),m);
+        }
         for (var row : rows) {
-            var sheetMappings = mappingsBySheet.getOrDefault(row.sheetId(), List.of());
             var normalized = row.normalizedValues();
             var corrected = row.correctedValues();
             var entries = normalized.fields();
@@ -245,7 +340,7 @@ public class DataWorkbookService {
                 // structured value wrapper.  Treating a text node as that wrapper exposed the internal key as
                 // the field name and discarded its source address and value in the workbench.
                 var wrapped = value != null && value.isObject();
-                var sourceMapping = wrapped ? null : mappingBySource(sheetMappings, row.sheetId(), entry.getKey());
+                var sourceMapping = wrapped ? null : bySource.get(java.util.Arrays.asList(row.sheetId(),entry.getKey()));
                 var fieldCode = wrapped
                         ? value.path("fieldCode").asText(entry.getKey())
                         : sourceMapping != null && sourceMapping.fieldCode() != null
@@ -255,7 +350,8 @@ public class DataWorkbookService {
                         ? value.path("valuePath").asText(value.path("dataPath").asText("/" + fieldCode))
                         : "/" + fieldCode;
                 var mapping = sourceMapping == null
-                        ? mapping(sheetMappings, row.sheetId(), fieldCode, provisionalBindingId, provisionalValuePath)
+                        ? byIdentity.getOrDefault(java.util.Arrays.asList(row.sheetId(),fieldCode,provisionalBindingId,provisionalValuePath),
+                                byField.get(java.util.Arrays.asList(row.sheetId(),fieldCode)))
                         : sourceMapping;
                 var sourceColumn = wrapped
                         ? value.path("sourceColumn").asText(mapping == null ? "" : mapping.sourceColumn())
@@ -906,5 +1002,12 @@ public class DataWorkbookService {
                                   String format, JsonNode snapshot, List<WorkbookSheet> sheets,
                                   String selectedSheetId, boolean editable, List<WorkbookRegion> regions,
                                   List<FieldDefinitionView> fieldDefinitions,
-                                  List<WorkbookRecord> records, List<FieldValue> fields,JsonNode templateInstance) {}
+                                  List<WorkbookRecord> records, List<FieldValue> fields,
+                                  @com.fasterxml.jackson.annotation.JsonIgnore JsonNode templateInstance) {
+        @com.fasterxml.jackson.annotation.JsonProperty("fieldResultsSource")
+        public String fieldResultsSource() {
+            return fields.isEmpty() && fieldDefinitions.isEmpty() && com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot)
+                    ?"SNAPSHOT":"STAGED";
+        }
+    }
 }

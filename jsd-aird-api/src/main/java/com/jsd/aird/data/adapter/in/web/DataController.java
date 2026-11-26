@@ -253,26 +253,35 @@ public class DataController {
     }
 
     @GetMapping({"/import-jobs/{id}/preview", "/experiment-import-jobs/{id}/preview"})
-    public ApiResponse<DataImportService.Preview> preview(@PathVariable UUID id) {
-        return success(service.preview(id));
+    public ApiResponse<DataImportService.Preview> preview(@PathVariable UUID id,
+            @RequestParam(defaultValue = "full") String view) {
+        return success("summary".equals(view) ? service.previewSummary(id) : service.preview(id));
     }
 
     @GetMapping({"/import-jobs/{id}/workbook-snapshot", "/experiment-import-jobs/{id}/workbook-snapshot"})
-    public ApiResponse<DataWorkbookService.WorkbookContext> importWorkbook(@PathVariable UUID id) {
-        return success(workbookService.importJob(id));
+    public ApiResponse<DataWorkbookService.WorkbookContext> importWorkbook(@PathVariable UUID id,
+            @RequestParam(defaultValue = "full") String view) {
+        return success("workspace".equals(view)?workbookService.workspace(id):workbookService.importJob(id));
+    }
+
+    @GetMapping({"/import-jobs/{id}/field-results", "/experiment-import-jobs/{id}/field-results"})
+    public ApiResponse<DataWorkbookService.FieldResults> fieldResults(@PathVariable UUID id,
+            @RequestParam String revision, @RequestParam(required=false) String sheetId,
+            @RequestParam(required=false) String recordId) {
+        return success(workbookService.fieldResults(id,revision,sheetId,recordId));
     }
 
     @PutMapping("/import-jobs/{id}/workbook-draft")
     public ApiResponse<?> saveWorkbookDraft(@PathVariable UUID id,@Valid @RequestBody WorkbookDraftRequest request) {
         var job=service.saveWorkbookDraft(id,request.revision(),request.snapshot(),request.templateInstance(),request.structureOperations());
-        return success(new WorkbookDraftResponse(job,workbookService.importJob(id)));
+        return success(new WorkbookDraftResponse(job,null));
     }
     public record WorkbookDraftRequest(@NotBlank String revision,@NotNull JsonNode snapshot,@NotNull JsonNode templateInstance,JsonNode structureOperations) {}
     public record WorkbookDraftResponse(DataRepository.Job job,DataWorkbookService.WorkbookContext workbook) {}
     @PutMapping("/experiment-import-jobs/{id}/workbook-draft")
     public ApiResponse<?> saveExperimentWorkbookDraft(@PathVariable UUID id,@Valid @RequestBody WorkbookDraftRequest request) {
         var job=service.saveExperimentWorkbookDraft(id,request.revision(),request.snapshot(),request.templateInstance(),request.structureOperations());
-        return success(new WorkbookDraftResponse(job,workbookService.importJob(id)));
+        return success(new WorkbookDraftResponse(job,null));
     }
 
     @PutMapping("/import-jobs/{id}/components/{componentId}/anchor")
@@ -288,15 +297,7 @@ public class DataController {
             publicationService.confirm(id,request==null?null:request.revision());
             return success(service.get(id));
         }
-        service.commit(id);
-        var job = service.get(id);
-        if ("EXPERIMENT_DRAFT".equals(job.importPurpose())) {
-            var plan = experimentAssemblyService.preview(id);
-            if (plan.readyCount() > 0 && plan.reviewCount() == 0 && plan.blockedCount() == 0) {
-                experimentAssemblyService.sync(id, job.targetExperimentCategoryId(), null);
-            }
-        }
-        return success(job);
+        return success(service.commitAtRevision(id,request==null?null:request.revision()));
     }
 
     @GetMapping({"/import-jobs/{id}/experiments", "/experiment-import-jobs/{id}/experiments"})
@@ -312,8 +313,9 @@ public class DataController {
     }
 
     @GetMapping({"/import-jobs/{id}/experiment-sync-status", "/experiment-import-jobs/{id}/experiment-sync-status"})
-    public ApiResponse<ExperimentAssemblyService.SyncStatus> experimentSyncStatus(@PathVariable UUID id) {
-        return success(experimentAssemblyService.status(id));
+    public ApiResponse<ExperimentAssemblyService.SyncStatus> experimentSyncStatus(@PathVariable UUID id,
+            @RequestParam(defaultValue = "full") String view) {
+        return success("summary".equals(view) ? experimentAssemblyService.statusSummary(id) : experimentAssemblyService.status(id));
     }
 
     /** The data-center list is one card per source file/import batch, never one card per field. */

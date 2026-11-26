@@ -414,45 +414,75 @@ public class JdbcKnowledgeRepository implements KnowledgeRepository {
                 "SELECT parse_run_id FROM kb.document_review_revision WHERE id = ?", UUID.class, reviewRevisionId);
         var ids = new java.util.LinkedHashMap<String, UUID>();
         for (var chunk : chunks) ids.put(chunk.chunkKey(), UUID.randomUUID());
+        var termWrites = new java.util.ArrayList<Object[]>();
+        var chunkWrites = new java.util.ArrayList<Object[]>();
         for (var chunk : chunks) {
             var chunkId = ids.get(chunk.chunkKey());
             var effectiveParentId = chunk.parentKey() == null ? null : ids.get(chunk.parentKey());
             if (chunk.parentKey() != null && effectiveParentId == null) {
                 throw new IllegalArgumentException("Chunk 父块键不存在：" + chunk.parentKey());
             }
-            jdbc.update("""
-                    INSERT INTO kb.document_chunk (
-                        id, document_id, document_version_id, parse_run_id, review_revision_id,
-                        chunk_no, page_no, section, content, embedding,
-                        parent_chunk_id, token_length, analyzer_version, embedding_model, sheet_name, cell_range,
-                        paragraph_id, bbox_jsonb, start_time_ms, end_time_ms, chunk_role, heading_path_jsonb,
-                        review_node_ids_jsonb, source_node_keys_jsonb, source_anchor_jsonb,
-                        source_anchors_jsonb, relations_jsonb, model_token_length
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS vector), ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?,
-                              ?, CAST(? AS jsonb), CAST(? AS jsonb), CAST(? AS jsonb), CAST(? AS jsonb),
-                              CAST(? AS jsonb), CAST(? AS jsonb), ?)
-                    """, chunkId, documentId, versionId, parseRunId, reviewRevisionId,
+            chunkWrites.add(new Object[]{chunkId, documentId, versionId, parseRunId, reviewRevisionId,
                     chunk.chunkNo(), chunk.pageNo(), chunk.section(),
                     chunk.content(), null, effectiveParentId, chunk.tokenLength(), chunk.analyzerVersion(),
                     null, chunk.sheetName(), chunk.cellRange(), chunk.paragraphId(),
                     chunk.bbox() == null || chunk.bbox().isEmpty() ? null : chunk.bbox().toString(),
                     chunk.startTimeMs(), chunk.endTimeMs(), chunk.chunkRole(), jsonStrings(chunk.headingPath()),
                     jsonUuids(chunk.reviewNodeIds()), jsonUuids(chunk.sourceNodeKeys()), chunk.sourceAnchorJson(),
-                    chunk.sourceAnchorsJson(), chunk.relationsJson(), chunk.modelTokenLength());
+                    chunk.sourceAnchorsJson(), chunk.relationsJson(), chunk.modelTokenLength()});
+            if (chunkWrites.size() >= 128) {
+                insertChunkBatch(chunkWrites);
+                chunkWrites.clear();
+            }
+        }
+        insertChunkBatch(chunkWrites);
+        UUID embeddingOrganization = chunks.stream().anyMatch(c -> "CHILD".equals(c.chunkRole()) && c.vector() != null)
+                ? jdbc.queryForObject("SELECT organization_id FROM kb.document WHERE id=?", UUID.class, documentId) : null;
+        for (var chunk : chunks) {
+            var chunkId = ids.get(chunk.chunkKey());
             if (!"CHILD".equals(chunk.chunkRole())) continue;
             if(chunk.vector()!=null) {
-                var org=jdbc.queryForObject("SELECT organization_id FROM kb.document WHERE id=?",UUID.class,documentId);
-                jdbc.update("INSERT INTO kb.document_chunk_embedding(organization_id,chunk_id,embedding_model,embedding_dimension,embedding) VALUES (?,?,?,vector_dims(?::halfvec),?::halfvec)",org,chunkId,chunk.embeddingModel(),chunk.vector(),chunk.vector());
+                jdbc.update("INSERT INTO kb.document_chunk_embedding(organization_id,chunk_id,embedding_model,embedding_dimension,embedding) VALUES (?,?,?,vector_dims(?::halfvec),?::halfvec)",embeddingOrganization,chunkId,chunk.embeddingModel(),chunk.vector(),chunk.vector());
             }
             for (var term : chunk.terms() == null ? List.<TermFrequency>of() : chunk.terms()) {
                 if (!com.jsd.aird.kb.domain.LexicalAnalyzer.indexableTerm(term.term())) continue;
-                jdbc.update("""
-                        INSERT INTO kb.chunk_term (chunk_id, term, term_frequency)
-                        VALUES (?, ?, ?)
-                        ON CONFLICT (chunk_id, term) DO UPDATE SET term_frequency = EXCLUDED.term_frequency
-                        """, chunkId, term.term(), term.frequency());
+                termWrites.add(new Object[]{chunkId, term.term(), term.frequency()});
+                if (termWrites.size() >= 512) {
+                    insertTermBatch(termWrites);
+                    termWrites.clear();
+                }
             }
         }
+        insertTermBatch(termWrites);
+    }
+
+    private void insertChunkBatch(List<Object[]> rows) {
+        if (rows.isEmpty()) return;
+        var args = new java.util.ArrayList<Object>();
+        for (var row : rows) java.util.Collections.addAll(args, row);
+        String values = String.join(",", java.util.Collections.nCopies(rows.size(), "(?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS vector), ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?, ?, CAST(? AS jsonb), CAST(? AS jsonb), CAST(? AS jsonb), CAST(? AS jsonb), CAST(? AS jsonb), CAST(? AS jsonb), ?)"));
+        jdbc.update("""
+                INSERT INTO kb.document_chunk (
+                        id, document_id, document_version_id, parse_run_id, review_revision_id,
+                        chunk_no, page_no, section, content, embedding,
+                        parent_chunk_id, token_length, analyzer_version, embedding_model, sheet_name, cell_range,
+                        paragraph_id, bbox_jsonb, start_time_ms, end_time_ms, chunk_role, heading_path_jsonb,
+                        review_node_ids_jsonb, source_node_keys_jsonb, source_anchor_jsonb,
+                        source_anchors_jsonb, relations_jsonb, model_token_length) VALUES
+                """ + values, args.toArray());
+    }
+
+    private void insertTermBatch(List<Object[]> terms) {
+        if (terms.isEmpty()) return;
+        // One statement per bounded batch, rather than one network round trip per term.
+        var unique = new java.util.LinkedHashMap<java.util.List<Object>, Object[]>();
+        for (var term : terms) unique.put(java.util.List.of(term[0], term[1]), term);
+        var args = new java.util.ArrayList<Object>();
+        for (var term : unique.values()) java.util.Collections.addAll(args, term);
+        String values = String.join(",", java.util.Collections.nCopies(unique.size(), "(?, ?, ?)"));
+        jdbc.update("INSERT INTO kb.chunk_term (chunk_id, term, term_frequency) VALUES " + values
+                + " ON CONFLICT (chunk_id, term) DO UPDATE SET term_frequency = EXCLUDED.term_frequency",
+                args.toArray());
     }
 
     @Override

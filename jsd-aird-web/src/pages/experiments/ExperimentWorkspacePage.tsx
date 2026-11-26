@@ -284,9 +284,6 @@ export function ExperimentWorkspacePage({
       ) {
         nextModel.documentSnapshot = d.templateSnapshot;
       }
-      detailRef.current = d;
-      setDetail(d);
-      setEditModel(nextModel);
       // Unified workbooks already carry the server-validated field definition.
       // Legacy templates still need the dedicated review response.
       const embeddedDefinition = labDefinition(nextModel.documentSnapshot) && readWorkbookInstance(nextModel.documentSnapshot ?? {})?.version === 2;
@@ -308,15 +305,26 @@ export function ExperimentWorkspacePage({
       if (verified) {
         writeWorkbookInstance(initialSnapshot, verified);
         nextModel.documentSnapshot = initialSnapshot;
-        setEditModel(nextModel);
       }
-      setSnapshot(initialSnapshot);
       const editable = !['COMPLETED', 'VOIDED', 'PENDING_REVIEW', 'APPROVED'].includes(d.summary.status);
+      // Mount once with the final read-only projection. Mounting the source
+      // first destroys and recreates Univer when this request finishes.
+      let initialPresentation: Awaited<ReturnType<typeof getExperimentPresentation>> | undefined;
+      if (!editable && !pinned && nextModel.importProcessingMode !== 'CONTENT_ONLY' && labDefinition(initialSnapshot)) {
+        try { initialPresentation = await getExperimentPresentation(id, d.summary.revision); }
+        catch { /* The authoritative source remains a usable fallback. */ }
+        if (!isCurrent()) return;
+      }
+      detailRef.current = d;
+      setDetail(d);
+      setEditModel(nextModel);
+      setSnapshot(initialSnapshot);
+      if (initialPresentation) {
+        setPresentationSnapshot(initialPresentation.snapshot);
+        setPresentationLocations(initialPresentation.locationMap);
+      }
       setSelectedVersion(pinned);
       setView(pinned ? 'versions' : editable && canUpdate ? 'edit' : 'preview');
-      if (!editable && nextModel.importProcessingMode !== 'CONTENT_ONLY' && labDefinition(initialSnapshot)) {
-        void loadPresentation(d);
-      }
       setSaveState('SAVED');
       editGenerationRef.current = 0;
       savedGenerationRef.current = 0;

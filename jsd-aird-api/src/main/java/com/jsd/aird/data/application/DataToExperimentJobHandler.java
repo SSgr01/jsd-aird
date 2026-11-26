@@ -17,6 +17,18 @@ public class DataToExperimentJobHandler implements AsyncJobHandler {
         return handle(p,null);
     }
     @Override public JsonNode handle(JsonNode p,ExecutionContext context){
+        if ("PREPARE".equals(p.path("phase").asText())) {
+            var previous=com.jsd.aird.shared.security.ActorContext.current();
+            com.jsd.aird.shared.security.ActorContext.set(new com.jsd.aird.shared.security.Actor(
+                    uuid(p,"organizationId"),uuid(p,"actorId"),p.path("actorName").asText("import-worker")));
+            try {
+                var result=service.prepareConfirmed(uuid(p,"importJobId"),p.path("reviewedRevision").asText(),context);
+                return json.createObjectNode().put("status","PREPARED").put("acceptedCount",result.acceptedCount());
+            } finally {
+                if(previous==null)com.jsd.aird.shared.security.ActorContext.clear();
+                else com.jsd.aird.shared.security.ActorContext.set(previous);
+            }
+        }
         var created=service.execute(uuid(p,"organizationId"),uuid(p,"actorId"),p.path("actorName").asText(),
                 uuid(p,"importJobId"),p.path("assemblyKey").asText(),p.path("planHash").asText(),optional(p,"categoryId"),
                 optional(p,"projectId"),optional(p,"stageId"),optional(p,"taskId"),context);
@@ -26,6 +38,7 @@ public class DataToExperimentJobHandler implements AsyncJobHandler {
     @Override public boolean isRetryable(Exception e){return !(e instanceof ApiException);}
     @Override public void handleTerminalFailure(JsonNode p,Exception e){handleTerminalFailure(p,e,null);}
     @Override public void handleTerminalFailure(JsonNode p,Exception e,ExecutionContext context){
+        if ("PREPARE".equals(p.path("phase").asText())) return;
         service.fail(uuid(p,"organizationId"),uuid(p,"importJobId"),p.path("assemblyKey").asText(),p.path("planHash").asText(),e,context);
     }
     private UUID uuid(JsonNode p,String field){return UUID.fromString(p.path(field).asText());}

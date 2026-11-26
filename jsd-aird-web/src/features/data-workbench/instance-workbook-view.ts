@@ -32,8 +32,18 @@ export function instanceWorkbookView(
       fields: [],
     };
   const groups = new Map(instance.model.groups.map((g) => [g.id, g.name]));
+  const sheetById = new Map(sheets.map(sheet => [sheet.id, sheet]));
+  const bindingById = new Map(instance.mapping.map(binding => [binding.bindingId, binding]));
+  const fieldByBinding = new Map(instance.model.fields.map(field => [field.bindingId, field]));
+  const recordsByRegion = groupBy(instance.records, record => record.regionId);
+  const identifiersByRegion = groupBy(instance.mapping.filter(binding => /SOURCE_IDENTITY/.test(binding.experimentField?.field ?? '') || /sample.number/.test(binding.fieldCode ?? '')), binding => binding.parentBindingId);
+  const itemsByRegion = groupBy(instance.items, item => item.regionId);
+  const regionCounts = new Map<string, number>();
+  const regionIds = new Set<string>();
+  const definitionIds = new Set<string>();
+  const issuesByAddress = new Map(instance.issues.map(issue => [`${issue.sheetId ?? ''}:${issue.address}`, issue]));
   const cell = (sheetId: string, row: number, col: number) =>
-    sheets.find((s) => s.id === sheetId)?.cellData?.[String(row - 1)]?.[String(col - 1)];
+    sheetById.get(sheetId)?.cellData?.[String(row - 1)]?.[String(col - 1)];
   const value = (sheetId: string, row: number, col: number) => cell(sheetId, row, col)?.v ?? '';
   const shown = (sheetId: string, row: number, col: number, type: string) => {
     const c = cell(sheetId, row, col),
@@ -46,13 +56,9 @@ export function instanceWorkbookView(
     return workbookCellValue(raw, type, pattern);
   };
   for (const identity of instance.records) {
-    const parent = instance.mapping.find((b) => b.bindingId === identity.regionId);
-    const identifiers = instance.mapping.filter(
-      (b) =>
-        b.parentBindingId === identity.regionId &&
-        (/SOURCE_IDENTITY/.test(b.experimentField?.field ?? '') ||
-          /sample.number/.test(b.fieldCode ?? '')),
-    );
+    const parent = bindingById.get(identity.regionId);
+    const identifiers = identifiersByRegion.get(identity.regionId) ?? [];
+    regionCounts.set(identity.regionId, (regionCounts.get(identity.regionId) ?? 0) + 1);
     const label = identifiers
       .map((b) => {
         const r = parseRange(locatorText(b.locator.valueRange || b.locator.address || ''));
@@ -72,21 +78,22 @@ export function instanceWorkbookView(
       regionId: identity.regionId,
       label:
         label ||
-        `记录 ${result.records.filter((r) => r.regionId === identity.regionId).length + 1}`,
+        `记录 ${regionCounts.get(identity.regionId)}`,
       sequence: identity.index,
       sheetId: identity.sheetId,
-      sheetName: sheets.find((s) => s.id === identity.sheetId)?.name,
+      sheetName: sheetById.get(identity.sheetId)?.name,
       address: workbookAddress(
         identity.axis === 'ROW' ? identity.index - 1 : 0,
         identity.axis === 'COLUMN' ? identity.index - 1 : 0,
       ),
       excluded: false,
     });
-    if (parent && !result.regions.some((r) => r.regionId === identity.regionId))
+    if (parent && !regionIds.has(identity.regionId)) {
+      regionIds.add(identity.regionId);
       result.regions.push({
         regionId: identity.regionId,
         name:
-          instance.model.fields.find((f) => f.bindingId === identity.regionId)?.name || '明细记录',
+          fieldByBinding.get(identity.regionId)?.name || '明细记录',
         structureType: identity.axis === 'COLUMN' ? 'COLUMN_TABLE' : 'ROW_TABLE',
         recordAxis: identity.axis,
         sheetId: identity.sheetId,
@@ -95,6 +102,7 @@ export function instanceWorkbookView(
         recordCount: 0,
         fieldGroups: [],
       });
+    }
   }
   const add = (
     fieldCode: string,
@@ -113,10 +121,8 @@ export function instanceWorkbookView(
   ) => {
     const raw = shown(sheetId, row, col, type),
       address = workbookAddress(row - 1, col - 1),
-      sheet = sheets.find((s) => s.id === sheetId),
-      issue = instance.issues.find(
-        (i) => i.address === address && (!i.sheetId || i.sheetId === sheetId),
-      );
+      sheet = sheetById.get(sheetId),
+      issue = issuesByAddress.get(`${sheetId}:${address}`) ?? issuesByAddress.get(`:${address}`);
     const data: DataFieldValueView = {
       componentId: regionId,
       recordId,
@@ -147,7 +153,8 @@ export function instanceWorkbookView(
       mappingKind: regionId === 'common' ? 'SCALAR' : 'REPEAT_FIELD',
     };
     result.fields.push(data);
-    if (!result.fieldDefinitions!.some((f) => f.bindingId === bindingId))
+    if (!definitionIds.has(bindingId)) {
+      definitionIds.add(bindingId);
       result.fieldDefinitions!.push({
         componentId: regionId,
         bindingId,
@@ -164,16 +171,17 @@ export function instanceWorkbookView(
         sourceRange: address,
         mappingKind: data.mappingKind,
       });
+    }
   };
   for (const field of instance.model.fields) {
-    const b = instance.mapping.find((b) => b.bindingId === field.bindingId);
+    const b = bindingById.get(field.bindingId ?? '');
     if (!b || b.mappingKind === 'REPEAT_REGION') continue;
     const r = parseRange(locatorText(b.locator.valueRange || b.locator.address || ''));
     if (!r) continue;
     const sid = locatorText(b.locator.sheetId || ''),
       region = b.parentBindingId || 'common',
       records = b.parentBindingId
-        ? instance.records.filter((i) => i.regionId === b.parentBindingId)
+        ? (recordsByRegion.get(b.parentBindingId) ?? [])
         : [];
     const source =
       field.valueSource === 'FORMULA' || b.locator.valueSource === 'FORMULA' ? 'FORMULA' : 'INPUT';
@@ -237,7 +245,7 @@ export function instanceWorkbookView(
     const labels = parseRange(p.labelRange),
       values = parseRange(p.valueRange);
     if (!labels || !values) continue;
-    for (const item of instance.items.filter((i) => i.regionId === p.listProjectionId)) {
+    for (const item of (itemsByRegion.get(p.listProjectionId) ?? [])) {
       const name =
         displayValue(
           value(
@@ -246,7 +254,7 @@ export function instanceWorkbookView(
             p.itemAxis === 'COLUMN' ? item.index : labels.startColumn,
           ),
         ) || `明细 ${item.index}`;
-      for (const record of instance.records.filter((r) => r.regionId === p.parentBindingId))
+      for (const record of (recordsByRegion.get(p.parentBindingId ?? '') ?? []))
         add(
           `${p.listProjectionId}:${item.id}`,
           name,
@@ -263,21 +271,26 @@ export function instanceWorkbookView(
         );
     }
   }
+  const definitionsByRegion = groupBy(result.fieldDefinitions!, field => field.componentId);
+  const displayedRecordsByRegion = groupBy(result.records, record => record.regionId);
   for (const region of result.regions) {
-    const definitions = result.fieldDefinitions!.filter((f) => f.componentId === region.regionId);
+    const definitions = definitionsByRegion.get(region.regionId) ?? [];
     region.fieldCount = definitions.length;
-    region.recordCount = result.records.filter((r) => r.regionId === region.regionId).length;
-    region.fieldGroups = [...new Set(definitions.map((f) => f.groupPath || '其他'))].map(
-      (name) => ({
-        groupId: name,
-        name,
-        fieldCount: definitions.filter((f) => f.groupPath === name).length,
-      }),
-    );
+    region.recordCount = displayedRecordsByRegion.get(region.regionId)?.length ?? 0;
+    const fieldGroups = groupBy(definitions, field => field.groupPath || '其他');
+    region.fieldGroups = [...fieldGroups].map(([name, fields]) => ({
+      groupId: name, name, fieldCount: fields.length,
+    }));
   }
   return result;
 }
 
 function locatorText(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+function groupBy<T, K>(items: T[], key: (item: T) => K): Map<K, T[]> {
+  const result = new Map<K, T[]>();
+  for (const item of items) { const id = key(item); const group = result.get(id) ?? []; group.push(item); result.set(id, group); }
+  return result;
 }

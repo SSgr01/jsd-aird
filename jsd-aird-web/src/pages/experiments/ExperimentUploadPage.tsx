@@ -250,7 +250,9 @@ export function ExperimentUploadPage() {
   }, [assemblyStatuses, visibleJobs, templateJobs]);
   const assemblyPollingKey = [...new Set(visibleJobs.flatMap((item) => {
     const id = item.kind === 'TEMPLATE' ? item.job.id : item.kind === 'CONVERSION' ? item.job.importJobId : undefined;
-    return id && assemblyStatuses[id]?.links.some((link) => ['READY', 'RUNNING'].includes(link.status)) ? [id] : [];
+    const status = id ? assemblyStatuses[id] : undefined;
+    return id && (['READY', 'RUNNING'].includes(status?.preparationStatus ?? '')
+      || status?.links.some((link) => ['READY', 'RUNNING'].includes(link.status))) ? [id] : [];
   }))].join('|');
   const assemblyReads = useLatestRequest(assemblyPollingKey);
   usePolling(async () => {
@@ -369,7 +371,7 @@ export function ExperimentUploadPage() {
     const assembly = assemblyStatuses[job.id];
     const assemblyLinks = assembly?.links ?? [];
     const linkedExperiments = assemblyLinks.filter((item) => item.experimentId);
-    const pendingCandidates = assembly?.plan.candidates.filter((item) =>
+    const pendingCandidates = assembly?.plan?.candidates.filter((item) =>
       ['NEEDS_REVIEW', 'BLOCKED', 'FAILED'].includes(item.status),
     ) ?? [];
     const pendingReasons = pendingCandidates.flatMap((item) =>
@@ -383,7 +385,7 @@ export function ExperimentUploadPage() {
       ? '已生成 ' + linkedExperiments.length + ' 个实验' + (hasPendingAssembly ? '；另有 ' + pendingCandidates.length + ' 项待处理' : '')
       : hasPendingAssembly ? '待处理，尚未生成草稿' + (pendingReasons[0] ? '：' + pendingReasons[0] : '')
         : !assembly ? '导入完成，正在读取实验草稿状态'
-          : assembly.plan.readyCount ? '实验草稿生成中' : '导入完成，尚未生成实验草稿';
+          : ['READY', 'RUNNING'].includes(assembly.preparationStatus ?? '') || assembly.plan?.readyCount ? '实验草稿生成中' : '导入完成，尚未生成实验草稿';
     return {
       id: `template-${job.id}`,
       name: job.sourceFileName,
@@ -392,7 +394,7 @@ export function ExperimentUploadPage() {
       status: job.status === 'COMPLETED'
         ? linkedExperiments.length ? { label: '导入完成', color: 'success' }
           : hasPendingAssembly ? { label: '待处理 · 未生成草稿', color: 'warning' }
-            : assembly?.plan.readyCount ? { label: '草稿生成中', color: 'processing' }
+            : ['READY', 'RUNNING'].includes(assembly?.preparationStatus ?? '') || assembly?.plan?.readyCount ? { label: '草稿生成中', color: 'processing' }
               : { label: '导入完成', color: 'success' }
         : job.status === 'FAILED' ? { label: '处理失败', color: 'error' }
           : { label: job.status === 'WAITING_MAPPING' || job.status === 'WAITING_CONFIRM' ? '待核对数据' : `处理中 ${progress}%`, color: job.status === 'WAITING_MAPPING' || job.status === 'WAITING_CONFIRM' ? 'warning' : 'processing' },

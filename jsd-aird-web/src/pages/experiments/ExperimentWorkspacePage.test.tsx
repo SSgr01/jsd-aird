@@ -61,6 +61,19 @@ it('skips an unchanged draft save and confirms the already saved revision direct
   expect(editor.mounts).toBe(1);
 });
 
+it('initializes a read-only workbook once after its projection arrives', async () => {
+  const source = detail('COMPLETED');
+  api.getExperiment.mockResolvedValue(source);
+  let resolve!: (value: unknown) => void;
+  api.getExperimentPresentation.mockReturnValue(new Promise(done => { resolve = done; }));
+  mount();
+  await waitFor(() => expect(api.getExperimentPresentation).toHaveBeenCalledTimes(1));
+  expect(editor.mounts).toBe(0);
+  await act(async () => { resolve({ snapshot: structuredClone(source.editModel.documentSnapshot), locationMap: {} }); });
+  await screen.findByRole('button', { name: '修改数据' });
+  expect(editor.mounts).toBe(1);
+});
+
 it('uses workflow responses through submit, approve and publish while projection loads independently', async () => {
   api.actExperiment.mockImplementation((_id: string, action: string, revision: number) =>
     Promise.resolve(detail(action === 'submit-review' ? 'PENDING_REVIEW' : action === 'approve' ? 'APPROVED' : 'COMPLETED', revision + 1)));

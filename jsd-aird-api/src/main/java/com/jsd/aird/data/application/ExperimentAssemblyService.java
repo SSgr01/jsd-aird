@@ -62,6 +62,56 @@ public class ExperimentAssemblyService {
         return plan(actor.organizationId(),importJobId,actor.userId());
     }
 
+    private com.jsd.aird.data.application.port.DataRepository importJobs;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setImportJobs(com.jsd.aird.data.application.port.DataRepository importJobs) { this.importJobs=importJobs; }
+
+    /** Planning is expensive; only persist its result and enqueue children in the fenced transaction. */
+    public SyncResult prepareConfirmed(UUID importJobId,String reviewedRevision,ExecutionContext context) {
+        var actor=ActorContext.required();
+        jobs.checkExecution(context,false);
+        requireExperimentCreate(actor.organizationId(),actor.userId());
+        var source=repository.load(actor.organizationId(),importJobId);
+        var prepared=plan(actor.organizationId(),source,actor.userId(),false);
+        var relations=projects.links(actor,ProjectResourceFacade.ResourceType.DATA_IMPORT_JOB,importJobId);
+        var project=relations.size()==1?relations.getFirst():null;
+        if(source.targetExperimentCategoryId()!=null)experiments.requireActiveCategory(actor.organizationId(),source.targetExperimentCategoryId());
+        return writes.execute(tx -> {
+            repository.lockSource(actor.organizationId(),importJobId);
+            var current=importJobs.findJob(actor.organizationId(),importJobId).orElseThrow();
+            com.jsd.aird.shared.json.RevisionToken.require(reviewedRevision,current.getRevision());
+            if(!"COMPLETED".equals(current.status()))throw validation("数据核对状态已变化");
+            var accepted=new ArrayList<UUID>();
+            for(var candidate:prepared.candidates()) repository.upsertPlan(actor.organizationId(),importJobId,
+                    new ExperimentAssemblyRepository.PlanRow(candidate.assemblyKey(),candidate.parentAssemblyKey(),
+                            candidate.sourceIdentity(),candidate.sourceIdentityType(),json.valueToTree(candidate.sourceRecordKeys()),
+                            json.valueToTree(candidate.sharedContextRecordKeys()),candidate.planHash(),candidate.contentHash(),
+                            candidate.status(),candidate.conflicts(),candidate.warnings()),actor.userId());
+            if(!prepared.candidates().isEmpty())repository.supersedeOtherPlans(actor.organizationId(),importJobId,prepared.candidates().getFirst().assemblyKey());
+            if(prepared.reviewCount()==0 && prepared.blockedCount()==0)for(var candidate:prepared.candidates()) {
+                if(!Set.of("READY","RUNNING").contains(candidate.status()))continue;
+                repository.lockAssembly(actor.organizationId(),importJobId,candidate.assemblyKey());
+                var existing=repository.find(actor.organizationId(),importJobId,candidate.assemblyKey()).orElseThrow();
+                if(existing.experimentId()!=null)continue;
+                var previous=latestJob(actor.organizationId(),importJobId,candidate.assemblyKey(),candidate.planHash()).orElse(null);
+                if(previous!=null)continue;
+                var payload=json.createObjectNode().put("organizationId",actor.organizationId().toString())
+                        .put("actorId",actor.userId().toString()).put("actorName",actor.username())
+                        .put("importJobId",importJobId.toString()).put("assemblyKey",candidate.assemblyKey()).put("planHash",candidate.planHash());
+                if(source.targetExperimentCategoryId()!=null)payload.put("categoryId",source.targetExperimentCategoryId().toString());
+                if(project!=null) {
+                    payload.put("projectId",project.projectId().toString());
+                    if(project.stageId()!=null)payload.put("stageId",project.stageId().toString());
+                    if(project.taskId()!=null)payload.put("taskId",project.taskId().toString());
+                }
+                accepted.add(jobs.enqueue(actor.organizationId(),"DATA_TO_EXPERIMENT_SYNC",payload,
+                        jobKey(importJobId,candidate.assemblyKey(),candidate.planHash()),40));
+            }
+            jobs.requireExecution(context,false);
+            return new SyncResult(accepted.size(),List.copyOf(accepted));
+        });
+    }
+
     @Transactional(propagation=Propagation.NOT_SUPPORTED)
     public SyncResult sync(UUID importJobId,UUID categoryId,List<String> selectedKeys) {
         var actor=ActorContext.required();
@@ -119,7 +169,25 @@ public class ExperimentAssemblyService {
     }
 
     public SyncStatus status(UUID importJobId) {
-        var actor=ActorContext.required();var plan=plan(actor.organizationId(),importJobId,actor.userId(),false);
+        return status(importJobId,false);
+    }
+
+    public SyncStatus statusSummary(UUID importJobId) {
+        return status(importJobId,true);
+    }
+
+    private SyncStatus status(UUID importJobId,boolean summary) {
+        var actor=ActorContext.required();
+        var preparation=jobs.findLatestJob(actor.organizationId(),"data-experiment-prepare:"+importJobId+":").orElse(null);
+        // A failed planner must not prevent the client from reading its status
+        // and retrying confirmation. In-flight planning is also never repeated by polling.
+        AssemblyPlan plan=null;
+        if(!summary && (preparation==null || "SUCCEEDED".equals(preparation.status()))) {
+            plan=plan(actor.organizationId(),importJobId,actor.userId(),false);
+        } else {
+            importJobs.findJob(actor.organizationId(),importJobId)
+                    .orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"导入任务不存在"));
+        }
         var links=repository.links(actor.organizationId(),importJobId).stream()
                 .map(link->reconcile(actor.organizationId(),importJobId,link)).toList();
         var visible=experimentStatuses==null?List.<com.jsd.aird.rnd.api.ExperimentStatusFacade.Summary>of()
@@ -128,7 +196,7 @@ public class ExperimentAssemblyService {
         if(experimentStatuses!=null)links=links.stream().map(link->link.experimentId()==null||ids.contains(link.experimentId())?link:
                 new ExperimentAssemblyRepository.Link(link.assemblyKey(),link.parentAssemblyKey(),link.status(),link.resolutionAction(),
                         link.resolutionReason(),null,null,null,link.planHash(),link.contentHash(),link.errorMessage())).toList();
-        return new SyncStatus(plan,links,visible);
+        return new SyncStatus(plan,links,visible,preparation==null?null:preparation.status());
     }
 
     @Transactional(propagation=Propagation.NOT_SUPPORTED)
@@ -136,6 +204,7 @@ public class ExperimentAssemblyService {
                                                         UUID importJobId,String assemblyKey,String expectedPlanHash,
                                                         UUID categoryId,UUID projectId,UUID stageId,UUID taskId,
                                                         ExecutionContext context) {
+        jobs.checkExecution(context,false);
         requireExperimentCreate(organizationId,actorId);
         if(categoryId!=null)experiments.requireActiveCategory(organizationId,categoryId);
         var already=repository.find(organizationId,importJobId,assemblyKey).orElse(null);
@@ -169,10 +238,22 @@ public class ExperimentAssemblyService {
         var prepared=new Prepared(source,sourceSnapshot,templateVersionId,templateSnapshotHash,templateSnapshot);
         var draft=experiments.prepareImportedDraft(draftCommand(organizationId,actorId,actorName,categoryId,
                 projectId,stageId,taskId,candidate,prepared));
+        var model=draft.editModel();
+        var coordinates=json.createObjectNode();
+        coordinates.set("sourceRecordKeys",json.valueToTree(candidate.sourceRecordKeys()));
+        coordinates.set("sharedContextRecordKeys",json.valueToTree(candidate.sharedContextRecordKeys()));
+        var snapshot=json.createObjectNode().put("planHash",candidate.planHash())
+                .put("contentHash",candidate.contentHash()).put("sourceIdentity",candidate.sourceIdentity());
+        snapshot.set("editModel",model);
+        var sourceGroups=candidate.sourceRecordKeys().isEmpty()?java.util.List.of(assemblyKey):candidate.sourceRecordKeys();
+        var sampleBoundaryId=assemblyKey+"/sample-1";
+        var logicalSampleKey="SOURCE:"+importJobId+":"+sampleBoundaryId;
+        var sample=new SourceRecognitionRepository.RecognizedSample(assemblyKey,sampleBoundaryId,
+                logicalSampleKey,sourceGroups,model.path("title").asText(),model,json.createObjectNode(),
+                model,coordinates,candidate.contentHash());
+        var preparedLink=recognition.prepareExperimentLink(coordinates,snapshot,java.util.List.of(sample));
         try (var timing = new com.jsd.aird.shared.observability.OperationTiming("experiment-generation-write")) {
         return Objects.requireNonNull(timing.phase("transaction", () -> writes.execute(tx->{
-            jobs.requireExecution(context,false);
-            timing.checkpoint("lease-lock");
             requireExperimentCreate(organizationId,actorId);
             if(categoryId!=null)experiments.requireActiveCategory(organizationId,categoryId);
             repository.lockSource(organizationId,importJobId);
@@ -185,8 +266,12 @@ public class ExperimentAssemblyService {
                 throw validation("读取文件期间导入资料已变化，请重新预览后生成");
             if(!repository.markRunning(organizationId,importJobId,assemblyKey))throw validation("该组装项已被处理");
             timing.checkpoint("source-recheck");
-            var created=saveDraft(organizationId,actorId,importJobId,assemblyKey,candidate,prepared,draft);
+            var created=saveDraft(organizationId,actorId,importJobId,assemblyKey,candidate,prepared,draft,preparedLink);
             timing.checkpoint("create-and-link");
+            // Fence last: heartbeats can renew the lease throughout business writes.
+            // Losing the lease rolls back the experiment and all source associations.
+            jobs.requireExecution(context,false);
+            timing.checkpoint("lease-fence");
             return created;
         })));
         }
@@ -211,36 +296,25 @@ public class ExperimentAssemblyService {
     }
 
     private ExperimentDraftFacade.ImportedDraft saveDraft(UUID organizationId,UUID actorId,UUID importJobId,String assemblyKey,
-            Candidate candidate,Prepared prepared,ExperimentDraftFacade.PreparedImportedDraft draft) {
-        var model=draft.command().editModel();
+            Candidate candidate,Prepared prepared,ExperimentDraftFacade.PreparedImportedDraft draft,
+            SourceRecognitionRepository.PreparedExperimentLink preparedLink) {
         var created=experiments.createPreparedImportedDraft(draft);
         repository.markSynced(organizationId,importJobId,assemblyKey,created.experimentId(),created.experimentVersionId(),created.experimentNo());
-        var coordinates=json.createObjectNode();
-        coordinates.set("sourceRecordKeys",json.valueToTree(candidate.sourceRecordKeys()));
-        coordinates.set("sharedContextRecordKeys",json.valueToTree(candidate.sharedContextRecordKeys()));
-        var snapshot=json.createObjectNode().put("planHash",candidate.planHash())
-                .put("contentHash",candidate.contentHash()).put("sourceIdentity",candidate.sourceIdentity());
-        snapshot.set("editModel",model.deepCopy());
-        var sourceGroups=candidate.sourceRecordKeys().isEmpty()?java.util.List.of(assemblyKey):candidate.sourceRecordKeys();
-        var sampleBoundaryId=assemblyKey+"/sample-1";
-        var logicalSampleKey="SOURCE:"+importJobId+":"+sampleBoundaryId;
-        var sample=new SourceRecognitionRepository.RecognizedSample(assemblyKey,sampleBoundaryId,
-                logicalSampleKey,sourceGroups,model.path("title").asText(),model.deepCopy(),json.createObjectNode(),
-                model.deepCopy(),coordinates,candidate.contentHash());
-        recognition.linkExperiment(organizationId,importJobId,
+        recognition.linkPreparedExperiment(organizationId,importJobId,
                 recognition.currentSubmissionId(organizationId,importJobId).orElse(null),assemblyKey,
-                created.experimentId(),created.experimentVersionId(),created.experimentNo(),coordinates,snapshot,
-                java.util.List.of(sample),candidate.contentHash(),actorId);
+                created.experimentId(),created.experimentVersionId(),created.experimentNo(),preparedLink,candidate.contentHash(),actorId);
         return created;
     }
 
     public void fail(UUID org,UUID job,String key,String planHash,Exception error,ExecutionContext context){
+        jobs.checkExecution(context,true);
         writes.executeWithoutResult(tx->{
-            jobs.requireExecution(context,true);
+            repository.lockSource(org,job);
             repository.lockAssembly(org,job,key);
             var latest=latestJob(org,job,key,planHash).orElse(null);
             if(context!=null&&latest!=null&&!latest.id().equals(context.jobId()))return;
             repository.markFailed(org,job,key,planHash,failureMessage(error));
+            jobs.requireExecution(context,true);
         });
     }
 
@@ -282,7 +356,7 @@ public class ExperimentAssemblyService {
         if(persist)plan.candidates().forEach(c->repository.upsertPlan(org,job,new ExperimentAssemblyRepository.PlanRow(
                 c.assemblyKey(),c.parentAssemblyKey(),c.sourceIdentity(),c.sourceIdentityType(),json.valueToTree(c.sourceRecordKeys()),
                 json.valueToTree(c.sharedContextRecordKeys()),c.planHash(),c.contentHash(),c.status(),c.conflicts(),c.warnings()),actor));
-        if(persist)repository.supersedeOtherPlans(org,job,plan.candidates().getFirst().assemblyKey());
+        if(persist && !plan.candidates().isEmpty())repository.supersedeOtherPlans(org,job,plan.candidates().getFirst().assemblyKey());
         var persisted=repository.links(org,job).stream().map(link->reconcile(org,job,link)).collect(java.util.stream.Collectors.toMap(
                 ExperimentAssemblyRepository.Link::assemblyKey,item->item,(a,b)->a));
         var candidates=plan.candidates().stream().map(c->{
@@ -333,5 +407,5 @@ public class ExperimentAssemblyService {
     }
     private static ApiException validation(String message){return new ApiException(ApiErrorCode.VALIDATION_ERROR,message);}
     public record SyncResult(int acceptedCount,List<UUID> jobIds){}
-    public record SyncStatus(AssemblyPlan plan,List<ExperimentAssemblyRepository.Link> links,List<com.jsd.aird.rnd.api.ExperimentStatusFacade.Summary> experiments){}
+    public record SyncStatus(AssemblyPlan plan,List<ExperimentAssemblyRepository.Link> links,List<com.jsd.aird.rnd.api.ExperimentStatusFacade.Summary> experiments,String preparationStatus){}
 }

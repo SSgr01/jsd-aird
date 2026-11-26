@@ -85,6 +85,51 @@ class JdbcKnowledgeRepositoryTest {
     }
 
     @Test
+    void chunkBatchesKeepEveryRowWithinParameterBounds() {
+        var jdbc = jdbcMock();
+        when(jdbc.queryForObject(anyString(), eq(UUID.class), any())).thenReturn(UUID.randomUUID());
+        var chunks = java.util.stream.IntStream.range(0, 260)
+                .mapToObj(i -> chunk("parent" + i, null, "PARENT", i, List.of(), List.of(), List.of())).toList();
+        new JdbcKnowledgeRepository(jdbc).replaceChunks(UUID.randomUUID(), UUID.randomUUID(),
+                UUID.randomUUID(), chunks);
+        var sql = ArgumentCaptor.forClass(String.class);
+        var args = ArgumentCaptor.forClass(Object[].class);
+        verify(jdbc, atLeastOnce()).update(sql.capture(), args.capture());
+        var sizes = java.util.stream.IntStream.range(0, sql.getAllValues().size())
+                .filter(i -> sql.getAllValues().get(i).contains("INSERT INTO kb.document_chunk"))
+                .map(i -> args.getAllValues().get(i).length / 28).boxed().toList();
+        assertThat(sizes).containsExactly(128, 128, 4);
+    }
+
+    @Test
+    void largeDocumentsBatchTermsWithoutLosingRowsAtBatchBoundaries() {
+        var jdbc = jdbcMock();
+        when(jdbc.queryForObject(anyString(), eq(UUID.class), any())).thenReturn(UUID.randomUUID());
+        var saved = new java.util.ArrayList<Object[]>();
+        var batchSizes = new java.util.ArrayList<Integer>();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            String sql = invocation.getArgument(0);
+            if (sql.startsWith("INSERT INTO kb.chunk_term")) {
+                Object[] args = invocation.getArguments();
+                batchSizes.add((args.length - 1) / 3);
+                for (int i = 1; i < args.length; i += 3)
+                    saved.add(new Object[]{args[i], args[i + 1], args[i + 2]});
+            }
+            return 1;
+        }).when(jdbc).update(anyString(), any(Object[].class));
+        var terms = java.util.stream.IntStream.range(0, 1200)
+                .mapToObj(i -> new KnowledgeRepository.TermFrequency("resin" + i, i + 1)).toList();
+        var child = chunk("child", null, "CHILD", 0, List.of(), List.of(), terms);
+        new JdbcKnowledgeRepository(jdbc).replaceChunks(UUID.randomUUID(), UUID.randomUUID(),
+                UUID.randomUUID(), List.of(child));
+        assertThat(saved).hasSize(1200);
+        assertThat(saved.stream().map(row -> row[1])).doesNotHaveDuplicates();
+        assertThat(saved.getFirst()[1]).isEqualTo("resin0");
+        assertThat(saved.getLast()[2]).isEqualTo(1200);
+        assertThat(batchSizes).containsExactly(512, 512, 176);
+    }
+
+    @Test
     void writesParentsBeforeChildrenAndIndexesOnlyChildTerms() {
         var jdbc = jdbcMock();
         var repository = new JdbcKnowledgeRepository(jdbc);
@@ -103,7 +148,9 @@ class JdbcKnowledgeRepositoryTest {
         verify(jdbc, atLeastOnce()).update(sql.capture(), args.capture());
         var inserts = java.util.stream.IntStream.range(0, sql.getAllValues().size())
                 .filter(index -> sql.getAllValues().get(index).contains("INSERT INTO kb.document_chunk"))
-                .mapToObj(index -> args.getAllValues().get(index)).toList();
+                .mapToObj(index -> args.getAllValues().get(index))
+                .flatMap(values -> java.util.stream.IntStream.range(0, values.length / 28)
+                        .mapToObj(row -> java.util.Arrays.copyOfRange(values, row * 28, (row + 1) * 28))).toList();
         assertThat(inserts).hasSize(2);
         assertThat(inserts.get(0)[20]).isEqualTo("PARENT");
         assertThat(inserts.get(0)[10]).isNull();
@@ -111,7 +158,10 @@ class JdbcKnowledgeRepositoryTest {
         assertThat(inserts.get(1)[10]).isEqualTo(inserts.get(0)[0]);
         assertThat(inserts.get(1)[22]).isEqualTo(json(reviewIds));
         assertThat(inserts.get(1)[23]).isEqualTo(json(sourceIds));
-        assertThat(sql.getAllValues().stream().filter(value -> value.contains("INSERT INTO kb.chunk_term"))).hasSize(1);
+        var termIndex = java.util.stream.IntStream.range(0, sql.getAllValues().size())
+                .filter(index -> sql.getAllValues().get(index).contains("INSERT INTO kb.chunk_term"))
+                .findFirst().orElseThrow();
+        assertThat(args.getAllValues().get(termIndex)).containsExactly(inserts.get(1)[0], "乙酸乙酯", 2);
     }
 
     @Test

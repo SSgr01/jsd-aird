@@ -13,8 +13,12 @@ public class DataReviewGuard {
     public DataReviewGuard(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
     public boolean locked(UUID organizationId, UUID jobId) {
-        return Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM data.publication WHERE organization_id=? AND import_job_id=? AND status IN ('PENDING_REVIEW','APPROVED','PUBLISHED','DISABLED'))",
-                Boolean.class, organizationId, jobId));
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS(SELECT 1 FROM data.publication WHERE organization_id=? AND import_job_id=?
+                    AND status IN ('PENDING_REVIEW','APPROVED','PUBLISHED','DISABLED'))
+                OR EXISTS(SELECT 1 FROM data.import_experiment_link WHERE organization_id=? AND import_job_id=?
+                    AND experiment_id IS NOT NULL)
+                """, Boolean.class, organizationId, jobId, organizationId, jobId));
     }
 
     public void assertNotFreeform(UUID organizationId, UUID jobId) {
@@ -31,6 +35,8 @@ public class DataReviewGuard {
         var jobs = jdbc.query("SELECT source_owner,status,recognition_mode FROM data.import_job WHERE organization_id=? AND id=? FOR UPDATE",
                 (rs, n) -> new String[]{rs.getString(1),rs.getString(2),rs.getString(3)}, organizationId, jobId);
         if (jobs.isEmpty()) return;
+        if (!"DATA_CENTER".equals(jobs.getFirst()[0]) && locked(organizationId,jobId))
+            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"已生成实验草稿，请在关联实验中修改数据");
         jdbc.update("UPDATE data.import_job SET updated_at=clock_timestamp() WHERE organization_id=? AND id=?",organizationId,jobId);
         if (!"DATA_CENTER".equals(jobs.getFirst()[0])) return;
         if ("FREEFORM".equals(jobs.getFirst()[2])) {

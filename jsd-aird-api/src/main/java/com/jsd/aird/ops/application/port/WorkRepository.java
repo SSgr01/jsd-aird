@@ -8,6 +8,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 public interface WorkRepository {
 
+    default int expireExhaustedJobs() { return 0; }
+
     Optional<AsyncJob> claimJob(String workerId, Duration leaseDuration);
 
     /** Renews the lease and records a heartbeat while a handler is running. */

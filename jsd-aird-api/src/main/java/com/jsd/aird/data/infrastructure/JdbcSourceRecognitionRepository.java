@@ -218,8 +218,21 @@ public class JdbcSourceRecognitionRepository implements SourceRecognitionReposit
                                String experimentBoundaryId, UUID experimentId, UUID experimentVersionId,
                                String experimentNo, JsonNode sourceCoordinates, JsonNode recognitionSnapshot,
                                List<RecognizedSample> samples, String contentHash, UUID actorId) {
-        var job = jdbc.query(SELECT_JOB + " WHERE organization_id=? AND id=?", this::job,
-                organizationId, recognitionJobId).stream().findFirst().orElseThrow();
+        linkPreparedExperiment(organizationId,recognitionJobId,confirmedSubmissionId,experimentBoundaryId,
+                experimentId,experimentVersionId,experimentNo,prepareExperimentLink(sourceCoordinates,recognitionSnapshot,samples),contentHash,actorId);
+    }
+
+    @Override
+    @Transactional
+    public void linkPreparedExperiment(UUID organizationId, UUID recognitionJobId, UUID confirmedSubmissionId,
+            String experimentBoundaryId, UUID experimentId, UUID experimentVersionId, String experimentNo,
+            PreparedExperimentLink link, String contentHash, UUID actorId) {
+        var samples=link.samples();
+        var serializedSnapshot=preparedJson(link.snapshotJson());
+        record Source(UUID sourceFileId,String sourceSha256) {}
+        var job = jdbc.query("SELECT source_file_id,source_sha256 FROM data.import_job WHERE organization_id=? AND id=?",
+                (rs,n)->new Source(rs.getObject("source_file_id",UUID.class),rs.getString("source_sha256")),
+                organizationId,recognitionJobId).stream().findFirst().orElseThrow();
         var sampleBoundaryIds = samples.stream().map(RecognizedSample::sampleBoundaryId).toList();
         var logicalSampleKeys = samples.stream().map(RecognizedSample::logicalSampleKey).toList();
         var sourceGroupKeys = samples.stream().flatMap(sample -> sample.sourceGroupKeys().stream()).distinct().toList();
@@ -246,7 +259,7 @@ public class JdbcSourceRecognitionRepository implements SourceRecognitionReposit
                 experimentBoundaryId, experimentBoundaryId, experimentBoundaryId,
                 pg(json.valueToTree(sourceGroupKeys)), pg(json.valueToTree(sampleBoundaryIds)),
                 pg(json.valueToTree(logicalSampleKeys)), pg(json.valueToTree(sourceGroupKeys)), contentHash, contentHash,
-                experimentId, experimentVersionId, experimentNo, pg(recognitionSnapshot), actorId);
+                experimentId, experimentVersionId, experimentNo, serializedSnapshot, actorId);
         if (linked != 1) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,
                 "该实验边界已绑定其他实验，不能覆盖已有来源关系");
         for (var sample : samples) {
@@ -260,7 +273,7 @@ public class JdbcSourceRecognitionRepository implements SourceRecognitionReposit
                     """, organizationId, experimentId, experimentVersionId, recognitionJobId, confirmedSubmissionId,
                     experimentBoundaryId, sample.sampleBoundaryId(), sample.logicalSampleKey(),
                     pg(json.valueToTree(sample.sourceGroupKeys())), job.sourceFileId(), job.sourceSha256(),
-                    pg(sample.sourceCoordinates()), pg(recognitionSnapshot), sample.contentHash(), actorId);
+                    pg(sample.sourceCoordinates()), serializedSnapshot, sample.contentHash(), actorId);
         }
     }
 
@@ -339,4 +352,8 @@ public class JdbcSourceRecognitionRepository implements SourceRecognitionReposit
                 recognition_profile_id,source_sequence,finalized_at,error_message,created_at,updated_at
             FROM data.import_job
             """;
+    private static PGobject preparedJson(String value) {
+        try { var object=new PGobject(); object.setType("jsonb"); object.setValue(value); return object; }
+        catch(java.sql.SQLException e) { throw new IllegalArgumentException(e); }
+    }
 }

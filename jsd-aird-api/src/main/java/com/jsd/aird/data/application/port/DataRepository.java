@@ -107,9 +107,29 @@ public interface DataRepository {
 
     List<Sheet> listSheets(UUID organizationId, UUID importJobId);
 
+    default List<Sheet> listSheetSummaries(UUID organizationId, UUID importJobId) {
+        return listSheets(organizationId, importJobId).stream().map(s -> new Sheet(s.id(), s.sheetId(),
+                s.sheetName(), s.sheetOrder(), s.selected(), s.headerRows(), s.dataStartRow(), s.dataEndRow(),
+                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode(), s.confirmationStatus())).toList();
+    }
+
     List<Mapping> listMappings(UUID organizationId, UUID importJobId);
 
     List<Row> listRows(UUID organizationId, UUID importJobId);
+
+    /** A prepared workbook already contains the original values; only staged overrides need replay. */
+    default boolean hasRowOverrides(UUID organizationId, UUID importJobId) {
+        return listRows(organizationId,importJobId).stream().anyMatch(row -> row.excluded()
+                || row.correctedValues().findValues("correctedValue").size() > 0);
+    }
+
+    default List<Row> listRowsForSheet(UUID organizationId, UUID importJobId, String sheetId) {
+        return listRows(organizationId,importJobId).stream().filter(row -> sheetId == null || sheetId.equals(row.sheetId())).toList();
+    }
+    default List<Mapping> listMappingsForSheet(UUID organizationId, UUID importJobId, String sheetId) {
+        return listMappings(organizationId,importJobId).stream().filter(mapping -> sheetId == null || sheetId.equals(mapping.sheetId())).toList();
+    }
+
 
     default void forEachRow(UUID organizationId,UUID importJobId,java.util.function.Consumer<Row> consumer) {
         listRows(organizationId,importJobId).forEach(consumer);

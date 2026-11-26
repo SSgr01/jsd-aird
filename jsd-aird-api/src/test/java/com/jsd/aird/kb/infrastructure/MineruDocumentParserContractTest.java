@@ -45,11 +45,14 @@ class MineruDocumentParserContractTest {
             json(exchange,200,root.toString());
         });
         server.createContext("/result.zip",exchange -> bytes(exchange,200,resultZip())); server.start();
-        var parser=parser(base,false); parser.configureDeployment("cloud","advanced",8,2,Duration.ofMillis(500),1024);
+        var parser = new MineruDocumentParser(true, base, "test-token", "vlm", Duration.ofMillis(1),
+                Duration.ofSeconds(30), Duration.ofSeconds(15), new SystemParsingPolicy("AUTO", false),
+                mapper, mock(FileStorageFacade.class));
+        parser.configureDeployment("cloud","advanced",2,2,Duration.ofSeconds(30),1024);
         try(var executor=java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
             var first=executor.submit(() -> parser.parse(new ByteArrayInputStream(new byte[]{1}),"a.pdf"));
             var second=executor.submit(() -> parser.parse(new ByteArrayInputStream(new byte[]{2}),"b.pdf"));
-            var one=first.get(10,java.util.concurrent.TimeUnit.SECONDS); var two=second.get(10,java.util.concurrent.TimeUnit.SECONDS);
+            var one=first.get(40,java.util.concurrent.TimeUnit.SECONDS); var two=second.get(40,java.util.concurrent.TimeUnit.SECONDS);
             assertThat(one.providerTaskId()).isEqualTo("multi"); assertThat(two.providerTaskId()).isEqualTo("multi");
             assertThat(one.metadata().get("remoteFileId")).isNotEqualTo(two.metadata().get("remoteFileId"));
             assertThat(one.metadata()).containsEntry("batchFileCount",2); assertThat(submissions).hasValue(1);

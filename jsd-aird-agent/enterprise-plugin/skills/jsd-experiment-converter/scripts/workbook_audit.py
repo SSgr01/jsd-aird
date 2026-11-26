@@ -138,13 +138,17 @@ def main():
         if len(ids) < args.min_groups:
             failures.append(f'{ws.title}: only {len(ids)} labeled groups; expected at least {args.min_groups}')
         if len(set(value for _, value in ids)) != len(ids):
-            failures.append(f'{ws.title}: repeated group identifiers within one output sheet')
+            warnings.append(f'{ws.title}: repeated sample/plan names; compare original group columns and conditions (names are not unique experiment IDs)')
 
         # Check that formulas cover every used group and include *all* recipe rows.
         for col, group_id in ids:
             letter = get_column_letter(col)
             formula = ws.cell(total, col).value
-            if ws.cell(total, col).data_type != 'f' or not isinstance(formula, str):
+            if item['recipe_rows'] == 0 and formula in (None, ''):
+                # A source test without a recipe has no charge total to compute.
+                # An empty total is valid; populated recipes still require SUM.
+                pass
+            elif ws.cell(total, col).data_type != 'f' or not isinstance(formula, str):
                 failures.append(f'{ws.title}:{letter}{total}: missing formula for group {group_id}')
             else:
                 item['formula_count'] += 1
@@ -162,7 +166,7 @@ def main():
                 failures.append(f'{ws.title}:{letter}10: missing curing-method dropdown validation')
 
             cached = output_cached_wb[ws.title].cell(total, col).value
-            if cached is None:
+            if cached is None and item['recipe_rows'] > 0:
                 warnings.append(f'{ws.title}:{letter}{total}: formula has no cached result; importer must recalculate')
 
         # Check static identity/format details at coordinates unchanged by recipe insertion.
@@ -173,8 +177,13 @@ def main():
             if a.font.name != b.font.name or a.number_format != b.number_format:
                 failures.append(f'{ws.title}:{address}: static template cell style changed')
 
-        if ws.freeze_panes != template.freeze_panes:
-            failures.append(f'{ws.title}: freeze panes changed')
+        actual_pane, template_pane = ws.sheet_view.pane, template.sheet_view.pane
+        # topLeftCell is the scroll origin of the unfrozen pane. It can move
+        # after inserted recipe rows without changing the frozen boundary.
+        def frozen_boundary(pane):
+            return None if pane is None else (pane.xSplit, pane.ySplit, pane.state)
+        if frozen_boundary(actual_pane) != frozen_boundary(template_pane):
+            failures.append(f'{ws.title}: frozen row/column boundary changed')
         if len(ws.merged_cells.ranges) < len(template.merged_cells.ranges):
             failures.append(f'{ws.title}: fewer merged ranges than template')
         if not print_covers(ws, max([col for col, _ in ids], default=3), ws.max_row):

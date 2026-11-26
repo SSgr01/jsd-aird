@@ -12,6 +12,12 @@ public interface OpsAsyncFacade {
         if(context!=null && context.cancelled())throw new com.jsd.aird.shared.error.ApiException(com.jsd.aird.shared.error.ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
     }
 
+    /** Cheap preflight only; callers must fence business writes with requireExecution before commit. */
+    default void checkExecution(AsyncJobHandler.ExecutionContext context, boolean terminal) {
+        if (context != null && context.cancelled()) throw new com.jsd.aird.shared.error.ApiException(
+                com.jsd.aird.shared.error.ApiErrorCode.OPTIMISTIC_LOCK_CONFLICT);
+    }
+
     UUID enqueue(UUID organizationId, String jobType, JsonNode payload, String idempotencyKey, int priority);
 
     default UUID enqueueAt(UUID organizationId, String jobType, JsonNode payload, String idempotencyKey,

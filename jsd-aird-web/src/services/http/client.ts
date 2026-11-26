@@ -29,14 +29,9 @@ export const httpClient = axios.create({
   },
 });
 
-/**
- * Requests whose payload scales with file size (upload/download of original
- * documents, published structured content, review snapshots) cannot share the
- * 15s interactive timeout: a knowledge file may be hundreds of megabytes, so
- * the transfer legitimately takes minutes. 0 disables the axios timeout — a
- * dropped connection still rejects the promise.
- */
-export const LARGE_PAYLOAD_TIMEOUT = 0;
+/** Bounded large transfers: reads 60s, business writes 120s. */
+export const LARGE_PAYLOAD_TIMEOUT = 60_000;
+export const LARGE_WRITE_TIMEOUT = 120_000;
 
 let csrfRefresh: Promise<unknown> | null = null;
 let csrfToken: string | null = null;
@@ -52,6 +47,7 @@ httpClient.interceptors.request.use(async (config) => {
   config.headers.set('X-Request-Id', generateUUID());
   const method = (config.method || 'get').toLowerCase();
   const isUnsafe = ['post', 'put', 'patch', 'delete'].includes(method);
+  if (isUnsafe && config.timeout === LARGE_PAYLOAD_TIMEOUT) config.timeout = LARGE_WRITE_TIMEOUT;
   if (isUnsafe) invalidateInflightReads();
   const isCsrfRequest = config.url?.endsWith('/api/v1/auth/csrf') ?? false;
   const hasExplicitCsrf = Boolean(config.headers.get('X-XSRF-TOKEN'));
@@ -80,6 +76,11 @@ httpClient.interceptors.response.use(
     if (axios.isCancel(error)) throw error;
     if (axios.isAxiosError<ApiErrorResponse>(error)) {
       const response = error.response;
+      // Large workbook reads decode successful JSON in a worker. Error envelopes
+      // remain small and still need the normal auth/conflict handling here.
+      if (response && typeof response.data === 'string') {
+        try { response.data = JSON.parse(response.data) as ApiErrorResponse; } catch { /* Non-JSON transport error. */ }
+      }
       const requestConfig = (response?.config || error.config) as RetriableRequestConfig | undefined;
       const isLoginRequest = response?.config.url?.endsWith('/api/v1/auth/login') ?? false;
       const isCurrentPasswordMismatch = response?.config.url?.endsWith('/api/v1/auth/password/change')

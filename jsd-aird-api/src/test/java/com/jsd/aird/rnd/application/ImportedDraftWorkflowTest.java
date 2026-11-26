@@ -51,6 +51,7 @@ class ImportedDraftWorkflowTest {
         when(templates.getVersion(organization,template)).thenReturn(new TemplateDataImportFacade.DataTemplateDefinition(
                 template,template,"EXP_SYNTHESIS_UNIFIED","合成",null,1,"XLSX",pack.path("schema"),pack.path("mapping"),List.of()));
         when(templates.getBindings(organization,template)).thenReturn(List.of());
+        org.mockito.Mockito.doCallRealMethod().when(repository).createPrepared(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any());
         when(repository.create(any())).thenAnswer(call->{
             var c=call.<ExperimentRepository.Create>getArgument(0);
             stored=new Detail(new Summary(c.id(),"EXP-TEST",c.title(),null,null,"EXCEL_IMPORT",ExperimentStatus.DRAFT,

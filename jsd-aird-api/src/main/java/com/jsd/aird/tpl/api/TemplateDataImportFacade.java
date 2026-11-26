@@ -52,9 +52,12 @@ public interface TemplateDataImportFacade {
     default ImportExecution prepareImport(UUID organizationId, UUID templateVersionId, UUID fileId) {
         return new ImportExecution(getVersion(organizationId,templateVersionId),getBindings(organizationId,templateVersionId),parse(organizationId,templateVersionId,fileId));
     }
-    record ImportExecution(DataTemplateDefinition definition,List<ImportBinding> bindings,ParsedTabularFile parsed,JsonNode issues) {
+    record ImportExecution(DataTemplateDefinition definition,List<ImportBinding> bindings,ParsedTabularFile parsed,JsonNode issues,JsonNode preparedSnapshot) {
         public ImportExecution(DataTemplateDefinition definition,List<ImportBinding> bindings,ParsedTabularFile parsed) {
-            this(definition,bindings,parsed,null);
+            this(definition,bindings,parsed,null,null);
+        }
+        public ImportExecution(DataTemplateDefinition definition,List<ImportBinding> bindings,ParsedTabularFile parsed,JsonNode issues) {
+            this(definition,bindings,parsed,issues,null);
         }
     }
 
@@ -71,6 +74,9 @@ public interface TemplateDataImportFacade {
     default ImportExecution describePreparedWorkbook(UUID organizationId, UUID templateVersionId, JsonNode snapshot, JsonNode instance) {
         return prepareWorkbookReview(organizationId, templateVersionId, snapshot, instance);
     }
+
+    /** Refresh reusable field decisions for display; does not compile or extract staged rows. */
+    default void refreshPreparedWorkbookReviews(UUID organizationId, UUID templateVersionId, JsonNode snapshot) { }
 
     FieldRequest requestField(UUID organizationId, UUID templateVersionId, FieldRequestCommand command);
 

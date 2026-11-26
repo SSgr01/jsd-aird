@@ -85,7 +85,8 @@ public class ExperimentDraftApplicationFacade implements ExperimentDraftFacade {
                     .put("dataHash",canonicalizer.hash(com.jsd.aird.shared.excel.WorkbookReviewContent.workbook(json,editModel.path("documentSnapshot"))));
         }
         ExperimentSourceType.fromNullable(command.sourceType());
-        return new PreparedImportedDraft(id, versionId, command, editModel);
+        return new PreparedImportedDraft(id, versionId, command, editModel,
+                command.templateSnapshot()==null?"{}":command.templateSnapshot().toString(),editModel.toString());
     }
 
     @Override
@@ -97,14 +98,14 @@ public class ExperimentDraftApplicationFacade implements ExperimentDraftFacade {
         var versionId = prepared.versionId();
         var editModel = prepared.editModel();
         var sourceType = ExperimentSourceType.fromNullable(command.sourceType()).name();
-        var result = repository.create(new ExperimentRepository.Create(
+        var result = repository.createPrepared(new ExperimentRepository.Create(
                 id, command.organizationId(), null, command.title().strip(), category == null ? null : category.id(), category == null ? null : category.name(),
                 sourceType, ExperimentStatus.DRAFT, command.projectId(), command.stageId(), command.taskId(),
                 null, blankToNull(command.ownerName()), command.experimentDate(), versionId,
                 command.templateVersionId(), blankToNull(command.templateSnapshotHash()),
                 command.templateSnapshot() == null ? json.createObjectNode() : command.templateSnapshot(),
                 editModel, command.actorId(), blankToNull(command.actorName())
-        ));
+        ),prepared.templateJson(),prepared.modelJson());
         return new ImportedDraft(result.id(), versionId, result.experimentNo(), result.title());
     }
 

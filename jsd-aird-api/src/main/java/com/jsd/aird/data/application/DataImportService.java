@@ -58,6 +58,8 @@ public class DataImportService {
     @Autowired
     public void setAuthorization(AuthorizationService authorization) { this.authorization = authorization; }
     private final ExperimentDocumentDataParser documentParser;
+    private PreparedImportWorkbooks preparedWorkbooks;
+    @Autowired public void setPreparedWorkbooks(PreparedImportWorkbooks preparedWorkbooks) { this.preparedWorkbooks=preparedWorkbooks; }
     private DataReviewGuard reviewGuard;
     @Autowired
     public void setReviewGuard(DataReviewGuard reviewGuard) { this.reviewGuard = reviewGuard; }
@@ -433,13 +435,21 @@ public class DataImportService {
     public DataRepository.Job saveWorkbookDraft(UUID id,String revision,JsonNode source,JsonNode provided,JsonNode operations) {
         var actor=ActorContext.required();
         var job=requireJob(actor.organizationId(),id);
-        com.jsd.aird.shared.json.RevisionToken.require(revision, job.getRevision());
         if(!Set.of("WAITING_MAPPING","WAITING_CONFIRM","COMPLETED").contains(job.status())||!Set.of("XLSX","XLS","CSV").contains(job.sourceFormat()))throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"当前导入任务不能修改工作簿结构");
         if(source==null||!source.path("sheets").isObject())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"工作簿草稿无效");
         var snapshot=source.deepCopy();
         if(snapshot instanceof ObjectNode object)object.remove("importConfirmation");
         var instance=com.jsd.aird.shared.excel.WorkbookStructure.validate(objectMapper,snapshot,provided);
         if(operations!=null&&!operations.isArray())throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"结构操作记录无效");
+        if (!java.util.Objects.equals(revision, job.getRevision())) {
+            // A lost response may be retried with the old revision. Acknowledge
+            // only an exact persisted request; never overwrite another edit.
+            var saved=repository.findWorkbookDraft(actor.organizationId(),id).orElse(null);
+            var requestedOperations=operations==null?objectMapper.createArrayNode():operations;
+            if(saved!=null && snapshot.equals(saved.snapshot()) && instance.equals(saved.instance())
+                    && requestedOperations.equals(saved.operations())) return job;
+            com.jsd.aird.shared.json.RevisionToken.require(revision, job.getRevision());
+        }
         // Exporting and parsing can involve an isolated Office process. Keep it
         // outside the write transaction; recheck the revision under lock before
         // atomically replacing the draft and its extracted data.
@@ -755,6 +765,9 @@ public class DataImportService {
                 throw new ApiException(ApiErrorCode.VALIDATION_ERROR,
                         "文件中没有可导入的实验数据；请填写本次实验数据后重传，或使用在线新建");
             }
+            // Persist outside the write transaction, with precisely the parser/template identity of these rows.
+            if (preparedWorkbooks != null && workbookDraft == null && labExecution != null && labExecution.preparedSnapshot() != null)
+                preparedWorkbooks.save(organizationId, job, parsed.parserVersion(), labExecution.preparedSnapshot());
             return new ParsedImportPlan(definition,parsed.parserVersion(),sheets,mappings,restoreCorrections(rows,previousRows),
                     documentSource?"COMPATIBLE":compatibility.status(),compatibilityReport,documentSource);
     }
@@ -1053,6 +1066,18 @@ public class DataImportService {
         return mapping.detail() == null ? "" : mapping.detail().path("componentId").asText("");
     }
 
+    public Preview previewSummary(UUID importJobId) {
+        var actor = ActorContext.required();
+        var job = requireJob(actor.organizationId(), importJobId);
+        // Never fetch the staged execution contract or physical cell grids for status polling.
+        return new Preview(job, repository.listSheetSummaries(actor.organizationId(), importJobId),
+                List.of(), List.of(), repository.listIssues(actor.organizationId(), importJobId),
+                new TemplateContract(job.importContractVersion() == null ? 0 : job.importContractVersion(),
+                        0, job.contractHash(), null, List.of(), List.of()),
+                new ProjectionSummary(null, "NOT_COMMITTED", 0, 0, 0),
+                objectMapper.createObjectNode().put("status", job.compatibilityStatus()), List.of());
+    }
+
     public Preview preview(UUID importJobId) {
         var actor = ActorContext.required();
         var job = requireJob(actor.organizationId(), importJobId);
@@ -1208,12 +1233,27 @@ public class DataImportService {
     }
 
     @Transactional
+    public DataRepository.Job commitAtRevision(UUID importJobId,String revision) {
+        var actor=ActorContext.required();
+        if(revision!=null) {
+            var current=repository.findJobForUpdate(actor.organizationId(),importJobId)
+                    .orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"导入任务不存在"));
+            com.jsd.aird.shared.json.RevisionToken.require(revision,current.getRevision());
+        }
+        commit(importJobId);
+        return requireJob(actor.organizationId(),importJobId);
+    }
+
+    @Transactional
     public void commit(UUID importJobId) {
         var actor = ActorContext.required();
         assertNotFreeform(actor.organizationId(), importJobId);
         var lockedJob = repository.findJobForUpdate(actor.organizationId(), importJobId)
                 .orElseThrow(() -> new ApiException(ApiErrorCode.NOT_FOUND, "导入任务不存在"));
-        if ("COMPLETED".equals(lockedJob.status())) return;
+        if ("COMPLETED".equals(lockedJob.status())) {
+            enqueueExperimentPreparation(lockedJob);
+            return;
+        }
         // Revalidate older drafts whose empty required values were persisted as blockers.
         var legacyRequired = repository.listIssues(actor.organizationId(), importJobId).stream()
                 .anyMatch(item -> "REQUIRED_MISSING".equals(item.issueType()) && "BLOCKER".equals(item.severity()));
@@ -1273,6 +1313,22 @@ public class DataImportService {
         }).toList();
         var result = repository.commit(actor.organizationId(), importJobId, actor.userId(), committed);
         appendCommitAuditAndOutbox(actor.organizationId(), actor.userId(), job, result);
+        if ("EXPERIMENT_DRAFT".equals(job.importPurpose()))
+            enqueueExperimentPreparation(requireJob(actor.organizationId(), importJobId));
+    }
+
+    private void enqueueExperimentPreparation(DataRepository.Job job) {
+        if (!"EXPERIMENT_DRAFT".equals(job.importPurpose())) return;
+        var actor=ActorContext.required();
+        var prefix="data-experiment-prepare:"+job.id()+":"+job.getRevision();
+        var previous=opsAsync.findLatestJob(actor.organizationId(),prefix).orElse(null);
+        if(previous!=null && !Set.of("FAILED","CANCELLED").contains(previous.status())) return;
+        var key=previous==null?prefix:prefix+":r:"+previous.id().toString().replace("-","");
+        var payload=objectMapper.createObjectNode().put("phase","PREPARE")
+                .put("organizationId",actor.organizationId().toString()).put("actorId",actor.userId().toString())
+                .put("actorName",actor.username()).put("importJobId",job.id().toString())
+                .put("reviewedRevision",job.getRevision());
+        opsAsync.enqueue(actor.organizationId(),"DATA_TO_EXPERIMENT_SYNC",payload,key,40);
     }
 
     private void appendCommitAuditAndOutbox(UUID organizationId, UUID actorId, DataRepository.Job job,

@@ -31,6 +31,7 @@ class ImportedDraftReviewTest {
                 .put("dataHash",new JsonCanonicalizer(json).hash(WorkbookReviewContent.workbook(json,model.path("documentSnapshot"))));
     }
     ObjectNode create(ObjectNode model,ObjectNode proof) {
+        org.mockito.Mockito.doCallRealMethod().when(repository).createPrepared(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any());
         when(repository.create(any())).thenReturn(mock(Summary.class));
         service.createImportedDraft(new ExperimentDraftFacade.ImportedDraftCommand(UUID.randomUUID(),UUID.randomUUID(),"tester",
                 "实验",null,"EXCEL_IMPORT",null,null,null,"tester",null,UUID.randomUUID(),null,json.createObjectNode(),model,proof));

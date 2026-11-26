@@ -101,7 +101,7 @@ const route = {
         { path: '/research-test/upload', name: '报告上传', icon: <UploadOutlined /> },
         { path: '/research-test/reports', name: '报告查看', icon: <EyeOutlined /> },
         { path: '/research-test/standard-upload', name: '测试标准上传', icon: <UploadOutlined /> },
-        { path: '/research-test/standards', name: '测试标准方法', icon: <FileTextOutlined /> },
+        { path: '/research-test/standards', name: '测试标准查看', icon: <FileTextOutlined /> },
       ],
     },
     {

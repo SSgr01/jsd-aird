@@ -391,14 +391,26 @@ class PermissionRouteFilterTest {
                 .isEqualTo("project.list.create");
         assertThat(PermissionRouteFilter.projectPageOperation("POST", project + "/stages"))
                 .isEqualTo("project.stage.create");
+        assertThat(PermissionRouteFilter.projectPageOperation("GET", project + "/communications"))
+                .isEqualTo("project.communication.view");
+        assertThat(PermissionRouteFilter.projectPageOperation("POST", project + "/communications"))
+                .isEqualTo("project.communication.create");
+        assertThat(PermissionRouteFilter.projectPageOperation("PUT", project + "/communications/00000000-0000-0000-0000-000000000002"))
+                .isEqualTo("project.communication.update");
+        assertThat(PermissionRouteFilter.projectPageOperation("DELETE", project + "/communications/00000000-0000-0000-0000-000000000002"))
+                .isEqualTo("project.communication.delete");
+        assertThat(code("GET", project + "/communications")).isEqualTo("project.communication.view");
+        assertThat(code("POST", project + "/communications")).isEqualTo("project.communication.create");
+        assertThat(code("PUT", project + "/communications/00000000-0000-0000-0000-000000000002"))
+                .isEqualTo("project.communication.update");
+        assertThat(code("DELETE", project + "/communications/00000000-0000-0000-0000-000000000002"))
+                .isEqualTo("project.communication.delete");
         assertThat(PermissionRouteFilter.projectPageOperation("PUT", project + "/stages/reorder"))
                 .isEqualTo("project.stage.update");
         assertThat(PermissionRouteFilter.projectPageOperation("DELETE", "/api/v1/tasks/00000000-0000-0000-0000-000000000002"))
                 .isEqualTo("project.task.delete");
         assertThat(PermissionRouteFilter.projectPageOperation("POST", project + "/documents/00000000-0000-0000-0000-000000000002/publish"))
                 .isEqualTo("project.document.publish");
-        assertThat(PermissionRouteFilter.projectPageOperation("POST", project + "/meetings/00000000-0000-0000-0000-000000000002/archive-to-kb"))
-                .isEqualTo("project.meeting.publish");
         assertThat(PermissionRouteFilter.projectPageOperation("POST", project + "/experiments"))
                 .isEqualTo("eln.create.create");
         assertThat(PermissionRouteFilter.projectPageOperation("DELETE", project + "/experiments/00000000-0000-0000-0000-000000000002"))
@@ -661,8 +673,6 @@ class PermissionRouteFilterTest {
         assertThat(code("POST", "/api/v1/projects/" + projectId + "/meetings")).isEqualTo("project.create");
         assertThat(code("PUT", "/api/v1/projects/" + projectId + "/meetings/" + meetingId)).isEqualTo("project.update");
         assertThat(code("DELETE", "/api/v1/projects/" + projectId + "/meetings/" + meetingId)).isEqualTo("project.delete");
-        assertThat(code("POST", "/api/v1/projects/" + projectId + "/meetings/" + meetingId + "/archive-to-kb"))
-                .isEqualTo("project.update");
     }
 
     @Test

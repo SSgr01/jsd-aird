@@ -8,6 +8,7 @@ import {
   InfoCircleOutlined,
   LinkOutlined,
   PlusOutlined,
+  MessageOutlined,
   SaveOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
@@ -44,21 +45,25 @@ import { getProjectRequirements } from '@/services/partners/crm-api';
 import './project-detail.css';
 import '@/styles/management-list.css';
 import { MeetingMinutesTab } from './MeetingMinutesTab';
+import { ProjectCommunicationsTab } from './ProjectCommunicationsTab';
 import { ProjectMaterialsTab } from './ProjectMaterialsTab';
 import { ReferenceMaterialsTab } from './ReferenceMaterialsTab';
 import { ProjectStageBoard } from './ProjectStageBoard';
 import { ProjectLogsTab } from './ProjectLogsTab';
+import { useProjectOwnerOptions } from './useProjectOwnerOptions';
 import ProjectDocumentsTab from './ProjectDocumentsTab';
 
 interface InfoFormValues {
   projectCode?: string;
   name: string;
   owner?: string;
+  ownerUserId?: string;
   dates?: [dayjs.Dayjs | null, dayjs.Dayjs | null];
   priority?: Project['priority'];
   status?: Project['status'];
   teamMembers?: string[];
   background?: string;
+  customerRequirements?: string;
   customFields?: { key: string; value: string }[];
 }
 
@@ -67,6 +72,7 @@ export function ProjectDetailPage() {
   const canViewDocuments = usePermission('project.document.view');
   const canViewReferences = usePermission('project.reference.view');
   const canViewMeetings = usePermission('project.meeting.view');
+  const canViewCommunications = usePermission('project.communication.view');
   const canViewLogs = usePermission('project.log.view');
   const canViewMaterials = usePermission('project.materials.view');
   const { id } = useParams();
@@ -81,6 +87,7 @@ export function ProjectDetailPage() {
   const [saving, setSaving] = useState(false);
   const [messageApi, holder] = message.useMessage();
   const [form] = Form.useForm<InfoFormValues>();
+  const ownerCandidates = useProjectOwnerOptions(true);
 
   const loadProject = async (projectId: string) => {
     try {
@@ -133,6 +140,7 @@ export function ProjectDetailPage() {
       projectCode: project.projectCode,
       name: project.name,
       owner: project.owner,
+      ownerUserId: project.ownerUserId,
       dates: project.startDate || project.endDate
         ? [project.startDate ? dayjs(project.startDate) : null, project.endDate ? dayjs(project.endDate) : null]
         : undefined,
@@ -140,6 +148,7 @@ export function ProjectDetailPage() {
       status: project.status,
       teamMembers: members,
       background: project.background,
+      customerRequirements: project.customerRequirements,
       customFields: (project.customFields
         ? Object.entries(project.customFields).map(([key, value]) => ({
             key,
@@ -179,13 +188,15 @@ export function ProjectDetailPage() {
     const input: ProjectInput & { version: number } = {
       projectCode: projectCode || undefined,
       name: values.name.trim(),
-      owner: values.owner?.trim() || undefined,
+      owner: ownerCandidates.users.find((user) => user.id === values.ownerUserId)?.displayName || values.owner?.trim() || undefined,
+      ownerUserId: values.ownerUserId || undefined,
       startDate: values.dates?.[0]?.format('YYYY-MM-DD') || undefined,
       endDate: values.dates?.[1]?.format('YYYY-MM-DD') || undefined,
       priority: values.priority,
       status: values.status,
       teamSize: (values.teamMembers ?? []).length,
       background: values.background?.trim() || undefined,
+      customerRequirements: values.customerRequirements?.trim() || undefined,
       teamMembers: values.teamMembers ?? [],
       customFields: Object.keys(customFields).length ? customFields : undefined,
       version: project.version,
@@ -230,6 +241,7 @@ export function ProjectDetailPage() {
                 status: project.status,
                 teamMembers: members,
                 background: project.background,
+                customerRequirements: project.customerRequirements,
                 customFields: project.customFields
                   ? Object.entries(project.customFields).map(([key, value]) => ({
                       key,
@@ -255,8 +267,16 @@ export function ProjectDetailPage() {
           >
             <Input placeholder="请输入项目名称" />
           </Form.Item>
-          <Form.Item name="owner" label="负责人">
-            <Input placeholder="请输入负责人" maxLength={100} />
+          <Form.Item name="owner" hidden><Input /></Form.Item>
+          <Form.Item name="ownerUserId" label="负责人">
+            <Select allowClear showSearch optionFilterProp="label" placeholder={project?.owner || '请选择负责人'}
+              loading={ownerCandidates.loading}
+              options={[
+                ...(project?.ownerUserId && !ownerCandidates.users.some((user) => user.id === project.ownerUserId)
+                  ? [{ value: project.ownerUserId, label: project.owner || '原负责人', disabled: true }] : []),
+                ...ownerCandidates.users.map((user) => ({ value: user.id, label: `${user.displayName} (${user.username})` })),
+              ]}
+              onChange={(value) => form.setFieldValue('owner', ownerCandidates.users.find((user) => user.id === value)?.displayName)} />
           </Form.Item>
           <Form.Item name="dates" label="项目日期">
             <DatePicker.RangePicker style={{ width: '100%' }} placeholder={['开始日期', '结束日期']} allowEmpty={[true, true]} />
@@ -288,11 +308,14 @@ export function ProjectDetailPage() {
           <Form.Item name="background" label="项目描述" className="pm-form-span-2">
             <Input.TextArea rows={4} placeholder="请输入项目描述" />
           </Form.Item>
+          <Form.Item name="customerRequirements" label="客户需求" className="pm-form-span-2">
+            <Input.TextArea rows={4} placeholder="请输入客户需求" />
+          </Form.Item>
 
           <Form.List name="customFields">
             {(fields, { add, remove }) => (
               <div className="pm-form-span-2">
-                <div className="pm-custom-field-toolbar">
+                <div className="pm-custom-field-toolbar" style={{ justifyContent: 'flex-start', gap: 12 }}>
                   <span>自定义字段</span>
                   <Button type="dashed" size="small" icon={<PlusOutlined />} onClick={() => add({ key: '', value: '' })}>
                     添加字段
@@ -339,6 +362,7 @@ export function ProjectDetailPage() {
     canViewDocuments && { key: 'documents', label: <><FolderOpenOutlined /> 项目文档</>, children: <ProjectDocumentsTab projectId={id ?? project.id} projectCode={project.projectCode} projectName={project.name} /> },
     canViewReferences && { key: 'references', label: <><BookOutlined /> 资料参考</>, children: <ReferenceMaterialsTab projectId={id ?? project.id} /> },
     canViewMeetings && { key: 'meetings', label: <><TeamOutlined /> 会议纪要</>, children: <MeetingMinutesTab projectId={id ?? project.id} /> },
+    canViewCommunications && { key: 'communications', label: <><MessageOutlined /> 沟通记录</>, children: <ProjectCommunicationsTab projectId={id ?? project.id} /> },
     canViewLogs && { key: 'logs', label: <><HistoryOutlined /> 日志</>, children: <ProjectLogsTab projectId={id ?? project.id} /> },
     canViewMaterials && { key: 'assets', label: <><LinkOutlined /> 关联资料</>, children: <ProjectMaterialsTab projectId={id ?? project.id} /> },
   ].filter(Boolean) as { key: string; label: React.ReactNode; children: React.ReactNode }[];

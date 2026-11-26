@@ -9,12 +9,12 @@ import java.util.UUID;
 
 public record ProjectQuery(String keyword, String owner, ProjectPriority priority, ProjectStatus status,
                            LocalDate startDateFrom, LocalDate startDateTo, UUID partnerId, int page, int size,
-                           UUID organizationId, String scopeType, UUID scopeUserId, Set<UUID> scopeTargetIds) {
+                           UUID organizationId, String scopeType, UUID scopeUserId, Set<UUID> scopeTargetIds, boolean mine) {
 
     public ProjectQuery(String keyword, String owner, ProjectPriority priority, ProjectStatus status,
                         LocalDate startDateFrom, LocalDate startDateTo, UUID partnerId, int page, int size) {
         this(keyword, owner, priority, status, startDateFrom, startDateTo, partnerId, page, size,
-                null, "ALL", null, Set.of());
+                null, "ALL", null, Set.of(), false);
     }
 
     public ProjectQuery {
@@ -32,6 +32,10 @@ public record ProjectQuery(String keyword, String owner, ProjectPriority priorit
 
     public ProjectQuery withDataScope(UUID organizationId, String scopeType, UUID scopeUserId, Set<UUID> targetIds) {
         return new ProjectQuery(keyword, owner, priority, status, startDateFrom, startDateTo, partnerId, page, size,
-                organizationId, scopeType, scopeUserId, targetIds);
+                organizationId, scopeType, scopeUserId, targetIds, mine);
+    }
+    public ProjectQuery withMine(boolean value) {
+        return new ProjectQuery(keyword, owner, priority, status, startDateFrom, startDateTo, partnerId,
+            page, size, organizationId, scopeType, scopeUserId, scopeTargetIds, value);
     }
 }

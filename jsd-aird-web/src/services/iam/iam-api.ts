@@ -19,6 +19,7 @@ export interface IamUser {
 export interface IamRole { id: string; code: string; name: string; builtin: boolean; enabled: boolean; policyVersion: number; }
 export interface DepartmentNode { id: string; name: string; parentId: string | null; sortOrder: number; userCount: number; }
 export interface DepartmentUser { id: string; username: string; displayName: string; email?: string; phone?: string; roleId?: string; roleCode: string | null; roleName: string | null; status: string; lastLoginAt?: string; authVersion: number; }
+export interface ProjectOwnerOption { id: string; username: string; displayName: string; departmentName?: string; }
 export interface PermissionDefinition { code: string; module: string; name: string; risk: string; defaultScope: string; }
 export interface PermissionBinding { menuKey?: string; permissionCode: string; effect: 'ALLOW' | 'DENY'; scopeType: string; targetIds: string[]; }
 export interface PermissionLevelBinding { menuKey?: string | null; permissionCode: string; effect: 'ALLOW'; scopeType: string; targetIds: string[]; }
@@ -72,6 +73,7 @@ const responseData = async <T>(request: Promise<{ data: ApiResponse<T> }>) => (a
 export const iamApi = {
   departments: () => responseData<DepartmentNode[]>(httpClient.get('/api/v1/iam/departments')),
   departmentUsers: (id: string) => responseData<DepartmentUser[]>(httpClient.get(`/api/v1/iam/departments/${id}/users`)),
+  projectOwnerOptions: () => responseData<ProjectOwnerOption[]>(httpClient.get('/api/v1/iam/project-owner-options')),
   createDepartment: (payload: { name: string; parentId: string | null; sortOrder: number }) => responseData<DepartmentNode>(httpClient.post('/api/v1/iam/departments', payload)),
   updateDepartment: (id: string, payload: { name: string; parentId: string | null; sortOrder: number }) => responseData<DepartmentNode>(httpClient.patch(`/api/v1/iam/departments/${id}`, payload)),
   deleteDepartment: (id: string) => responseData<void>(httpClient.delete(`/api/v1/iam/departments/${id}`)),

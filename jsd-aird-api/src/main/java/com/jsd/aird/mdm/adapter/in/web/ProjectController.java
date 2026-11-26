@@ -91,10 +91,11 @@ public class ProjectController {
         @Parameter(description = "开始日期止") @RequestParam(required = false)
         @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDateTo,
         @Parameter(description = "按所属客户（公司）ID 过滤") @RequestParam(required = false) UUID partnerId,
+        @RequestParam(defaultValue = "false") boolean mine,
         @Parameter(description = "页码，从 1 开始") @RequestParam(defaultValue = "1") int page,
         @Parameter(description = "每页条数") @RequestParam(defaultValue = "10") int size) {
 
-        var query = new ProjectQuery(keyword, owner, priority, status, startDateFrom, startDateTo, partnerId, page, size);
+        var query = new ProjectQuery(keyword, owner, priority, status, startDateFrom, startDateTo, partnerId, page, size).withMine(mine);
         var items = service.search(query).stream().map(ProjectResponse::from).toList();
         var total = service.count(query);
         var totalPages = query.size() == 0 ? 0 : (total + query.size() - 1) / query.size();
@@ -271,15 +272,16 @@ public class ProjectController {
     public record SaveProjectRequest(@Size(max = 64) String projectCode,
                                      @NotBlank @Size(max = 300) String name,
                                      UUID partnerId, @Size(max = 300) String partnerName,
-                                     @Size(max = 100) String owner,
+                                     @Size(max = 100) String owner, UUID ownerUserId,
                                      LocalDate startDate, LocalDate endDate,
                                      ProjectPriority priority, ProjectStatus status,
                                      @PositiveOrZero Integer teamSize,
-                                     String background, JsonNode customFields, JsonNode teamMembers,
+                                     String background, String customerRequirements, JsonNode customFields, JsonNode teamMembers,
                                      @PositiveOrZero Long version) {
         ProjectCommands.SaveProject toCommand() {
             return new ProjectCommands.SaveProject(projectCode, name, partnerId, partnerName, owner,
-                startDate, endDate, priority, status, teamSize, background, customFields, teamMembers, version);
+                startDate, endDate, priority, status, teamSize, background, customFields, teamMembers, version,
+                ownerUserId, customerRequirements);
         }
     }
 
@@ -301,16 +303,16 @@ public class ProjectController {
     }
 
     public record ProjectResponse(UUID id, String projectCode, String name, UUID partnerId, String partnerName,
-                                  String owner, LocalDate startDate, LocalDate endDate, ProjectPriority priority,
-                                  ProjectStatus status, int teamSize, String background, JsonNode customFields,
+                                  String owner, UUID ownerUserId, LocalDate startDate, LocalDate endDate, ProjectPriority priority,
+                                  ProjectStatus status, int teamSize, String background, String customerRequirements, JsonNode customFields,
                                   JsonNode teamMembers, long version) {
         public List<String> getAllowedActions() {
             return AllowedActions.project(status == null ? null : status.name());
         }
         static ProjectResponse from(Project p) {
             return new ProjectResponse(p.id(), p.projectCode(), p.name(), p.partnerId(), p.partnerName(),
-                p.owner(), p.startDate(), p.endDate(), p.priority(), p.status(), p.teamSize(),
-                p.background(), p.customFields(), p.teamMembers(), p.version());
+                p.owner(), p.ownerUserId(), p.startDate(), p.endDate(), p.priority(), p.status(), p.teamSize(),
+                p.background(), p.customerRequirements(), p.customFields(), p.teamMembers(), p.version());
         }
     }
 }

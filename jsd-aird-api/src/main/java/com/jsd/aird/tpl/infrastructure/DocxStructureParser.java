@@ -1678,6 +1678,7 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
             source.put("layout", "fixed".equalsIgnoreCase(attribute(firstElement(firstElement(table, "tblPr"), "tblLayout"), "type")) ? 1 : 0);
             var tableProperties = firstElement(table, "tblPr");
             var tableBorders = firstElement(tableProperties, "tblBorders");
+            var verticalMergeRoots = new HashMap<Integer, ObjectNode>();
             for (var rowIndex = 0; rowIndex < directRows.size(); rowIndex++) {
                 var row = directRows.get(rowIndex);
                 stream.append(TABLE_ROW_START);
@@ -1707,10 +1708,18 @@ public class DocxStructureParser implements OfficeStructureParser, WordDocumentP
                     var columnSpan = gridSpan == null
                             ? 1
                             : Math.max(1, parseInt(attribute(gridSpan, "val"), 1));
+                    var firstColumn = occupiedColumns;
                     occupiedColumns += columnSpan;
                     if (columnSpan > 1) cellNode.put("columnSpan", columnSpan);
-                    if (vMerge != null && (attribute(vMerge, "val").isBlank() || "continue".equalsIgnoreCase(attribute(vMerge, "val")))) {
+                    var continuesMerge = vMerge != null && (attribute(vMerge, "val").isBlank()
+                            || "continue".equalsIgnoreCase(attribute(vMerge, "val")));
+                    if (continuesMerge) {
                         cellNode.put("rowSpan", 0).put("columnSpan", 0);
+                        var root = verticalMergeRoots.get(firstColumn);
+                        if (root != null) root.put("rowSpan", root.path("rowSpan").asInt(1) + 1);
+                    } else {
+                        for (var column = firstColumn; column < occupiedColumns; column++) verticalMergeRoots.remove(column);
+                        if (vMerge != null) verticalMergeRoots.put(firstColumn, cellNode);
                     }
                     var cellWidth = firstElement(tcPr, "tcW");
                     if (cellWidth != null) {

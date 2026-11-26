@@ -6,12 +6,12 @@ import { UniverDocsEditor } from './UniverDocsEditor';
 
 const sdk = vi.hoisted(() => {
   const raw = { id: 'doc', body: { dataStream: 'before\r\n', customRanges: [{ rangeId: 'marker', startIndex: 0, endIndex: 5 }] } };
-  return { raw, save: vi.fn(() => raw), rawRead: vi.fn(() => raw), create: vi.fn(), emit: (_command: { id: string; type?: number; params?: object }, _options?: { fromChangeset?: boolean }) => { void _command; void _options; } };
+  return { raw, save: vi.fn(() => raw), rawRead: vi.fn(() => raw), create: vi.fn(), setShowComponents: vi.fn(), emit: (_command: { id: string; type?: number; params?: object }, _options?: { fromChangeset?: boolean }) => { void _command; void _options; } };
 });
 vi.mock('@univerjs/presets', () => ({
   ICommandService: 'commands', IUniverInstanceService: 'instances', DocumentFlavor: { MODERN: 0 }, LocaleType: { ZH_CN: 'zhCN' }, mergeLocales: () => ({}),
   createUniver: () => ({
-    univer: { __getInjector: () => ({ get: (key: string) => key === 'commands' ? { onCommandExecuted: (callback: typeof sdk.emit) => { sdk.emit = callback; return { dispose: vi.fn() }; } } : { getUnit: () => ({ getSnapshot: sdk.rawRead }) } }), dispose: vi.fn() },
+    univer: { __getInjector: () => ({ get: (key: string) => key === 'commands' ? { onCommandExecuted: (callback: typeof sdk.emit) => { sdk.emit = callback; return { dispose: vi.fn() }; } } : { getUnit: () => ({ getSnapshot: sdk.rawRead }), setShowComponents: sdk.setShowComponents } }), dispose: vi.fn() },
     univerAPI: { getActiveDocument: () => ({ save: sdk.save }), createDocument: (snapshot: unknown) => { sdk.create(snapshot); return { getId: () => 'doc', save: sdk.save, setSelection: vi.fn(), getPermission: () => ({ setReadOnly: vi.fn() }) }; } },
   }),
 }));
@@ -35,6 +35,7 @@ describe('Word change delivery uses raw body rather than exporting images', () =
     sdk.raw.body.dataStream = 'latest saved content\r\n';
     view.rerender(<UniverDocsEditor ref={ref} snapshot={source} editable={false} onDirty={dirty} />);
     await waitFor(() => expect(sdk.create).toHaveBeenCalledTimes(2));
+    expect(sdk.setShowComponents).toHaveBeenCalledWith(false);
     const restored = sdk.create.mock.calls[1]?.[0] as { body: { dataStream: string } } | undefined;
     expect(restored?.body.dataStream).toBe('latest saved content\r\n');
     expect(dirty).not.toHaveBeenCalled();

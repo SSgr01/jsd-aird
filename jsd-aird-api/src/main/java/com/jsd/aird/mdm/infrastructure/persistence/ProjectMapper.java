@@ -15,7 +15,8 @@ public interface ProjectMapper {
     String SELECT_COLUMNS = "SELECT p.id, p.project_code projectCode, p.name, p.partner_id partnerId, " +
         "p.partner_name partnerName, p.owner, p.start_date startDate, p.end_date endDate, p.priority, p.status, " +
         "p.team_size teamSize, p.background, p.custom_fields::text customFields, p.team_members::text teamMembers, p.version, " +
-        "p.created_at createdAt, p.updated_at updatedAt FROM mdm.project p ";
+        "p.created_at createdAt, p.updated_at updatedAt, p.owner_user_id ownerUserId, " +
+        "p.customer_requirements customerRequirements FROM mdm.project p ";
 
     String SCOPE_FILTER = "<choose>" +
         "<when test='scopeType == &quot;ALL&quot; or scopeType == &quot;ORG&quot;'></when>" +
@@ -29,7 +30,8 @@ public interface ProjectMapper {
     // 日期筛选的是“开始日期”区间（与项目列表页的 开始日期 列、开始日期起/止 参数一致），
     // 两个边界都必须落在 start_date 上。此前下界误用 end_date 匹配，未填写结束日期（end_date 为 null）
     // 的项目会被整体过滤掉，表现为按日期查询时列表为空。
-    String FILTERS = "<if test='organizationId != null'> AND p.organization_id = #{organizationId}</if>" + SCOPE_FILTER +
+    String FILTERS = "<if test='organizationId != null'> AND p.organization_id = #{organizationId}</if>" +
+        "<choose><when test='mine'> AND p.owner_user_id = #{scopeUserId}</when><otherwise>" + SCOPE_FILTER + "</otherwise></choose>" +
         "<if test='keyword != null'> AND (p.name ILIKE concat('%',#{keyword},'%') " +
         "OR p.project_code ILIKE concat('%',#{keyword},'%') OR p.partner_name ILIKE concat('%',#{keyword},'%') " +
         "OR p.owner ILIKE concat('%',#{keyword},'%'))</if>" +
@@ -48,7 +50,8 @@ public interface ProjectMapper {
                               @Param("startDateFrom") LocalDate startDateFrom, @Param("startDateTo") LocalDate startDateTo,
                               @Param("offset") int offset, @Param("size") int size,
                               @Param("scopeType") String scopeType,
-                              @Param("scopeUserId") UUID scopeUserId, @Param("scopeTargetIds") java.util.Set<UUID> scopeTargetIds);
+                              @Param("scopeUserId") UUID scopeUserId, @Param("scopeTargetIds") java.util.Set<UUID> scopeTargetIds,
+                              @Param("mine") boolean mine);
 
     @Select("<script>SELECT count(*) FROM mdm.project p WHERE p.organization_id = #{organizationId} AND p.deleted = false " + FILTERS + "</script>")
     long count(@Param("organizationId") UUID organizationId, @Param("keyword") String keyword, @Param("owner") String owner,
@@ -56,7 +59,8 @@ public interface ProjectMapper {
                @Param("partnerId") UUID partnerId,
                @Param("startDateFrom") LocalDate startDateFrom, @Param("startDateTo") LocalDate startDateTo,
                @Param("scopeType") String scopeType,
-               @Param("scopeUserId") UUID scopeUserId, @Param("scopeTargetIds") java.util.Set<UUID> scopeTargetIds);
+               @Param("scopeUserId") UUID scopeUserId, @Param("scopeTargetIds") java.util.Set<UUID> scopeTargetIds,
+               @Param("mine") boolean mine);
 
     @Select(SELECT_COLUMNS + "WHERE p.organization_id = #{organizationId} AND p.id = #{id} AND p.deleted = false")
     Optional<ProjectRow> findById(@Param("organizationId") UUID organizationId, @Param("id") UUID id);
@@ -74,31 +78,31 @@ public interface ProjectMapper {
         "WHERE organization_id=#{organizationId} AND project_code LIKE #{prefix} || '%'")
     int maxSequence(@Param("organizationId") UUID organizationId, @Param("prefix") String prefix);
 
-    @Insert("INSERT INTO mdm.project(id,organization_id,project_code,name,partner_id,partner_name,owner,start_date,end_date," +
-        "priority,status,team_size,background,custom_fields,team_members,version,created_at,updated_at,created_by,updated_by) " +
-        "VALUES(#{id},#{organizationId},#{projectCode},#{name},#{partnerId},#{partnerName},#{owner},#{startDate},#{endDate}," +
-        "#{priority},#{status},#{teamSize},#{background},CAST(#{customFields} AS jsonb),CAST(#{teamMembers} AS jsonb),0,#{now},#{now},CAST(#{operator} AS uuid),CAST(#{operator} AS uuid))")
+    @Insert("INSERT INTO mdm.project(id,organization_id,project_code,name,partner_id,partner_name,owner,owner_user_id,start_date,end_date," +
+        "priority,status,team_size,background,custom_fields,team_members,version,created_at,updated_at,created_by,updated_by,customer_requirements) " +
+        "VALUES(#{id},#{organizationId},#{projectCode},#{name},#{partnerId},#{partnerName},#{owner},#{ownerUserId},#{startDate},#{endDate}," +
+        "#{priority},#{status},#{teamSize},#{background},CAST(#{customFields} AS jsonb),CAST(#{teamMembers} AS jsonb),0,#{now},#{now},CAST(#{operator} AS uuid),CAST(#{operator} AS uuid),#{customerRequirements})")
     void insert(@Param("id") UUID id, @Param("organizationId") UUID organizationId,
                 @Param("projectCode") String projectCode, @Param("name") String name,
                 @Param("partnerId") UUID partnerId, @Param("partnerName") String partnerName,
-                @Param("owner") String owner, @Param("startDate") LocalDate startDate, @Param("endDate") LocalDate endDate,
+                @Param("owner") String owner, @Param("ownerUserId") UUID ownerUserId, @Param("startDate") LocalDate startDate, @Param("endDate") LocalDate endDate,
                 @Param("priority") String priority, @Param("status") String status, @Param("teamSize") int teamSize,
                 @Param("background") String background, @Param("customFields") String customFields,
-                @Param("teamMembers") String teamMembers,
+                @Param("teamMembers") String teamMembers, @Param("customerRequirements") String customerRequirements,
                 @Param("now") Instant now, @Param("operator") String operator);
 
     @Update("UPDATE mdm.project SET project_code=#{projectCode},name=#{name},partner_id=#{partnerId}," +
-        "partner_name=#{partnerName},owner=#{owner},start_date=#{startDate},end_date=#{endDate}," +
-        "priority=#{priority},status=#{status},team_size=#{teamSize},background=#{background}," +
+        "partner_name=#{partnerName},owner=#{owner},owner_user_id=#{ownerUserId},start_date=#{startDate},end_date=#{endDate}," +
+        "priority=#{priority},status=#{status},team_size=#{teamSize},background=#{background},customer_requirements=#{customerRequirements}," +
         "custom_fields=CAST(#{customFields} AS jsonb),team_members=CAST(#{teamMembers} AS jsonb)," +
         "version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) " +
         "WHERE organization_id=#{organizationId} AND id=#{id} AND deleted=false AND version=#{version}")
     int update(@Param("organizationId") UUID organizationId, @Param("id") UUID id, @Param("projectCode") String projectCode, @Param("name") String name,
                @Param("partnerId") UUID partnerId, @Param("partnerName") String partnerName,
-               @Param("owner") String owner, @Param("startDate") LocalDate startDate, @Param("endDate") LocalDate endDate,
+               @Param("owner") String owner, @Param("ownerUserId") UUID ownerUserId, @Param("startDate") LocalDate startDate, @Param("endDate") LocalDate endDate,
                @Param("priority") String priority, @Param("status") String status, @Param("teamSize") int teamSize,
                @Param("background") String background, @Param("customFields") String customFields,
-               @Param("teamMembers") String teamMembers,
+               @Param("teamMembers") String teamMembers, @Param("customerRequirements") String customerRequirements,
                @Param("version") long version, @Param("operator") String operator);
 
     @Update("UPDATE mdm.project SET deleted=true,version=version+1,updated_at=now(),updated_by=CAST(#{operator} AS uuid) " +

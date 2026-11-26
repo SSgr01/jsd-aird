@@ -3,6 +3,7 @@ import com.jsd.aird.mdm.application.query.*;
 import com.jsd.aird.mdm.domain.model.*;
 import java.util.*;
 public interface ProjectWorkRepository {
+ Optional<String> selectableOwnerName(UUID organizationId, UUID actorId, UUID ownerUserId);
  boolean stageBelongs(UUID stageId, UUID projectId);
  Optional<UUID> stageProjectId(UUID stageId);
  void insertTask(ProjectTask task, String operator);

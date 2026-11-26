@@ -35,6 +35,8 @@ const scopeOptions = [
   { value: 'SELECTED', label: '指定' },
 ];
 const projectTargetMenus = new Set(['eln.view', 'research-test.report.view', 'quality.view', 'production.view']);
+// 客户需求不再作为独立的权限配置项展示；对应功能入口由客户/项目模块权限控制。
+const hiddenPermissionMenus = new Set(['customer.needs', 'project.customer-needs']);
 const selectedScopeLabels: Record<string, string> = {
   'project.list': '指定项目及我创建',
   'customer.list': '指定客户及我创建',
@@ -145,6 +147,7 @@ const menusWithoutDataScope = new Set([
   'project.customer-needs',
   'project.reference',
   'project.meeting',
+  'project.communication',
   'project.log',
   'project.materials',
   'ai.search',
@@ -185,7 +188,7 @@ const approveOnlyMenus = new Set(['knowledge.review']);
 // Operation codes that were retired from a feature. Definitions are append-only in
 // the database, so they are hidden here even when an existing environment still
 // reports them.
-const retiredOperationCodes = new Set(['spectrum.view.publish']);
+const retiredOperationCodes = new Set(['spectrum.view.publish', 'project.meeting.archive', 'project.meeting.publish']);
 const standardOperationsFor = (menu: PermissionMenu, availableCodes: Set<string>): PermissionDefinition[] => {
   const module = menuModuleKey(menu);
   const withoutApproveAndPublish = modulesWithoutApproveAndPublish.has(module) || menusWithoutApproveAndPublish.has(menu.key);
@@ -203,7 +206,7 @@ const standardOperationsFor = (menu: PermissionMenu, availableCodes: Set<string>
   ).map((spec) => ({
     code: `${menu.key}.${spec.suffix}`,
     module,
-    name: menu.key === 'project.meeting' && spec.suffix === 'publish' ? '归档' : spec.label,
+    name: spec.label,
     risk: spec.risk,
     defaultScope: spec.defaultScope,
   })).filter((definition) => availableCodes.has(definition.code) && !retiredOperationCodes.has(definition.code));
@@ -306,7 +309,7 @@ export function PermissionManagementPage({ initialMode = 'user' }: PermissionMan
 
   const matrixRows = useMemo(() => {
     const availableCodes = new Set((model?.operations ?? []).map((definition) => definition.code));
-    return (model?.menus ?? []).map<PermissionMatrixRow>((menu) => ({
+    return (model?.menus ?? []).filter((menu) => !hiddenPermissionMenus.has(menu.key)).map<PermissionMatrixRow>((menu) => ({
       menu,
       operations: menu.parent ? standardOperationsFor(menu, availableCodes) : [],
     }));

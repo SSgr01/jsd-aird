@@ -7,5 +7,5 @@ import java.util.UUID;
 public record ProjectRow(UUID id, String projectCode, String name, UUID partnerId, String partnerName,
                          String owner, LocalDate startDate, LocalDate endDate, String priority, String status,
                          int teamSize, String background, String customFields, String teamMembers, long version,
-                         Instant createdAt, Instant updatedAt) {
+                         Instant createdAt, Instant updatedAt, UUID ownerUserId, String customerRequirements) {
 }

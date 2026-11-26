@@ -30,7 +30,7 @@ public class ProjectWorkController {
 
     @PostMapping("/projects/{projectId}/tasks")
     public ApiResponse<ProjectTask> createTask(@PathVariable UUID projectId, @Valid @RequestBody TaskRequest r) {
-        return ok(service.createTask(projectId, new ProjectWorkService.TaskInput(r.stageId, r.name, r.owner, r.priority, r.plannedDate, r.plannedEnd, r.status, null)));
+        return ok(service.createTask(projectId, new ProjectWorkService.TaskInput(r.stageId, r.name, r.owner, r.priority, r.plannedDate, r.plannedEnd, r.status, null, r.description, r.ownerUserId)));
     }
 
     @GetMapping("/tasks/{taskId}")
@@ -40,7 +40,7 @@ public class ProjectWorkController {
 
     @PutMapping("/tasks/{taskId}")
     public ApiResponse<ProjectTask> updateTask(@PathVariable UUID taskId, @Valid @RequestBody TaskRequest r) {
-        return ok(service.updateTask(taskId, new ProjectWorkService.TaskInput(r.stageId, r.name, r.owner, r.priority, r.plannedDate, r.plannedEnd, r.status, r.version)));
+        return ok(service.updateTask(taskId, new ProjectWorkService.TaskInput(r.stageId, r.name, r.owner, r.priority, r.plannedDate, r.plannedEnd, r.status, r.version, r.description, r.ownerUserId)));
     }
 
     @DeleteMapping("/tasks/{taskId}")
@@ -57,9 +57,10 @@ public class ProjectWorkController {
         @RequestParam(required = false) String status,
         @RequestParam(required = false) String owner,
         @RequestParam(required = false) String priority,
+        @RequestParam(defaultValue = "false") boolean mine,
         @RequestParam(defaultValue = "1") int page,
         @RequestParam(defaultValue = "20") int size) {
-        var query = new ProjectTaskQuery(keyword, projectId, stageId, status, owner, priority, page, size);
+        var query = new ProjectTaskQuery(keyword, projectId, stageId, status, owner, priority, page, size, mine);
         List<ProjectTaskSummary> items = service.searchTasks(query);
         var total = service.countTasks(query);
         var totalPages = size == 0 ? 0 : (total + size - 1) / size;
@@ -77,7 +78,7 @@ public class ProjectWorkController {
 
     public record TaskRequest(@NotNull UUID stageId, @NotBlank @Size(max = 300) String name,
                               @Size(max = 100) String owner, ProjectPriority priority, LocalDate plannedDate, LocalDate plannedEnd,
-                              String status, Long version) {
+                              String status, Long version, @Size(max = 5000) String description, UUID ownerUserId) {
     }
 
 }

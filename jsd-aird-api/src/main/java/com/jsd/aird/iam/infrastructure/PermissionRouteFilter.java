@@ -162,6 +162,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if (path.matches(project + "/documents(/.*)?")) return path.endsWith("/export")?"project.document.export":"project.document.view";
             if (path.matches(project + "/requirements(/.*)?")) return "project.customer-needs.view";
             if (path.matches(project + "/references(/.*)?")) return "project.reference.view";
+            if (path.matches(project + "/communications(/.*)?")) return "project.communication.view";
             if (path.matches("/api/v1/meetings/" + id + "(/.*)?")
                     || path.matches(project + "/meetings(/.*)?")) return "project.meeting.view";
             if (path.matches(project + "/logs(/.*)?")) return "project.log.view";
@@ -189,10 +190,14 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if ("DELETE".equals(method)) return "project.customer-needs.delete";
         }
         if (path.matches(project + "/meetings(/.*)?") || path.matches("/api/v1/meetings/[0-9a-fA-F-]{36}")) {
-            if ("POST".equals(method) && path.endsWith("/archive-to-kb")) return "project.meeting.publish";
             if ("POST".equals(method)) return "project.meeting.create";
             if ("PUT".equals(method)) return "project.meeting.update";
             if ("DELETE".equals(method)) return "project.meeting.delete";
+        }
+        if (path.matches(project + "/communications(/.*)?")) {
+            if ("POST".equals(method)) return "project.communication.create";
+            if ("PUT".equals(method)) return "project.communication.update";
+            if ("DELETE".equals(method)) return "project.communication.delete";
         }
         if (path.matches(project + "/stages(/.*)?") || path.matches("/api/v1/stages/[0-9a-fA-F-]{36}")) {
             if ("POST".equals(method)) return "project.stage.create";
@@ -457,13 +462,15 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         if (path.startsWith("/api/v1/projects") || path.startsWith("/api/v1/tasks") || path.startsWith("/api/v1/stages")
                 || path.startsWith("/api/v1/project-stages") || path.startsWith("/api/v1/materials")
                 || path.startsWith("/api/v1/meetings")) {
+            if (path.matches("/api/v1/projects/[0-9a-f-]{36}/communications(?:/[0-9a-f-]{36})?")) {
+                var code = projectPageOperation(method, path);
+                return code == null ? null : permission(code, "PROJECT", read ? "READ" : "WRITE");
+            }
             if (path.matches("/api/v1/projects/[0-9a-f-]{36}/references(/.*)?"))
                 return read ? permission("project.reference.view", "PROJECT", "READ")
                         : permission("project.assign", "PROJECT", "WRITE");
             if (path.contains("/materials/link") || path.contains("/materials/unlink") || path.contains("/materials/associations"))
                 return permission("project.assign", "PROJECT", "WRITE");
-            if (path.contains("/meetings/") && path.endsWith("/archive-to-kb"))
-                return permission("project.update", "PROJECT", "WRITE");
             if (path.equals("/api/v1/projects/import") || path.equals("/api/v1/projects/import/commit"))
                 return permission("project.create", "PROJECT", "WRITE");
             if (path.equals("/api/v1/projects/copy")) return permission("project.copy", "PROJECT", "WRITE");

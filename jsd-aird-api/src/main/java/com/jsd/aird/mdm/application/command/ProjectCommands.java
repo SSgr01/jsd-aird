@@ -16,7 +16,21 @@ public final class ProjectCommands {
     public record SaveProject(String projectCode, String name, UUID partnerId, String partnerName, String owner,
                               LocalDate startDate, LocalDate endDate, ProjectPriority priority, ProjectStatus status,
                               Integer teamSize, String background, JsonNode customFields, JsonNode teamMembers,
-                              Long version) {
+                              Long version, UUID ownerUserId, String customerRequirements) {
+        public SaveProject(String projectCode, String name, UUID partnerId, String partnerName, String owner,
+                           LocalDate startDate, LocalDate endDate, ProjectPriority priority, ProjectStatus status,
+                           Integer teamSize, String background, JsonNode customFields, JsonNode teamMembers,
+                           Long version, UUID ownerUserId) {
+            this(projectCode, name, partnerId, partnerName, owner, startDate, endDate, priority,
+                status, teamSize, background, customFields, teamMembers, version, ownerUserId, null);
+        }
+        public SaveProject(String projectCode, String name, UUID partnerId, String partnerName, String owner,
+                           LocalDate startDate, LocalDate endDate, ProjectPriority priority, ProjectStatus status,
+                           Integer teamSize, String background, JsonNode customFields, JsonNode teamMembers,
+                           Long version) {
+            this(projectCode, name, partnerId, partnerName, owner, startDate, endDate, priority,
+                status, teamSize, background, customFields, teamMembers, version, null);
+        }
     }
 
     public record Created(UUID id, long version) {

@@ -44,9 +44,9 @@ public class QualityDataRepository implements QualityDataStore {
     public List<Category> categories(UUID org,String type){return jdbc.query("SELECT c.*,count(r.id) record_count FROM quality.data_category c LEFT JOIN quality.data_record r ON r.category_id=c.id AND r.deleted=false WHERE c.organization_id=? AND c.business_type=? GROUP BY c.id ORDER BY c.sort_order,c.created_at",(rs,n)->category(rs),org,type);}
     @Override public List<Category> categories(UUID org,String role,String type,QualityDataStore.DataScopeFilter scope){
         var args=new java.util.ArrayList<Object>();
-        args.add(role); args.add(role); args.add(role);
+        args.add(scope.actorId()); args.add(role); args.add(role); args.add(role);
         var visible="r.organization_id=c.organization_id AND r.business_type=c.business_type AND r.deleted=false"
-                +" AND (r.visibility='ALL' OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND r.visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND r.visibility='RND'))";
+                +" AND (r.visibility='ALL' OR r.created_by=? OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND r.visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND r.visibility='RND'))";
         visible=appendScope(visible,args,scope,org);
         args.add(org); args.add(type);
         return jdbc.query("SELECT c.*,count(r.id) record_count FROM quality.data_category c LEFT JOIN quality.data_record r ON r.category_id=c.id AND "
@@ -108,9 +108,9 @@ public class QualityDataRepository implements QualityDataStore {
     @Override public PageResponse<RecordView> records(UUID org,String role,String type,UUID cat,String keyword,UUID projectId,String status,String format,int page,int size,
             QualityDataStore.DataScopeFilter scope){
         var like="%"+(keyword==null?"":keyword.trim())+"%";
-        var where=" organization_id=? AND business_type=? AND deleted=false AND (?::uuid IS NULL OR category_id=?) AND (?::uuid IS NULL OR project_id=?) AND (?='' OR business_no ILIKE ? OR coalesce(display_name,'') ILIKE ? OR data_jsonb::text ILIKE ?) AND (?::text IS NULL OR data_jsonb->>'status'=?) AND (visibility='ALL' OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND visibility='RND'))";
+        var where=" organization_id=? AND business_type=? AND deleted=false AND (?::uuid IS NULL OR category_id=?) AND (?::uuid IS NULL OR project_id=?) AND (?='' OR business_no ILIKE ? OR coalesce(display_name,'') ILIKE ? OR data_jsonb::text ILIKE ?) AND (?::text IS NULL OR data_jsonb->>'status'=?) AND (visibility='ALL' OR created_by=? OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND visibility='RND'))";
         if (format != null && !format.isBlank()) where += " AND (" + FORMAT_SQL + ") = ?";
-        var args=new java.util.ArrayList<Object>(java.util.Arrays.asList(org,type,cat,cat,projectId,projectId,keyword==null?"":keyword.trim(),like,like,like,status,status,role,role,role));
+        var args=new java.util.ArrayList<Object>(java.util.Arrays.asList(org,type,cat,cat,projectId,projectId,keyword==null?"":keyword.trim(),like,like,like,status,status,scope.actorId(),role,role,role));
         if (format != null && !format.isBlank()) args.add(format);
         where=appendScope(where,args,scope,org);
         var total=jdbc.queryForObject("SELECT count(*) FROM quality.data_record r WHERE"+where,Long.class,args.toArray());
@@ -124,11 +124,12 @@ public class QualityDataRepository implements QualityDataStore {
             case "ALL", "ORG" -> { }
             case "SELF", "CREATOR" -> { where += " AND r.created_by=?"; args.add(scope.actorId()); }
             case "DEPARTMENT" -> {
-                where += " AND r.department_id IS NOT NULL AND r.department_id=(SELECT u.department_id FROM iam.app_user u WHERE u.id=? AND u.organization_id=?)";
+                where += " AND (r.created_by=? OR (r.department_id IS NOT NULL AND r.department_id=(SELECT u.department_id FROM iam.app_user u WHERE u.id=? AND u.organization_id=?)))";
+                args.add(scope.actorId());
                 args.add(scope.actorId()); args.add(org);
             }
             case "SELECTED", "PROJECT" -> {
-                if (scope.targetIds().isEmpty()) where += " AND 1=0";
+                if (scope.targetIds().isEmpty()) { where += " AND r.created_by=?"; args.add(scope.actorId()); }
                 else {
                     where += " AND (r.project_id IN (" + String.join(",",scope.targetIds().stream().map(id -> "?").toList()) + ") OR r.created_by=?)";
                     args.addAll(scope.targetIds());
@@ -140,11 +141,11 @@ public class QualityDataRepository implements QualityDataStore {
         return where;
     }
     public Optional<RecordView> recordByBusinessNo(UUID org,String role,String type,String businessNo){
-        var rows=jdbc.query("SELECT r.*,(SELECT name FROM quality.data_category c WHERE c.id=r.category_id) category_name,COALESCE((SELECT original_name FROM ops.file_object f WHERE f.id=r.source_file_id AND f.status <> 'DELETED'),(SELECT original_name FROM quality.upload_file u WHERE u.generated_record_id=r.id AND u.deleted=false ORDER BY u.created_at LIMIT 1)) source_file_name,"+WORKFLOW_STATUS_SQL+" FROM quality.data_record r WHERE r.organization_id=? AND r.business_type=? AND r.business_no=? AND r.deleted=false AND (r.visibility='ALL' OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND r.visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND r.visibility='RND'))",(rs,n)->record(rs),org,type,businessNo,role,role,role);
+        var rows=jdbc.query("SELECT r.*,(SELECT name FROM quality.data_category c WHERE c.id=r.category_id) category_name,COALESCE((SELECT original_name FROM ops.file_object f WHERE f.id=r.source_file_id AND f.status <> 'DELETED'),(SELECT original_name FROM quality.upload_file u WHERE u.generated_record_id=r.id AND u.deleted=false ORDER BY u.created_at LIMIT 1)) source_file_name,"+WORKFLOW_STATUS_SQL+" FROM quality.data_record r WHERE r.organization_id=? AND r.business_type=? AND r.business_no=? AND r.deleted=false AND (r.visibility='ALL' OR r.created_by=? OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND r.visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND r.visibility='RND'))",(rs,n)->record(rs),org,type,businessNo,com.jsd.aird.shared.security.ActorContext.required().userId(),role,role,role);
         return rows.stream().findFirst();
     }
     public RecordView record(UUID org,UUID id){return record(org,"ADMIN",id);}
-    public RecordView record(UUID org,String role,UUID id){var rows=jdbc.query("SELECT r.*,(SELECT name FROM quality.data_category c WHERE c.id=r.category_id) category_name,COALESCE((SELECT original_name FROM ops.file_object f WHERE f.id=r.source_file_id AND f.status <> 'DELETED'),(SELECT original_name FROM quality.upload_file u WHERE u.generated_record_id=r.id AND u.deleted=false ORDER BY u.created_at LIMIT 1)) source_file_name,"+WORKFLOW_STATUS_SQL+" FROM quality.data_record r WHERE r.organization_id=? AND r.id=? AND r.deleted=false AND (r.visibility='ALL' OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND r.visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND r.visibility='RND'))",(rs,n)->record(rs),org,id,role,role,role);if(rows.isEmpty())throw new ApiException(ApiErrorCode.NOT_FOUND,"品管数据不存在");return rows.getFirst();}
+    public RecordView record(UUID org,String role,UUID id){var rows=jdbc.query("SELECT r.*,(SELECT name FROM quality.data_category c WHERE c.id=r.category_id) category_name,COALESCE((SELECT original_name FROM ops.file_object f WHERE f.id=r.source_file_id AND f.status <> 'DELETED'),(SELECT original_name FROM quality.upload_file u WHERE u.generated_record_id=r.id AND u.deleted=false ORDER BY u.created_at LIMIT 1)) source_file_name,"+WORKFLOW_STATUS_SQL+" FROM quality.data_record r WHERE r.organization_id=? AND r.id=? AND r.deleted=false AND (r.visibility='ALL' OR r.created_by=? OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND r.visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND r.visibility='RND'))",(rs,n)->record(rs),org,id,com.jsd.aird.shared.security.ActorContext.required().userId(),role,role,role);if(rows.isEmpty())throw new ApiException(ApiErrorCode.NOT_FOUND,"品管数据不存在");return rows.getFirst();}
     public List<VersionView> versions(UUID org,UUID recordId){return jdbc.query("SELECT v.*,coalesce(u.display_name,u.username,'未知用户') created_by_name FROM quality.data_record_version v LEFT JOIN iam.app_user u ON u.id=v.created_by WHERE v.organization_id=? AND v.record_id=? AND v.change_type='PUBLISH' ORDER BY v.version_no DESC",(rs,n)->version(rs),org,recordId);}
     public RecordView upsert(UUID org,UUID user,String type,UUID cat,UUID id,String no,JsonNode data,JsonNode workbookSnapshot,
                              UUID projectId,String projectName,UUID stageId,String stageName,UUID taskId,String taskName,long version){
@@ -243,7 +244,17 @@ public class QualityDataRepository implements QualityDataStore {
         var statusValue=status==null?"":status.trim();
         var where=" organization_id=? AND deleted=false AND (?='' OR original_name ILIKE ?) AND (?='' OR status=?) AND (?::uuid IS NULL OR project_id=?) AND (visibility='ALL' OR created_by=? OR ? IN ('ADMIN','SYSTEM_ADMIN') OR (?='QUALITY_MANAGER' AND visibility IN ('QUALITY','PROJECT')) OR (? LIKE 'RND%' AND visibility='RND'))";
         var args=new java.util.ArrayList<Object>(java.util.Arrays.asList(org,q,like,statusValue,statusValue,projectId,projectId,userId,role,role,role));
-        var scoped=new StringBuilder(where).append(scope.sqlCondition("u",args));
+        var scoped=new StringBuilder(where);
+        if ("DEPARTMENT".equals(scope.type())) {
+            scoped.append(" AND (u.created_by=? OR EXISTS (SELECT 1 FROM iam.app_user creator "
+                    + "JOIN iam.app_user viewer ON viewer.id=? AND viewer.organization_id=creator.organization_id "
+                    + "WHERE creator.id=u.created_by AND creator.organization_id=u.organization_id "
+                    + "AND creator.department_id IS NOT NULL AND creator.department_id=viewer.department_id))");
+            args.add(scope.actorId());
+            args.add(scope.actorId());
+        } else {
+            scoped.append(scope.sqlCondition("u",args));
+        }
         var total=jdbc.queryForObject("SELECT count(*) FROM quality.upload_file u WHERE"+scoped,Long.class,args.toArray());
         args.add(size);args.add((page-1)*size);
         var rows=jdbc.query("SELECT u.*,(SELECT name FROM quality.data_category c WHERE c.id=u.category_id) category_name FROM quality.upload_file u WHERE"+scoped+" ORDER BY u.created_at DESC LIMIT ? OFFSET ?",

@@ -100,7 +100,9 @@ export interface ProjectTask {
   stageId: string;
   stageName?: string;
   name: string;
+  description?: string;
   owner?: string;
+  ownerUserId?: string;
   priority?: ProjectPriority;
   plannedDate?: string;
   plannedEnd?: string;
@@ -113,6 +115,7 @@ export interface ProjectTask {
 }
 
 export interface TaskQuery {
+  mine?: boolean;
   keyword?: string;
   projectId?: string;
   stageId?: string;
@@ -139,12 +142,14 @@ export interface Project {
   partnerId?: string;
   partnerName?: string;
   owner?: string;
+  ownerUserId?: string;
   startDate?: string;
   endDate?: string;
   priority: ProjectPriority;
   status: ProjectStatus;
   teamSize: number;
   background?: string;
+  customerRequirements?: string;
   customFields?: Record<string, unknown>;
   teamMembers: string[];
   version: number;
@@ -157,12 +162,14 @@ export interface ProjectInput {
   partnerId?: string;
   partnerName?: string;
   owner?: string;
+  ownerUserId?: string;
   startDate?: string;
   endDate?: string;
   priority?: ProjectPriority;
   status?: ProjectStatus;
   teamSize?: number;
   background?: string;
+  customerRequirements?: string;
   customFields?: Record<string, unknown>;
   teamMembers?: string[];
   version?: number;
@@ -215,6 +222,7 @@ export interface ProjectImportCommitResult {
 }
 
 export interface ProjectQuery {
+  mine?: boolean;
   keyword?: string;
   owner?: string;
   priority?: ProjectPriority;
@@ -388,6 +396,11 @@ export async function createStage(projectId: string, input: StageInput): Promise
   return data.data;
 }
 
+export async function applyStandardStageTemplate(projectId: string): Promise<ProjectStage[]> {
+  const { data } = await httpClient.post<ApiResponse<ProjectStage[]>>(`/api/v1/projects/${projectId}/stages/templates/standard/apply`);
+  return data.data;
+}
+
 export async function updateStage(id: string, input: StageInput): Promise<ProjectStage> {
   const { data } = await httpClient.put<ApiResponse<ProjectStage>>(`/api/v1/stages/${id}`, input);
   return data.data;
@@ -412,9 +425,9 @@ export async function getProjectLogs(projectId: string, query: ProjectLogQuery =
 }
 
 export async function getStageTasks(stageId:string):Promise<ProjectTask[]>{const {data}=await httpClient.get<ApiResponse<ProjectTask[]>>(`/api/v1/stages/${stageId}/tasks`);return data.data;}
-export async function createProjectTask(projectId:string,input:{stageId:string;name:string;owner?:string;priority?:ProjectPriority;plannedDate?:string;plannedEnd?:string;status?:string}):Promise<ProjectTask>{const {data}=await httpClient.post<ApiResponse<ProjectTask>>(`/api/v1/projects/${projectId}/tasks`,input);return data.data;}
+export async function createProjectTask(projectId:string,input:{stageId:string;name:string;description?:string;owner?:string;ownerUserId?:string;priority?:ProjectPriority;plannedDate?:string;plannedEnd?:string;status?:string}):Promise<ProjectTask>{const {data}=await httpClient.post<ApiResponse<ProjectTask>>(`/api/v1/projects/${projectId}/tasks`,input);return data.data;}
 export async function getProjectTask(taskId:string):Promise<ProjectTask>{const {data}=await httpClient.get<ApiResponse<ProjectTask>>(`/api/v1/tasks/${taskId}`);return data.data;}
-export async function updateProjectTask(taskId:string,input:{stageId:string;name:string;owner?:string;priority?:ProjectPriority;plannedDate?:string;plannedEnd?:string;status?:string;version:number}):Promise<ProjectTask>{const {data}=await httpClient.put<ApiResponse<ProjectTask>>(`/api/v1/tasks/${taskId}`,input);return data.data;}
+export async function updateProjectTask(taskId:string,input:{stageId:string;name:string;description?:string;owner?:string;ownerUserId?:string;priority?:ProjectPriority;plannedDate?:string;plannedEnd?:string;status?:string;version:number}):Promise<ProjectTask>{const {data}=await httpClient.put<ApiResponse<ProjectTask>>(`/api/v1/tasks/${taskId}`,input);return data.data;}
 export async function deleteProjectTask(taskId:string, version:number):Promise<void>{await httpClient.delete(`/api/v1/tasks/${taskId}`,{params:{version}});}
 export async function getTasks(query: TaskQuery = {}, signal?: AbortSignal): Promise<PageData<ProjectTask>> {
   const { data } = await httpClient.get<ApiResponse<PageData<ProjectTask>>>('/api/v1/tasks', {

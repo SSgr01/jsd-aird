@@ -83,9 +83,9 @@ CREATE TABLE mdm.material (
 
 CREATE TABLE mdm.project (
     id uuid PRIMARY KEY, project_code varchar(64) NOT NULL, name varchar(300) NOT NULL,
-    partner_id uuid REFERENCES mdm.business_partner(id), partner_name varchar(300), owner varchar(100),
+    partner_id uuid REFERENCES mdm.business_partner(id), partner_name varchar(300), owner varchar(100), owner_user_id uuid,
     start_date date, end_date date, priority varchar(20) NOT NULL DEFAULT 'MEDIUM', status varchar(30) NOT NULL DEFAULT 'NOT_STARTED', team_size integer NOT NULL DEFAULT 0,
-    background text, custom_fields jsonb NOT NULL DEFAULT '{}'::jsonb, team_members jsonb NOT NULL DEFAULT '[]'::jsonb,
+    background text, customer_requirements text, custom_fields jsonb NOT NULL DEFAULT '{}'::jsonb, team_members jsonb NOT NULL DEFAULT '[]'::jsonb,
     version bigint NOT NULL DEFAULT 0, deleted boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
     created_by varchar(160) NOT NULL, updated_by varchar(160) NOT NULL,
@@ -122,12 +122,13 @@ CREATE UNIQUE INDEX uq_project_stage_name_active ON mdm.project_stage(project_id
 CREATE TABLE mdm.project_task (
     id uuid PRIMARY KEY, task_code varchar(80) NOT NULL, project_id uuid NOT NULL REFERENCES mdm.project(id) ON DELETE CASCADE,
     stage_id uuid NOT NULL REFERENCES mdm.project_stage(id) ON DELETE CASCADE,
-    name varchar(300) NOT NULL, owner varchar(100), priority varchar(20) NOT NULL DEFAULT 'MEDIUM', planned_date date, status varchar(30) NOT NULL DEFAULT 'PENDING',
+    name varchar(300) NOT NULL, description text, owner varchar(100), owner_user_id uuid REFERENCES iam.app_user(id), priority varchar(20) NOT NULL DEFAULT 'MEDIUM', planned_date date, status varchar(30) NOT NULL DEFAULT 'PENDING',
     version bigint NOT NULL DEFAULT 0, deleted boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
     created_by varchar(160) NOT NULL, updated_by varchar(160) NOT NULL
 );
 CREATE UNIQUE INDEX uq_project_task_code_active ON mdm.project_task(project_id, task_code) WHERE deleted = false;
+CREATE INDEX idx_project_task_owner_user_active ON mdm.project_task(owner_user_id) WHERE deleted = false;
 
 CREATE TABLE mdm.project_material (
     id uuid PRIMARY KEY, project_id uuid NOT NULL REFERENCES mdm.project(id) ON DELETE CASCADE,
@@ -315,11 +316,12 @@ CREATE TABLE rnd.research_test_audit (
 CREATE TABLE rnd.research_test_upload (
     id uuid PRIMARY KEY, organization_id uuid NOT NULL REFERENCES iam.organization(id), record_id uuid NOT NULL,
     file_id uuid NOT NULL REFERENCES ops.file_object(id), original_name varchar(500) NOT NULL, content_type varchar(200),
-    file_size bigint NOT NULL, sha256 varchar(64), status varchar(24) NOT NULL DEFAULT 'DRAFT_CREATED',
+    file_size bigint NOT NULL, sha256 varchar(64), record_type varchar(24) NOT NULL CHECK (record_type IN ('REPORT', 'STANDARD')),
+    status varchar(24) NOT NULL DEFAULT 'DRAFT_CREATED',
     deleted boolean NOT NULL DEFAULT false, created_by uuid NOT NULL REFERENCES iam.app_user(id), created_at timestamptz NOT NULL DEFAULT now(),
     FOREIGN KEY (organization_id, record_id) REFERENCES rnd.research_test_record(organization_id, id)
 );
-CREATE UNIQUE INDEX uq_research_test_upload_content ON rnd.research_test_upload(organization_id, sha256) WHERE sha256 IS NOT NULL AND deleted = false;
+CREATE UNIQUE INDEX uq_research_test_upload_content ON rnd.research_test_upload(organization_id, record_type, sha256) WHERE sha256 IS NOT NULL AND deleted = false;
 
 CREATE OR REPLACE FUNCTION mdm.project_stage_task_count(stage_uuid uuid) RETURNS bigint LANGUAGE sql STABLE AS
 $$ SELECT count(*) FROM mdm.project_task WHERE stage_id = stage_uuid AND deleted = false $$;

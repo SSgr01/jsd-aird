@@ -31,7 +31,7 @@ public class MyBatisProjectRepository implements ProjectRepository {
     public List<Project> findPage(ProjectQuery query) {
         return mapper.findPage(query.organizationId(), query.keyword(), query.owner(), name(query.priority()), name(query.status()),
                 query.partnerId(), query.startDateFrom(), query.startDateTo(), query.offset(), query.size(),
-                query.scopeType(), query.scopeUserId(), query.scopeTargetIds())
+                query.scopeType(), query.scopeUserId(), query.scopeTargetIds(), query.mine())
             .stream().map(MyBatisProjectRepository::toProject).toList();
     }
 
@@ -39,7 +39,7 @@ public class MyBatisProjectRepository implements ProjectRepository {
     public long count(ProjectQuery query) {
         return mapper.count(query.organizationId(), query.keyword(), query.owner(), name(query.priority()), name(query.status()),
             query.partnerId(), query.startDateFrom(), query.startDateTo(),
-            query.scopeType(), query.scopeUserId(), query.scopeTargetIds());
+            query.scopeType(), query.scopeUserId(), query.scopeTargetIds(), query.mine());
     }
 
     @Override
@@ -61,17 +61,17 @@ public class MyBatisProjectRepository implements ProjectRepository {
     @Override
     public void insert(Project project, UUID organizationId, String operator) {
         mapper.insert(project.id(), organizationId, project.projectCode(), project.name(), project.partnerId(),
-            project.partnerName(), project.owner(), project.startDate(), project.endDate(),
+            project.partnerName(), project.owner(), project.ownerUserId(), project.startDate(), project.endDate(),
             project.priority().name(), project.status().name(), project.teamSize(), project.background(),
-            json(project.customFields()), json(project.teamMembers()), Instant.now(), operator);
+            json(project.customFields()), json(project.teamMembers()), project.customerRequirements(), Instant.now(), operator);
     }
 
     @Override
     public boolean update(Project project, long version, String operator) {
         return mapper.update(ActorContext.required().organizationId(), project.id(), project.projectCode(), project.name(), project.partnerId(),
-            project.partnerName(), project.owner(), project.startDate(), project.endDate(),
+            project.partnerName(), project.owner(), project.ownerUserId(), project.startDate(), project.endDate(),
             project.priority().name(), project.status().name(), project.teamSize(), project.background(),
-            json(project.customFields()), json(project.teamMembers()), version, operator) == 1;
+            json(project.customFields()), json(project.teamMembers()), project.customerRequirements(), version, operator) == 1;
     }
 
     @Override
@@ -108,7 +108,7 @@ public class MyBatisProjectRepository implements ProjectRepository {
         return new Project(r.id(), r.projectCode(), r.name(), r.partnerId(), r.partnerName(), r.owner(),
             r.startDate(), r.endDate(), ProjectPriority.valueOf(r.priority()), ProjectStatus.valueOf(r.status()),
             r.teamSize(), r.background(), parse(r.customFields()), parse(r.teamMembers()),
-            r.version(), r.createdAt(), r.updatedAt());
+            r.version(), r.createdAt(), r.updatedAt(), r.ownerUserId(), r.customerRequirements());
     }
 
     private static String json(JsonNode value) {

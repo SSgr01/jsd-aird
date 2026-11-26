@@ -21,6 +21,7 @@ import java.util.UUID;
 
 @Service
 public class ProjectStageService {
+    private static final List<String> STANDARD_STAGE_TEMPLATE = List.of("实验阶段", "发样沟通", "中试放大", "量产导入");
     static String operator() { return com.jsd.aird.shared.security.ActorContext.required().userId().toString(); }
 
     private final ProjectRepository projects;
@@ -89,6 +90,25 @@ public class ProjectStageService {
             null, 0, 0, 0, 0, 0, now, now);
         stages.insert(stage, operator());
         return stage;
+    }
+
+    @Transactional
+    public List<ProjectStage> applyStandardTemplate(UUID projectId) {
+        requireAction(projectId, "project.stage.create");
+        var project = requireProject(projectId);
+        if (project.status() == ProjectStatus.COMPLETED) {
+            throw new ApiException(ApiErrorCode.VALIDATION_ERROR, "已完成项目不能新增阶段");
+        }
+        var existingNames = stages.findByProject(projectId).stream()
+            .map(stage -> stage.name().toLowerCase(java.util.Locale.ROOT))
+            .collect(java.util.stream.Collectors.toSet());
+        var created = new java.util.ArrayList<ProjectStage>();
+        for (String name : STANDARD_STAGE_TEMPLATE) {
+            if (existingNames.contains(name.toLowerCase(java.util.Locale.ROOT))) continue;
+            created.add(create(projectId, new ProjectStageCommands.Create(name, null, StageStatus.PENDING,
+                null, null, null, null)));
+        }
+        return created;
     }
 
     @Transactional

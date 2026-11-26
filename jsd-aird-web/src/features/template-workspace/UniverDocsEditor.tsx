@@ -14,6 +14,7 @@ import {
   type FUniver,
   type IDocumentData,
 } from '@univerjs/presets';
+import { IPermissionService } from '@univerjs/core';
 import {
   DocBackScrollRenderController,
   IRenderManagerService,
@@ -170,7 +171,10 @@ export const UniverDocsEditor = forwardRef<EditorHandle, Props>(function UniverD
         const bindingValues = new Map<string, unknown>();
         const initialModel = model?.getSnapshot();
         for (const binding of bindingsRef.current) bindingValues.set(binding.bindingId, locateMarker(initialModel, binding.markerId)?.value);
-        if (!editable) void document.getPermission().setReadOnly();
+        if (!editable) {
+          univer.__getInjector().get(IPermissionService).setShowComponents(false);
+          void document.getPermission().setReadOnly();
+        }
         // Docs disables paragraph commands until it has an active text range.
         // Put the editable surface at a valid caret position so alignment and
         // other paragraph commands work immediately after the document opens.
@@ -410,8 +414,33 @@ function normalizeDocumentSnapshot(snapshot: Record<string, unknown>) {
     marginLeft: style.marginLeft ?? 72,
   };
   normalizeDocumentTextStyles(result as unknown as Record<string, unknown>);
+  normalizeLegacyDocumentTableMerges(result as unknown as Record<string, unknown>);
   normalizeDocumentTableBorders(result as unknown as Record<string, unknown>);
   return result;
+}
+
+function normalizeLegacyDocumentTableMerges(snapshot: Record<string, unknown>) {
+  if (!isRecord(snapshot.wordImport) || snapshot.wordImport.parserVersion !== 'docx-univer-v6') return;
+  if (!isRecord(snapshot.tableSource)) return;
+  for (const table of Object.values(snapshot.tableSource)) {
+    if (!isRecord(table) || !Array.isArray(table.tableRows)) continue;
+    const roots = new Map<number, { cell: Record<string, unknown>; alreadyMerged: boolean }>();
+    for (const row of table.tableRows) {
+      if (!isRecord(row) || !Array.isArray(row.tableCells)) continue;
+      row.tableCells.forEach((cell, column) => {
+        if (!isRecord(cell)) return;
+        if (cell.rowSpan === 0 && cell.columnSpan === 0 && isRecord(cell.size)) {
+          const root = roots.get(column);
+          if (root && !root.alreadyMerged) root.cell.rowSpan = Number(root.cell.rowSpan ?? 1) + 1;
+          return;
+        }
+        roots.delete(column);
+        if (Number(cell.columnSpan ?? 1) === 1) {
+          roots.set(column, { cell, alreadyMerged: Number(cell.rowSpan ?? 1) > 1 });
+        }
+      });
+    }
+  }
 }
 
 function normalizeDocumentTextStyles(snapshot: Record<string, unknown>) {

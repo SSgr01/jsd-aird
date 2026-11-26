@@ -71,13 +71,21 @@ async def authorize_history_snapshot(bindings, principal, previous, *, authorize
             if not version_conflict(error):
                 raise
         kind, resource_id = identity(source)
-        if source.get("kind") != "BUSINESS_RECORD" or kind not in {
+        anchor = source.get("anchor", {})
+        adapter_ref = anchor.get("ref", {})
+        adapter = (anchor.get("business_adapter") == "v1"
+                   and adapter_ref.get("type") == kind and adapter_ref.get("id") == resource_id)
+        if source.get("kind") != "BUSINESS_RECORD" or not (adapter or kind in {
             "PROJECT", "STAGE", "TASK", "REQUIREMENT", "MATERIAL", "EXPERIMENT",
-        }:
+        }):
             raise HTTPException(409, "SOURCE_REFRESH_REQUIRED")
         # These domain readers recheck current authorization. Keep experiment
         # identity/version pinned while dropping only its obsolete draft hash.
         ref = {"type": kind, "id": resource_id}
+        if adapter:
+            # The adapter owns domain-specific references and page selectors.
+            # Refresh its mutable revision, but retain pinned versions/identity.
+            ref = {key: value for key, value in adapter_ref.items() if key != "revision"}
         if kind == "EXPERIMENT":
             ref["version_id"] = source["version_id"]
         project = source.get("project_id") or source.get("anchor", {}).get("ref", {}).get("project_id")
@@ -85,6 +93,9 @@ async def authorize_history_snapshot(bindings, principal, previous, *, authorize
             ref["project_id"] = project
         page = source.get("anchor", {}).get("page", {})
         args = {"ref": ref, **{key: page[key] for key in ("section", "offset", "limit") if key in page}}
+        if adapter:
+            args.update({key: value for key, value in anchor.get("read_options", {}).items()
+                         if key in {"section", "page", "offset", "limit"}})
         result = await bindings.java(principal, "business_read", args, previous["id"])
         candidates = [canonical_candidate(item) for item in result.get("candidates", [])
                       if identity(item.get("source", {})) == (kind, resource_id)]

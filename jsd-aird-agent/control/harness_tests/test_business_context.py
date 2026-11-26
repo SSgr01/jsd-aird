@@ -43,6 +43,40 @@ async def test_new_turn_refreshes_changed_experiment_and_preserves_original_ledg
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("options", [{}, {"section": "page", "page": 1}])
+async def test_history_refreshes_adapter_spectrum_with_original_page_selector(options):
+    source = {"kind": "BUSINESS_RECORD", "resource_type": "SPECTRUM", "resource_id": "spectrum",
+              "document_id": "spectrum", "version_id": "old", "source_node_key": "page",
+              "content_sha256": hashlib.sha256(b"old").hexdigest(), "title": "UA-338",
+              "anchor": {"business_adapter": "v1", "ref": {"type": "SPECTRUM", "id": "spectrum",
+                         "revision": "old"}, "read_options": options}}
+    original = canonical_candidate({"source": source, "text": "old"})
+    current = canonical_candidate({"source": {**source, "version_id": "new",
+                                  "content_sha256": hashlib.sha256(b"new").hexdigest()}, "text": "new"})
+    run = {"id": "run", "source_refs": [source], "evidence": {original["evidence_id"]: original}}
+    saved = copy.deepcopy(run)
+
+    async def java(principal, action, args, rid):
+        if action == "authorize_sources":
+            if args["sources"][0]["version_id"] == "old":
+                raise HostToolError(409, "VERSION_CONFLICT", "changed")
+            return {"allowed": True}
+        assert action == "business_read"
+        assert args == {"ref": {"type": "SPECTRUM", "id": "spectrum"}, **options}
+        return {"candidates": [current]}
+
+    class Bindings:
+        source_authorization = AsyncMock(return_value={"sources": [source]})
+    bindings = Bindings()
+    bindings.java = java
+    inherited = await authorize_history_snapshot(bindings, None, run)
+    assert run == saved
+    assert inherited["source_refs"] == [current["source"]]
+    assert set(inherited["evidence"]) == {current["evidence_id"]}
+    assert original["evidence_id"] in inherited["superseded_evidence"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status,code", [(403, "DATA_SCOPE_DENIED"), (404, "NOT_FOUND"), (409, "POLICY_VERSION_CONFLICT")])
 async def test_history_refresh_never_suppresses_access_denials(status, code):
     class Bindings:

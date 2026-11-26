@@ -18,7 +18,7 @@ import {
   mergeLocales,
   type FUniver,
 } from '@univerjs/presets';
-import { UniverSheetsCorePreset, IRenderManagerService, ISheetClipboardService, SHEET_VIEWPORT_KEY, ScrollCommand, ScrollToRangeOperation, unmount } from '@univerjs/preset-sheets-core';
+import { UniverSheetsCorePreset, IRenderManagerService, ISheetClipboardService, SHEET_VIEWPORT_KEY, ScrollCommand, ScrollToRangeOperation, PasteCommand, unmount } from '@univerjs/preset-sheets-core';
 import UniverPresetSheetsCoreZhCN from '@univerjs/preset-sheets-core/locales/zh-CN';
 import { UniverSheetsDrawingPreset } from '@univerjs/preset-sheets-drawing';
 import UniverPresetSheetsDrawingZhCN from '@univerjs/preset-sheets-drawing/locales/zh-CN';
@@ -689,6 +689,12 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
         );
       };
       const commands = univer.__getInjector().get(ICommandService);
+      // The ribbon still dispatches the legacy sheet id; Univer 1.2 registers
+      // the shared clipboard command under univer.command.paste.
+      if (!commands.hasCommand('sheet.command.paste')) commands.registerCommand({
+        id: 'sheet.command.paste', type: CommandType.COMMAND,
+        handler: (_accessor, params) => commands.executeCommand(PasteCommand.id, params),
+      });
       let restoringHistory = false;
       beforeCommandSubscription = commands.beforeCommandExecuted((command, options) => {
         if (cellChangeEventsArmed && editableRef.current && !applyingInstanceRef.current && !restoringHistory && !structureGroup && !options?.fromChangeset && !options?.syncOnly && isGuardedWorkbookOperation(command.id)) {

@@ -404,6 +404,22 @@ public final class LabWorkbook {
     public static Presentation present(ObjectMapper json,JsonNode source) {
         if(LabWorkbookSheets.multiple(source))return new Presentation(source.deepCopy(),json.createObjectNode());
         if(!supported(source))return new Presentation(source.deepCopy(),json.createObjectNode());
+        // Compacting changes coordinates and removes unmapped content. Preserve the
+        // authored layout whenever it contains drawings or an extra calculation area.
+        for(var resource:source.path("resources"))if("SHEET_DRAWING_PLUGIN".equals(resource.path("name").asText())) {
+            try {
+                for(var drawingSheet:json.readTree(resource.path("data").asText("{}")))
+                    if(!drawingSheet.path("data").isEmpty())return new Presentation(source.deepCopy(),json.createObjectNode());
+            } catch(Exception ignored) { return new Presentation(source.deepCopy(),json.createObjectNode()); }
+        }
+        var authoredSheet=sheet(source);int sampleEnd=definition(source).path("lastSampleColumn").asInt(7);
+        for(var row:iterable(authoredSheet.path("cellData").fields()))for(var col:iterable(row.getValue().fields())) {
+            var cell=col.getValue();
+            if(!cell.path("p").path("drawings").isEmpty()
+                ||Integer.parseInt(col.getKey())>sampleEnd&&(cell.hasNonNull("f")||LabValues.recorded(value(authoredSheet,Integer.parseInt(row.getKey()),Integer.parseInt(col.getKey()))))
+                ||cell.hasNonNull("f")&&cell.path("custom").path("lab").path("fieldCode").asText().isBlank())
+                return new Presentation(source.deepCopy(),json.createObjectNode());
+        }
         var out=(ObjectNode)source.deepCopy();var sheet=sheet(out);var def=definition(out);var fields=def.path("fields");
         int first=def.path("firstSampleColumn").asInt(2),end=def.path("lastSampleColumn").asInt(7);
         var keepColumns=new TreeSet<Integer>();keepColumns.add(0);keepColumns.add(1);

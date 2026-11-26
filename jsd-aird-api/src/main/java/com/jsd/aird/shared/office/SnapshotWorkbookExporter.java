@@ -459,7 +459,11 @@ public final class SnapshotWorkbookExporter {
     }
 
     private void writeManifest(XSSFWorkbook workbook, Manifest manifest) {
-        var sheet = workbook.createSheet(MANIFEST_SHEET);
+        var old=workbook.getSheet(MANIFEST_SHEET);
+        if(old!=null&&old.getRow(0)!=null&&old.getRow(0).getCell(0)!=null&&"JSD_EXPORT".equals(old.getRow(0).getCell(0).toString()))
+            workbook.removeSheetAt(workbook.getSheetIndex(old));
+        var name=MANIFEST_SHEET;int suffix=1;while(workbook.getSheet(name)!=null)name=MANIFEST_SHEET+"_"+(suffix++);
+        var sheet = workbook.createSheet(name);
         putText(sheet, 0, "JSD_EXPORT", "1"); putText(sheet, 1, "templateVersionId", manifest.templateVersionId());
         putText(sheet, 2, "schemaHash", manifest.schemaHash()); putText(sheet, 3, "mappingHash", manifest.mappingHash());
         putText(sheet, 4, "source", manifest.source()); if (manifest.revisionId() != null) putText(sheet, 5, "revisionId", manifest.revisionId());

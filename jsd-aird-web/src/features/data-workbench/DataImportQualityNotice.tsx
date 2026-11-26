@@ -28,7 +28,7 @@ export function DataImportQualityNotice({ issues, sheets, onLocate, experimentDr
       <summary>查看缺失字段和来源位置（{required.length} 处）</summary>
       <Space size={4} wrap>
       {required.slice((page - 1) * 20, page * 20).map((issue, index) => {
-        const location = [sheets.find(sheet => sheet.sheetId === issue.sheetId)?.sheetName, issue.address || (issue.rowNumber ? `${issue.rowNumber} 行` : issue.fieldCode)].filter(Boolean).join(' · ');
+        const location = [sheets.find(sheet => sheet.sheetId === issue.sheetId)?.sheetName, issue.address || (issue.rowNumber ? `${issue.rowNumber} 行` : '待补充字段')].filter(Boolean).join(' · ');
         return onLocate ? <Button key={index} type="link" size="small" onClick={() => onLocate(issue)}>{location || '定位字段'}</Button>
           : <Typography.Text key={index} type="secondary">{location}</Typography.Text>;
       })}

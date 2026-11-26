@@ -174,6 +174,9 @@ export function DataFieldCard({ field, active, onSelect, extra, children, active
   const secondaryLabel = labelPath && !equivalentCustomerLabel(labelPath, label) ? labelPath : '';
   const currentValue = fieldCurrentValue(field);
   const rowStatus = fieldRowStatus(field);
+  const sourceLocation = field.sourceLocation && !internalWorkbookLabel(field.sourceLocation)
+    ? field.sourceLocation : [field.sheetName && !internalWorkbookLabel(field.sheetName) ? field.sheetName : undefined,
+      field.address || (field.rowNumber ? `${field.rowNumber} 行` : undefined)].filter(Boolean).join(' · ');
   const unit = /^[<>≤≥]?\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(currentValue)
     ? customerDisplayLabel(field.unit) : '';
   return (
@@ -203,10 +206,7 @@ export function DataFieldCard({ field, active, onSelect, extra, children, active
             {normalizedChanged ? <div><dt>格式转换值</dt><dd>{normalized || '未填写'}</dd></div> : null}
             {normalizedChanged || effectiveChanged || corrected ? <div><dt>最终采用值</dt><dd>{currentValue || '未填写'}</dd></div> : null}
             {unit ? <div><dt>单位</dt><dd>{unit}</dd></div> : null}
-            {field.sourceLocation || field.sheetName || field.address || field.rowNumber ? <div><dt>来源位置</dt><dd>{field.sourceLocation || [
-              field.sheetName,
-              field.address || (field.rowNumber ? `${field.rowNumber} 行` : undefined),
-            ].filter(Boolean).join(' · ')}</dd></div> : null}
+            {sourceLocation ? <div><dt>来源位置</dt><dd>{sourceLocation}</dd></div> : null}
           </dl>
           {!field.excluded && field.valueStatus !== 'VALID' ? (
             <Typography.Text type="warning">

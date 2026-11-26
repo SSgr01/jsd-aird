@@ -37,6 +37,13 @@ const field: DataFieldValueView = {
 };
 
 describe('DataWorkbench', () => {
+  it('uses the business sheet and address instead of an internal source identity', () => {
+    const sourceLocation = 'IMPORT:STRUCT:sheet-1:binding-1';
+    render(<DataFieldCard field={{ ...field, sourceLocation }} active onSelect={() => undefined} />);
+    expect(screen.getByText('原料数据 · B3')).toBeInTheDocument();
+    expect(screen.queryByText(sourceLocation)).not.toBeInTheDocument();
+    expect(screen.getAllByText('树脂 A').length).toBeGreaterThan(0);
+  });
   beforeEach(() => useAppStore.setState({ fieldPanelCollapsed: false }));
   it('scrolls only the field panel when a workbook cell selects an offscreen field', () => {
     let callback: FrameRequestCallback | undefined;

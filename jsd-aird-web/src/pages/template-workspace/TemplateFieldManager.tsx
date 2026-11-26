@@ -13,6 +13,7 @@ import { Button, Empty, Input, Select, Switch, Tooltip } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
 import { CollapsibleFieldPanel } from '@/components/field-panel/CollapsibleFieldPanel';
+import { customerFieldName, customerGroupName, internalWorkbookLabel } from '@/features/data-workbench/workbench-labels';
 
 import type {
   BusinessField,
@@ -353,7 +354,7 @@ export function FieldStructure({
           <details className="field-tree-group field-region-group" key={region.id} open>
             <summary>
               <span>
-                <FolderOpenOutlined /> {region.name}
+                <FolderOpenOutlined /> {customerGroupName(region.name) || '未命名分组'}
                 <small className="field-region-meta">
                   {kindLabel(region.kind)}
                   {region.sheet ? ` · ${region.sheet}` : ''}
@@ -367,7 +368,7 @@ export function FieldStructure({
                     <button
                       type="button"
                       className="field-tree-group-add"
-                      aria-label={`在${region.name}中新增明细字段`}
+                      aria-label={`在${customerGroupName(region.name) || '未命名分组'}中新增明细字段`}
                       disabled={!region.root}
                       onClick={(event) => {
                         event.preventDefault();
@@ -527,7 +528,7 @@ function buildFieldRegionViews(
       id: region.regionId,
       name: region.fieldName || '未命名区域',
       kind: region.kind,
-      sheet: displaySheetName(region.sheetName, region.sheetId, root, fields, region.fields ?? []),
+      sheet: displaySheetName(region.sheetName, root, fields, region.fields ?? []),
       range: root ? locatorValueRange(root.locator) || region.range : region.range,
       root,
       fields,
@@ -584,7 +585,6 @@ function buildFieldRegionViews(
 
 function displaySheetName(
   regionSheetName: string | undefined,
-  regionSheetId: string | undefined,
   root: BusinessField | undefined,
   fields: BusinessField[],
   reviewFields: RecognitionReviewItem[],
@@ -598,7 +598,7 @@ function displaySheetName(
   const rootName = textValue(root?.locator?.sheetName);
   const regionNameIsTechnical = !regionSheetName || /^sheet-\d+$/i.test(regionSheetName);
   if (!regionNameIsTechnical) return regionSheetName;
-  return reviewName || recognizedName || rootName || regionSheetName || regionSheetId;
+  return [reviewName, recognizedName, rootName, regionSheetName].find(name => name && !/^sheet-/i.test(name) && !internalWorkbookLabel(name)) || '未命名工作表';
 }
 
 function regionRootMatches(
@@ -691,8 +691,8 @@ function FieldTreeButton({
 }
 
 function fieldDisplayPath(field: BusinessField) {
-  const segments = (field.pathSegments ?? []).map((segment) => segment.trim()).filter(Boolean);
-  return segments.length ? segments.join(' > ') : field.name;
+  const segments = (field.pathSegments ?? []).map((segment) => segment.trim()).filter(segment => segment && !internalWorkbookLabel(segment));
+  return segments.length ? segments.join(' > ') : customerFieldName(field.name);
 }
 
 function fieldNameInputValue(field: BusinessField) {
@@ -963,9 +963,10 @@ function BusinessPropertyFields({
         <label className="field-property">
           <span>字段分组</span>
           <Select
-            value={field.groupId}
+            value={groups.some(group => group.id === field.groupId) ? field.groupId : undefined}
+            placeholder="未分组"
             disabled={!editable || Boolean(field.projectionField)}
-            options={groups.map((group) => ({ value: group.id, label: group.name }))}
+            options={groups.map((group) => ({ value: group.id, label: customerGroupName(group.name) || '未命名分组' }))}
             onChange={(value) => onUpdateField(field.id, { groupId: value })}
           />
         </label>

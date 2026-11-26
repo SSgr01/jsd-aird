@@ -1,7 +1,7 @@
 import { gunzipSync, brotliDecompressSync, inflateSync } from 'node:zlib';
 import { readFileSync } from 'node:fs';
 
-export const productName = 'AI工作台 · 杰事达';
+export const productName = 'AI工作台';
 const englishName = 'AI Workbench · JSD';
 // The business application owns the brand asset; the gateway serves the same bytes.
 export const brandIcon = readFileSync(new URL('../../../jsd-aird-web/public/favicon.svg', import.meta.url), 'utf8');

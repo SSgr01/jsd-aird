@@ -79,6 +79,8 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
             var summary = objectMapper.createObjectNode();
             var sheets = objectMapper.createArrayNode();
             var snapshot = objectMapper.createObjectNode();
+            snapshot.put("id", UUID.randomUUID().toString());
+            var drawings = objectMapper.createObjectNode();
             var sheetOrder = objectMapper.createArrayNode();
             var snapshotSheets = objectMapper.createObjectNode();
             var snapshotStyles = objectMapper.createObjectNode();
@@ -93,7 +95,11 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
 
             for (int sheetIndex = 0; sheetIndex < workbook.getNumberOfSheets(); sheetIndex++) {
                 var sheet = workbook.getSheetAt(sheetIndex);
+                if (sheet.getSheetName().equals(com.jsd.aird.shared.office.SnapshotWorkbookExporter.MANIFEST_SHEET)
+                        && sheet.getRow(0)!=null && sheet.getRow(0).getCell(0)!=null
+                        && "JSD_EXPORT".equals(sheet.getRow(0).getCell(0).toString())) continue;
                 var sheetId = "sheet-" + (sheetIndex + 1);
+                readPictures(sheet, sheetId, snapshot.path("id").asText(), drawings);
                 var dimensions = dimensions(sheet);
                 var sheetCandidates = objectMapper.createArrayNode();
                 var mergedRanges = objectMapper.createArrayNode();
@@ -207,7 +213,7 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
             summary.put("format", "XLSX");
             summary.put("structureVersion", STRUCTURE_VERSION);
             summary.put("parserVersion", "xlsx-physical-facts-v7-topology-ready");
-            summary.put("sheetCount", workbook.getNumberOfSheets());
+            summary.put("sheetCount", sheetOrder.size());
             summary.put("formulaCount", formulaCount);
             summary.put("mergedRegionCount", mergedCount);
             summary.set("sheets", sheets);
@@ -227,7 +233,8 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
                 summary.set("namedRanges", names);
             }
 
-            snapshot.put("id", UUID.randomUUID().toString());
+            if(!drawings.isEmpty())snapshot.putArray("resources").addObject().put("name","SHEET_DRAWING_PLUGIN")
+                    .put("data",objectMapper.writeValueAsString(drawings));
             snapshot.put("name", "导入的 Excel 模板");
             snapshot.put("appVersion", "univer-1.2.0");
             snapshot.put("snapshotFormatVersion", 3);
@@ -240,13 +247,44 @@ public class XlsxStructureParser implements OfficeStructureParser, WorkbookInsta
             issues.add(new ParseIssue(
                     "INFO",
                     "XLSX_BUSINESS_FIDELITY",
-                    "已保留合并、行列尺寸和核心单元格样式，并提取数据验证用于识别；图片、图表、数据验证往返及打印设置不在本次转换范围。",
+                    "已保留合并、行列尺寸、核心单元格样式和嵌入图片，并提取数据验证用于识别；图表与数据验证往返不在本次转换范围。",
                     objectMapper.createObjectNode()
             ));
             return new ParseResult(summary, snapshot, List.copyOf(issues));
         } catch (Exception exception) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "XLSX 解析失败：" + exception.getMessage());
         }
+    }
+
+    private void readPictures(org.apache.poi.xssf.usermodel.XSSFSheet sheet,String sheetId,String unitId,ObjectNode drawings) {
+        var nativeDrawing=sheet.getDrawingPatriarch();if(nativeDrawing==null)return;
+        var entry=objectMapper.createObjectNode();var order=entry.putArray("order");var data=entry.putObject("data");
+        int index=0;
+        for(var shape:nativeDrawing.getShapes())if(shape instanceof org.apache.poi.xssf.usermodel.XSSFPicture picture) {
+            var anchor=picture.getClientAnchor();if(anchor==null)continue;
+            var id="xlsx-image-"+sheetId+"-"+(index++);var image=picture.getPictureData();
+            var fromX=columnPixels(sheet,anchor.getCol1())+anchor.getDx1()/9525d;
+            var fromY=rowPixels(sheet,anchor.getRow1())+anchor.getDy1()/9525d;
+            var toX=columnPixels(sheet,anchor.getCol2())+anchor.getDx2()/9525d;
+            var toY=rowPixels(sheet,anchor.getRow2())+anchor.getDy2()/9525d;
+            var size=picture.getImageDimension();
+            var drawing=data.putObject(id).put("drawingId",id).put("unitId",unitId).put("subUnitId",sheetId)
+                    .put("drawingType",0).put("imageSourceType","BASE64").put("anchorType",anchor.getAnchorType()==org.apache.poi.ss.usermodel.ClientAnchor.AnchorType.MOVE_AND_RESIZE?"1":"0")
+                    .put("source","data:"+image.getMimeType()+";base64,"+java.util.Base64.getEncoder().encodeToString(image.getData()));
+            drawing.putObject("transform").put("left",fromX).put("top",fromY)
+                    .put("width",toX>fromX?toX-fromX:size.getWidth()).put("height",toY>fromY?toY-fromY:size.getHeight());
+            var location=drawing.putObject("sheetTransform");
+            location.putObject("from").put("row",anchor.getRow1()).put("column",anchor.getCol1()).put("rowOffset",anchor.getDy1()/9525d).put("columnOffset",anchor.getDx1()/9525d);
+            location.putObject("to").put("row",anchor.getRow2()).put("column",anchor.getCol2()).put("rowOffset",anchor.getDy2()/9525d).put("columnOffset",anchor.getDx2()/9525d);
+            order.add(id);
+        }
+        if(!order.isEmpty())drawings.set(sheetId,entry);
+    }
+    private double columnPixels(org.apache.poi.xssf.usermodel.XSSFSheet sheet,int column) {
+        double pixels=0;for(int c=0;c<column;c++)pixels+=sheet.getColumnWidthInPixels(c);return pixels;
+    }
+    private double rowPixels(org.apache.poi.xssf.usermodel.XSSFSheet sheet,int row) {
+        double pixels=0;for(int r=0;r<row;r++)pixels+=(sheet.getRow(r)==null?sheet.getDefaultRowHeightInPoints():sheet.getRow(r).getHeightInPoints())*POINT_TO_PIXEL;return pixels;
     }
 
     private ObjectNode cellData(XSSFWorkbook workbook, Cell cell) {

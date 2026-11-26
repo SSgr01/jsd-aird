@@ -4,6 +4,12 @@ import type { DataIssue } from '@/services/data/data-api';
 import { DataImportQualityNotice } from './DataImportQualityNotice';
 
 describe('required import reminders', () => {
+  it('does not use a field code as the fallback when source coordinates are missing', () => {
+    const fieldCode = 'INSTANCE_LOCAL.test.FIELD_123';
+    render(<DataImportQualityNotice issues={[{ issueType: 'REQUIRED_MISSING', severity: 'WARNING', status: 'OPEN', fieldCode, detail: {} } as DataIssue]} sheets={[]} />);
+    expect(screen.getByText('待补充字段')).toBeInTheDocument();
+    expect(screen.queryByText(fieldCode)).not.toBeInTheDocument();
+  });
   it('distinguishes saving imported data from submitting an experiment for review', () => {
     const issue = { issueType: 'REQUIRED_MISSING', severity: 'WARNING', status: 'OPEN', sheetId: 'one', address: 'D2', fieldCode: 'date', detail: {} } as DataIssue;
     render(<DataImportQualityNotice issues={[issue]} sheets={[]} experimentDraft />);

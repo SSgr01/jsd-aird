@@ -52,6 +52,18 @@ function Workspace({ selection, onFocusBinding, editable = false }: {
 }
 
 describe('field structure for configured templates', () => {
+  it('renders safe labels for legacy system identities in field and group names', () => {
+    const code = 'INSTANCE_LOCAL.test.FIELD_123';
+    const group = 'IMPORT:STRUCT:sheet-1:comparison';
+    render(<FieldStructure editable={false} fieldModel={{ ...model,
+      groups: [{ id: 'legacy', name: group, order: 0 }],
+      fields: [{ ...field('legacy-field', code, 'legacy'), pathSegments: [code] }],
+    }} {...handlers} />);
+    expect(screen.getByText('未命名字段')).toBeInTheDocument();
+    expect(screen.getByText('未命名分组')).toBeInTheDocument();
+    expect(screen.queryByText(code)).not.toBeInTheDocument();
+    expect(screen.queryByText(group)).not.toBeInTheDocument();
+  });
   it('shows an explicit empty state when properties are opened before selecting a field', () => {
     render(<InstanceFieldEditor initialView="properties" instance={createWorkbookInstance(model,mapping,configuration)} ownerId="empty" editable={false} onChange={vi.fn()} onFocus={vi.fn()} />);
     expect(screen.getByText('请先在字段结构或表格中选择字段')).toBeInTheDocument();

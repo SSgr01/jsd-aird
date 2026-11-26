@@ -54,6 +54,10 @@ describe('shared workbench display labels', () => {
   });
 
   it('recognizes only system identifier shapes rather than hiding valid business values', () => {
+    for (const value of ['INSTANCE_LOCAL.test.FIELD_123', 'TEMPLATE_LOCAL.FIELD_456']) {
+      expect(internalWorkbookLabel(value)).toBe(true);
+      expect(customerFieldName(value, '树脂物性 > 酸值')).toBe('酸值');
+    }
     for (const value of ['IMPORT:STRUCT:sheet-1:comparison:COLUMN:1', 'INSTANCE:field:1', 'FIELD.CALC.1', '12345678-1234-1234-1234-123456789012']) expect(internalWorkbookLabel(value)).toBe(true);
     for (const value of ['SIM-SYN-006', 'MAT_GEN_01', 'NCO', 'pH', 'UV', 'EB', 'mg KOH/g', 'GEN-T001']) expect(internalWorkbookLabel(value)).toBe(false);
   });

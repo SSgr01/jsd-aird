@@ -15,6 +15,7 @@ const groupNames: Record<string, string> = {
 export function internalWorkbookLabel(value: string | undefined) {
   const text = value?.trim() || '';
   return /^(?:IMPORT|INSTANCE|SOURCE|RECORD|BINDING|COMPONENT|REGION|PROJECTION|FIELD):/i.test(text)
+    || /^(?:INSTANCE_LOCAL|TEMPLATE_LOCAL|LOCAL_FIELD)[.:_]/i.test(text)
     || /^(?:AUTO|TABLE|DATA|MATERIAL|PRODUCTION|WORKFLOW|FIELD)\.[A-Z0-9_.-]+$/i.test(text)
     || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)
     || /^(?:sheet-\w+:|column:|row:|\/)/i.test(text);

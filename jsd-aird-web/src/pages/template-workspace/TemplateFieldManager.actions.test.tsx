@@ -59,6 +59,18 @@ function renderProperties(field: BusinessField, format: TemplateFormat = 'XLSX')
 }
 
 describe('TemplateFieldManager field actions', () => {
+  it('does not display a stale group identity when its group was removed', () => {
+    const missingGroup = 'IMPORT:STRUCT:sheet-1:deleted-group';
+    renderProperties({ ...makeField('CONFIRMED'), groupId: missingGroup });
+    expect(screen.getByText('未分组')).toBeInTheDocument();
+    expect(screen.queryByText(missingGroup)).not.toBeInTheDocument();
+  });
+  it('does not expose an instance-local code as the field name', () => {
+    const code = 'INSTANCE_LOCAL.test.FIELD_123';
+    renderProperties({ ...makeField('CONFIRMED'), name: code, pathSegments: [code] });
+    expect(screen.queryByDisplayValue(code)).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue('未命名字段')).toBeInTheDocument();
+  });
   it.each(['XLSX', 'DOCX'] as const)('%s 待确认候选只能从识别确认中忽略', (format) => {
     renderProperties(makeField('NEEDS_CONFIRMATION', true), format);
 

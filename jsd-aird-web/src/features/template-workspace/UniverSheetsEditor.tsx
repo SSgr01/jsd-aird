@@ -46,6 +46,7 @@ import { templateLocalFieldCode } from './field-model';
 import { WorkbookUndoBatch } from './undo-batch';
 import { workbookOperationBlock, isGuardedWorkbookOperation, copyableSheetMetadata } from './workbook-operation-guard';
 import { writesReadOnlyValue } from './read-only-values';
+import { compatibleLabTotalFormula, compatibleLabTotals } from '@/features/experiment-workspace/lab-template';
 import { sectionMergeExtensions, migratedWorkbookMerges } from './section-merges';
 import { templatePasteStyleHook } from './paste-styles';
 import { fieldNumberFormatEdits, fieldNumberFormat } from './field-number-format';
@@ -321,7 +322,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       ownedApi = univerAPI;
       univerRef.current = univer;
       apiRef.current = univerAPI;
-      const workbook = univerAPI.createWorkbook(workbookWithScrollableFreeze(workbookWithExplicitRowHeights(snapshot), {
+      const workbook = univerAPI.createWorkbook(workbookWithScrollableFreeze(workbookWithExplicitRowHeights(compatibleLabTotals(snapshot)), {
         width: Math.max(1, width - 47), height: Math.max(1, height - (editableRef.current ? 160 : 84)),
       }));
       stopWheelFocus = bindSheetWheelFocus(container, () => {
@@ -562,7 +563,10 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
             const liveSheet = instanceSheets(workbook.save() as unknown as Record<string, unknown>).find(sheet => sheet.id === structureOperation.sheetId);
             for (const [row, columns] of Object.entries(liveSheet?.cellData ?? {})) for (const [column, cell] of Object.entries(columns)) {
               if (!cell.f) continue;
-              const formula = retargetAggregateFormula(cell.f, formulaChanges);
+              const retargeted = retargetAggregateFormula(cell.f, formulaChanges);
+              // Scalar lab totals must enumerate newly inserted material rows, too.
+              const formula = isRecord(cell.custom?.lab) && cell.custom.lab.fieldCode === 'formula.total'
+                ? compatibleLabTotalFormula(retargeted, Number(column)) : retargeted;
               if (formula !== cell.f) targetSheet?.getRange(workbookAddress(Number(row), Number(column))).setValues([[{ ...cell, f: formula }]] as Parameters<ReturnType<NonNullable<typeof targetSheet>['getRange']>['setValues']>[0]);
             }
             const first = workbook.getSheets()[0];
@@ -705,7 +709,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
           && command.type === CommandType.COMMAND) { fieldEditGroup = beginStructureBatch(); fieldEditCommand = command; }
         if (cellChangeEventsArmed && editableRef.current && !structureGroup && !restoringHistory && !options?.fromChangeset
           && command.type === CommandType.MUTATION && isCellMutationCommand(command.id, command.params)
-          && writesReadOnlyValue(bindingsRef.current, command.params)) throw new CanceledError();
+          && writesReadOnlyValue(bindingsRef.current, command.params, options)) throw new CanceledError();
         const operation = structureOperationFor(command);
         if (cellChangeEventsArmed && editableRef.current && operation && !structureBefore && !options?.fromChangeset) {
           const beforeSnapshot = workbook.save() as unknown as Record<string, unknown>;

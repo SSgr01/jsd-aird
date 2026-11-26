@@ -117,9 +117,35 @@ export function labMassFormula(column: number, firstRow: number, lastRow: number
   const start = labAddress(firstRow, column),
     end = labAddress(lastRow, column),
     values = `${start}:${end}`;
-  const labels = `$B$${firstRow + 1}:$B$${lastRow + 1}`;
-  const numbers = `IFERROR(--SUBSTITUTE(SUBSTITUTE(LOWER(TRIM(${values})),"g",""),"/","0"),-1)`;
-  return `=IF(COUNTA(${values})=0,"",IF(OR(SUMPRODUCT((${labels}<>"")*(${values}=""))>0,SUMPRODUCT((${labels}="")*(${values}<>"")*(${values}<>"/"))>0,SUMPRODUCT(--(${numbers}<0))>0,SUMPRODUCT(--ISNUMBER(SEARCH("%",${values})))>0,SUMPRODUCT((${values}<>"/")*ISNUMBER(SEARCH("/",${values})))>0),"",SUMPRODUCT(${numbers})))`;
+  // Scalar expressions avoid the online engine's incompatible nested array coercion.
+  const numbers: string[] = [], invalid: string[] = [];
+  for (let row = firstRow; row <= lastRow; row++) {
+    const a = labAddress(row, column), b = `$B$${row + 1}`;
+    const number = `IFERROR(--SUBSTITUTE(LOWER(TRIM(${a})),"g",""),-1)`;
+    numbers.push(`IF(${a}="/",0,IF(${a}="",0,${number}))`);
+    invalid.push(`AND(${b}<>"",${a}="")`, `AND(${b}="",${a}<>"",${a}<>"/")`,
+      `AND(${a}<>"",${a}<>"/",OR(${number}<0,ISNUMBER(SEARCH("%",${a})),ISNUMBER(SEARCH("/",${a}))))`);
+  }
+  return `=IF(COUNTA(${values})=0,"",IF(OR(${invalid.join(',')}),"",SUM(${numbers.join(',')})))`;
+}
+
+/** Upgrade only our legacy generated totals; retain customer formulas and manual totals. */
+export function compatibleLabTotalFormula(formula: string, column: number): string {
+  const range = /^=IF\(COUNTA\([A-Z]+(\d+):[A-Z]+(\d+)\)=0,/.exec(formula);
+  return range && formula.includes('IFERROR(--SUBSTITUTE(') && formula.includes('LOWER(TRIM(')
+    ? labMassFormula(column, Number(range[1]) - 1, Number(range[2]) - 1) : formula;
+}
+
+export function compatibleLabTotals(snapshot: Record<string, unknown>): Record<string, unknown> {
+  const next = structuredClone(snapshot);
+  for (const sheet of Object.values((next.sheets ?? {}) as Record<string, LabSheet>)) {
+    if (!sheet.custom?.labTemplate) continue;
+    for (const cells of Object.values(sheet.cellData ?? {})) for (const [column, cell] of Object.entries(cells)) {
+      if (cell.custom?.lab?.fieldCode !== 'formula.total' || !cell.f) continue;
+      cell.f = compatibleLabTotalFormula(cell.f, Number(column));
+    }
+  }
+  return next;
 }
 
 export { copyWorkbookCells as copyLabCells } from '@/features/template-workspace/workbook-instance';

@@ -18,9 +18,10 @@ export function isAccessDenied(error: unknown): boolean {
 
 export function httpErrorMessage(status: number | undefined, code: string | undefined, backendMessage: string | undefined, transportMessage: string | undefined): string {
   if (status === 403 && code !== 'CSRF_TOKEN_INVALID') {
+    if (backendMessage === 'Invalid CORS request') return '当前访问地址未获服务允许，请使用本地服务配置的前端地址登录。';
     return backendMessage && !/^request failed with status code 403$/i.test(backendMessage)
       ? backendMessage
-      : '当前用户没有操作权限';
+      : code === 'PERMISSION_DENIED' ? '当前用户没有操作权限' : '请求被服务拒绝，请检查访问地址及服务配置。';
   }
   return backendMessage || transportMessage || '请求失败';
 }

@@ -198,6 +198,57 @@ class WorkbookDraftGuardTest {
         verify(repository,never()).updateJobStatus(any(),any(),eq("FAILED"),anyInt(),any(),any());
     }
 
+    @Test void confirmationReextractsBeforeOpeningTheWriteTransaction() {
+        actor();transactions();var job=job();
+        when(repository.findJob(org,id)).thenReturn(Optional.of(job));
+        when(repository.findJobForUpdate(org,id)).thenAnswer(call->{
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isTrue();
+            return Optional.of(job);
+        });
+        var issue=mock(DataRepository.Issue.class);
+        when(issue.issueType()).thenReturn("FIELD_UNCONFIRMED");
+        when(issue.severity()).thenReturn("WARNING");
+        when(repository.listIssues(org,id)).thenReturn(List.of(issue));
+        var prepared=emptyPrepared(job);
+        when(templates.prepareImport(org,job.templateVersionId(),job.sourceFileId())).thenAnswer(call->{
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            verify(repository,never()).findJobForUpdate(any(),any());
+            return prepared;
+        });
+        when(repository.commit(eq(org),eq(id),any(),anyList())).thenReturn(new DataRepository.CommitResult(List.of(),0));
+        assertThat(service.commitAtRevision(id,job.getRevision())).isEqualTo(job);
+        verify(templates,times(1)).prepareImport(any(),any(),any());
+        verify(repository).clearParsed(org,id);
+    }
+
+    @Test void confirmationRejectsConcurrentEditsAfterReExtractionWithoutWritingAnything() {
+        actor();transactions();var job=job();
+        when(repository.findJob(org,id)).thenReturn(Optional.of(job));
+        var newer=mock(DataRepository.Job.class);when(newer.getRevision()).thenReturn("newer-revision");
+        when(repository.findJobForUpdate(org,id)).thenReturn(Optional.of(newer));
+        var issue=mock(DataRepository.Issue.class);when(issue.issueType()).thenReturn("FIELD_UNCONFIRMED");
+        when(repository.listIssues(org,id)).thenReturn(List.of(issue));
+        var prepared=emptyPrepared(job);
+        when(templates.prepareImport(any(),any(),any())).thenReturn(prepared);
+        assertThatThrownBy(()->service.commitAtRevision(id,job.getRevision())).isInstanceOf(ApiException.class);
+        verify(repository,never()).clearParsed(any(),any());
+        verify(repository,never()).commit(any(),any(),any(),anyList());
+    }
+
+    @Test void confirmationRechecksConcurrentEditsBetweenStagingAndPublication() {
+        actor();transactions();var job=job();
+        when(repository.findJob(org,id)).thenReturn(Optional.of(job));
+        var newer=mock(DataRepository.Job.class);when(newer.getRevision()).thenReturn("edited-after-staging");
+        when(repository.findJobForUpdate(org,id)).thenReturn(Optional.of(job),Optional.of(newer));
+        var issue=mock(DataRepository.Issue.class);when(issue.issueType()).thenReturn("FIELD_UNCONFIRMED");
+        when(repository.listIssues(org,id)).thenReturn(List.of(issue));
+        var prepared=emptyPrepared(job);
+        when(templates.prepareImport(any(),any(),any())).thenReturn(prepared);
+        assertThatThrownBy(()->service.commitAtRevision(id,job.getRevision())).isInstanceOf(ApiException.class);
+        verify(repository).clearParsed(org,id);
+        verify(repository,never()).commit(any(),any(),any(),anyList());
+    }
+
     private TemplateDataImportFacade.ImportExecution emptyPrepared(DataRepository.Job job) {
         var definition=new TemplateDataImportFacade.DataTemplateDefinition(null,job.templateVersionId(),"V8","test",null,1,"XLSX",json.createObjectNode(),json.createArrayNode(),List.of(),8,2,"hash",json.createObjectNode());
         when(templates.getVersion(org,job.templateVersionId())).thenReturn(definition);

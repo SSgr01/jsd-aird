@@ -3,6 +3,13 @@ import { confirmationBlockReason, distinctRequiredNotices, importIssueMessage, r
 import type { DataPreview, DataTemplateOption } from './data-api';
 
 describe('data import guidance', () => {
+  it('shows the current parse failure or queued state instead of stale template compatibility', () => {
+    const preview = { job: { status: 'FAILED', errorMessage: '原文件读取失败', compatibilityStatus: 'INCOMPATIBLE' }, issues: [], mappings: [] } as unknown as DataPreview;
+    expect(confirmationBlockReason(preview)).toBe('原文件读取失败');
+    preview.job.status = 'QUEUED';
+    expect(confirmationBlockReason(preview)).toContain('数据尚未完成解析');
+    expect(confirmationBlockReason(preview)).not.toContain('所选模板不一致');
+  });
   it('uses accepted definition reviews while keeping other actual blockers', () => {
     const issue = { severity: 'BLOCKER', status: 'OPEN', issueType: 'FIELD_UNCONFIRMED' } as const;
     const preview = { job: { status: 'WAITING_MAPPING' }, mappings: [], issues: [issue] } as unknown as DataPreview;

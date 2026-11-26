@@ -174,6 +174,25 @@ class DataImportValidationTest {
         verify(repository).updateJobStatus(ORGANIZATION_ID, jobId, "FAILED", 0, "FAILED", reason);
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = com.jsd.aird.shared.error.ApiErrorCode.class,
+            names = {"SERVER_BUSY", "DATABASE_BUSY", "VALIDATION_ERROR"})
+    void parsingKeepsResourceContentionQueuedButReportsInvalidFiles(com.jsd.aird.shared.error.ApiErrorCode code) {
+        var sourceFileId = UUID.randomUUID();
+        var job = new DataRepository.Job(jobId, sourceFileId, "sha", "source.xlsx", "XLSX",
+                templateVersionId, null, "QUEUED", 0, "QUEUED", null, null,
+                Instant.now(), Instant.now());
+        when(repository.findJob(ORGANIZATION_ID, jobId)).thenReturn(Optional.of(job));
+        when(templates.getVersion(ORGANIZATION_ID, templateVersionId)).thenReturn(definition(false));
+        var failure = new ApiException(code, "source reason");
+        when(templates.prepareImport(ORGANIZATION_ID, templateVersionId, sourceFileId)).thenThrow(failure);
+
+        assertThatThrownBy(() -> service.parseInternal(ORGANIZATION_ID, jobId)).isSameAs(failure);
+        if (code == com.jsd.aird.shared.error.ApiErrorCode.VALIDATION_ERROR)
+            verify(repository).updateJobStatus(ORGANIZATION_ID, jobId, "FAILED", 0, "FAILED", "source reason");
+        else verify(repository).updateJobStatus(ORGANIZATION_ID, jobId, "QUEUED", 0, "WAITING_RESOURCE", null);
+    }
+
     @Test
     void blocksRowsWhenTemplateRequiredFieldHasNoMapping() {
         ActorContext.set(new com.jsd.aird.shared.security.Actor(ORGANIZATION_ID, USER_ID, "developer"));

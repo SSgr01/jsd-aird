@@ -133,6 +133,17 @@ public class DataWorkbookService {
                     if(draft!=null)com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot,draft.instance());
                     timing.checkpoint("prepared-source");
                     if(com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot)) {
+                        var instance=com.jsd.aird.shared.excel.WorkbookStructure.instance(snapshot);
+                        if(com.jsd.aird.shared.lab.LabWorkbookSheets.multiple(snapshot)
+                                && !instance.path("labMultiSheet").asBoolean()
+                                && !instance.path("model").path("fields").isEmpty()) {
+                            // Legacy drafts can contain only the first sheet's definitions.
+                            // Rebuild all physical sheets before exposing confirmation actions.
+                            var repaired=templates.prepareWorkbookReview(org,job.templateVersionId(),snapshot,instance);
+                            snapshot=repaired.preparedSnapshot();
+                            com.jsd.aird.shared.excel.WorkbookStructure.attach(snapshot,
+                                    repaired.definition().schema().path("x-jsd-workbook-instance"));
+                        }
                         templates.refreshPreparedWorkbookReviews(org,job.templateVersionId(),snapshot);
                         timing.checkpoint("field-decisions");
                         // Only display preparation moves to the worker; commit still checks all staged records.

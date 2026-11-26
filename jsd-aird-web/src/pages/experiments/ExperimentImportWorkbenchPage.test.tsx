@@ -1,8 +1,12 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ExperimentImportWorkbenchPage } from './ExperimentImportWorkbenchPage';
+
+const { syncStatus } = vi.hoisted(() => ({ syncStatus: vi.fn() }));
+vi.mock('@/services/data/data-api', () => ({ dataApi: { experimentSyncStatus: syncStatus } }));
+beforeEach(() => { syncStatus.mockReset().mockResolvedValue({ plan: null, links: [] }); });
 
 vi.mock('@/pages/data/DataImportJobPage', () => ({
   DataImportJobPage: ({
@@ -32,7 +36,7 @@ function LocationProbe() {
 }
 
 describe('ExperimentImportWorkbenchPage', () => {
-  it('switches from import confirmation to the experiment without changing route', () => {
+  it('switches from import confirmation to the experiment without changing route', async () => {
     render(
       <MemoryRouter initialEntries={['/experiments/template-imports/job-1']}>
         <Routes>
@@ -42,12 +46,39 @@ describe('ExperimentImportWorkbenchPage', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '打开生成的实验' }));
+    fireEvent.click(await screen.findByRole('button', { name: '打开生成的实验' }));
     expect(screen.getByText('experiment:experiment-1')).toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent('/experiments/template-imports/job-1');
 
     fireEvent.click(screen.getByRole('button', { name: '返回导入数据' }));
     expect(screen.getByRole('button', { name: '打开生成的实验' })).toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent('/experiments/template-imports/job-1');
+  });
+
+  it('reopens a unique generated experiment without mounting the source workbook', async () => {
+    syncStatus.mockResolvedValue({ plan: { candidates: [{}] }, links: [{ experimentId: 'existing', status: 'COMPLETED' }] });
+    render(<MemoryRouter initialEntries={['/experiments/template-imports/job-1']}><Routes>
+      <Route path="/experiments/template-imports/:id" element={<ExperimentImportWorkbenchPage />} />
+    </Routes></MemoryRouter>);
+    expect(await screen.findByText('experiment:existing')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '打开生成的实验' })).not.toBeInTheDocument();
+    expect(syncStatus).toHaveBeenCalledWith('job-1', 'summary');
+  });
+
+  it('keeps the import selector when several candidates remain', async () => {
+    syncStatus.mockResolvedValue({ plan: { candidates: [{}, {}] }, links: [{ experimentId: 'existing' }] });
+    render(<MemoryRouter initialEntries={['/experiments/template-imports/job-1']}><Routes>
+      <Route path="/experiments/template-imports/:id" element={<ExperimentImportWorkbenchPage />} />
+    </Routes></MemoryRouter>);
+    expect(await screen.findByRole('button', { name: '打开生成的实验' })).toBeInTheDocument();
+    expect(screen.queryByText('experiment:existing')).not.toBeInTheDocument();
+  });
+
+  it('falls back to import review if the summary read fails', async () => {
+    syncStatus.mockRejectedValue(new Error('SERVER_BUSY'));
+    render(<MemoryRouter initialEntries={['/experiments/template-imports/job-1']}><Routes>
+      <Route path="/experiments/template-imports/:id" element={<ExperimentImportWorkbenchPage />} />
+    </Routes></MemoryRouter>);
+    expect(await screen.findByRole('button', { name: '打开生成的实验' })).toBeInTheDocument();
   });
 });

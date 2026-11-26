@@ -499,8 +499,15 @@ public class DataImportService {
             var plan=prepareParsedImport(organizationId,importJobId,force,prepared,null);
             if(plan!=null)persistParsedImport(organizationId,importJobId,force,plan);
         } catch(RuntimeException exception) {
-            if(!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
-                repository.updateJobStatus(organizationId,importJobId,"FAILED",0,"FAILED",safeMessage(exception));
+            if(!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+                var resource = com.jsd.aird.shared.resource.ResourceFailures.code(exception);
+                // The worker defers resource contention without consuming a retry.
+                // Keep the business task queued too, so users cannot retry/delete
+                // an import which still has a live background job.
+                if(resource == ApiErrorCode.SERVER_BUSY || resource == ApiErrorCode.DATABASE_BUSY)
+                    repository.updateJobStatus(organizationId,importJobId,"QUEUED",0,"WAITING_RESOURCE",null);
+                else repository.updateJobStatus(organizationId,importJobId,"FAILED",0,"FAILED",safeMessage(exception));
+            }
             throw exception;
         }
     }
@@ -1232,20 +1239,42 @@ public class DataImportService {
         validateInternal(actor.organizationId(), importJobId);
     }
 
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
     public DataRepository.Job commitAtRevision(UUID importJobId,String revision) {
         var actor=ActorContext.required();
-        if(revision!=null) {
-            var current=repository.findJobForUpdate(actor.organizationId(),importJobId)
-                    .orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"导入任务不存在"));
-            com.jsd.aird.shared.json.RevisionToken.require(revision,current.getRevision());
-        }
-        commit(importJobId);
-        return requireJob(actor.organizationId(),importJobId);
+        assertNotFreeform(actor.organizationId(), importJobId);
+        var current=requireJob(actor.organizationId(),importJobId);
+        if(revision!=null) com.jsd.aird.shared.json.RevisionToken.require(revision,current.getRevision());
+        var issues=repository.listIssues(actor.organizationId(),importJobId);
+        var needsValidation=issues.stream().anyMatch(item ->
+                "REQUIRED_MISSING".equals(item.issueType()) && "BLOCKER".equals(item.severity())
+                || "FIELD_UNCONFIRMED".equals(item.issueType())
+                || item.detail()!=null && "FIELD_UNCONFIRMED".equals(item.detail().path("code").asText()));
+        // Legacy drafts can require an Office re-extraction after definitions
+        // were accepted. Never run that process while retaining the job lock.
+        var plan=!"COMPLETED".equals(current.status()) && needsValidation
+                ? prepareParsedImport(actor.organizationId(),importJobId,true,null,null) : null;
+        // Staging and publishing are independently atomic. Keeping both writes
+        // in one transaction makes legacy multi-sheet revalidation exhaust the
+        // transaction budget before the formal records can be inserted.
+        var stagedRevision=plan==null?current.getRevision():java.util.Objects.requireNonNull(workbookWrites.execute(tx -> {
+            requireJobRevision(actor.organizationId(),importJobId,current.getRevision());
+            persistParsedImport(actor.organizationId(),importJobId,true,plan);
+            return requireJob(actor.organizationId(),importJobId).getRevision();
+        }));
+        return java.util.Objects.requireNonNull(workbookWrites.execute(tx -> {
+            requireJobRevision(actor.organizationId(),importJobId,stagedRevision);
+            commitPrepared(importJobId,true);
+            return requireJob(actor.organizationId(),importJobId);
+        }));
     }
 
     @Transactional
     public void commit(UUID importJobId) {
+        commitPrepared(importJobId,false);
+    }
+
+    private void commitPrepared(UUID importJobId, boolean revalidated) {
         var actor = ActorContext.required();
         assertNotFreeform(actor.organizationId(), importJobId);
         var lockedJob = repository.findJobForUpdate(actor.organizationId(), importJobId)
@@ -1260,13 +1289,13 @@ public class DataImportService {
         var definitionReview = repository.listIssues(actor.organizationId(), importJobId).stream()
                 .anyMatch(item -> "FIELD_UNCONFIRMED".equals(item.issueType())
                         || item.detail() != null && "FIELD_UNCONFIRMED".equals(item.detail().path("code").asText()));
-        if (definitionReview) {
+        if (!revalidated && definitionReview) {
             // Re-extract against accepted definitions; never waive unresolved issues.
             parseInternal(actor.organizationId(), importJobId, true);
-        } else if (legacyRequired) {
+        } else if (!revalidated && legacyRequired) {
             validateInternal(actor.organizationId(), importJobId);
         }
-        var job = legacyRequired || definitionReview ? repository.findJobForUpdate(actor.organizationId(), importJobId).orElseThrow() : lockedJob;
+        var job = !revalidated && (legacyRequired || definitionReview) ? repository.findJobForUpdate(actor.organizationId(), importJobId).orElseThrow() : lockedJob;
         if ("INCOMPATIBLE".equals(job.compatibilityStatus())) {
             throw new ApiException(ApiErrorCode.BAD_REQUEST, "上传文件与模板存在硬结构冲突，不能提交正式数据");
         }

@@ -120,7 +120,9 @@ httpClient.interceptors.response.use(
       }
       if (response?.status === 401 && !isLoginRequest && !isCurrentPasswordMismatch) notifyAuthRequired(response.data?.code);
       throw new HttpError(
-        httpErrorMessage(response?.status, response?.data?.code, response?.data?.message, error.message),
+        httpErrorMessage(response?.status, response?.data?.code,
+          (response?.data as unknown) === 'Invalid CORS request'
+            ? 'Invalid CORS request' : response?.data?.message, error.message),
         response?.data?.code || 'HTTP_REQUEST_FAILED',
         response?.status,
         response?.data?.traceId,

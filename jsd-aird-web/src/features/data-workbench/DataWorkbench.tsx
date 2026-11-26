@@ -260,7 +260,7 @@ export function DataFieldDataBrowser({
     const byRegion = new Map<string | undefined, DataFieldValueView[]>();
     for (const field of fields) {
       const key = dataFieldKey(field);
-      if (!byKey.has(key)) byKey.set(key, field);
+      if (key && !byKey.has(key)) byKey.set(key, field);
       const record = field.recordGroupId || field.recordId || '';
       const values = byRecord.get(record) ?? []; values.push(field); byRecord.set(record, values);
       const regionValues = byRegion.get(field.componentId) ?? []; regionValues.push(field); byRegion.set(field.componentId, regionValues);

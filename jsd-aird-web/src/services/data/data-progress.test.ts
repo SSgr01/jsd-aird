@@ -11,5 +11,6 @@ describe('data parsing progress', () => {
     expect(dataParseProgress({ status: 'QUEUED', progress: 1 })).toBe(0);
     expect(dataParseProgress({ status: 'PARSING', progress: 45 })).toBe(45);
     expect(dataParseStageLabel({ status: 'PARSING', currentStage: 'ANALYZING_STRUCTURE' })).toBe('正在分析结构');
+    expect(dataParseStageLabel({ status: 'QUEUED', currentStage: 'WAITING_RESOURCE' })).toBe('等待处理资源，稍后自动继续');
   });
 });

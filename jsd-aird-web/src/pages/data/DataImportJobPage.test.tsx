@@ -153,7 +153,7 @@ it('accepts a save acknowledgement without rebuilding the workbook and keeps its
   fireEvent.click(screen.getByRole('button', { name: '修改表格' }));
   fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
   await waitFor(() => expect(api.saveWorkbookDraft).toHaveBeenCalledTimes(2));
-  expect(api.saveWorkbookDraft.mock.calls[1][1].revision).toBe('2');
+  expect(api.saveWorkbookDraft.mock.calls[1]?.[1]?.revision).toBe('2');
   expect(api.getImportWorkbookSnapshot).toHaveBeenCalledTimes(1);
 });
 

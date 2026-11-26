@@ -45,6 +45,9 @@ export function sheetSummary(preview: DataPreview, sheetId: string) {
 }
 
 export function confirmationBlockReason(preview: DataPreview, reviewedIssues = preview.issues) {
+  if (preview.job.status === 'FAILED') return preview.job.errorMessage || '文件处理失败，请重新解析或重新上传。';
+  if (['CREATED', 'QUEUED', 'PARSING', 'VALIDATING', 'COMMITTING'].includes(preview.job.status))
+    return '数据尚未完成解析，请稍后刷新；处理失败时可重新解析或重新上传。';
   if (reviewedIssues.some((issue) => requiresTemplateChange(issue.issueType) && issue.severity === 'BLOCKER' && !['RESOLVED', 'IGNORED'].includes(issue.status)))
     return '文件中有内容无法按所选模板读取，请重新选择模板或文件；仍无法导入时请联系模板维护人员。';
   const count = reviewedIssues.filter(isImportBlocker).length;

@@ -20,6 +20,7 @@ export function dataParseProgress(job: DataProgressSource) {
 export function dataParseStageLabel(job: Pick<DataJob, 'status' | 'currentStage'>) {
   if (PARSE_COMPLETE_STATUSES.has(job.status)) return '解析完成';
   if (job.status === 'FAILED') return '解析失败';
+  if (job.status === 'QUEUED' && job.currentStage === 'WAITING_RESOURCE') return '等待处理资源，稍后自动继续';
   if (job.status === 'CREATED' || job.status === 'QUEUED') return '等待解析';
   return switchStage(job.currentStage);
 }

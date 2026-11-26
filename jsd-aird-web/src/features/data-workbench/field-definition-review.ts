@@ -17,6 +17,10 @@ export interface FieldDefinitionReviewItem {
 
 type DefinitionIssue = InstanceIssue | DataIssue;
 
+function firstText(...values: unknown[]) {
+  return values.find((value): value is string => typeof value === 'string' && value.length > 0) ?? '';
+}
+
 function issueCode(issue: DefinitionIssue) {
   if ('code' in issue) return issue.code;
   return issue.issueType === 'FIELD_UNCONFIRMED'
@@ -47,11 +51,11 @@ export function definitionReviewItems(
     if (field.displayRole === 'REGION') return [];
     const binding = instance.mapping.find((item) => item.bindingId === field.bindingId);
     const locator = binding?.locator ?? field.locator ?? {};
-    const address = String(
-      locator.labelRange || field.labelRange || field.locator?.labelRange
-      || locator.address || locator.valueRange || field.valueRange || '',
+    const address = firstText(
+      locator.labelRange, field.labelRange, field.locator?.labelRange,
+      locator.address, locator.valueRange, field.valueRange,
     );
-    const sheetId = String(locator.sheetId || field.locator?.sheetId || '');
+    const sheetId = firstText(locator.sheetId, field.locator?.sheetId);
     const definitionConfirmed = field.reviewStatus === 'CONFIRMED'
       && field.experimentSemanticStatus !== 'NEEDS_REVIEW';
     if (definitionConfirmed) return [];
@@ -70,7 +74,7 @@ export function definitionReviewItems(
       fieldId: field.id,
       bindingId: field.bindingId,
       name: field.name,
-      sheetName: String(locator.sheetName || field.locator?.sheetName || ''),
+      sheetName: firstText(locator.sheetName, field.locator?.sheetName),
       address,
       valueType: field.valueType,
       unit: field.unit,
@@ -97,11 +101,10 @@ export function fieldDefinitionIssueLocation(
 ): EditorSelection | undefined {
   let sheetId = issue.sheetId;
   let address = issue.address;
-  const fieldId = issueFieldId(issue);
-  const field = fieldId ? instance.model.fields.find((item) => item.id === fieldId) : undefined;
+  const field = fieldForDefinitionIssue(issue, instance);
   const binding = field ? instance.mapping.find((item) => item.bindingId === field.bindingId) : undefined;
-  const locator = (binding?.locator || field?.locator || {}) as Record<string, unknown>;
-  const locatorText = (key: string) => typeof locator[key] === 'string' ? locator[key] as string : undefined;
+  const locator = binding?.locator || field?.locator || {};
+  const locatorText = (key: string) => typeof locator[key] === 'string' ? locator[key] : undefined;
   sheetId ||= locatorText('sheetId');
   address ||= locatorText('labelRange') || locatorText('labelAddress');
   if (!sheetId || !address) return undefined;
@@ -140,18 +143,20 @@ export function deduplicateFieldDefinitionIssues(
 
 function fieldForDefinitionIssue(issue: DataIssue, instance: WorkbookTemplateInstance) {
   const fieldId = issueFieldId(issue);
-  if (fieldId) return instance.model.fields.find((field) => field.id === fieldId);
-  if (!issue.address) return undefined;
+  const exact = fieldId ? instance.model.fields.find((field) => field.id === fieldId) : undefined;
+  if (exact) return exact;
+  // Rebuilding legacy multi-sheet instances namespaces/replaces field ids.
+  // The parser's physical sheet and label cell still identify the same field.
   const address = normalizedCellAddress(issue.address);
-  const binding = instance.mapping.find((item) => {
-    const locator = item.locator as Record<string, unknown>;
+  const bindings = instance.mapping.filter((item) => {
+    const locator = item.locator;
     const label = typeof locator.labelRange === 'string' ? locator.labelRange
       : typeof locator.labelAddress === 'string' ? locator.labelAddress : '';
     const sheetId = typeof locator.sheetId === 'string' ? locator.sheetId : undefined;
-    return normalizedCellAddress(label) === address
-      && (!issue.sheetId || !sheetId || issue.sheetId === sheetId);
+    return (!address || normalizedCellAddress(label) === address)
+      && (!issue.sheetId || issue.sheetId === sheetId);
   });
-  return binding
-    ? instance.model.fields.find((field) => field.bindingId === binding.bindingId)
-    : undefined;
+  const candidates = instance.model.fields.filter((field) => bindings.some((binding) => binding.bindingId === field.bindingId)
+    && (address || issue.message.includes(`字段“${field.name}”`) || issue.message.includes(`项目“${field.name}”`)));
+  return candidates.length === 1 ? candidates[0] : undefined;
 }

@@ -205,7 +205,7 @@ export function DepartmentTreePage() {
 
   return <div className="iam-page iam-department-page">
     <div className="page-heading">
-      <div><Typography.Title level={2}>机构树管理</Typography.Title></div>
+      <div><Typography.Title level={2}>组织架构管理</Typography.Title></div>
       <Space><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>{canCreate && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增机构</Button>}</Space>
     </div>
     <div className="iam-department-layout">

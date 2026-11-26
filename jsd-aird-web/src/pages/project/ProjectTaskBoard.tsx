@@ -7,6 +7,7 @@ import dayjs from '@/utils/dayjs';
 import { Can } from '@/components/auth/Can';
 import { createProjectExperiment, deleteProjectExperiment, listProjectExperiments, type ExperimentSummary } from '@/services/experiments/experiment-api';
 import { projectTemplateApi, type ProjectTemplateOption } from '@/services/project/project-template-api';
+import { useProjectOwnerOptions } from './useProjectOwnerOptions';
 import {
   createProjectTask, deleteProjectTask, getProjectTask, getStageTasks,
   updateProjectTask,
@@ -39,7 +40,8 @@ type DocumentFormat = 'word' | 'excel';
 interface TaskFormValues {
   stageId: string;
   name: string;
-  owner?: string;
+  description?: string;
+  ownerUserId?: string;
   priority: ProjectPriority;
   dates: [dayjs.Dayjs, dayjs.Dayjs];
   status: string;
@@ -78,6 +80,7 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
   const [deletingExperimentId, setDeletingExperimentId] = useState<string>();
   const [editingTask, setEditingTask] = useState<ProjectTask>();
   const [taskForm] = Form.useForm<TaskFormValues>();
+  const ownerOptions = useProjectOwnerOptions(taskOpen);
 
   const totalExperiments = useMemo(
     () => tasks.reduce((sum, task) => sum + (task.experimentCount ?? 0), 0),
@@ -185,7 +188,7 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
   const openNewTask = () => {
     setEditingTask(undefined);
     taskForm.resetFields();
-    taskForm.setFieldsValue({ stageId: stage.id, owner: '', priority: 'MEDIUM', dates: [dayjs(), dayjs()], status: 'PENDING' });
+    taskForm.setFieldsValue({ stageId: stage.id, ownerUserId: undefined, priority: 'MEDIUM', dates: [dayjs(), dayjs()], status: 'PENDING' });
     setTaskOpen(true);
   };
 
@@ -193,7 +196,8 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
     const data = await getProjectTask(taskId);
     setEditingTask(data);
     taskForm.setFieldsValue({
-      stageId: data.stageId, name: data.name, owner: data.owner,
+      stageId: data.stageId, name: data.name, description: data.description,
+      ownerUserId: data.ownerUserId ?? (data.owner ? `legacy:${data.id}` : undefined),
       priority: data.priority || 'MEDIUM', dates: [data.plannedDate ? dayjs(data.plannedDate) : dayjs(), data.plannedEnd ? dayjs(data.plannedEnd) : (data.plannedDate ? dayjs(data.plannedDate) : dayjs())], status: data.status || 'PENDING',
     });
     setTaskOpen(true);
@@ -208,8 +212,12 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
     }
     setTaskSaving(true);
     try {
+      const selectedOwner = ownerOptions.users.find((user) => user.id === values.ownerUserId);
+      const unchangedOwner = editingTask && values.ownerUserId === (editingTask.ownerUserId ?? `legacy:${editingTask.id}`);
       const payload = {
-        stageId: values.stageId, name: values.name.trim(), owner: values.owner?.trim() || '',
+        stageId: values.stageId, name: values.name.trim(), description: values.description?.trim() || undefined,
+        owner: selectedOwner?.displayName ?? (unchangedOwner ? editingTask.owner : ''),
+        ownerUserId: selectedOwner?.id ?? (unchangedOwner ? editingTask.ownerUserId : undefined),
         priority: values.priority, plannedDate: values.dates[0].format('YYYY-MM-DD'), plannedEnd: values.dates[1].format('YYYY-MM-DD'), status: values.status,
       };
       if (editingTask) {
@@ -330,8 +338,15 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
           <Form.Item name="stageId" label={<FieldLabel text="关联阶段" required />} rules={[{ required: true, message: '请选择阶段' }]}>
             <Select placeholder="请选择阶段" options={stages.map((s) => ({ value: s.id, label: s.name }))} />
           </Form.Item>
-          <Form.Item name="owner" label={<FieldLabel text="负责人" />}>
-            <Input placeholder="请输入负责人" />
+          <Form.Item name="ownerUserId" label={<FieldLabel text="负责人" />}>
+            <Select showSearch allowClear loading={ownerOptions.loading} options={[
+              ...ownerOptions.users.map((user) => ({ value: user.id, label: `${user.displayName} (${user.username})` })),
+              ...(editingTask?.owner && !ownerOptions.users.some((user) => user.id === editingTask.ownerUserId)
+                ? [{ value: editingTask.ownerUserId ?? `legacy:${editingTask.id}`, label: `${editingTask.owner} (原负责人)`, disabled: true }]
+                : []),
+            ]}
+              optionFilterProp="label" placeholder="请选择负责人"
+              notFoundContent={ownerOptions.error ? '负责人列表加载失败' : '暂无可选用户'} />
           </Form.Item>
           <Form.Item name="priority" label={<FieldLabel text="优先级" required />} rules={[{ required: true, message: '请选择优先级' }]}>
             <Select placeholder="请选择优先级" options={projectPriorities} />
@@ -341,6 +356,9 @@ export function ProjectTaskBoard({ projectId, stage, stages, onTaskSaved }: {
           </Form.Item>
           <Form.Item name="status" label={<FieldLabel text="状态" required />} rules={[{ required: true }]}>
             <Select options={Object.entries(taskStatuses).map(([value, label]) => ({ value, label }))} />
+          </Form.Item>
+          <Form.Item className="pm-task-description" name="description" label={<FieldLabel text="任务描述" />} rules={[{ max: 5000, message: '任务描述最多 5000 字符' }]}>
+            <Input.TextArea rows={3} maxLength={5000} showCount placeholder="请输入任务描述" />
           </Form.Item>
         </Form>
       </div>

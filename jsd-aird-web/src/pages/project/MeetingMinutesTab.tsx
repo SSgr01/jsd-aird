@@ -1,12 +1,11 @@
 import { FormModal } from '@/components/form-dialog/FormModal';
-import { App, Button, DatePicker, Form, Input, Modal, Popconfirm, Space, Tag } from 'antd';
+import { App, Button, DatePicker, Form, Input, Modal, Popconfirm, Space } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined, TeamOutlined, EyeOutlined, FileTextOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useEffect, useMemo, useState } from 'react';
 import { Can } from '@/components/auth/Can';
 
 import {
-  archiveMeetingToKb,
   createMeeting,
   deleteMeeting,
   listMeetings,
@@ -79,7 +78,6 @@ export function MeetingMinutesTab({ projectId }: Props) {
   };
 
   const openEdit = (record: MeetingMinutes) => {
-    if (record.archivedToKb) return;
     setEditing(record);
     form.resetFields();
     form.setFieldsValue({
@@ -140,16 +138,6 @@ export function MeetingMinutesTab({ projectId }: Props) {
     }
   };
 
-  const handleArchive = async (record: MeetingMinutes) => {
-    try {
-      await archiveMeetingToKb(projectId, record.id,record.version);
-      message.success('已归档到知识库');
-      await load();
-    } catch (reason) {
-      message.error(reason instanceof Error ? reason.message : '归档失败');
-    }
-  };
-
   const sortedItems = useMemo(
     () => [...items].sort((a, b) => (b.occurredAt ?? '').localeCompare(a.occurredAt ?? '')),
     [items],
@@ -158,7 +146,7 @@ export function MeetingMinutesTab({ projectId }: Props) {
   return (
     <div className="pm-mm-tab">
       <div className="pm-mm-tab-head">
-        <div className="pm-mm-tip">按项目归档所有会议纪要，支持新增、编辑、查看与归档到知识库。</div>
+        <div className="pm-mm-tip">按项目管理所有会议纪要，支持新增、编辑与查看。</div>
         <Can permission="project.meeting.create"><Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
           新增会议纪要
         </Button></Can>
@@ -176,10 +164,7 @@ export function MeetingMinutesTab({ projectId }: Props) {
           {sortedItems.map((item) => (
             <li className="pm-mm-item" key={item.id}>
               <div className="pm-mm-item-head">
-                <div className="pm-mm-title">
-                  {item.title}
-                  {item.archivedToKb ? <Tag color="green" style={{ marginLeft: 8 }}>已归档</Tag> : null}
-                </div>
+                <div className="pm-mm-title">{item.title}</div>
                 <div className="pm-mm-date">
                   <span className="pm-mm-date-icon" aria-hidden>📅</span>
                   {formatDate(item.occurredAt)}
@@ -199,9 +184,6 @@ export function MeetingMinutesTab({ projectId }: Props) {
                 <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setViewing(item)}>
                   查看
                 </Button>
-                <Can permission="project.meeting.publish"><Button type="link" size="small" icon={<FileTextOutlined />} onClick={() => handleArchive(item)} disabled={item.archivedToKb}>
-                  归档知识库
-                </Button></Can>
                 <Can permission="project.meeting.delete"><Popconfirm title="确认删除该会议纪要？" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => handleDelete(item)}>
                   <Button type="link" size="small" danger icon={<DeleteOutlined />}>
                     删除
@@ -249,14 +231,7 @@ export function MeetingMinutesTab({ projectId }: Props) {
             <Button onClick={() => setViewing(null)}>关闭</Button>
             {viewing ? (
               <>
-                <Can permission="project.meeting.publish"><Button
-                  icon={<FileTextOutlined />}
-                  onClick={() => handleArchive(viewing)}
-                  disabled={viewing.archivedToKb}
-                >
-                  归档知识库
-                </Button></Can>
-                {!viewing.archivedToKb && <Can permission="project.meeting.update"><Button
+                <Can permission="project.meeting.update"><Button
                   type="primary"
                   icon={<EditOutlined />}
                   onClick={() => {
@@ -266,7 +241,7 @@ export function MeetingMinutesTab({ projectId }: Props) {
                   }}
                 >
                   编辑
-                </Button></Can>}
+                </Button></Can>
               </>
             ) : null}
           </Space>

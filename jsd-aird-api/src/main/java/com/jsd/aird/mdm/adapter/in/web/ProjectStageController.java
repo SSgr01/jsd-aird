@@ -41,6 +41,11 @@ public class ProjectStageController {
         return ok(service.create(projectId, request.toCreate()));
     }
 
+    @PostMapping("/projects/{projectId}/stages/templates/standard/apply")
+    public ApiResponse<List<ProjectStage>> applyStandardTemplate(@PathVariable UUID projectId) {
+        return ok(service.applyStandardTemplate(projectId));
+    }
+
     @PutMapping("/stages/{stageId}")
     public ApiResponse<ProjectStage> update(@PathVariable UUID stageId, @Valid @RequestBody StageRequest request) {
         return ok(service.update(stageId, request.toUpdate()));

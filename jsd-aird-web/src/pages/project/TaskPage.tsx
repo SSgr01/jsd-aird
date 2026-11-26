@@ -1,7 +1,7 @@
 import { StatusTag } from '@/components/status/StatusTag';
 import { AppstoreOutlined, ReloadOutlined, SearchOutlined, UnorderedListOutlined } from '@ant-design/icons';
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Can } from '@/components/auth/Can';
 import { ListFeedback } from '@/components/loading/ListQueryFeedback';
 import {
@@ -11,6 +11,7 @@ import {
   message,
   Pagination,
   Popconfirm,
+  Segmented,
   Select,
   Space,
   Spin,
@@ -60,6 +61,8 @@ function priorityColor(value?: ProjectPriority) {
 
 export default function TaskPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const mine = searchParams.get('mine') === '1';
   const [loading, setLoading] = useState(false);
   const [listError, setListError] = useState<string>();
   const [listLoaded, setListLoaded] = useState(false);
@@ -111,7 +114,7 @@ export default function TaskPage() {
   const loadTasks = async (q: TaskQuery) => {
     setLoading(true);
     try {
-      const res = await getTasks(q);
+      const res = await getTasks({ ...q, mine });
       setTasks(res.items);
       setTotal(res.total);
       setListError(undefined); setListLoaded(true);
@@ -124,7 +127,7 @@ export default function TaskPage() {
 
   useEffect(() => {
     loadTasks(query);
-  }, [query.page, query.size, query.keyword, query.projectId, query.stageId, query.status, query.owner, query.priority]);
+  }, [query.page, query.size, query.keyword, query.projectId, query.stageId, query.status, query.owner, query.priority, mine]);
 
   const handleFilterChange = <K extends keyof TaskQuery>(key: K, value: TaskQuery[K]) => {
     setQuery((prev) => {
@@ -138,6 +141,7 @@ export default function TaskPage() {
 
   const handleReset = () => {
     setQuery({ ...defaultQuery });
+    setSearchParams({});
   };
 
   const handleView = (task: ProjectTask) => {
@@ -284,6 +288,11 @@ export default function TaskPage() {
           <p>集中查看并筛选全部项目任务，数据来自项目管理原有项目结构。</p>
         </div>
         <div className="pm-page-actions">
+          <Segmented options={[{ label: '全部任务', value: 'all' }, { label: '我的任务', value: 'mine' }]}
+            value={mine ? 'mine' : 'all'} onChange={(value) => {
+              setSearchParams(value === 'mine' ? { mine: '1' } : {});
+              setQuery((current) => ({ ...current, owner: undefined, page: 1 }));
+            }} />
           <Button type="primary" onClick={() => navigate('/projects/list')}>
             项目列表
           </Button>
@@ -349,6 +358,7 @@ export default function TaskPage() {
           value={query.owner || ''}
           options={ownerOptions}
           onChange={(v) => handleFilterChange('owner', v || undefined)}
+          disabled={mine}
           showSearch
           optionFilterProp="label"
           allowClear

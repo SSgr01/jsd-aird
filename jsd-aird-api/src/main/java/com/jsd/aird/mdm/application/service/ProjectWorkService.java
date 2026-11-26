@@ -25,7 +25,7 @@ public class ProjectWorkService {
   if(!mapper.stageBelongs(input.stageId(),projectId)) throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"所选阶段不属于当前项目");
   String name=required(input.name(),"任务名称不能为空"); Instant now=Instant.now();
   validateDates(input);
-  var task=new ProjectTask(UUID.randomUUID(),code("TASK"),projectId,input.stageId(),name,clean(input.owner()),input.priority()==null?ProjectPriority.MEDIUM:input.priority(),input.plannedDate(),input.plannedEnd(),input.status()==null?"PENDING":input.status(),0,0,now,now);
+  var task=new ProjectTask(UUID.randomUUID(),code("TASK"),projectId,input.stageId(),name,clean(input.description()),ownerName(input,null),input.ownerUserId(),input.priority()==null?ProjectPriority.MEDIUM:input.priority(),input.plannedDate(),input.plannedEnd(),input.status()==null?"PENDING":input.status(),0,0,now,now);
   mapper.insertTask(task, com.jsd.aird.shared.security.ActorContext.required().userId().toString()); return task;
  }
  public ProjectTask getTask(UUID id){var task=mapper.task(id).orElseThrow(()->new ApiException(ApiErrorCode.NOT_FOUND,"任务不存在"));requireProject(task.projectId());return task;}
@@ -37,7 +37,7 @@ public class ProjectWorkService {
   if(!mapper.stageBelongs(input.stageId(),existing.projectId())) throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"所选阶段不属于当前项目");
   validateDates(input);
   long version=input.version();
-  var task=new ProjectTask(id,existing.taskCode(),existing.projectId(),input.stageId(),required(input.name(),"任务名称不能为空"),clean(input.owner()),input.priority()==null?existing.priority():input.priority(),input.plannedDate(),input.plannedEnd(),input.status()==null?"PENDING":input.status(),existing.experimentCount(),version,existing.createdAt(),existing.updatedAt());
+  var task=new ProjectTask(id,existing.taskCode(),existing.projectId(),input.stageId(),required(input.name(),"任务名称不能为空"),clean(input.description()),ownerName(input,existing),input.ownerUserId(),input.priority()==null?existing.priority():input.priority(),input.plannedDate(),input.plannedEnd(),input.status()==null?"PENDING":input.status(),existing.experimentCount(),version,existing.createdAt(),existing.updatedAt());
   int rows=mapper.updateTask(task, com.jsd.aird.shared.security.ActorContext.required().userId().toString());
   if(rows==0) throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT,"任务已被他人修改，请刷新后重试");
   if(!Objects.equals(existing.stageId(),input.stageId())) moveTaskChildren(id,input.stageId());
@@ -92,6 +92,10 @@ public class ProjectWorkService {
  }
 
  private ProjectTaskQuery scoped(ProjectTaskQuery query) {
+  if(query.mine()){
+   var actor=com.jsd.aird.shared.security.ActorContext.required();
+   return query.withDataScope(actor.organizationId(),"ALL",actor.userId(),Set.of());
+  }
   if(projectAccess==null)return query;
   var actor=com.jsd.aird.shared.security.ActorContext.required();
   var scope=projectAccess.scope();
@@ -100,6 +104,14 @@ public class ProjectWorkService {
  private void requireProject(UUID projectId){if(projectAccess!=null)projectAccess.get(projectId);}
  private void requireAction(UUID projectId,String permissionCode){if(projectAccess!=null)projectAccess.requireAccess(projectId,permissionCode);}
 
+ private String ownerName(TaskInput input, ProjectTask existing) {
+  if(input.ownerUserId()==null)return clean(input.owner());
+  if(existing!=null && input.ownerUserId().equals(existing.ownerUserId()))return existing.owner();
+  var actor=com.jsd.aird.shared.security.ActorContext.required();
+  return mapper.selectableOwnerName(actor.organizationId(),actor.userId(),input.ownerUserId())
+   .orElseThrow(()->new ApiException(ApiErrorCode.VALIDATION_ERROR,"负责人不在当前部门及下属部门的可选用户中"));
+ }
+
 private static String code(String prefix){return prefix+"-"+LocalDate.now().toString().replace("-","")+"-"+UUID.randomUUID().toString().substring(0,5).toUpperCase();}
  private static String clean(String v){return v==null||v.isBlank()?null:v.trim();}
  private static String required(String v,String message){String x=clean(v);if(x==null)throw new ApiException(ApiErrorCode.VALIDATION_ERROR,message);return x;}
@@ -107,5 +119,12 @@ private static String code(String prefix){return prefix+"-"+LocalDate.now().toSt
   if (input.plannedDate() != null && input.plannedEnd() != null && input.plannedEnd().isBefore(input.plannedDate()))
    throw new ApiException(ApiErrorCode.VALIDATION_ERROR,"计划结束日期不能早于开始日期");
  }
- public record TaskInput(UUID stageId,String name,String owner,ProjectPriority priority,LocalDate plannedDate,LocalDate plannedEnd,String status,Long version){}
+ public record TaskInput(UUID stageId,String name,String owner,ProjectPriority priority,LocalDate plannedDate,LocalDate plannedEnd,String status,Long version,String description,UUID ownerUserId){
+  public TaskInput(UUID stageId,String name,String owner,ProjectPriority priority,LocalDate plannedDate,LocalDate plannedEnd,String status,Long version){
+   this(stageId,name,owner,priority,plannedDate,plannedEnd,status,version,null,null);
+  }
+  public TaskInput(UUID stageId,String name,String owner,ProjectPriority priority,LocalDate plannedDate,LocalDate plannedEnd,String status,Long version,String description){
+   this(stageId,name,owner,priority,plannedDate,plannedEnd,status,version,description,null);
+  }
+ }
 }

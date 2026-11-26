@@ -43,13 +43,13 @@ const DASHBOARD_STATS: StatMetric[] = [
     key: 'projects',
     label: '我的项目',
     value: 0,
-    to: '/projects/list',
+    to: '/projects/list?mine=1',
   },
   {
     key: 'tasks',
     label: '我的任务',
     value: 0,
-    to: '/projects/tasks',
+    to: '/projects/tasks?mine=1',
   },
   {
     key: 'experiments',
@@ -84,7 +84,7 @@ const DASHBOARD_MODULES: DashboardModule[] = [
     items: [],
     emptyHint: '进入项目模块',
     entryName: '项目',
-    to: '/projects/list',
+    to: '/projects/list?mine=1',
   },
   {
     key: 'pending-review',
@@ -116,7 +116,7 @@ const DASHBOARD_MODULES: DashboardModule[] = [
     items: [],
     emptyHint: '进入任务模块',
     entryName: '任务',
-    to: '/projects/tasks',
+    to: '/projects/tasks?mine=1',
   },
   {
     key: 'recent-experiments',
@@ -203,9 +203,9 @@ function ModuleCard({ module }: { module: DashboardModule }) {
 
 export function DashboardPage() {
   const user = useAuthStore(state => state.user);
-  const canOpen = (path: string) => Boolean(user && canViewPathWithMenus(path, user.permissions, user.menuKeys));
-  const projectsQuery = useBusinessQuery('projects', {page:1,size:6}, signal=>getProjects({page:1,size:6},signal), { enabled: canOpen('/projects/list') });
-  const tasksQuery = useBusinessQuery('tasks', {page:1,size:6}, signal=>getTasks({page:1,size:6},signal), { enabled: canOpen('/projects/tasks') });
+  const canOpen = (path: string) => Boolean(user && canViewPathWithMenus(path.split('?')[0]!, user.permissions, user.menuKeys));
+  const projectsQuery = useBusinessQuery('projects', {mine:true,page:1,size:6}, signal=>getProjects({mine:true,page:1,size:6},signal), { enabled: canOpen('/projects/list') });
+  const tasksQuery = useBusinessQuery('tasks', {mine:true,page:1,size:6}, signal=>getTasks({mine:true,page:1,size:6},signal), { enabled: canOpen('/projects/tasks') });
   const experimentsQuery = useBusinessQuery('experiments', {page:1,size:6}, signal=>listExperiments({page:1,size:6},signal), { enabled: canOpen('/experiments/list') });
   const pendingQuery = useBusinessQuery('experiments', {status:'PENDING_REVIEW',page:1,size:6}, signal=>listExperiments({status:'PENDING_REVIEW',page:1,size:6},signal), { enabled: canOpen('/experiments/list') });
   const returnedQuery = useBusinessQuery('experiments', {status:'RETURNED',page:1,size:6}, signal=>listExperiments({status:'RETURNED',page:1,size:6},signal), { enabled: canOpen('/experiments/list') });
@@ -238,7 +238,7 @@ export function DashboardPage() {
         'pending-review': pendingReviews.map(experimentItem),
         'to-be-filled': returnedExperiments.map(experimentItem),
         inventory: inventoryReminders,
-        'my-tasks': tasks.map((item) => ({ key: item.id, title: item.name, meta: item.projectName, badge: '任务', to: '/projects/tasks' })),
+        'my-tasks': tasks.map((item) => ({ key: item.id, title: item.name, meta: item.projectName, badge: '任务', to: '/projects/tasks?mine=1' })),
         'recent-experiments': experiments.map(experimentItem),
       }[module.key] ?? [],
     })),

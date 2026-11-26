@@ -32,4 +32,34 @@ class ProjectTaskConsistencyTest {
         verify(mapper,never()).moveTaskProductionUploads(any(),any());
         verify(mapper,never()).moveTaskResourceLinks(any(),any());
     }
+    @Test void taskDescriptionIsSavedOnCreateAndUpdate() {
+        ActorContext.set(ActorContext.developmentDefault());
+        var mapper=mock(ProjectWorkMapper.class);var service=new ProjectWorkService(mapper);
+        var project=UUID.randomUUID();var stage=UUID.randomUUID();
+        when(mapper.stageBelongs(stage,project)).thenReturn(true);
+        var created=service.createTask(project,new ProjectWorkService.TaskInput(stage,"任务",null,null,null,null,null,null,"  创建说明  "));
+        assertThat(created.description()).isEqualTo("创建说明");
+        verify(mapper).insertTask(argThat(task->"创建说明".equals(task.description())),anyString());
+
+        when(mapper.task(created.id())).thenReturn(Optional.of(created));
+        when(mapper.updateTask(any(),anyString())).thenReturn(1);
+        service.updateTask(created.id(),new ProjectWorkService.TaskInput(stage,"任务",null,null,null,null,null,0L,"  编辑说明  "));
+        verify(mapper).updateTask(argThat(task->"编辑说明".equals(task.description())),anyString());
+    }
+    @Test void selectedOwnerIsResolvedFromTheAllowedDepartmentTree() {
+        ActorContext.set(ActorContext.developmentDefault());
+        var mapper=mock(ProjectWorkMapper.class);var service=new ProjectWorkService(mapper);
+        var project=UUID.randomUUID();var stage=UUID.randomUUID();var owner=UUID.randomUUID();
+        when(mapper.stageBelongs(stage,project)).thenReturn(true);
+        when(mapper.selectableOwnerName(ActorContext.required().organizationId(),ActorContext.required().userId(),owner))
+            .thenReturn(Optional.of("实际姓名"));
+        var task=service.createTask(project,new ProjectWorkService.TaskInput(stage,"任务","伪造姓名",null,null,null,null,null,null,owner));
+        assertThat(task.owner()).isEqualTo("实际姓名");
+        assertThat(task.ownerUserId()).isEqualTo(owner);
+
+        var other=UUID.randomUUID();
+        assertThatThrownBy(()->service.createTask(project,new ProjectWorkService.TaskInput(stage,"任务","其他人",null,null,null,null,null,null,other)))
+            .isInstanceOf(ApiException.class);
+        verify(mapper,times(1)).insertTask(any(),anyString());
+    }
 }

@@ -27,7 +27,7 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
         if (check.resourceId() == null) {
             return switch (scope) {
                 case "SELECTED", "PROJECT", "CATEGORY" -> binding.targetIds().isEmpty()
-                        ? ("SELECTED".equals(scope) && Set.of("QUALITY", "QUALITY_UPLOAD").contains(
+                        ? ("SELECTED".equals(scope) && Set.of("EXPERIMENT", "QUALITY", "QUALITY_UPLOAD").contains(
                                 check.resourceType() == null ? "" : check.resourceType().toUpperCase(Locale.ROOT))
                                 ? ResolvedDataScope.allow(scope, Set.of())
                                 : ResolvedDataScope.deny(scope, "EMPTY_SCOPE"))
@@ -89,6 +89,10 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
             };
             if (projectScopedTable != null) {
                 if (binding.targetIds().isEmpty()) {
+                    if ("EXPERIMENT".equalsIgnoreCase(check.resourceType()))
+                        return exists("SELECT EXISTS (SELECT 1 FROM rnd.experiment WHERE organization_id = ? " +
+                                        "AND id = ? AND deleted = false AND created_by = ?)",
+                                new Object[]{check.organizationId(), check.resourceId(), check.userId()}, scope, "NOT_CREATOR");
                     if (!"QUALITY".equalsIgnoreCase(check.resourceType())) return ResolvedDataScope.deny(scope, "EMPTY_SCOPE");
                     return exists("SELECT EXISTS (SELECT 1 FROM quality.data_record WHERE organization_id = ? " +
                                     "AND id = ? AND deleted = false AND created_by = ?)",
@@ -144,8 +148,9 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
             if (directTable != null) {
                 if (binding.targetIds().contains(check.resourceId())) return ResolvedDataScope.allow(scope);
                 var creatorColumn = "KNOWLEDGE_UPLOAD".equalsIgnoreCase(check.resourceType()) ? "actor_id" : "created_by";
+                var idColumn = "SPECTRUM_UPLOAD".equalsIgnoreCase(check.resourceType()) ? "request_id" : "id";
                 return exists("SELECT EXISTS (SELECT 1 FROM " + directTable
-                                + " WHERE organization_id = ? AND id = ? AND " + creatorColumn + " = ?)",
+                                + " WHERE organization_id = ? AND " + idColumn + " = ? AND " + creatorColumn + " = ?)",
                         new Object[]{check.organizationId(), check.resourceId(), check.userId()}, scope, "TARGET_NOT_SELECTED");
             }
             return binding.targetIds().contains(check.resourceId())
@@ -227,6 +232,7 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
             case "PRODUCTION_UPLOAD" -> "mfg.production_upload";
             case "FILE" -> "ops.file_object";
             case "SPECTRUM" -> "spc.chart_asset";
+            case "SPECTRUM_UPLOAD" -> "spc.chart_upload_attempt";
             case "INVENTORY" -> "mfg.inventory_product";
             default -> null;
         };
@@ -281,6 +287,10 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
                 sql = "SELECT EXISTS (SELECT 1 FROM rnd.experiment_import_job WHERE organization_id = ? AND created_by = ? AND id = ?)";
                 args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
             }
+            case "KNOWLEDGE_UPLOAD" -> {
+                sql = "SELECT EXISTS (SELECT 1 FROM kb.upload_task WHERE organization_id = ? AND actor_id = ? AND id = ?)";
+                args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
+            }
             case "RESEARCH_TEST_UPLOAD" -> {
                 sql = "SELECT EXISTS (SELECT 1 FROM rnd.research_test_upload WHERE organization_id = ? AND created_by = ? AND id = ? AND deleted = false)";
                 args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
@@ -299,6 +309,10 @@ public class JdbcDataScopeResolver implements DataScopeResolver {
             }
             case "SPECTRUM" -> {
                 sql = "SELECT EXISTS (SELECT 1 FROM spc.chart_asset WHERE organization_id = ? AND created_by = ? AND id = ? AND status <> 'DELETED')";
+                args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
+            }
+            case "SPECTRUM_UPLOAD" -> {
+                sql = "SELECT EXISTS (SELECT 1 FROM spc.chart_upload_attempt WHERE organization_id = ? AND created_by = ? AND request_id = ?)";
                 args = new Object[]{check.organizationId(), check.userId(), check.resourceId()};
             }
             case "QUALITY" -> {

@@ -337,7 +337,7 @@ public class JdbcDataRepository implements DataRepository {
     public void saveAttemptHistory(UUID organizationId, UUID importJobId, String reason, UUID actorId) {
         jdbc.update("""
                 INSERT INTO data.import_job_attempt (
-                    id, organization_id, import_job_id, attempt_no, reason, status, snapshot_jsonb, created_by
+                    id, organization_id, import_job_id, attempt_no, reason, status, snapshot_jsonb, created_by, created_at
                 )
                 SELECT gen_random_uuid(), j.organization_id, j.id,
                        (SELECT coalesce(max(previous.attempt_no), 0) + 1

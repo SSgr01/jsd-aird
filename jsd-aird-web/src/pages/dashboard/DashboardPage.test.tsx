@@ -33,6 +33,10 @@ describe('dashboard independent module loading', () => {
   it('shows completed modules while other requests are still pending', async () => {
     renderDashboard();
     expect(await screen.findByText('已加载项目')).toBeInTheDocument();
+    expect(getTasks).toHaveBeenCalledWith({ mine: true, page: 1, size: 6 }, expect.any(AbortSignal));
+    expect(getProjects).toHaveBeenCalledWith({ mine: true, page: 1, size: 6 }, expect.any(AbortSignal));
+    expect(screen.getByRole('link', { name: /我的项目/ })).toHaveAttribute('href', '/projects/list?mine=1');
+    expect(screen.getByRole('link', { name: /我的任务/ })).toHaveAttribute('href', '/projects/tasks?mine=1');
   });
 
   it('keeps successful modules visible when another request fails', async () => {
@@ -48,6 +52,6 @@ describe('dashboard independent module loading', () => {
     expect(screen.queryByRole('link', { name: /进入模块/ })).not.toBeInTheDocument();
     expect(getProjects).not.toHaveBeenCalled();
     expect(getTasks).not.toHaveBeenCalled();
-    expect(inventoryApi.balances).not.toHaveBeenCalled();
+    expect(vi.spyOn(inventoryApi, 'balances')).not.toHaveBeenCalled();
   });
 });

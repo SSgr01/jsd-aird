@@ -15,6 +15,7 @@
 @media(max-width:760px){.pm-stage-overview-actions>*{min-width:0}.pm-stage-overview-actions>* .ant-btn{width:100%}.pm-stage-work{padding:12px}.pm-stage-work-head{align-items:flex-start;flex-wrap:wrap;gap:8px}}
 @media(max-width:760px){.pm-detail-tabs .ant-tabs-nav{margin-bottom:8px}.pm-detail-tabs .ant-tabs-nav-list{gap:0}.pm-detail-tabs .ant-tabs-tab{margin:0!important;padding:6px 2px}.pm-detail-tabs .ant-tabs-tab+.ant-tabs-tab{margin-left:12px!important}}
 @media(min-width:761px){.pm-task-form-body .ant-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}.pm-task-form-body .ant-form-item{min-width:0}}
+.pm-task-form-body .pm-task-description{grid-column:1/-1}
 @media(max-width:760px){.pm-task-form-body .ant-form{display:grid;grid-template-columns:1fr}}
 
 /* Keep the stage sequence label pinned to the card edge while allowing long
@@ -48,6 +49,37 @@
   width: 204px;
 }
 
+.pm-stage-card .pm-stage-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 6px;
+  border-top: 1px solid var(--app-border);
+  padding-top: 5px;
+}
+
+.pm-stage-card-actions .pm-stage-card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin-inline-end: auto;
+  white-space: nowrap;
+}
+
+.pm-stage-card-status .pm-dot {
+  flex: none;
+}
+
+.pm-stage-card-actions .ant-btn {
+  flex: none;
+  padding-inline: 4px;
+}
+
+.pm-stage-card-actions .ant-btn:not(.ant-btn-dangerous) {
+  color: var(--app-text);
+}
+
 /* Keep stage-card copy in the same readable scale as task-card copy. */
 .pm-stage-card,
 .pm-stage-card .pm-stage-card-head strong,
@@ -55,6 +87,21 @@
 .pm-stage-card .pm-stage-card-stats {
   font-size: 14px;
   line-height: 1.45;
+}
+
+.pm-stage-card .pm-stage-card-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.pm-stage-card-stats span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Task names may span multiple lines; keep their actions with the status row. */

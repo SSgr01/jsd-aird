@@ -177,6 +177,45 @@ class JdbcDataScopeResolverTest {
     }
 
     @Test
+    void selectedExperimentWithoutProjectsStillAllowsItsCreator() {
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+        var binding = new Binding("eln.view.update", "ALLOW", "SELECTED", List.of());
+
+        assertThat(resolver.resolve(check("EXPERIMENT", null), binding).allowed()).isTrue();
+        assertThat(resolver.resolve(check("EXPERIMENT"), binding).allowed()).isTrue();
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).queryForObject(sql.capture(), eq(Boolean.class), any(Object[].class));
+        assertThat(sql.getValue()).contains("rnd.experiment", "created_by = ?")
+                .doesNotContain("project_id IN");
+    }
+
+    @Test
+    void spectrumUploadScopeUsesRequestId() {
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+        var selected = new Binding("spectrum.upload.delete", "ALLOW", "SELECTED", List.of());
+        var creator = new Binding("spectrum.upload.delete", "ALLOW", "CREATOR", List.of());
+
+        assertThat(resolver.resolve(check("SPECTRUM_UPLOAD"), selected).allowed()).isTrue();
+        assertThat(resolver.resolve(check("SPECTRUM_UPLOAD"), creator).allowed()).isTrue();
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc, org.mockito.Mockito.times(2)).queryForObject(sql.capture(), eq(Boolean.class), any(Object[].class));
+        assertThat(sql.getAllValues()).allSatisfy(value ->
+                assertThat(value).contains("spc.chart_upload_attempt", "request_id = ?"));
+    }
+
+    @Test
+    void knowledgeUploadCreatorScopeUsesTaskActor() {
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+        var result = resolver.resolve(check("KNOWLEDGE_UPLOAD"),
+                new Binding("knowledge.upload.create", "ALLOW", "CREATOR", List.of()));
+
+        assertThat(result.allowed()).isTrue();
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).queryForObject(sql.capture(), eq(Boolean.class), any(Object[].class));
+        assertThat(sql.getValue()).contains("kb.upload_task", "actor_id = ?");
+    }
+
+    @Test
     void selectedProductionOrderWithoutProjectRelationRetainsOnlyCreatorAccess() {
         when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
         var projectId = UUID.randomUUID();

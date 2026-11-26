@@ -595,6 +595,27 @@ export function DataImportJobPage({
     void message.success(`字段“${field.name}”已确认`);
   };
 
+  const confirmAllFieldDefinitions = async (items: FieldDefinitionReviewItem[]) => {
+    const current = editorRef.current?.getTemplateInstance?.() ?? instance;
+    if (!current) throw new Error('字段定义尚未加载');
+    let next = current;
+    for (const item of items) {
+      const field = next.model.fields.find((candidate) => candidate.id === item.fieldId);
+      if (!field) throw new Error(`未找到需要确认的字段“${item.name}”`);
+      next = updateWorkbookField(next, item.fieldId, {
+        ...(field.experimentSemanticStatus === 'NEEDS_REVIEW'
+          ? { experimentSemanticStatus: 'CONFIRMED' as const }
+          : {}),
+      });
+    }
+    await editorRef.current?.setTemplateInstance?.(next);
+    if (!loads.isActive()) return;
+    setInstance(next);
+    markStructureDirty();
+    if (!(await saveDraft(true))) throw new Error('字段确认尚未保存，请重试');
+    void message.success(`${items.length} 个字段已确认`);
+  };
+
   const compatibility = preview.job.compatibilityStatus || 'LEGACY';
   const saveProjectRelations = async () => {
     setSaving(true);
@@ -654,6 +675,7 @@ export function DataImportJobPage({
           busy={saving || Boolean(savingCell)}
           onEdit={editFieldDefinition}
           onConfirm={confirmFieldDefinition}
+          onConfirmAll={confirmAllFieldDefinitions}
         />
         <WorkbenchNotice preview={preview} issues={issuesOutsideDefinition} processing={processing} onIssue={(issue) => {
           if (isFieldDefinitionIssue(issue) && instance) {

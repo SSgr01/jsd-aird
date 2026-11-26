@@ -66,9 +66,6 @@ public class MeetingMinutesService {
     public void update(UUID id, MeetingMinutes input) {
         var current = get(id);
         requireAction(current.projectId(), "project.meeting.update");
-        if (current.archivedToKb()) {
-            throw new ApiException(ApiErrorCode.RESOURCE_CONFLICT, "已归档会议纪要不可编辑");
-        }
         var value = new MeetingMinutes(
                 id,
                 current.projectId(),
@@ -76,7 +73,7 @@ public class MeetingMinutesService {
                 input.attendees() == null ? List.of() : input.attendees(),
                 input.summary(),
                 input.occurredAt() == null ? current.occurredAt() : input.occurredAt(),
-                input.archivedToKb(),
+                current.archivedToKb(),
                 input.version(),
                 current.createdAt(),
                 Instant.now()
@@ -90,20 +87,6 @@ public class MeetingMinutesService {
         requireAction(current.projectId(), "project.meeting.delete");
         if (!repository.delete(id, version)) CrmServiceSupport.conflict();
         if(materialActivity!=null)materialActivity.record("DELETED","MEETING_MINUTES",id,current.projectId(),current.title());
-    }
-
-    @Transactional
-    public void archiveToKb(UUID id,long expectedVersion) {
-        var current = get(id);
-        requireAction(current.projectId(), "project.meeting.archive");
-        if(current.version()!=expectedVersion)CrmServiceSupport.conflict();
-        if (current.archivedToKb()) return;
-        var value = new MeetingMinutes(
-                current.id(), current.projectId(), current.title(), current.attendees(),
-                current.summary(), current.occurredAt(), true, current.version(),
-                current.createdAt(), Instant.now()
-        );
-        if (!repository.update(value, expectedVersion, CrmServiceSupport.operator())) CrmServiceSupport.conflict();
     }
 
     private static int clamp(int value) {

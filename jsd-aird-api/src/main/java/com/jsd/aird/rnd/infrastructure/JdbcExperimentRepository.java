@@ -306,7 +306,8 @@ public class JdbcExperimentRepository implements ExperimentRepository {
 
     private void appendSelectedOrCreated(StringBuilder where, List<Object> args, DataScopeFilter scope) {
         if (scope.targetIds().isEmpty()) {
-            where.append(" AND 1=0");
+            where.append(" AND e.created_by=?");
+            args.add(scope.actorId());
             return;
         }
         where.append(" AND (e.project_id IN (")

@@ -13,6 +13,7 @@ import { UploadWorkspace, type UploadWorkspaceRecord } from '@/components/upload
 import { usePermission } from '@/components/auth/usePermission';
 import { ProjectRelationPicker } from '@/components/project-relations/ProjectRelationPicker';
 import { downloadFile } from '@/services/files/file-api';
+import { HttpError } from '@/services/http/errors';
 import type { ProjectRelationTarget } from '@/services/project/project-resource-api';
 import {
   deleteResearchTestUpload,
@@ -127,6 +128,7 @@ export function ResearchTestUploadPage({ type = 'REPORT' }: { type?: ResearchTes
     const relation = relations.find((item) => item.projectId);
     setUploading(true);
     let failed = 0;
+    let skipped = 0;
     let cancelled = 0;
     try {
       for (const file of sourceFiles) {
@@ -162,6 +164,13 @@ export function ResearchTestUploadPage({ type = 'REPORT' }: { type?: ResearchTes
             setTasks((current) => current.filter((task) => task.id !== taskId));
             continue;
           }
+          if (error instanceof HttpError && error.code === 'RESOURCE_CONFLICT'
+            && error.message === '相同内容的文件已上传') {
+            skipped += 1;
+            setTasks((current) => current.filter((task) => task.id !== taskId));
+            void message.warning(`“${file.name}”已存在，已跳过上传`);
+            continue;
+          }
           failed += 1;
           const reason = error instanceof Error ? error.message : '上传失败';
           setTasks((current) =>
@@ -183,9 +192,9 @@ export function ResearchTestUploadPage({ type = 'REPORT' }: { type?: ResearchTes
       if (cancelled === sourceFiles.length) return;
       setFiles([]);
       await load();
-      const succeeded = sourceFiles.length - failed;
+      const succeeded = sourceFiles.length - failed - skipped;
       if (failed) void message.warning(`${succeeded} 个文件上传成功，${failed} 个失败`);
-      else void message.success(`已上传 ${succeeded} 个文件并生成${standard ? '测试方法' : '报告'}草稿`);
+      else if (succeeded) void message.success(`已上传 ${succeeded} 个文件并生成${standard ? '测试方法' : '报告'}草稿`);
     } finally {
       setUploading(false);
     }

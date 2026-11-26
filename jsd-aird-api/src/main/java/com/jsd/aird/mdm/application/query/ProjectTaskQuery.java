@@ -16,11 +16,17 @@ public record ProjectTaskQuery(
     UUID organizationId,
     String scopeType,
     UUID scopeUserId,
-    List<UUID> scopeTargetIds
+    List<UUID> scopeTargetIds,
+    boolean mine
 ) {
     public ProjectTaskQuery(String keyword, String projectId, String stageId, String status,
                             String owner, String priority, Integer page, Integer size) {
-        this(keyword, projectId, stageId, status, owner, priority, page, size, null, "ALL", null, List.of());
+        this(keyword, projectId, stageId, status, owner, priority, page, size, false);
+    }
+
+    public ProjectTaskQuery(String keyword, String projectId, String stageId, String status,
+                            String owner, String priority, Integer page, Integer size, boolean mine) {
+        this(keyword, projectId, stageId, status, owner, priority, page, size, null, "ALL", null, List.of(), mine);
     }
 
     public ProjectTaskQuery {
@@ -29,6 +35,6 @@ public record ProjectTaskQuery(
 
     public ProjectTaskQuery withDataScope(UUID organizationId, String scopeType, UUID userId, Set<UUID> targetIds) {
         return new ProjectTaskQuery(keyword, projectId, stageId, status, owner, priority, page, size,
-                organizationId, scopeType, userId, List.copyOf(targetIds));
+                organizationId, scopeType, userId, List.copyOf(targetIds), mine);
     }
 }

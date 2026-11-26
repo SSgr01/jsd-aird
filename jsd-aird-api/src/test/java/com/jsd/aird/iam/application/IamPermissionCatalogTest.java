@@ -56,12 +56,12 @@ class IamPermissionCatalogTest {
     void featureMenusExposeOnlyApplicableStandardActions() {
         var codes = IamPermissionCatalog.definitions().stream().map(definition -> definition.code()).collect(java.util.stream.Collectors.toSet());
         assertThat(codes).contains("eln.view.create", "eln.view.approve", "quality.view.publish",
-                "research-test.report.view.approve", "production.view.delete", "project.meeting.publish",
+                "research-test.report.view.approve", "production.view.delete",
                 "knowledge.review.publish", "template.upload.download", "template.upload.retry",
                 "research-test.report.upload.delete", "production.upload.download",
                 "knowledge.upload.retry", "data.upload.delete", "quality.upload.download");
         assertThat(codes).doesNotContain("ai.search.create", "project.materials.delete");
-        assertThat(codes).doesNotContain("spectrum.view.publish");
+        assertThat(codes).doesNotContain("spectrum.view.publish", "project.meeting.archive", "project.meeting.publish");
         assertThat(codes).doesNotContain("inventory.rnd.delete", "inventory.production.delete");
     }
 

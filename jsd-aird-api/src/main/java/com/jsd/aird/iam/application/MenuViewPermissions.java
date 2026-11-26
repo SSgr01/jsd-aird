@@ -25,6 +25,7 @@ public final class MenuViewPermissions {
             Map.entry("project.customer-needs", "project.view"),
             Map.entry("project.reference", "project.view"),
             Map.entry("project.meeting", "project.view"),
+            Map.entry("project.communication", "project.view"),
             Map.entry("project.log", "project.view"),
             Map.entry("project.materials", "project.view"),
             Map.entry("eln.view", "experiment.view"),

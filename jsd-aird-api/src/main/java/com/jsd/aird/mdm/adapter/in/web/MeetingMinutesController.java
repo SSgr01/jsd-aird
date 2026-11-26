@@ -81,13 +81,6 @@ public class MeetingMinutesController {
         return ok(null);
     }
 
-    @PostMapping("/{id}/archive-to-kb")
-    @Operation(summary = "归档到知识库", description = "将会议纪要标记为已归档到知识库")
-    ApiResponse<Void> archiveToKb(@Parameter(description = "会议纪要 ID") @PathVariable UUID id,@RequestParam @PositiveOrZero long version) {
-        service.archiveToKb(id,version);
-        return ok(null);
-    }
-
     private static <T> ApiResponse<T> ok(T data) {
         return ResponseFactory.success(data, RequestIdHolder.currentOrUnknown());
     }

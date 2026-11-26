@@ -5,6 +5,7 @@ import { ListFilterBar } from '@/components/list-controls/ListFilterBar';
 import { useListPageBounds } from '@/services/query/use-list-page-bounds';
 import { useBusinessQuery } from '@/services/query/use-business-query';
 import { useListKeyword, useListUrl } from '@/services/query/use-list-url';
+import { useProjectOwnerOptions } from './useProjectOwnerOptions';
 import {
   AppstoreOutlined,
   DeleteOutlined,
@@ -75,6 +76,7 @@ interface ProjectFormValues {
   projectCode?: string;
   partnerName?: string;
   owner?: string;
+  ownerUserId?: string;
   startDate?: dayjs.Dayjs | null;
   endDate?: dayjs.Dayjs | null;
   priority?: ProjectPriority;
@@ -82,6 +84,7 @@ interface ProjectFormValues {
   teamSize?: number;
   teamMembers?: string[];
   background?: string;
+  customerRequirements?: string;
   customFields?: CustomField[];
 }
 
@@ -128,10 +131,12 @@ export function ProjectListPage() {
   const dateRange = useMemo<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(() => from || to ? [from ? dayjs(from) : null, to ? dayjs(to) : null] : null, [from, to]);
   const setDateRange = (value: [dayjs.Dayjs | null, dayjs.Dayjs | null] | null) => url.update({ from: value?.[0]?.format('YYYY-MM-DD'), to: value?.[1]?.format('YYYY-MM-DD') }, true);
   const [owner, setOwner] = url.field<string | undefined>('owner', undefined);
+  const mine = url.text('mine') === '1';
   const [priority, setPriority] = url.field<ProjectPriority | undefined>('priority', undefined);
   const [status, setStatus] = url.field<ProjectStatus | undefined>('status', undefined);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const ownerCandidates = useProjectOwnerOptions(drawerOpen);
   const [submitting, setSubmitting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [copying, setCopying] = useState(false);
@@ -147,7 +152,7 @@ export function ProjectListPage() {
   const [msg, holder] = message.useMessage();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const filters = { keyword: keyword || undefined, owner, priority, status, startDateFrom: from, startDateTo: to, page, size: pageSize };
+  const filters = { keyword: keyword || undefined, owner, mine, priority, status, startDateFrom: from, startDateTo: to, page, size: pageSize };
   const listQuery = useBusinessQuery('projects', filters, (signal) => getProjects(filters, signal), { keepPage: true });
   useListPageBounds(url, listQuery, DEFAULT_PAGE_SIZE);
   const rows = listQuery.data?.items ?? [];
@@ -386,13 +391,15 @@ export function ProjectListPage() {
       name: values.name.trim(),
       projectCode: values.projectCode?.trim() || undefined,
       partnerName: values.partnerName?.trim() || undefined,
-      owner: values.owner?.trim() || undefined,
+      owner: ownerCandidates.users.find((user) => user.id === values.ownerUserId)?.displayName || values.owner?.trim() || undefined,
+      ownerUserId: values.ownerUserId || undefined,
       startDate: values.startDate?.format('YYYY-MM-DD') || undefined,
       endDate: values.endDate?.format('YYYY-MM-DD') || undefined,
       priority: values.priority,
       status: values.status,
       teamSize: values.teamSize ?? (values.teamMembers ?? []).length,
       background: values.background?.trim() || undefined,
+      customerRequirements: values.customerRequirements?.trim() || undefined,
       customFields: Object.keys(customFields).length ? customFields : undefined,
       teamMembers: values.teamMembers ?? [],
     };
@@ -495,6 +502,9 @@ export function ProjectListPage() {
       </div>
 
       <section className="pm-list-surface" aria-label="项目筛选与记录">
+      <Select aria-label="项目范围" value={mine ? 'mine' : 'all'} style={{ width: 140, marginBottom: 12 }}
+        options={[{ value: 'all', label: '全部项目' }, { value: 'mine', label: '我的项目' }]}
+        onChange={(value) => { url.update({ mine: value === 'mine' ? '1' : undefined }, true); setPage(1); clearSelection(); }} />
       <ListFilterBar className="project-list-filters" activeCount={activeFilterCount}
         summary={filterSummary} canReset={hasFilters} onReset={reset}
         search={<Input
@@ -775,8 +785,11 @@ export function ProjectListPage() {
               <Form.Item name="partnerName" label="所属客户">
                 <Input placeholder="请输入客户或公司名称" maxLength={300} />
               </Form.Item>
-              <Form.Item name="owner" label="负责人">
-                <Input placeholder="请输入负责人" maxLength={100} />
+              <Form.Item name="owner" hidden><Input /></Form.Item>
+              <Form.Item name="ownerUserId" label="负责人">
+                <Select allowClear showSearch optionFilterProp="label" placeholder="请选择负责人"
+                  loading={ownerCandidates.loading} options={ownerCandidates.users.map((user) => ({ value: user.id, label: `${user.displayName} (${user.username})` }))}
+                  onChange={(value) => form.setFieldValue('owner', ownerCandidates.users.find((user) => user.id === value)?.displayName)} />
               </Form.Item>
               <Form.Item name="startDate" label="开始日期">
                 <DatePicker style={{ width: '100%' }} placeholder="请选择开始日期" />
@@ -813,6 +826,9 @@ export function ProjectListPage() {
             <div className="pm-form-desc">
               <Form.Item name="background" label="项目描述">
                 <Input.TextArea rows={3} placeholder="请输入项目描述" />
+              </Form.Item>
+              <Form.Item name="customerRequirements" label="客户需求">
+                <Input.TextArea rows={3} placeholder="请输入客户需求" />
               </Form.Item>
             </div>
           </div>
@@ -878,6 +894,7 @@ export function ProjectListPage() {
             </Descriptions.Item>
             <Descriptions.Item label="团队">{detail.teamSize} 人</Descriptions.Item>
             <Descriptions.Item label="项目背景">{detail.background || '—'}</Descriptions.Item>
+            <Descriptions.Item label="客户需求">{detail.customerRequirements || '—'}</Descriptions.Item>
           </Descriptions>
         )}
       </Drawer>

@@ -4,9 +4,7 @@ import { ArrowLeftOutlined, CloudUploadOutlined, DownloadOutlined, EyeOutlined, 
 import { Button, Result, Skeleton, Space, Tabs, Tag, Typography, message } from 'antd';
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { DocumentStructure, EditorHandle, TemplateBinding } from '@/features/template-workspace/types';
-import { DocumentOutlinePanel } from '@/features/template-workspace/DocumentOutlinePanel';
-import { deriveDocumentStructureFromSnapshot } from '@/features/template-workspace/document-structure';
+import type { EditorHandle, TemplateBinding } from '@/features/template-workspace/types';
 import { templateApi } from '@/services/templates/template-api';
 import { projectDocumentApi, type ProjectDocumentDetail, type ProjectDocumentVersion } from '@/services/project/project-document-api';
 import { formatTime } from '@/utils/date';
@@ -68,7 +66,6 @@ export function ProjectDocumentWorkspacePage() {
   const [schema, setSchema] = useState<Record<string, unknown>>({});
   const [mapping, setMapping] = useState<TemplateBinding[]>([]);
   const [data, setData] = useState<Record<string, unknown>>({});
-  const [documentStructure, setDocumentStructure] = useState<DocumentStructure>();
   const canUpdate = usePermission('project.document.update');
   const [view, setView] = useState<'preview' | 'edit' | 'versions'>(canUpdate ? 'edit' : 'preview');
   const [error, setError] = useState<string>();
@@ -89,12 +86,9 @@ export function ProjectDocumentWorkspacePage() {
         let nextSchema = doc.contentSchema ?? {};
         let nextMapping = (doc.contentMapping ?? []) as TemplateBinding[];
         let nextData = doc.contentData ?? {};
-        let nextStructure: DocumentStructure | undefined = doc.contentStructure
-          ?? deriveDocumentStructureFromSnapshot(nextSnapshot, doc.id);
         if (!nextSnapshot && doc.templateVersionId) {
           try {
             const template = await templateApi.getEditModel(doc.templateVersionId);
-            nextStructure = template.documentStructure;
             nextSnapshot = template.snapshotFileId && template.snapshotHash
               ? await templateApi.downloadSnapshot(template.versionId)
               : template.inlineSnapshot ?? {};
@@ -126,7 +120,7 @@ export function ProjectDocumentWorkspacePage() {
           });
         }
         if (!active) return;
-        setDocument(doc); setVersions(history); setSnapshot(nextSnapshot ?? {}); setSchema(nextSchema); setMapping(nextMapping); setData(nextData); setDocumentStructure(nextStructure);
+        setDocument(doc); setVersions(history); setSnapshot(nextSnapshot ?? {}); setSchema(nextSchema); setMapping(nextMapping); setData(nextData);
         setSelectedVersion(undefined);
         setView(canUpdate && doc.status !== 'ARCHIVED' ? 'edit' : 'preview');
         setSaveState('SAVED');
@@ -142,7 +136,6 @@ export function ProjectDocumentWorkspacePage() {
       const current = editorRef.current?.getSnapshot() ?? snapshot ?? {};
       await projectDocumentApi.saveContent(projectId, documentId, { snapshot: current, schema, mapping, data });
       setSnapshot(current);
-      setDocumentStructure(deriveDocumentStructureFromSnapshot(current, document.id));
       setSaveState('SAVED');
       message.success('项目文档已保存');
     } catch (reason) {
@@ -246,8 +239,7 @@ export function ProjectDocumentWorkspacePage() {
           )}
         </main>
       ) : (
-        <div className={`template-workspace-grid prototype-workspace-grid ${word ? 'word-workspace-grid project-word-workspace' : ''}`}>
-            {word && <DocumentOutlinePanel collapsible structure={documentStructure} onSelect={(node) => editorRef.current?.focusNode?.(node)} />}
+        <div className="template-workspace-grid prototype-workspace-grid">
             <main className={`workspace-canvas ${view === 'preview' ? 'is-preview' : ''}`}><Suspense fallback={<Skeleton active />}>
               {word ? <div className={!editable ? 'document-readonly' : undefined}><DocsEditor ref={editorRef} snapshot={snapshot} editable={editable} onDirty={() => setSaveState('DIRTY')} /></div>
                 : <div className={!editable ? 'document-readonly' : undefined}><SheetsEditor ref={editorRef} snapshot={snapshot} editable={editable} bindings={mapping} onEditorValue={() => undefined} onDirty={() => setSaveState('DIRTY')} /></div>}

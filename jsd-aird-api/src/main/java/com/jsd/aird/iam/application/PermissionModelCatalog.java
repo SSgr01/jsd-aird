@@ -41,6 +41,7 @@ public final class PermissionModelCatalog {
             m("project.customer-needs", "客户需求", "project", "/projects/list"),
             m("project.reference", "资料参考", "project", "/projects/list"),
             m("project.meeting", "会议纪要", "project", "/projects/list"),
+            m("project.communication", "沟通记录", "project", "/projects/list"),
             m("project.log", "项目日志", "project", "/projects/list"),
             m("project.materials", "关联资料", "project", "/projects/list"),
             m("eln", "电子实验记录本", null, "/experiments/list"),

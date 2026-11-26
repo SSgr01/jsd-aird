@@ -110,7 +110,9 @@ public final class IamPermissionCatalog {
                 p("project.meeting.create", "project", "新增会议纪要", "MEDIUM", "SELF"),
                 p("project.meeting.update", "project", "编辑会议纪要", "MEDIUM", "SELF"),
                 p("project.meeting.delete", "project", "删除会议纪要", "HIGH", "SELF"),
-                p("project.meeting.archive", "project", "归档会议纪要到知识库", "HIGH", "SELF"),
+                p("project.communication.create", "project", "新增沟通记录", "MEDIUM", "SELF"),
+                p("project.communication.update", "project", "编辑沟通记录", "MEDIUM", "SELF"),
+                p("project.communication.delete", "project", "删除沟通记录", "HIGH", "SELF"),
                 p("project.materials.download", "project", "下载关联资料", "MEDIUM", "ALL"),
 
                 p("template.view", "template", "查看模板", "LOW", "ALL"),
@@ -315,7 +317,7 @@ public final class IamPermissionCatalog {
             for (var action : actions.split(",")) {
                 var code = menu.key() + "." + action;
                 if (existing.add(code)) definitions.add(p(code, module,
-                        ("project.meeting".equals(menu.key()) && "publish".equals(action) ? "归档" : ACTION_NAMES.get(action)) + menu.label(),
+                        ACTION_NAMES.get(action) + menu.label(),
                         "view".equals(action) ? ("system".equals(menu.parent()) ? "HIGH" : "LOW")
                                 : Set.of("delete", "approve", "publish").contains(action) ? "HIGH" : "MEDIUM",
                         "view".equals(action) || "publish".equals(action) ? "ALL"
@@ -340,7 +342,8 @@ public final class IamPermissionCatalog {
             Map.entry("project.document", "view,create,update,delete,submit,approve,publish"),
             Map.entry("project.customer-needs", "view,create,update,delete"),
             Map.entry("project.reference", "view,update"),
-            Map.entry("project.meeting", "view,create,update,delete,publish"),
+            Map.entry("project.meeting", "view,create,update,delete"),
+            Map.entry("project.communication", "view,create,update,delete"),
             Map.entry("project.log", "view"),
             Map.entry("project.materials", "view"),
             Map.entry("eln.create", "view,create"),

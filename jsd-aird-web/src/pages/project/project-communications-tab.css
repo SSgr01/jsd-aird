@@ -1,0 +1,36 @@
+.pm-communication-tab { padding: 8px 0 16px; }
+.pm-communication-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.pm-communication-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.pm-communication-head small { margin-left: 5px; color: var(--app-text-secondary); font-size: 12px; font-weight: 400; }
+.pm-communication-view.active { color: var(--app-text); background: var(--app-primary-soft); border-color: var(--app-primary); }
+.pm-communication-body { border: 1px solid var(--app-border); border-radius: 8px; background: var(--app-surface); overflow: hidden; }
+.pm-communication-body > .ant-empty { padding: 42px 20px; }
+.pm-communication-loading { display: grid; place-items: center; min-height: 180px; }
+.pm-communication-timeline { padding: 18px 20px 0; }
+.pm-communication-item { display: flex; gap: 14px; padding-bottom: 20px; }
+.pm-communication-marker { position: relative; display: flex; flex: 0 0 14px; justify-content: center; }
+.pm-communication-dot { z-index: 1; width: 12px; height: 12px; margin-top: 4px; border-radius: 50%; background: var(--app-primary); box-shadow: 0 0 0 4px var(--app-primary-soft); }
+.pm-communication-line { position: absolute; top: 16px; bottom: -4px; left: 50%; width: 2px; transform: translateX(-50%); background: var(--app-border); }
+.pm-communication-item:last-child .pm-communication-line { display: none; }
+.pm-communication-content { flex: 1; min-width: 0; padding: 12px 14px; border: 1px solid var(--app-border); border-radius: 8px; background: var(--app-surface-subtle); }
+.pm-communication-time { margin-bottom: 8px; color: var(--app-text-secondary); font-size: 12px; }
+.pm-communication-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 8px; font-size: 14px; font-weight: 600; }
+.pm-communication-meta em { color: var(--app-text-secondary); font-size: 13px; font-style: normal; font-weight: 400; }
+.pm-communication-text { padding: 8px 10px; border: 1px solid var(--app-border); border-radius: 6px; background: var(--app-surface); color: var(--app-text-secondary); font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pm-communication-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.pm-communication-actions .ant-btn { padding-inline: 4px; }
+.pm-communication-table-wrap { overflow-x: auto; }
+.pm-communication-table { width: 100%; min-width: 620px; border-collapse: collapse; font-size: 13px; }
+.pm-communication-table th { padding: 12px 14px; background: var(--app-surface-subtle); color: var(--app-text-secondary); text-align: left; font-weight: 600; }
+.pm-communication-table td { padding: 9px 14px; border-top: 1px solid var(--app-border); }
+.pm-communication-table td:last-child { width: 130px; }
+.pm-communication-table .pm-communication-actions { margin-top: 0; }
+.pm-communication-pagination { display: flex; justify-content: flex-end; padding: 12px 14px; border-top: 1px solid var(--app-border); }
+.pm-communication-custom-values { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 8px; color: var(--app-text); font-size: 13px; }
+.pm-communication-custom-values em { color: var(--app-text-secondary); font-style: normal; }
+.pm-communication-divider { margin: 18px 0 12px; border-top: 1px solid var(--app-border); color: var(--app-text-secondary); font-size: 13px; }
+.pm-communication-divider span { position: relative; top: -10px; padding-right: 10px; background: var(--app-surface); }
+.pm-communication-fields { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.pm-communication-field { display: flex; width: 100%; gap: 8px; }
+.pm-communication-field .ant-input { min-width: 0; }
+@media (max-width: 640px) { .pm-communication-head { align-items: flex-start; flex-wrap: wrap; } .pm-communication-head > .ant-space { margin-left: auto; } .pm-communication-timeline { padding-inline: 12px; } }

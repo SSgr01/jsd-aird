@@ -162,6 +162,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if (path.matches(project + "/documents(/.*)?")) return path.endsWith("/export")?"project.document.export":"project.document.view";
             if (path.matches(project + "/requirements(/.*)?")) return "project.customer-needs.view";
             if (path.matches(project + "/references(/.*)?")) return "project.reference.view";
+            if (path.matches(project + "/communications(/.*)?")) return "project.communication.view";
             if (path.matches("/api/v1/meetings/" + id + "(/.*)?")
                     || path.matches(project + "/meetings(/.*)?")) return "project.meeting.view";
             if (path.matches(project + "/logs(/.*)?")) return "project.log.view";
@@ -189,10 +190,14 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if ("DELETE".equals(method)) return "project.customer-needs.delete";
         }
         if (path.matches(project + "/meetings(/.*)?") || path.matches("/api/v1/meetings/[0-9a-fA-F-]{36}")) {
-            if ("POST".equals(method) && path.endsWith("/archive-to-kb")) return "project.meeting.publish";
             if ("POST".equals(method)) return "project.meeting.create";
             if ("PUT".equals(method)) return "project.meeting.update";
             if ("DELETE".equals(method)) return "project.meeting.delete";
+        }
+        if (path.matches(project + "/communications(/.*)?")) {
+            if ("POST".equals(method)) return "project.communication.create";
+            if ("PUT".equals(method)) return "project.communication.update";
+            if ("DELETE".equals(method)) return "project.communication.delete";
         }
         if (path.matches(project + "/stages(/.*)?") || path.matches("/api/v1/stages/[0-9a-fA-F-]{36}")) {
             if ("POST".equals(method)) return "project.stage.create";
@@ -396,12 +401,12 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         // with the upload page and ExperimentImportService checks.
         if (path.startsWith("/api/v1/experiment-imports")) {
             if (read) return permission("eln.upload.view", "EXPERIMENT_IMPORT", "READ");
-            if (method.equals("DELETE")) return permission("eln.upload.delete", "EXPERIMENT", "WRITE");
+            if (method.equals("DELETE")) return permission("eln.upload.delete", "EXPERIMENT_IMPORT", "WRITE");
             if (method.equals("PUT") || method.equals("PATCH"))
-                return permission("eln.upload.create", "EXPERIMENT", "WRITE");
+                return permission("eln.upload.create", "EXPERIMENT_IMPORT", "WRITE");
             if (method.equals("POST") && path.endsWith("/retry"))
-                return permission("eln.upload.retry", "EXPERIMENT", "WRITE");
-            if (method.equals("POST")) return permission("eln.upload.create", "EXPERIMENT", "WRITE");
+                return permission("eln.upload.create", "EXPERIMENT_IMPORT", "WRITE");
+            if (method.equals("POST")) return permission("eln.upload.create", "EXPERIMENT_IMPORT", "WRITE");
             return null;
         }
 
@@ -427,11 +432,11 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             // Publishing and approval require separate permissions.
             if (path.endsWith("/publish")) return permission("eln.view.publish", "EXPERIMENT", "WRITE");
             if (path.contains("/return") || path.contains("/void")) return permission("experiment.review", "EXPERIMENT", "WRITE");
-            if (path.contains("/start")) return permission("experiment.update", "EXPERIMENT", "WRITE");
+            if (path.contains("/start")) return permission("eln.view.update", "EXPERIMENT", "WRITE");
             if (method.equals("DELETE")) return permission("experiment.delete", "EXPERIMENT", "WRITE");
-            if (path.endsWith("/draft") || path.contains("/versions")) return permission("experiment.update", "EXPERIMENT", "WRITE");
+            if (path.endsWith("/draft") || path.contains("/versions")) return permission("eln.view.update", "EXPERIMENT", "WRITE");
             if (method.equals("POST")) return permission("experiment.create", "EXPERIMENT", "WRITE");
-            if (method.equals("PUT") || method.equals("PATCH")) return permission("experiment.update", "EXPERIMENT", "WRITE");
+            if (method.equals("PUT") || method.equals("PATCH")) return permission("eln.view.update", "EXPERIMENT", "WRITE");
             return null;
         }
 
@@ -444,26 +449,28 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if (read) return request.getParameter("projectId") != null
                     ? permission("project.materials.view", "PROJECT", "READ")
                     : permission("production.upload.view", "PRODUCTION_UPLOAD", "READ");
-            if (path.endsWith("/retry")) return permission("production.upload.create", "PRODUCTION", "WRITE");
+            if (path.endsWith("/retry")) return permission("production.upload.create", "PRODUCTION_UPLOAD", "WRITE");
             if (path.equals("/api/v1/production-uploads") && method.equals("POST"))
-                return permission("production.upload.create", "PRODUCTION", "WRITE");
-            if (path.endsWith("/select-template")) return permission("production.update", "PRODUCTION", "WRITE");
-            if (method.equals("DELETE")) return permission("production.upload.delete", "PRODUCTION", "WRITE");
-            if (method.equals("PUT") || method.equals("PATCH")) return permission("production.update", "PRODUCTION", "WRITE");
-            if (method.equals("POST")) return permission("production.create", "PRODUCTION", "WRITE");
+                return permission("production.upload.create", "PRODUCTION_UPLOAD", "WRITE");
+            if (path.endsWith("/select-template")) return permission("production.view.update", "PRODUCTION_UPLOAD", "WRITE");
+            if (method.equals("DELETE")) return permission("production.upload.delete", "PRODUCTION_UPLOAD", "WRITE");
+            if (method.equals("PUT") || method.equals("PATCH")) return permission("production.view.update", "PRODUCTION_UPLOAD", "WRITE");
+            if (method.equals("POST")) return permission("production.view.update", "PRODUCTION_UPLOAD", "WRITE");
             return null;
         }
 
         if (path.startsWith("/api/v1/projects") || path.startsWith("/api/v1/tasks") || path.startsWith("/api/v1/stages")
                 || path.startsWith("/api/v1/project-stages") || path.startsWith("/api/v1/materials")
                 || path.startsWith("/api/v1/meetings")) {
+            if (path.matches("/api/v1/projects/[0-9a-f-]{36}/communications(?:/[0-9a-f-]{36})?")) {
+                var code = projectPageOperation(method, path);
+                return code == null ? null : permission(code, "PROJECT", read ? "READ" : "WRITE");
+            }
             if (path.matches("/api/v1/projects/[0-9a-f-]{36}/references(/.*)?"))
                 return read ? permission("project.reference.view", "PROJECT", "READ")
                         : permission("project.assign", "PROJECT", "WRITE");
             if (path.contains("/materials/link") || path.contains("/materials/unlink") || path.contains("/materials/associations"))
                 return permission("project.assign", "PROJECT", "WRITE");
-            if (path.contains("/meetings/") && path.endsWith("/archive-to-kb"))
-                return permission("project.update", "PROJECT", "WRITE");
             if (path.equals("/api/v1/projects/import") || path.equals("/api/v1/projects/import/commit"))
                 return permission("project.create", "PROJECT", "WRITE");
             if (path.equals("/api/v1/projects/copy")) return permission("project.copy", "PROJECT", "WRITE");
@@ -503,7 +510,7 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if (path.contains("/suggestions/"))
                 return permission("template.recognition", "TEMPLATE_IMPORT", "WRITE");
             if (method.equals("DELETE")) return permission("template.upload.delete", "TEMPLATE_IMPORT", "WRITE");
-            if (path.equals("/api/v1/template-imports")) return permission("template.upload", "TEMPLATE_IMPORT", "WRITE");
+            if (path.equals("/api/v1/template-imports")) return permission("template.upload.create", "TEMPLATE_IMPORT", "WRITE");
             return null;
         }
         if (path.startsWith("/api/v1/template-files")) {
@@ -584,9 +591,9 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             var uploadPrefix = prefix + "upload.";
             if (path.contains("/uploads")) {
                 if (read) return permission(uploadPrefix + "view", "RESEARCH_TEST_UPLOAD", "READ");
-                if (method.equals("DELETE")) return permission(uploadPrefix + "delete", "RESEARCH_TEST", "WRITE");
-                if (path.endsWith("/retry")) return permission(uploadPrefix + "create", "RESEARCH_TEST", "WRITE");
-                if (method.equals("POST")) return permission(uploadPrefix + "create", "RESEARCH_TEST", "WRITE");
+                if (method.equals("DELETE")) return permission(uploadPrefix + "delete", "RESEARCH_TEST_UPLOAD", "WRITE");
+                if (path.endsWith("/retry")) return permission(uploadPrefix + "create", "RESEARCH_TEST_UPLOAD", "WRITE");
+                if (method.equals("POST")) return permission(uploadPrefix + "create", "RESEARCH_TEST_UPLOAD", "WRITE");
             }
             if (path.equals("/api/v1/comprehensive-reports/next-number"))
                 return permission(operationPrefix + "create", "RESEARCH_TEST", "WRITE");
@@ -611,9 +618,11 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
             if (path.equals("/api/v1/knowledge/search") || path.equals("/api/v1/knowledge/assistant"))
                 return permission("ai.use", "KNOWLEDGE", "WRITE");
             if (path.startsWith("/api/v1/knowledge/upload-tasks")) {
-                if (read) return permission("knowledge.view", "KNOWLEDGE", "READ");
-                if (method.equals("POST") || method.equals("PUT") || method.equals("DELETE"))
-                    return permission("knowledge.upload", "KNOWLEDGE", "WRITE");
+                if (read) return permission("knowledge.upload.view", "KNOWLEDGE_UPLOAD", "READ");
+                if (method.equals("DELETE"))
+                    return permission("knowledge.upload.delete", "KNOWLEDGE_UPLOAD", "WRITE");
+                if (method.equals("POST") || method.equals("PUT"))
+                    return permission("knowledge.upload.create", "KNOWLEDGE_UPLOAD", "WRITE");
                 return null;
             }
             if (path.contains("/download")) return permission("knowledge.download", "KNOWLEDGE", "READ");
@@ -638,18 +647,25 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         }
 
         if (path.startsWith("/api/v1/data/experiment-conversions")) {
-            return permission(read ? "eln.upload.view" : "eln.upload.create", "EXPERIMENT", read ? "READ" : "WRITE");
+            return permission(read ? "eln.upload.view" : "eln.upload.create", "DATA", read ? "READ" : "WRITE");
         }
         if (path.startsWith("/api/v1/data/experiment-import-jobs")) {
             if (read) return permission("eln.upload.view", "DATA", "READ");
-            if (method.equals("DELETE")) return permission("eln.upload.delete", "EXPERIMENT", "WRITE");
+            if (method.equals("DELETE")) return permission("eln.upload.delete", "DATA", "WRITE");
             if (method.equals("POST") && path.endsWith("/retry"))
-                return permission("eln.upload.retry", "EXPERIMENT", "WRITE");
+                return permission("eln.upload.create", "DATA", "WRITE");
             if (path.contains("/commit") || path.contains("/experiment-sync"))
-                return permission("eln.upload.create", "EXPERIMENT", "WRITE");
+                return permission("eln.upload.create", "DATA", "WRITE");
             if (method.equals("PUT") || method.equals("PATCH"))
-                return permission("eln.upload.create", "EXPERIMENT", "WRITE");
-            if (method.equals("POST")) return permission("eln.upload.create", "EXPERIMENT", "WRITE");
+                return permission("eln.upload.create", "DATA", "WRITE");
+            if (method.equals("POST")) return permission("eln.upload.create", "DATA", "WRITE");
+            return null;
+        }
+        if (path.startsWith("/api/v1/data/import-jobs")) {
+            if (read) return permission("data.upload.view", "DATA", "READ");
+            if (method.equals("DELETE")) return permission("data.upload.delete", "DATA", "WRITE");
+            if (method.equals("POST") || method.equals("PUT") || method.equals("PATCH"))
+                return permission("data.upload.create", "DATA", "WRITE");
             return null;
         }
         if (path.startsWith("/api/v1/data")) {
@@ -678,9 +694,9 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
         if (path.startsWith("/api/v1/quality")) {
             if (path.contains("/uploads")) {
                 if (read) return permission("quality.upload.view", "QUALITY_UPLOAD", "READ");
-                if (method.equals("DELETE")) return permission("quality.upload.delete", "QUALITY", "WRITE");
-                if (path.endsWith("/retry")) return permission("quality.upload.create", "QUALITY", "WRITE");
-                if (method.equals("POST")) return permission("quality.upload.create", "QUALITY", "WRITE");
+                if (method.equals("DELETE")) return permission("quality.upload.delete", "QUALITY_UPLOAD", "WRITE");
+                if (path.endsWith("/retry")) return permission("quality.upload.create", "QUALITY_UPLOAD", "WRITE");
+                if (method.equals("POST")) return permission("quality.upload.create", "QUALITY_UPLOAD", "WRITE");
             }
             if(path.equals("/api/v1/quality/records/delete")) return permission("quality.delete","QUALITY","WRITE");
             if (path.endsWith("/revisions")) return permission("quality.view.update", "QUALITY", "WRITE");
@@ -704,7 +720,10 @@ public class PermissionRouteFilter extends OncePerRequestFilter {
 
         if (path.startsWith("/api/v1/spc") || path.startsWith("/api/v1/spectrum")) {
             if (method.equals("DELETE") && path.matches("/api/v1/spc/uploads/attempts/[0-9a-fA-F-]{36}"))
-                return permission("spectrum.upload.delete", "SPECTRUM", "WRITE");
+                return permission("spectrum.upload.delete", "SPECTRUM_UPLOAD", "WRITE");
+            if (path.equals("/api/v1/spc/uploads/attempts"))
+                return permission(read ? "spectrum.upload.view" : "spectrum.upload.create",
+                        "SPECTRUM_UPLOAD", read ? "READ" : "WRITE");
             if (path.contains("/export")) return permission("spectrum.export", "SPECTRUM", "READ");
             if (path.contains("/download")) return permission("spectrum.download", "SPECTRUM", "READ");
             if (read) return permission("spectrum.view", "SPECTRUM", "READ");

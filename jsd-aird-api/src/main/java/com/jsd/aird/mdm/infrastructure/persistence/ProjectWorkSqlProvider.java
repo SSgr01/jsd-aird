@@ -17,7 +17,13 @@ public class ProjectWorkSqlProvider {
         sql.JOIN("mdm.project_stage s ON s.id = t.stage_id AND s.deleted = false");
         sql.WHERE("t.deleted = false");
         if (query.organizationId() != null) sql.WHERE("p.organization_id = #{query.organizationId}");
-        switch (query.scopeType() == null ? "ALL" : query.scopeType()) {
+        if (query.mine()) {
+            sql.WHERE("EXISTS (SELECT 1 FROM iam.app_user me WHERE me.id = #{query.scopeUserId} " +
+                "AND me.organization_id = #{query.organizationId} AND (t.owner_user_id = me.id OR " +
+                "(t.owner_user_id IS NULL AND (t.owner = me.username OR " +
+                "(t.owner = me.display_name AND (SELECT count(*) FROM iam.app_user same_name " +
+                "WHERE same_name.organization_id = me.organization_id AND same_name.display_name = me.display_name) = 1)))))");
+        } else switch (query.scopeType() == null ? "ALL" : query.scopeType()) {
             case "ALL", "ORG" -> { }
             case "SELF", "CREATOR" -> sql.WHERE("p.created_by = #{query.scopeUserId}");
             case "DEPARTMENT" -> sql.WHERE("p.department_id IS NOT NULL AND p.department_id = (SELECT u.department_id FROM iam.app_user u WHERE u.id = #{query.scopeUserId} AND u.organization_id = #{query.organizationId})");

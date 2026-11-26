@@ -2,6 +2,7 @@ package com.jsd.aird.mdm.application.service;
 
 import com.jsd.aird.iam.api.AuthorizationService;
 import com.jsd.aird.iam.api.PermissionCheck;
+import com.jsd.aird.iam.application.ProjectOwnerOptionsService;
 import com.jsd.aird.mdm.application.command.ProjectCommands;
 import com.jsd.aird.mdm.application.port.ProjectRepository;
 import com.jsd.aird.mdm.application.query.ProjectQuery;
@@ -13,6 +14,7 @@ import com.jsd.aird.shared.error.ApiException;
 import com.jsd.aird.shared.security.ActorContext;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -28,10 +30,17 @@ public class ProjectService {
 
     private final ProjectRepository repository;
     private final AuthorizationService authorization;
+    private final ProjectOwnerOptionsService ownerOptions;
 
-    public ProjectService(ProjectRepository repository, AuthorizationService authorization) {
+    @Autowired
+    public ProjectService(ProjectRepository repository, AuthorizationService authorization, ProjectOwnerOptionsService ownerOptions) {
         this.repository = repository;
         this.authorization = authorization;
+        this.ownerOptions = ownerOptions;
+    }
+
+    public ProjectService(ProjectRepository repository, AuthorizationService authorization) {
+        this(repository, authorization, null);
     }
 
     public List<Project> search(ProjectQuery query) {
@@ -52,7 +61,7 @@ public class ProjectService {
             var pageQuery = new ProjectQuery(query.keyword(), query.owner(), query.priority(), query.status(),
                 query.startDateFrom(), query.startDateTo(), query.partnerId(), page, pageSize)
                 .withDataScope(scopedQuery.organizationId(), scopedQuery.scopeType(), scopedQuery.scopeUserId(),
-                    scopedQuery.scopeTargetIds());
+                    scopedQuery.scopeTargetIds()).withMine(query.mine());
             projects.addAll(repository.findPage(pageQuery));
         }
         try (var workbook = new XSSFWorkbook(); var output = new ByteArrayOutputStream()) {
@@ -133,12 +142,14 @@ public class ProjectService {
         if (repository.existsByProjectCode(code, null)) throw duplicateProjectCode(code);
 
         var now = Instant.now();
+        var resolvedOwner = resolveOwner(command);
         var project = new Project(UUID.randomUUID(), code, command.name().trim(), command.partnerId(),
-            trim(command.partnerName()), trim(command.owner()), command.startDate(), command.endDate(),
+            trim(command.partnerName()), resolvedOwner.name(), command.startDate(), command.endDate(),
             command.priority() == null ? ProjectPriority.MEDIUM : command.priority(),
             command.status() == null ? ProjectStatus.NOT_STARTED : command.status(),
             command.teamSize() == null ? 0 : Math.max(command.teamSize(), 0),
-            command.background(), command.customFields(), command.teamMembers(), 0, now, now);
+            command.background(), command.customFields(), command.teamMembers(), 0, now, now,
+            resolvedOwner.id(), trim(command.customerRequirements()));
         insert(project);
         return new ProjectCommands.Created(project.id(), 0);
     }
@@ -152,16 +163,19 @@ public class ProjectService {
         var current = get(id);
         authorize(id, "project.update");
         var code = command.projectCode().trim();
+        var resolvedOwner = resolveOwner(command);
         if (repository.existsByProjectCode(code, id)) throw duplicateProjectCode(code);
 
         var project = new Project(id, code, command.name().trim(), command.partnerId(),
-            trim(command.partnerName()), trim(command.owner()), command.startDate(), command.endDate(),
+            trim(command.partnerName()), resolvedOwner.name(), command.startDate(), command.endDate(),
             command.priority() == null ? current.priority() : command.priority(),
             command.status() == null ? current.status() : command.status(),
             command.teamSize() == null ? current.teamSize() : Math.max(command.teamSize(), 0),
             command.background(), command.customFields(),
             command.teamMembers() == null ? current.teamMembers() : command.teamMembers(),
-            current.version(), current.createdAt(), Instant.now());
+            current.version(), current.createdAt(), Instant.now(), resolvedOwner.id() == null &&
+                java.util.Objects.equals(trim(command.owner()), current.owner()) ? current.ownerUserId() : resolvedOwner.id(),
+            trim(command.customerRequirements()));
 
         try {
             if (!repository.update(project, command.version(), operator())) mutationFailed(id);
@@ -209,7 +223,8 @@ public class ProjectService {
             var copy = new Project(UUID.randomUUID(), repository.nextProjectCode(year),
                 truncate(source.name() + "（副本）"), source.partnerId(), source.partnerName(), source.owner(),
                 source.startDate(), source.endDate(), source.priority(), ProjectStatus.NOT_STARTED,
-                source.teamSize(), source.background(), source.customFields(), source.teamMembers(), 0, now, now);
+                source.teamSize(), source.background(), source.customFields(), source.teamMembers(), 0, now, now,
+                source.ownerUserId(), source.customerRequirements());
             insert(copy);
             return new ProjectCommands.Created(copy.id(), 0);
         }).toList();
@@ -244,6 +259,18 @@ public class ProjectService {
         var scope = scope();
         return query.withDataScope(actor.organizationId(), scope.scopeType(), actor.userId(), scope.targetIds());
     }
+
+    private ResolvedOwner resolveOwner(ProjectCommands.SaveProject command) {
+        if (command.ownerUserId() == null) return new ResolvedOwner(trim(command.owner()), null);
+        var actor = ActorContext.required();
+        return ownerOptions.list(actor).stream()
+            .filter(option -> option.id().equals(command.ownerUserId()))
+            .findFirst()
+            .map(option -> new ResolvedOwner(option.displayName(), option.id()))
+            .orElseThrow(() -> new ApiException(ApiErrorCode.VALIDATION_ERROR, "负责人不在可选用户范围内"));
+    }
+
+    private record ResolvedOwner(String name, UUID id) { }
 
     private static String operator() {
         return ActorContext.required().userId().toString();

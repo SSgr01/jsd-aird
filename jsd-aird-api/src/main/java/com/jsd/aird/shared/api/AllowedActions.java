@@ -103,7 +103,7 @@ public final class AllowedActions {
     }
 
     public static List<String> meeting(boolean archivedToKnowledgeBase) {
-        return archivedToKnowledgeBase ? List.of() : List.of("DELETE", "ARCHIVE");
+        return List.of("DELETE");
     }
 
     public static List<String> material(boolean linked) {

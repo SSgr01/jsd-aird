@@ -58,10 +58,14 @@ body.workspace-is-maximized .operation-assistant-root {
 .workspace-maximize-button { flex: none; }
 .workspace-frame :is(.workspace-main-stage, .data-workbench-grid) { min-height: 0; }
 
-/* Project spreadsheets have no field rail; let the canvas use the whole grid. */
-.project-document-workspace .prototype-workspace-grid:not(.word-workspace-grid) {
+/* Project documents use a single editing canvas. */
+.workspace-frame.project-document-workspace .prototype-workspace-grid {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
+}
+.workspace-frame.project-document-workspace .prototype-workspace-grid > .workspace-canvas {
+  grid-column: 1;
+  grid-row: 1;
 }
 .workspace-frame .document-outline-panel-header { display: flex; min-height: 44px; flex: none; align-items: flex-start; justify-content: space-between; padding-right: 8px; }
 .workspace-frame .document-outline-panel-header > .side-panel-heading { min-width: 0; flex: 1; padding: 0; border: 0; }

@@ -177,6 +177,29 @@ class DocxStructureParserTest {
                 .path("columnSpan").asInt()).isEqualTo(2);
     }
 
+    @Test
+    void preservesVerticalMergeSpanInEditableSnapshot() throws Exception {
+        var source = minimalDocx(
+                """
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body><w:tbl>
+                    <w:tblGrid><w:gridCol w:w="1200"/><w:gridCol w:w="2000"/></w:tblGrid>
+                    <w:tr><w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>UA-763</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>60/62</w:t></w:r></w:p></w:tc></w:tr>
+                    <w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc><w:p><w:r><w:t>58/60</w:t></w:r></w:p></w:tc></w:tr>
+                    <w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc><w:p><w:r><w:t>56</w:t></w:r></w:p></w:tc></w:tr>
+                  </w:tbl><w:sectPr/></w:body>
+                </w:document>
+                """,
+                "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"/>"
+        );
+
+        var table = parser.parse(new ByteArrayInputStream(source)).initialEditorSnapshot()
+                .path("tableSource").path("table-1").path("tableRows");
+        assertThat(table.get(0).path("tableCells").get(0).path("rowSpan").asInt()).isEqualTo(3);
+        assertThat(table.get(1).path("tableCells").get(0).path("rowSpan").asInt()).isZero();
+        assertThat(table.get(2).path("tableCells").get(0).path("rowSpan").asInt()).isZero();
+    }
+
     private byte[] minimalDocx(String documentXml, String stylesXml) throws Exception {
         try (var output = new ByteArrayOutputStream(); var zip = new ZipOutputStream(output)) {
             for (var part : Map.of("word/document.xml", documentXml, "word/styles.xml", stylesXml).entrySet()) {

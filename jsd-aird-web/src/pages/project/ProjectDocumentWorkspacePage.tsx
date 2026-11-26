@@ -1,7 +1,8 @@
+import { SheetsEditor, DocsEditor } from '@/features/template-workspace/editor-runtime';
 import { WorkspaceFrame, WorkspaceMaximizeButton } from '@/components/workspace/WorkspaceFrame';
 import { ArrowLeftOutlined, CloudUploadOutlined, DownloadOutlined, EyeOutlined, HistoryOutlined, SaveOutlined } from '@ant-design/icons';
 import { Button, Result, Skeleton, Space, Tabs, Tag, Typography, message } from 'antd';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { DocumentStructure, EditorHandle, TemplateBinding } from '@/features/template-workspace/types';
 import { DocumentOutlinePanel } from '@/features/template-workspace/DocumentOutlinePanel';
@@ -17,8 +18,6 @@ import { usePermission } from '@/components/auth/usePermission';
 import { WorkspaceReviewActions } from '@/components/workspace-review/WorkspaceReviewActions';
 import type { WorkspaceReviewState } from '@/services/reviews/workspace-review-api';
 
-const SheetsEditor = lazy(async () => ({ default: (await import('@/features/template-workspace/UniverSheetsEditor')).UniverSheetsEditor }));
-const DocsEditor = lazy(async () => ({ default: (await import('@/features/template-workspace/UniverDocsEditor')).UniverDocsEditor }));
 
 function blankSnapshot(format: ProjectDocumentDetail['format'], id: string, title: string): Record<string, unknown> {
   if (format === 'XLSX') {

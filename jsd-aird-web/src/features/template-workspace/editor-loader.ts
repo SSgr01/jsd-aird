@@ -1,5 +1,6 @@
 import '@/compat/browser';
 import { lazy } from 'react';
+import { retryChunkImport } from '@/services/release/chunk-import';
 
 const sheetsImport = () => import('./UniverSheetsEditor').then(module => ({ default: module.UniverSheetsEditor }));
 const docsImport = () => import('./UniverDocsEditor').then(module => ({ default: module.UniverDocsEditor }));
@@ -7,8 +8,12 @@ let sheets: ReturnType<typeof sheetsImport> | undefined;
 let docs: ReturnType<typeof docsImport> | undefined;
 let sheetsFailed = false;
 let docsFailed = false;
-const loadSheets = () => sheets ??= sheetsImport().catch((error: unknown) => { sheetsFailed = true; throw error; });
-const loadDocs = () => docs ??= docsImport().catch((error: unknown) => { docsFailed = true; throw error; });
+const loadSheets = () => sheets ??= retryChunkImport(sheetsImport)
+  .then(module => { sheetsFailed = false; return module; })
+  .catch((error: unknown) => { sheets = undefined; sheetsFailed = true; throw error; });
+const loadDocs = () => docs ??= retryChunkImport(docsImport)
+  .then(module => { docsFailed = false; return module; })
+  .catch((error: unknown) => { docs = undefined; docsFailed = true; throw error; });
 let sheetsRuntime = lazy(loadSheets);
 let docsRuntime = lazy(loadDocs);
 

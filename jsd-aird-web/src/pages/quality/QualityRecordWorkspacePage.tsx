@@ -1,3 +1,4 @@
+import { SheetsEditor, DocsEditor } from '@/features/template-workspace/editor-runtime';
 import {
   ArrowLeftOutlined,
   DownloadOutlined,
@@ -25,7 +26,6 @@ import { WorkspaceReviewActions } from '@/components/workspace-review/WorkspaceR
 import type { WorkspaceReviewState } from '@/services/reviews/workspace-review-api';
 import { VersionHistoryPanel } from '@/components/version-history/VersionHistoryPanel';
 import {
-  lazy,
   Suspense,
   useCallback,
   useEffect,
@@ -49,12 +49,6 @@ const wordDocumentTypes = new Set(['coa', 'defect', 'manual', 'msds', 'label']);
 const textValue = (value: unknown) =>
   typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value);
 
-const SheetsEditor = lazy(async () => ({
-  default: (await import('@/features/template-workspace/UniverSheetsEditor')).UniverSheetsEditor,
-}));
-const DocsEditor = lazy(async () => ({
-  default: (await import('@/features/template-workspace/UniverDocsEditor')).UniverDocsEditor,
-}));
 
 async function parseExcelSnapshot(blob: Blob, fileName: string): Promise<Record<string, unknown>> {
   const XLSX = await import('xlsx');

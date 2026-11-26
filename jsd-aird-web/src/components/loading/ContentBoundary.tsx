@@ -19,10 +19,12 @@ class PageErrorBoundary extends Component<PropsWithChildren<{ resetKey: string }
     if (this.state.error) {
       const chunkError = isChunkError(this.state.error);
       return <div className="content-error">
-        <InlineNotice tone="error" details={this.state.error.message} detailsLabel="错误详情" action={<button type="button" onClick={() => {
-          if (chunkError) { window.location.reload(); return; }
+        <InlineNotice tone="error" details={this.state.error.message} detailsLabel="错误详情" action={<>
+          <button type="button" onClick={() => {
           resetFailedPages(); resetFailedEditors(); this.setState({ error: undefined });
-        }}>{chunkError ? '重新加载页面' : '重试当前页面'}</button>}>
+          }}>重试当前页面</button>
+          {chunkError && <button type="button" onClick={() => window.location.reload()}>重新加载页面</button>}
+        </>}>
           <strong>当前页面加载失败</strong>
           <p>{chunkError ? '页面资源加载失败，请重新加载。' : '暂时无法打开，请重试。'}</p>
         </InlineNotice>

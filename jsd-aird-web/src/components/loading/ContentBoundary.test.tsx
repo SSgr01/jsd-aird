@@ -44,6 +44,30 @@ it('identifies a failed page chunk and offers a full reload', async () => {
   error.mockRestore();
 });
 
+it('does not poison later navigation when an earlier prefetch failed', async () => {
+  const importer = vi.fn().mockRejectedValueOnce(new Error('network')).mockResolvedValue({ default: () => <p>预加载失败后正常打开</p> });
+  const Page = routePage(importer);
+  await expect(Page.preload()).rejects.toThrow('network');
+  render(<MemoryRouter><ContentBoundary><Page /></ContentBoundary></MemoryRouter>);
+  expect(await screen.findByText('预加载失败后正常打开')).toBeInTheDocument();
+  expect(importer).toHaveBeenCalledTimes(2);
+});
+
+it('can recover an exhausted resource download with local retry', async () => {
+  const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const failure = new Error('Failed to fetch dynamically imported module');
+  const importer = vi.fn().mockRejectedValueOnce(failure).mockRejectedValueOnce(failure)
+    .mockRejectedValueOnce(failure).mockResolvedValue({ default: () => <p>资源恢复后正常打开</p> });
+  const Page = routePage(importer);
+  render(<MemoryRouter><nav>保留导航</nav><ContentBoundary><Page /></ContentBoundary></MemoryRouter>);
+  expect(await screen.findByText('页面资源加载失败，请重新加载。', {}, { timeout: 5000 })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '重试当前页面' }));
+  expect(await screen.findByText('资源恢复后正常打开')).toBeInTheDocument();
+  expect(screen.getByText('保留导航')).toBeInTheDocument();
+  expect(importer).toHaveBeenCalledTimes(4);
+  consoleError.mockRestore();
+});
+
 it('only reveals content loading after 200 milliseconds',()=>{
   vi.useFakeTimers();
   render(<ContentLoading label="加载测试内容" />);

@@ -1,3 +1,4 @@
+import { SheetsEditor } from '@/features/template-workspace/editor-runtime';
 import { FormModal } from '@/components/form-dialog/FormModal';
 import { ArrowLeftOutlined, DownloadOutlined, SaveOutlined } from '@ant-design/icons';
 import {
@@ -18,7 +19,7 @@ import {
   Typography,
   message,
 } from 'antd';
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { SaveStateBadge, type SaveState } from '@/components/SaveStateBadge';
@@ -56,9 +57,6 @@ import {
 } from '@/services/production-orders/production-upload-api';
 import '../quality/quality-pages.css';
 
-const SheetsEditor = lazy(async () => ({
-  default: (await import('@/features/template-workspace/UniverSheetsEditor')).UniverSheetsEditor,
-}));
 
 type WorkspaceView = 'recognition' | 'preview' | 'edit' | 'material' | 'attachments' | 'versions';
 

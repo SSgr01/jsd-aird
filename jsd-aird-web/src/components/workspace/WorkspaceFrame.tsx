@@ -1,6 +1,7 @@
 import { FullscreenExitOutlined, FullscreenOutlined } from '@ant-design/icons';
 import { Button, Tooltip } from 'antd';
-import { createContext, forwardRef, useContext, useEffect, useRef, useState, type HTMLAttributes } from 'react';
+import { createContext, forwardRef, useCallback, useContext, useEffect, useRef, useState, type HTMLAttributes } from 'react';
+import { WorkspaceFullscreenContext } from './workspace-fullscreen';
 import { editorEscapeEvents } from './workspace-escape';
 import './workspace-frame.css';
 
@@ -34,6 +35,8 @@ export const WorkspaceFrame = forwardRef<HTMLElement, WorkspaceFrameProps>(funct
   { maximizable = false, className = '', children, ...props }, ref,
 ) {
   const [maximized, setMaximized] = useState(false);
+  const parentToggle = useContext(WorkspaceFullscreenContext);
+  const toggle = useCallback(() => setMaximized(value => !value), []);
   const composing = useRef(false);
   const active = maximizable && maximized;
 
@@ -72,10 +75,12 @@ export const WorkspaceFrame = forwardRef<HTMLElement, WorkspaceFrameProps>(funct
     };
   }, [active]);
 
-  return <WorkspaceContext.Provider value={maximizable ? { maximized: active, toggle: () => setMaximized(value => !value) } : null}>
-    <section {...props} ref={ref} className={`workspace-frame ${className}`} data-maximized={active || undefined}>
-      {children}
-    </section>
+  return <WorkspaceContext.Provider value={maximizable ? { maximized: active, toggle } : null}>
+    <WorkspaceFullscreenContext.Provider value={maximizable ? toggle : parentToggle}>
+      <section {...props} ref={ref} className={`workspace-frame ${className}`} data-maximized={active || undefined}>
+        {children}
+      </section>
+    </WorkspaceFullscreenContext.Provider>
   </WorkspaceContext.Provider>;
 });
 

@@ -7,6 +7,7 @@ import { markPerformance } from '@/services/performance/metrics';
 import { editorReady } from './workspace-loading';
 import { editorTheme } from './editor-theme';
 import { editorEscapeEvents } from '@/components/workspace/workspace-escape';
+import { WorkspaceFullscreenContext } from '@/components/workspace/workspace-fullscreen';
 import {
   createUniver,
   ICommandService,
@@ -23,7 +24,7 @@ import { UniverSheetsCorePreset, IContextMenuService, IRenderManagerService, ISh
 import UniverPresetSheetsCoreZhCN from '@univerjs/preset-sheets-core/locales/zh-CN';
 import { UniverSheetsDrawingPreset } from '@univerjs/preset-sheets-drawing';
 import UniverPresetSheetsDrawingZhCN from '@univerjs/preset-sheets-drawing/locales/zh-CN';
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { forwardRef, useContext, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { App } from 'antd';
 
 import '@univerjs/preset-sheets-core/lib/index.css';
@@ -106,6 +107,9 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
   ref,
 ) {
   const { message } = App.useApp();
+  const toggleFullscreen = useContext(WorkspaceFullscreenContext);
+  const toggleFullscreenRef = useRef(toggleFullscreen);
+  toggleFullscreenRef.current = toggleFullscreen;
   const messageRef = useRef(message); messageRef.current = message;
   const containerRef = useRef<HTMLDivElement>(null);
   const [initializationError, setInitializationError] = useState<Error>();
@@ -713,6 +717,11 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       });
       let restoringHistory = false;
       beforeCommandSubscription = commands.beforeCommandExecuted((command, options) => {
+        if (command.id === 'base-ui.operation.toggle-fullscreen' && toggleFullscreenRef.current) {
+          // Native element fullscreen excludes the toolbar menus mounted outside the editor.
+          toggleFullscreenRef.current();
+          throw new CanceledError();
+        }
         if (cellChangeEventsArmed && editableRef.current && !applyingInstanceRef.current && !restoringHistory && !structureGroup && !options?.fromChangeset && !options?.syncOnly && isGuardedWorkbookOperation(command.id)) {
           const unitId = (command.params as { unitId?: string })?.unitId;
           if (!unitId || unitId === workbook.getId()) {

@@ -7,6 +7,7 @@ import com.jsd.aird.rnd.application.port.ExperimentRepository;
 import com.jsd.aird.rnd.domain.ExperimentModels.Detail;
 import com.jsd.aird.shared.error.ApiErrorCode;
 import com.jsd.aird.shared.error.ApiException;
+import com.jsd.aird.shared.lab.LabWorkbook;
 import com.jsd.aird.shared.office.SnapshotWorkbookExporter;
 import com.jsd.aird.shared.security.ActorContext;
 import com.jsd.aird.tpl.api.BlankWordDocumentFactory;
@@ -65,17 +66,16 @@ public class ExperimentExportService {
                 && ("word".equalsIgnoreCase(format) || isDocumentSnapshot(snapshot))) {
             return exportWord(detail, actor.organizationId());
         }
-        return exportWorkbook(detail, actor.organizationId(),view);
+        return exportWorkbook(detail, snapshot, view);
     }
 
-    private Download exportWorkbook(Detail detail, UUID organizationId,String view) {
-        var snapshot = currentSnapshot(detail);
+    private Download exportWorkbook(Detail detail, JsonNode snapshot, String view) {
         if (snapshot == null || !snapshot.isObject() || snapshot.isEmpty()) {
             throw new ApiException(ApiErrorCode.FILE_NOT_READY, "实验工作簿快照不存在，请先保存实验");
         }
-        if(com.jsd.aird.shared.lab.LabWorkbook.supported(snapshot))snapshot=view.equals("BLANK")
-                ?com.jsd.aird.shared.lab.LabWorkbook.blank(snapshot)
-                :com.jsd.aird.shared.lab.LabWorkbook.present(objectMapper,snapshot).snapshot();
+        if ("BLANK".equals(view) && LabWorkbook.supported(snapshot)) {
+            snapshot = LabWorkbook.blank(snapshot);
+        }
         var result = workbookExporter.export(
                 snapshot,
                 objectMapper.createArrayNode(),

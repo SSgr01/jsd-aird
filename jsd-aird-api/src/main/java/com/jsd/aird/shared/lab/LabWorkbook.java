@@ -185,8 +185,8 @@ public final class LabWorkbook {
         }
         int first=def.path("firstSampleColumn").asInt(2),end=first;
         for(var row:iterable(target.path("cellData").fields()))for(var c:iterable(row.getValue().fields())) {
-            int column=Integer.parseInt(c.getKey());
-            if(Integer.parseInt(row.getKey())>5&&column>=first&&!LabValues.text(c.getValue().path("v")).isBlank())end=Math.max(end,column);
+            int r=Integer.parseInt(row.getKey()), column=Integer.parseInt(c.getKey());
+            if(r>5&&column>=first&&!value(target,r,column).isBlank())end=Math.max(end,column);
         }
         // Keep the physical editing surface, including explicitly added blank groups.
         for(var c:iterable(target.path("columnData").fields()))if(c.getValue().path("custom").path("lab").has("sampleKey"))end=Math.max(end,Integer.parseInt(c.getKey()));
@@ -258,6 +258,26 @@ public final class LabWorkbook {
     private static <T> Iterable<T> iterable(Iterator<T> iterator){return ()->iterator;}
     private static String pattern(JsonNode snapshot,JsonNode cell) {return cell.path("s").isTextual()?snapshot.path("styles").path(cell.path("s").asText()).path("n").path("pattern").asText(""):cell.path("s").path("n").path("pattern").asText("");}
 
+    private static JsonNode inputValue(JsonNode cell) {
+        var scalar = cell.path("v");
+        if (scalar.isValueNode() && !scalar.isNull()) return scalar;
+        var text = cell.path("p").path("body").path("dataStream").asText("").strip();
+        return text.isBlank() ? scalar : com.fasterxml.jackson.databind.node.TextNode.valueOf(text);
+    }
+
+    private static boolean hasSampleInput(JsonNode cell, JsonNode fields) {
+        var meta = cell.path("custom").path("lab");
+        var role = meta.path("role").asText();
+        var code = meta.path("fieldCode").asText();
+        var field = fields.path(code);
+        if (!role.equals("MATERIAL_QTY") && !(role.equals("VALUE") && field.path("scope").asText().equals("SAMPLE"))) return false;
+        var input = LabValues.text(inputValue(cell));
+        if (field.path("semantic").asText().equals("SOURCE_IDENTITY")) return LabValues.recorded(input);
+        // Every blank template column can contain a calculated total, including a cache of zero.
+        if (cell.hasNonNull("f")) return !field.path("valueSource").asText().equals("FORMULA");
+        return !input.isBlank();
+    }
+
     /** Snapshot is the editing source; all facts are rebuilt together on the server. */
     public static ObjectNode extract(ObjectMapper json,JsonNode snapshot,JsonNode previous,String seed) {
         if(LabWorkbookSheets.multiple(snapshot))return LabWorkbookSheets.extract(json,snapshot,previous,seed);
@@ -284,9 +304,10 @@ public final class LabWorkbook {
         for(int c=first;c<=end;c++) {
             boolean populated=false;
             for(var row:iterable(sheet.path("cellData").fields())) {
-                int r=Integer.parseInt(row.getKey());var cell=row.getValue().path(""+c);var meta=cell.path("custom").path("lab");
-                var field=fields.path(meta.path("fieldCode").asText());
-                if(!cell.hasNonNull("f")&&!value(sheet,r,c).isBlank()&&(meta.path("role").asText().equals("MATERIAL_QTY")||meta.path("role").asText().equals("VALUE")&&field.path("scope").asText().equals("SAMPLE")&&!field.path("semantic").asText().equals("SOURCE_IDENTITY")))populated=true;
+                if (hasSampleInput(row.getValue().path(""+c), fields)) {
+                    populated = true;
+                    break;
+                }
             }
             if(!populated)continue;
             active.add(c);var key=sheet.path("columnData").path(""+c).path("custom").path("lab").path("sampleKey").asText();
@@ -301,7 +322,7 @@ public final class LabWorkbook {
                 if(!meta.path("role").asText().equals("VALUE"))continue;
                 var code=meta.path("fieldCode").asText();var field=fields.path(code);if(!field.isObject())continue;
                 var sample=field.path("scope").asText().equals("SAMPLE");
-                var raw=cell.path("v");
+                var raw=inputValue(cell);
                 var binding=json.createObjectNode().put("bindingId",id(seed,"binding:"+code+":"+c)).put("fieldCode",code).put("dataPath","/fields/"+code).put("role","FIELD").put("mappingKind","SCALAR").put("locatorType","CELL_RANGE").put("syncDirection","TWO_WAY").put("primaryBinding",true).put("bindingStatus","VALID");
                 binding.set("locator",json.createObjectNode().put("sheetId",sid).put("sheetName",sheet.path("name").asText()).put("address",address(r,c)).put("valueRange",address(r,c)));
                 if(!sample||active.contains(c))bindings.add(binding);
@@ -338,12 +359,16 @@ public final class LabWorkbook {
         active.forEach(c->{totals.put(c,java.math.BigDecimal.ZERO);complete.put(c,true);});
         for(int r=start;r<=last;r++) {
             var code=value(sheet,r,1);var lineId=sheet.path("cellData").path(""+r).path("1").path("custom").path("lab").path("lineId").asText();
-            boolean any=false;for(int c:active)any|=LabValues.recorded(value(sheet,r,c));
+            boolean any=false;
+            for(int c:active) {
+                var quantity = sheet.path("cellData").path(""+r).path(""+c);
+                any |= quantity.hasNonNull("f") || LabValues.recorded(value(sheet,r,c));
+            }
             if(code.isBlank()&&!any)continue;
             lines.addObject().put("lineId",lineId).put("materialCode",code).put("sequence",r-start+1);
             if(code.isBlank())issues.addObject().put("code","MATERIAL_CODE_MISSING").put("address",address(r,1)).put("message","用量对应的物料编码未填写");
             for(int c:active) {
-                var entry=LabValues.parse(json,sheet.path("cellData").path(""+r).path(""+c).path("v"),materialField,"");
+                var entry=LabValues.parse(json,inputValue(sheet.path("cellData").path(""+r).path(""+c)),materialField,"");
                 var key=sheet.path("columnData").path(""+c).path("custom").path("lab").path("sampleKey").asText();
                 var valid=code.length()>0&&entry.path("value").isNumber()&&!entry.path("parseStatus").asText().equals("CONFLICT");
                 if(!valid){
@@ -416,7 +441,7 @@ public final class LabWorkbook {
         for(var row:iterable(authoredSheet.path("cellData").fields()))for(var col:iterable(row.getValue().fields())) {
             var cell=col.getValue();
             if(!cell.path("p").path("drawings").isEmpty()
-                ||Integer.parseInt(col.getKey())>sampleEnd&&(cell.hasNonNull("f")||LabValues.recorded(value(authoredSheet,Integer.parseInt(row.getKey()),Integer.parseInt(col.getKey()))))
+                ||Integer.parseInt(col.getKey())>sampleEnd&&(cell.hasNonNull("f")||!value(authoredSheet,Integer.parseInt(row.getKey()),Integer.parseInt(col.getKey())).isBlank())
                 ||cell.hasNonNull("f")&&cell.path("custom").path("lab").path("fieldCode").asText().isBlank())
                 return new Presentation(source.deepCopy(),json.createObjectNode());
         }
@@ -425,8 +450,11 @@ public final class LabWorkbook {
         var keepColumns=new TreeSet<Integer>();keepColumns.add(0);keepColumns.add(1);
         var keepRows=new TreeSet<Integer>();var rows=sheet.path("cellData");
         for(var row:iterable(rows.fields()))for(var col:iterable(row.getValue().fields())) {
-            int r=Integer.parseInt(row.getKey()),c=Integer.parseInt(col.getKey());var field=fields.path(col.getValue().path("custom").path("lab").path("fieldCode").asText());
-            if(r>=6&&c>=first&&c<=end&&!col.getValue().hasNonNull("f")&&!field.path("scope").asText().equals("EXPERIMENT")&&!field.path("semantic").asText().equals("SOURCE_IDENTITY")&&LabValues.recorded(value(sheet,r,c)))keepColumns.add(c);
+            int r=Integer.parseInt(row.getKey()),c=Integer.parseInt(col.getKey());
+            var cell=col.getValue();
+            var field=fields.path(cell.path("custom").path("lab").path("fieldCode").asText());
+            if(r>=6&&c>=first&&c<=end&&(hasSampleInput(cell,fields)
+                    ||(!field.isObject()&&LabValues.recorded(value(sheet,r,c)))))keepColumns.add(c);
         }
         if(!def.path("stackedHeader").asBoolean()&&keepColumns.size()<8) {
             // The original second row holds four shared fields across A:H.
@@ -453,19 +481,15 @@ public final class LabWorkbook {
                 if(role.equals("VALUE")) {
                     var field=fields.path(meta.path("fieldCode").asText());
                     if(field.path("scope").asText().equals("EXPERIMENT"))keep|=LabValues.recorded(value(sheet,r,c))||field.path("required").asBoolean();
-                    else if(keepColumns.contains(c))keep|=LabValues.recorded(value(sheet,r,c));
-                } else if(role.equals("MATERIAL_QTY")&&keepColumns.contains(c))keep|=LabValues.recorded(value(sheet,r,c));
+                    else if(keepColumns.contains(c))keep|=LabValues.recorded(value(sheet,r,c))
+                            ||cell.hasNonNull("f")&&!meta.path("fieldCode").asText().equals("formula.total");
+                } else if(role.equals("MATERIAL_CODE"))keep|=!value(sheet,r,c).isBlank();
+                else if(role.equals("MATERIAL_QTY")&&keepColumns.contains(c))keep|=hasSampleInput(cell,fields);
                 else if(c>=first&&keepColumns.contains(c)&&!cell.hasNonNull("f"))keep|=LabValues.recorded(value(sheet,r,c));
             }
             // Identity labels remain when a group contains real content.
             if(keepColumns.size()>2&&row.getValue().path("1").path("custom").path("lab").path("fieldCode").asText().equals("sample.experimentNo"))keep=true;
             if(keep)keepRows.add(r);
-        }
-        // A name alone is unused layout; nonempty malformed quantities already remain visible above.
-        int a=def.path("formulaStartRow").asInt(),b=def.path("formulaEndRow").asInt();
-        for(int r=a;r<=b;r++)if(!value(sheet,r,1).isBlank()) {
-            boolean used=false;for(int c:keepColumns)if(c>=first)used|=LabValues.recorded(value(sheet,r,c));
-            if(used)keepRows.add(r);
         }
         var rowMap=index(keepRows);var colMap=index(keepColumns);var newCells=json.createObjectNode();var newRows=json.createObjectNode();var newColumns=json.createObjectNode();
         var usedFields=new HashSet<String>();
@@ -473,11 +497,7 @@ public final class LabWorkbook {
             if(sheet.path("rowData").has(""+r))newRows.set(""+rowMap.get(r),sheet.path("rowData").path(""+r).deepCopy());
             for(int c:keepColumns) {
                 var original=rows.path(""+r).path(""+c);if(!original.isObject())continue;
-                var cell=(ObjectNode)original.deepCopy();var role=cell.path("custom").path("lab").path("role").asText();
-                if((role.equals("VALUE")||role.equals("MATERIAL_QTY"))&&!LabValues.recorded(value(sheet,r,c))) {
-                    mark(cell).put("valueStatus",LabValues.state(value(sheet,r,c),role.equals("MATERIAL_QTY")));
-                    cell.remove(List.of("v","p","f"));
-                }
+                var cell=(ObjectNode)original.deepCopy();
                 if(cell.hasNonNull("f"))cell.put("f",formula(cell.path("f").asText(),rowMap,colMap));
                 var code=cell.path("custom").path("lab").path("fieldCode").asText();if(!code.isBlank())usedFields.add(code);
                 newCells.withObject("/"+rowMap.get(r)).set(""+colMap.get(c),cell);

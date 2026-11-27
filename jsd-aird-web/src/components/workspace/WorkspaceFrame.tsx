@@ -1,6 +1,7 @@
 import { FullscreenExitOutlined, FullscreenOutlined } from '@ant-design/icons';
 import { Button, Tooltip } from 'antd';
 import { createContext, forwardRef, useContext, useEffect, useRef, useState, type HTMLAttributes } from 'react';
+import { editorEscapeEvents } from './workspace-escape';
 import './workspace-frame.css';
 
 const WorkspaceContext = createContext<{ maximized: boolean; toggle: () => void } | null>(null);
@@ -51,7 +52,7 @@ export const WorkspaceFrame = forwardRef<HTMLElement, WorkspaceFrameProps>(funct
     };
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing
-        || event.keyCode === 229 || composing.current || overlayAtKeydown) return;
+        || event.keyCode === 229 || composing.current || overlayAtKeydown || editorEscapeEvents.has(event)) return;
       event.preventDefault();
       setMaximized(false);
     };

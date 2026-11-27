@@ -6,6 +6,7 @@ import { scrollableFreeze, workbookWithScrollableFreeze } from './scrollable-fre
 import { markPerformance } from '@/services/performance/metrics';
 import { editorReady } from './workspace-loading';
 import { editorTheme } from './editor-theme';
+import { editorEscapeEvents } from '@/components/workspace/workspace-escape';
 import {
   createUniver,
   ICommandService,
@@ -18,7 +19,7 @@ import {
   mergeLocales,
   type FUniver,
 } from '@univerjs/presets';
-import { UniverSheetsCorePreset, IRenderManagerService, ISheetClipboardService, SHEET_VIEWPORT_KEY, ScrollCommand, ScrollToRangeOperation, PasteCommand, unmount } from '@univerjs/preset-sheets-core';
+import { UniverSheetsCorePreset, IContextMenuService, IRenderManagerService, ISheetClipboardService, SHEET_VIEWPORT_KEY, ScrollCommand, ScrollToRangeOperation, PasteCommand, unmount } from '@univerjs/preset-sheets-core';
 import UniverPresetSheetsCoreZhCN from '@univerjs/preset-sheets-core/locales/zh-CN';
 import { UniverSheetsDrawingPreset } from '@univerjs/preset-sheets-drawing';
 import UniverPresetSheetsDrawingZhCN from '@univerjs/preset-sheets-drawing/locales/zh-CN';
@@ -256,6 +257,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
     let cancelled = false;
     let stopObservingSize: (() => void) | undefined;
     let stopWheelFocus: (() => void) | undefined;
+    let stopHandlingEscape: (() => void) | undefined;
     let animationFrame = 0;
     let commandSubscription: { dispose(): void } | undefined;
     let beforeCommandSubscription: { dispose(): void } | undefined;
@@ -325,6 +327,20 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       const workbook = univerAPI.createWorkbook(workbookWithScrollableFreeze(workbookWithExplicitRowHeights(compatibleLabTotals(snapshot)), {
         width: Math.max(1, width - 47), height: Math.max(1, height - (editableRef.current ? 160 : 84)),
       }));
+      const contextMenu = univer.__getInjector().get(IContextMenuService);
+      const handleEscape = (event: KeyboardEvent) => {
+        if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+        if (contextMenu.visible) {
+          editorEscapeEvents.add(event);
+          contextMenu.hideContextMenu();
+          event.preventDefault();
+          event.stopPropagation();
+        } else if (workbook.isCellEditing()) {
+          editorEscapeEvents.add(event);
+        }
+      };
+      document.addEventListener('keydown', handleEscape, true);
+      stopHandlingEscape = () => document.removeEventListener('keydown', handleEscape, true);
       stopWheelFocus = bindSheetWheelFocus(container, () => {
         univer.__getInjector().get(IUniverInstanceService).focusUnit(workbook.getId());
       });
@@ -854,6 +870,7 @@ export const UniverSheetsEditor = forwardRef<EditorHandle, Props>(function Unive
       cancelled = true;
       stopObservingSize?.();
       stopWheelFocus?.();
+      stopHandlingEscape?.();
       cellChangeEventsArmed = false;
       window.cancelAnimationFrame(animationFrame);
       commandSubscription?.dispose();

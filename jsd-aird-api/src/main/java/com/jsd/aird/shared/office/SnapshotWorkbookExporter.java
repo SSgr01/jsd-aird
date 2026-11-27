@@ -367,8 +367,15 @@ public final class SnapshotWorkbookExporter {
                     }
                 } else if (sourceCell.path("v").isBoolean()) cell.setCellValue(sourceCell.path("v").asBoolean());
                 else if (sourceCell.path("v").isNumber()) cell.setCellValue(sourceCell.path("v").asDouble());
-                else if (sourceCell.has("v")) cell.setCellValue(sourceCell.path("v").asText());
-                else cell.setCellType(CellType.BLANK);
+                else if (sourceCell.hasNonNull("v")) cell.setCellValue(sourceCell.path("v").asText());
+                else {
+                    // Univer stores formatted cell text in a document body, without a scalar value.
+                    var text = sourceCell.path("p").path("body").path("dataStream").asText("")
+                            .replace("\b", "");
+                    if (text.endsWith("\r\n")) text = text.substring(0, text.length() - 2);
+                    if (text.isEmpty()) cell.setBlank();
+                    else cell.setCellValue(text.replace("\r\n", "\n").replace('\r', '\n'));
+                }
                 var styleNode = sourceCell.path("s").isTextual()
                         ? workbookStyles.path(sourceCell.path("s").asText()) : sourceCell.path("s");
                 if (styleNode.isObject() && !styleNode.isEmpty()) {

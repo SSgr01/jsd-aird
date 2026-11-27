@@ -1,4 +1,5 @@
 import { WorkspaceFrame, WorkspaceMaximizeButton } from './WorkspaceFrame';
+import { editorEscapeEvents } from './workspace-escape';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { useEffect, useRef, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -66,5 +67,16 @@ describe('workspace display mode', () => {
     expect(document.body.style.overflow).toBe('auto');
     expect(document.documentElement.style.overflow).toBe('clip');
     expect(document.body).not.toHaveClass('workspace-is-maximized');
+  });
+
+  it('restores the workspace only after the editor releases Escape', () => {
+    render(<WorkspaceFrame maximizable><WorkspaceMaximizeButton /><input aria-label="单元格" /></WorkspaceFrame>);
+    const editor = screen.getByRole('textbox', { name: '单元格' });
+    editor.addEventListener('keydown', (event) => editorEscapeEvents.add(event), { once: true });
+    fireEvent.click(screen.getByRole('button', { name: '全屏' }));
+    fireEvent.keyDown(editor, { key: 'Escape' });
+    expect(screen.getByRole('button', { name: '还原' })).toBeInTheDocument();
+    fireEvent.keyDown(editor, { key: 'Escape' });
+    expect(screen.getByRole('button', { name: '全屏' })).toBeInTheDocument();
   });
 });
